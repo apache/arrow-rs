@@ -42,6 +42,11 @@ struct ACompleteRecord<'a> {
     pub borrowed_maybe_a_string: &'a Option<String>,
     pub borrowed_maybe_a_str: &'a Option<&'a str>,
     pub now: chrono::NaiveDateTime,
+    pub byte_vec: Vec<u8>,
+    pub maybe_byte_vec: Option<Vec<u8>>,
+    pub borrowed_byte_vec: &'a [u8],
+    pub borrowed_maybe_byte_vec: &'a Option<Vec<u8>>,
+    pub borrowed_maybe_borrowed_byte_vec: &'a Option<&'a [u8]>,
 }
 
 #[cfg(test)]
@@ -84,6 +89,11 @@ mod tests {
             OPTIONAL BINARY          borrowed_maybe_a_string (STRING);
             OPTIONAL BINARY          borrowed_maybe_a_str (STRING);
             REQUIRED INT64           now (TIMESTAMP_MILLIS);
+            REQUIRED BINARY          byte_vec;
+            OPTIONAL BINARY          maybe_byte_vec;
+            REQUIRED BINARY          borrowed_byte_vec;
+            OPTIONAL BINARY          borrowed_maybe_byte_vec;
+            OPTIONAL BINARY          borrowed_maybe_borrowed_byte_vec;
         }";
 
         let schema = Arc::new(parse_message_type(schema_str).unwrap());
@@ -92,6 +102,9 @@ mod tests {
         let a_borrowed_string = "cool news".to_owned();
         let maybe_a_string = Some("it's true, I'm a string".to_owned());
         let maybe_a_str = Some(&a_str[..]);
+        let borrowed_byte_vec = vec![0x68, 0x69, 0x70];
+        let borrowed_maybe_byte_vec = Some(vec![0x71, 0x72]);
+        let borrowed_maybe_borrowed_byte_vec = Some(&borrowed_byte_vec[..]);
 
         let drs: Vec<ACompleteRecord> = vec![ACompleteRecord {
             a_bool: true,
@@ -115,6 +128,11 @@ mod tests {
             borrowed_maybe_a_string: &maybe_a_string,
             borrowed_maybe_a_str: &maybe_a_str,
             now: chrono::Utc::now().naive_local(),
+            byte_vec: vec![0x65, 0x66, 0x67],
+            maybe_byte_vec: Some(vec![0x88, 0x89, 0x90]),
+            borrowed_byte_vec: &borrowed_byte_vec,
+            borrowed_maybe_byte_vec: &borrowed_maybe_byte_vec,
+            borrowed_maybe_borrowed_byte_vec: &borrowed_maybe_borrowed_byte_vec,
         }];
 
         let generated_schema = drs.as_slice().schema().unwrap();

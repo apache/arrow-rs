@@ -92,6 +92,10 @@ impl Field {
                     Type::TypePath(_) => self.option_into_vals(),
                     _ => unimplemented!("Unsupported type encountered"),
                 },
+                Type::Vec(ref first_type) => match **first_type {
+                    Type::TypePath(_) => self.option_into_vals(),
+                    _ => unimplemented!("Unsupported type encountered"),
+                },
                 ref f => unimplemented!("Unsupported: {:#?}", f),
             },
             Type::Reference(_, ref first_type) => match **first_type {
@@ -100,10 +104,26 @@ impl Field {
                     Type::TypePath(_) => self.option_into_vals(),
                     Type::Reference(_, ref second_type) => match **second_type {
                         Type::TypePath(_) => self.option_into_vals(),
+                        Type::Slice(ref second_type) => match **second_type {
+                            Type::TypePath(_) => self.option_into_vals(),
+                            ref f => unimplemented!("Unsupported: {:#?}", f),
+                        },
+                        _ => unimplemented!("Unsupported type encountered"),
+                    },
+                    Type::Vec(ref first_type) => match **first_type {
+                        Type::TypePath(_) => self.option_into_vals(),
                         _ => unimplemented!("Unsupported type encountered"),
                     },
                     ref f => unimplemented!("Unsupported: {:#?}", f),
                 },
+                Type::Slice(ref second_type) => match **second_type {
+                    Type::TypePath(_) => self.copied_direct_vals(),
+                    ref f => unimplemented!("Unsupported: {:#?}", f),
+                },
+                ref f => unimplemented!("Unsupported: {:#?}", f),
+            },
+            Type::Vec(ref first_type) => match **first_type {
+                Type::TypePath(_) => self.copied_direct_vals(),
                 ref f => unimplemented!("Unsupported: {:#?}", f),
             },
             f => unimplemented!("Unsupported: {:#?}", f),
@@ -116,26 +136,55 @@ impl Field {
                 Type::Option(_) => unimplemented!("Unsupported nesting encountered"),
                 Type::Reference(_, ref second_type)
                 | Type::Vec(ref second_type)
-                | Type::Array(ref second_type) => match **second_type {
+                | Type::Array(ref second_type)
+                | Type::Slice(ref second_type) => match **second_type {
                     Type::TypePath(_) => Some(self.optional_definition_levels()),
                     _ => unimplemented!("Unsupported nesting encountered"),
                 },
             },
             Type::Reference(_, ref first_type)
             | Type::Vec(ref first_type)
-            | Type::Array(ref first_type) => match **first_type {
+            | Type::Array(ref first_type)
+            | Type::Slice(ref first_type) => match **first_type {
                 Type::TypePath(_) => None,
-                Type::Reference(_, ref second_type)
-                | Type::Vec(ref second_type)
+                Type::Vec(ref second_type)
                 | Type::Array(ref second_type)
-                | Type::Option(ref second_type) => match **second_type {
-                    Type::TypePath(_) => Some(self.optional_definition_levels()),
+                | Type::Slice(ref second_type) => match **second_type {
+                    Type::TypePath(_) => None,
                     Type::Reference(_, ref third_type) => match **third_type {
-                        Type::TypePath(_) => Some(self.optional_definition_levels()),
+                        Type::TypePath(_) => None,
                         _ => unimplemented!("Unsupported definition encountered"),
                     },
                     _ => unimplemented!("Unsupported definition encountered"),
                 },
+                Type::Reference(_, ref second_type) | Type::Option(ref second_type) => {
+                    match **second_type {
+                        Type::TypePath(_) => Some(self.optional_definition_levels()),
+                        Type::Vec(ref third_type)
+                        | Type::Array(ref third_type)
+                        | Type::Slice(ref third_type) => match **third_type {
+                            Type::TypePath(_) => Some(self.optional_definition_levels()),
+                            Type::Reference(_, ref fourth_type) => match **fourth_type {
+                                Type::TypePath(_) => {
+                                    Some(self.optional_definition_levels())
+                                }
+                                _ => unimplemented!("Unsupported definition encountered"),
+                            },
+                            _ => unimplemented!("Unsupported definition encountered"),
+                        },
+                        Type::Reference(_, ref third_type) => match **third_type {
+                            Type::TypePath(_) => Some(self.optional_definition_levels()),
+                            Type::Slice(ref fourth_type) => match **fourth_type {
+                                Type::TypePath(_) => {
+                                    Some(self.optional_definition_levels())
+                                }
+                                _ => unimplemented!("Unsupported definition encountered"),
+                            },
+                            _ => unimplemented!("Unsupported definition encountered"),
+                        },
+                        _ => unimplemented!("Unsupported definition encountered"),
+                    }
+                }
             },
         };
 
@@ -323,6 +372,7 @@ impl Field {
 enum Type {
     Array(Box<Type>),
     Option(Box<Type>),
+    Slice(Box<Type>),
     Vec(Box<Type>),
     TypePath(syn::Type),
     Reference(Option<syn::Lifetime>, Box<Type>),
@@ -374,6 +424,7 @@ impl Type {
             Type::Option(ref first_type)
             | Type::Vec(ref first_type)
             | Type::Array(ref first_type)
+            | Type::Slice(ref first_type)
             | Type::Reference(_, ref first_type) => {
                 Type::leaf_type_recursive_helper(first_type, Some(ty))
             }
@@ -391,6 +442,7 @@ impl Type {
             Type::Option(ref first_type)
             | Type::Vec(ref first_type)
             | Type::Array(ref first_type)
+            | Type::Slice(ref first_type)
             | Type::Reference(_, ref first_type) => match **first_type {
                 Type::TypePath(ref type_) => type_,
                 _ => unimplemented!("leaf_type() should only return shallow types"),
@@ -443,7 +495,7 @@ impl Type {
                     }
                 }
             }
-            Type::Vec(ref first_type) => {
+            Type::Vec(ref first_type) | Type::Slice(ref first_type) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return BasicType::BYTE_ARRAY;
@@ -484,7 +536,7 @@ impl Type {
                     }
                 }
             }
-            Type::Vec(ref first_type) => {
+            Type::Vec(ref first_type) | Type::Slice(ref first_type) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return quote! { None };
@@ -572,6 +624,7 @@ impl Type {
             syn::Type::Path(ref p) => Type::from_type_path(f, p),
             syn::Type::Reference(ref tr) => Type::from_type_reference(f, tr),
             syn::Type::Array(ref ta) => Type::from_type_array(f, ta),
+            syn::Type::Slice(ref ts) => Type::from_type_slice(f, ts),
             other => unimplemented!(
                 "Unable to derive {:?} - it is currently an unsupported type\n{:#?}",
                 f.ident.as_ref().unwrap(),
@@ -621,6 +674,11 @@ impl Type {
     fn from_type_array(f: &syn::Field, ta: &syn::TypeArray) -> Self {
         let inner_type = Type::from_type(f, ta.elem.as_ref());
         Type::Array(Box::new(inner_type))
+    }
+
+    fn from_type_slice(f: &syn::Field, ts: &syn::TypeSlice) -> Self {
+        let inner_type = Type::from_type(f, ts.elem.as_ref());
+        Type::Slice(Box::new(inner_type))
     }
 }
 
