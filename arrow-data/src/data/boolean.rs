@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::data::types::PhysicalType;
-use crate::data::ArrayDataLayout;
-use crate::{ArrayDataBuilder, Buffers};
+use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::DataType;
 
@@ -78,21 +77,6 @@ impl BooleanArrayData {
         }
     }
 
-    /// Creates a new [`BooleanArrayData`] from raw buffers
-    ///
-    /// # Safety
-    ///
-    /// See [`BooleanArrayData::new_unchecked`]
-    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder) -> Self {
-        let values = builder.buffers.into_iter().next().unwrap();
-        let values = BooleanBuffer::new(values, builder.offset, builder.len);
-        Self {
-            values,
-            data_type: builder.data_type,
-            nulls: builder.nulls,
-        }
-    }
-
     /// Returns the null buffer if any
     #[inline]
     pub fn nulls(&self) -> Option<&NullBuffer> {
@@ -124,16 +108,29 @@ impl BooleanArrayData {
             nulls: self.nulls.as_ref().map(|x| x.slice(offset, len)),
         }
     }
+}
 
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        ArrayDataLayout {
-            data_type: &self.data_type,
-            len: self.values.len(),
-            offset: self.values.offset(),
-            nulls: self.nulls.as_ref(),
-            buffers: Buffers::one(self.values().inner()),
-            child_data: &[],
+impl From<ArrayData> for BooleanArrayData {
+    fn from(data: ArrayData) -> Self {
+        let values = data.buffers.into_iter().next().unwrap();
+        let values = BooleanBuffer::new(values, data.offset, data.len);
+        Self {
+            values,
+            data_type: data.data_type,
+            nulls: data.nulls,
+        }
+    }
+}
+
+impl From<BooleanArrayData> for ArrayData {
+    fn from(value: BooleanArrayData) -> Self {
+        Self {
+            data_type: value.data_type,
+            len: value.values.len(),
+            offset: value.values.offset(),
+            buffers: vec![value.values.into_inner()],
+            nulls: value.nulls,
+            child_data: vec![],
         }
     }
 }

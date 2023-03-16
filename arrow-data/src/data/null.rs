@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::data::types::PhysicalType;
-use crate::data::ArrayDataLayout;
-use crate::{ArrayDataBuilder, Buffers};
+use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_schema::DataType;
 
 /// ArrayData for [null arrays](https://arrow.apache.org/docs/format/Columnar.html#null-layout)
@@ -51,18 +50,6 @@ impl NullArrayData {
         Self { data_type, len }
     }
 
-    /// Creates a new [`NullArrayData`] from raw buffers
-    ///
-    /// # Safety
-    ///
-    /// See [`NullArrayData::new_unchecked`]
-    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder) -> Self {
-        Self {
-            data_type: builder.data_type,
-            len: builder.len,
-        }
-    }
-
     /// Returns the data type of this array
     #[inline]
     pub fn data_type(&self) -> &DataType {
@@ -89,16 +76,26 @@ impl NullArrayData {
             len,
         }
     }
+}
 
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        ArrayDataLayout {
-            data_type: &self.data_type,
-            len: self.len,
+impl From<ArrayData> for NullArrayData {
+    fn from(value: ArrayData) -> Self {
+        Self {
+            data_type: value.data_type,
+            len: value.len + value.offset,
+        }
+    }
+}
+
+impl From<NullArrayData> for ArrayData {
+    fn from(value: NullArrayData) -> Self {
+        Self {
+            data_type: value.data_type,
+            len: value.len,
             offset: 0,
+            buffers: vec![],
+            child_data: vec![],
             nulls: None,
-            buffers: Buffers::default(),
-            child_data: &[],
         }
     }
 }

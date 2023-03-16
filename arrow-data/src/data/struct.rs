@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::ArrayDataLayout;
 use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_schema::DataType;
@@ -46,26 +45,6 @@ impl StructArrayData {
             data_type,
             len,
             nulls,
-            children,
-        }
-    }
-
-    /// Creates a new [`StructArrayData`] from raw buffers
-    ///
-    /// # Safety
-    ///
-    /// See [`StructArrayData::new_unchecked`]
-    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder) -> Self {
-        let children = builder
-            .child_data
-            .into_iter()
-            .map(|x| x.slice(builder.offset, builder.len))
-            .collect();
-
-        Self {
-            data_type: builder.data_type,
-            len: builder.len,
-            nulls: builder.nulls,
             children,
         }
     }
@@ -114,16 +93,34 @@ impl StructArrayData {
             children: self.children.iter().map(|c| c.slice(offset, len)).collect(),
         }
     }
+}
 
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        ArrayDataLayout {
-            data_type: &self.data_type,
-            len: self.len,
+impl From<ArrayData> for StructArrayData {
+    fn from(data: ArrayData) -> Self {
+        let children = data
+            .child_data
+            .into_iter()
+            .map(|x| x.slice(data.offset, data.len))
+            .collect();
+
+        Self {
+            data_type: data.data_type,
+            len: data.len,
+            nulls: data.nulls,
+            children,
+        }
+    }
+}
+
+impl From<StructArrayData> for ArrayData {
+    fn from(value: StructArrayData) -> Self {
+        Self {
+            data_type: value.data_type,
+            len: value.len,
             offset: 0,
-            nulls: self.nulls.as_ref(),
-            buffers: Buffers::default(),
-            child_data: &self.children,
+            buffers: vec![],
+            child_data: value.children,
+            nulls: value.nulls,
         }
     }
 }

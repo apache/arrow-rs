@@ -16,31 +16,13 @@
 // under the License.
 
 use crate::data::types::DictionaryKeyType;
-use crate::data::ArrayDataLayout;
 use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::{NullBuffer, ScalarBuffer};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType;
 
 mod private {
-    use super::*;
-
-    pub trait DictionaryKeySealed {
-        /// Downcast [`ArrayDataDictionary`] to `[DictionaryArrayData`]
-        fn downcast_ref(data: &ArrayDataDictionary) -> Option<&DictionaryArrayData<Self>>
-        where
-            Self: DictionaryKey;
-
-        /// Downcast [`ArrayDataDictionary`] to `[DictionaryArrayData`]
-        fn downcast(data: ArrayDataDictionary) -> Option<DictionaryArrayData<Self>>
-        where
-            Self: DictionaryKey;
-
-        /// Cast [`DictionaryArrayData`] to [`ArrayDataDictionary`]
-        fn upcast(v: DictionaryArrayData<Self>) -> ArrayDataDictionary
-        where
-            Self: DictionaryKey;
-    }
+    pub trait DictionaryKeySealed {}
 }
 
 /// Types of dictionary key used by dictionary arrays
@@ -53,27 +35,7 @@ macro_rules! dictionary {
         impl DictionaryKey for $t {
             const TYPE: DictionaryKeyType = DictionaryKeyType::$v;
         }
-        impl private::DictionaryKeySealed for $t {
-            fn downcast_ref(
-                data: &ArrayDataDictionary,
-            ) -> Option<&DictionaryArrayData<Self>> {
-                match data {
-                    ArrayDataDictionary::$v(v) => Some(v),
-                    _ => None,
-                }
-            }
-
-            fn downcast(data: ArrayDataDictionary) -> Option<DictionaryArrayData<Self>> {
-                match data {
-                    ArrayDataDictionary::$v(v) => Some(v),
-                    _ => None,
-                }
-            }
-
-            fn upcast(v: DictionaryArrayData<Self>) -> ArrayDataDictionary {
-                ArrayDataDictionary::$v(v)
-            }
-        }
+        impl private::DictionaryKeySealed for $t {}
     };
 }
 
@@ -86,100 +48,13 @@ dictionary!(u16, UInt16);
 dictionary!(u32, UInt32);
 dictionary!(u64, UInt64);
 
-/// Applies op to each variant of [`ArrayDataDictionary`]
-macro_rules! dictionary_op {
-    ($array:ident, $op:block) => {
-        match $array {
-            ArrayDataDictionary::Int8($array) => $op
-            ArrayDataDictionary::Int16($array) => $op
-            ArrayDataDictionary::Int32($array) => $op
-            ArrayDataDictionary::Int64($array) => $op
-            ArrayDataDictionary::UInt8($array) => $op
-            ArrayDataDictionary::UInt16($array) => $op
-            ArrayDataDictionary::UInt32($array) => $op
-            ArrayDataDictionary::UInt64($array) => $op
-        }
-    };
-}
-
-/// An enumeration of the types of [`DictionaryArrayData`]
-#[derive(Debug, Clone)]
-pub enum ArrayDataDictionary {
-    Int8(DictionaryArrayData<i8>),
-    Int16(DictionaryArrayData<i16>),
-    Int32(DictionaryArrayData<i32>),
-    Int64(DictionaryArrayData<i64>),
-    UInt8(DictionaryArrayData<u8>),
-    UInt16(DictionaryArrayData<u16>),
-    UInt32(DictionaryArrayData<u32>),
-    UInt64(DictionaryArrayData<u64>),
-}
-
-impl ArrayDataDictionary {
-    /// Downcast this [`ArrayDataDictionary`] to the corresponding [`DictionaryArrayData`]
-    pub fn downcast_ref<K: DictionaryKey>(&self) -> Option<&DictionaryArrayData<K>> {
-        K::downcast_ref(self)
-    }
-
-    /// Downcast this [`ArrayDataDictionary`] to the corresponding [`DictionaryArrayData`]
-    pub fn downcast<K: DictionaryKey>(self) -> Option<DictionaryArrayData<K>> {
-        K::downcast(self)
-    }
-
-    /// Returns the values of this dictionary
-    pub fn values(&self) -> &ArrayData {
-        let s = self;
-        dictionary_op!(s, { s.values() })
-    }
-
-    /// Returns a zero-copy slice of this array
-    pub fn slice(&self, offset: usize, len: usize) -> Self {
-        let s = self;
-        dictionary_op!(s, { s.slice(offset, len).into() })
-    }
-
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        let s = self;
-        dictionary_op!(s, { s.layout() })
-    }
-
-    /// Creates a new [`ArrayDataDictionary`] from raw buffers
-    ///
-    /// # Safety
-    ///
-    /// See [`DictionaryArrayData::new_unchecked`]
-    pub(crate) unsafe fn from_raw(
-        builder: ArrayDataBuilder,
-        key: DictionaryKeyType,
-    ) -> Self {
-        use DictionaryKeyType::*;
-        match key {
-            Int8 => Self::Int8(DictionaryArrayData::from_raw(builder)),
-            Int16 => Self::Int16(DictionaryArrayData::from_raw(builder)),
-            Int32 => Self::Int32(DictionaryArrayData::from_raw(builder)),
-            Int64 => Self::Int64(DictionaryArrayData::from_raw(builder)),
-            UInt8 => Self::UInt8(DictionaryArrayData::from_raw(builder)),
-            UInt16 => Self::UInt16(DictionaryArrayData::from_raw(builder)),
-            UInt32 => Self::UInt32(DictionaryArrayData::from_raw(builder)),
-            UInt64 => Self::UInt64(DictionaryArrayData::from_raw(builder)),
-        }
-    }
-}
-
-impl<K: DictionaryKey> From<DictionaryArrayData<K>> for ArrayDataDictionary {
-    fn from(value: DictionaryArrayData<K>) -> Self {
-        K::upcast(value)
-    }
-}
-
 /// ArrayData for [dictionary arrays](https://arrow.apache.org/docs/format/Columnar.html#dictionary-encoded-layout)
 #[derive(Debug, Clone)]
 pub struct DictionaryArrayData<K: DictionaryKey> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
     keys: ScalarBuffer<K>,
-    values: Box<ArrayData>,
+    values: ArrayData,
 }
 
 impl<K: DictionaryKey> DictionaryArrayData<K> {
@@ -189,36 +64,19 @@ impl<K: DictionaryKey> DictionaryArrayData<K> {
     ///
     /// - `PhysicalType::from(&data_type) == PhysicalType::Dictionary(K::TYPE)`
     /// - child must have a type matching `data_type`
-    /// - all values in `keys` must be `0 < v < child.len()` or be a null according to `nulls`
-    /// - `nulls` must have the same length as `child`
+    /// - all values in `keys` must be `0 < v < values.len()` or be a null according to `nulls`
+    /// - `nulls` must have the same length as `values`
     pub unsafe fn new_unchecked(
         data_type: DataType,
         keys: ScalarBuffer<K>,
         nulls: Option<NullBuffer>,
-        child: ArrayData,
+        values: ArrayData,
     ) -> Self {
         Self {
             data_type,
             nulls,
             keys,
-            values: Box::new(child),
-        }
-    }
-
-    /// Creates a new [`DictionaryArrayData`] from raw buffers
-    ///
-    /// # Safety
-    ///
-    /// See [`Self::new_unchecked`]
-    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder) -> Self {
-        let keys = builder.buffers.into_iter().next().unwrap();
-        let keys = ScalarBuffer::new(keys, builder.offset, builder.len);
-        let values = builder.child_data.into_iter().next().unwrap();
-        Self {
-            keys,
-            data_type: builder.data_type,
-            nulls: builder.nulls,
-            values: Box::new(values),
+            values,
         }
     }
 
@@ -242,14 +100,14 @@ impl<K: DictionaryKey> DictionaryArrayData<K> {
 
     /// Returns the keys
     #[inline]
-    pub fn keys(&self) -> &[K] {
+    pub fn keys(&self) -> &ScalarBuffer<K> {
         &self.keys
     }
 
     /// Returns the values data
     #[inline]
     pub fn values(&self) -> &ArrayData {
-        self.values.as_ref()
+        &self.values
     }
 
     /// Returns the data type of this array
@@ -262,7 +120,7 @@ impl<K: DictionaryKey> DictionaryArrayData<K> {
     pub fn into_parts(
         self,
     ) -> (DataType, ScalarBuffer<K>, Option<NullBuffer>, ArrayData) {
-        (self.data_type, self.keys, self.nulls, *self.values)
+        (self.data_type, self.keys, self.nulls, self.values)
     }
 
     /// Returns a zero-copy slice of this array
@@ -274,16 +132,31 @@ impl<K: DictionaryKey> DictionaryArrayData<K> {
             values: self.values.clone(),
         }
     }
+}
 
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        ArrayDataLayout {
-            data_type: &self.data_type,
-            len: self.keys.len(),
+impl<K: DictionaryKey> From<ArrayData> for DictionaryArrayData<K> {
+    fn from(data: ArrayData) -> Self {
+        let keys = data.buffers.into_iter().next().unwrap();
+        let keys = ScalarBuffer::new(keys, data.offset, data.len);
+        let values = data.child_data.into_iter().next().unwrap();
+        Self {
+            keys,
+            data_type: data.data_type,
+            nulls: data.nulls,
+            values,
+        }
+    }
+}
+
+impl<K: DictionaryKey> From<DictionaryArrayData<K>> for ArrayData {
+    fn from(value: DictionaryArrayData<K>) -> Self {
+        Self {
+            data_type: value.data_type,
+            len: value.keys.len(),
             offset: 0,
-            nulls: self.nulls.as_ref(),
-            buffers: Buffers::one(self.keys.inner()),
-            child_data: std::slice::from_ref(self.values.as_ref()),
+            buffers: vec![],
+            child_data: vec![value.values],
+            nulls: value.nulls,
         }
     }
 }

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::ArrayDataLayout;
 use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::ScalarBuffer;
 use arrow_schema::{DataType, UnionMode};
@@ -50,46 +49,6 @@ impl UnionArrayData {
             type_ids,
             offsets,
             children,
-        }
-    }
-
-    /// Creates a new [`UnionArrayData`] from raw buffers
-    ///
-    /// # Safety
-    ///
-    /// See [`UnionArrayData::new_unchecked`]
-    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder, mode: UnionMode) -> Self {
-        match mode {
-            UnionMode::Sparse => {
-                let type_ids = builder.buffers.into_iter().next().unwrap();
-                let type_ids = ScalarBuffer::new(type_ids, builder.offset, builder.len);
-                let children = builder
-                    .child_data
-                    .into_iter()
-                    .map(|x| x.slice(builder.offset, builder.len))
-                    .collect();
-
-                Self {
-                    type_ids,
-                    children,
-                    data_type: builder.data_type,
-                    offsets: None,
-                }
-            }
-            UnionMode::Dense => {
-                let mut iter = builder.buffers.into_iter();
-                let type_ids = iter.next().unwrap();
-                let offsets = iter.next().unwrap();
-                let type_ids = ScalarBuffer::new(type_ids, builder.offset, builder.len);
-                let offsets = ScalarBuffer::new(offsets, builder.offset, builder.len);
-
-                Self {
-                    type_ids,
-                    data_type: builder.data_type,
-                    offsets: Some(offsets),
-                    children: builder.child_data,
-                }
-            }
         }
     }
 
@@ -151,21 +110,61 @@ impl UnionArrayData {
             children,
         }
     }
+}
 
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        let buffers = match &self.offsets {
-            Some(offsets) => Buffers::two(self.type_ids.inner(), offsets.inner()),
-            None => Buffers::one(self.type_ids.inner()),
+impl From<ArrayData> for UnionArrayData {
+    fn from(value: ArrayData) -> Self {
+        match value.data_type {
+            DataType::Union(_, _, UnionMode::Sparse) => {
+                let type_ids = value.buffers.into_iter().next().unwrap();
+                let type_ids = ScalarBuffer::new(type_ids, value.offset, value.len);
+                let children = value
+                    .child_data
+                    .into_iter()
+                    .map(|x| x.slice(value.offset, value.len))
+                    .collect();
+
+                Self {
+                    type_ids,
+                    children,
+                    data_type: value.data_type,
+                    offsets: None,
+                }
+            }
+            DataType::Union(_, _, UnionMode::Dense) => {
+                let mut iter = value.buffers.into_iter();
+                let type_ids = iter.next().unwrap();
+                let offsets = iter.next().unwrap();
+                let type_ids = ScalarBuffer::new(type_ids, value.offset, value.len);
+                let offsets = ScalarBuffer::new(offsets, value.offset, value.len);
+
+                Self {
+                    type_ids,
+                    data_type: value.data_type,
+                    offsets: Some(offsets),
+                    children: value.child_data,
+                }
+            }
+            d => panic!("invalid data type for UnionArrayData: {d}"),
+        }
+    }
+}
+
+impl From<UnionArrayData> for ArrayData {
+    fn from(value: UnionArrayData) -> Self {
+        let len = value.type_ids.len();
+        let buffers = match value.offsets {
+            Some(offsets) => vec![value.type_ids.into_inner(), offsets.into_inner()],
+            None => vec![value.type_ids.into_inner()],
         };
 
-        ArrayDataLayout {
-            data_type: &self.data_type,
-            len: self.type_ids.len(),
+        Self {
+            data_type: value.data_type,
+            len,
             offset: 0,
             nulls: None,
             buffers,
-            child_data: &self.children,
+            child_data: value.children,
         }
     }
 }

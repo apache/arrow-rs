@@ -16,31 +16,13 @@
 // under the License.
 
 use crate::data::types::OffsetType;
-use crate::data::ArrayDataLayout;
 use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType;
 
 mod private {
-    use super::*;
-
-    pub trait ListOffsetSealed {
-        /// Downcast [`ArrayDataList`] to `[ListArrayData`]
-        fn downcast_ref(data: &ArrayDataList) -> Option<&ListArrayData<Self>>
-        where
-            Self: ListOffset;
-
-        /// Downcast [`ArrayDataList`] to `[ListArrayData`]
-        fn downcast(data: ArrayDataList) -> Option<ListArrayData<Self>>
-        where
-            Self: ListOffset;
-
-        /// Cast [`ListArrayData`] to [`ArrayDataList`]
-        fn upcast(v: ListArrayData<Self>) -> ArrayDataList
-        where
-            Self: ListOffset;
-    }
+    pub trait ListOffsetSealed {}
 }
 
 /// Types of offset used by variable length list arrays
@@ -52,132 +34,13 @@ impl ListOffset for i32 {
     const TYPE: OffsetType = OffsetType::Int32;
 }
 
-impl private::ListOffsetSealed for i32 {
-    fn downcast_ref(data: &ArrayDataList) -> Option<&ListArrayData<Self>>
-    where
-        Self: ListOffset,
-    {
-        match data {
-            ArrayDataList::Small(v) => Some(v),
-            ArrayDataList::Large(_) => None,
-        }
-    }
-
-    fn downcast(data: ArrayDataList) -> Option<ListArrayData<Self>>
-    where
-        Self: ListOffset,
-    {
-        match data {
-            ArrayDataList::Small(v) => Some(v),
-            ArrayDataList::Large(_) => None,
-        }
-    }
-
-    fn upcast(v: ListArrayData<Self>) -> ArrayDataList
-    where
-        Self: ListOffset,
-    {
-        ArrayDataList::Small(v)
-    }
-}
+impl private::ListOffsetSealed for i32 {}
 
 impl ListOffset for i64 {
     const TYPE: OffsetType = OffsetType::Int64;
 }
 
-impl private::ListOffsetSealed for i64 {
-    fn downcast_ref(data: &ArrayDataList) -> Option<&ListArrayData<Self>>
-    where
-        Self: ListOffset,
-    {
-        match data {
-            ArrayDataList::Small(_) => None,
-            ArrayDataList::Large(v) => Some(v),
-        }
-    }
-
-    fn downcast(data: ArrayDataList) -> Option<ListArrayData<Self>>
-    where
-        Self: ListOffset,
-    {
-        match data {
-            ArrayDataList::Small(_) => None,
-            ArrayDataList::Large(v) => Some(v),
-        }
-    }
-
-    fn upcast(v: ListArrayData<Self>) -> ArrayDataList
-    where
-        Self: ListOffset,
-    {
-        ArrayDataList::Large(v)
-    }
-}
-
-/// Applies op to each variant of [`ListArrayData`]
-macro_rules! list_op {
-    ($array:ident, $op:block) => {
-        match $array {
-            ArrayDataList::Small($array) => $op
-            ArrayDataList::Large($array) => $op
-        }
-    };
-}
-
-/// An enumeration of the types of [`ListArrayData`]
-#[derive(Debug, Clone)]
-pub enum ArrayDataList {
-    Small(ListArrayData<i32>),
-    Large(ListArrayData<i64>),
-}
-
-impl ArrayDataList {
-    /// Downcast this [`ArrayDataList`] to the corresponding [`ListArrayData`]
-    pub fn downcast_ref<O: ListOffset>(&self) -> Option<&ListArrayData<O>> {
-        O::downcast_ref(self)
-    }
-
-    /// Downcast this [`ArrayDataList`] to the corresponding [`ListArrayData`]
-    pub fn downcast<O: ListOffset>(self) -> Option<ListArrayData<O>> {
-        O::downcast(self)
-    }
-
-    /// Returns the values of this [`ArrayDataList`]
-    pub fn values(&self) -> &ArrayData {
-        let s = self;
-        list_op!(s, { s.values() })
-    }
-
-    /// Returns a zero-copy slice of this array
-    pub fn slice(&self, offset: usize, len: usize) -> Self {
-        let s = self;
-        list_op!(s, { s.slice(offset, len).into() })
-    }
-
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        let s = self;
-        list_op!(s, { s.layout() })
-    }
-
-    /// Creates a new [`ArrayDataList`] from raw buffers
-    ///
-    /// # Safety
-    ///
-    /// See [`ListArrayData::new_unchecked`]
-    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder, offset: OffsetType) -> Self {
-        match offset {
-            OffsetType::Int32 => Self::Small(ListArrayData::from_raw(builder)),
-            OffsetType::Int64 => Self::Large(ListArrayData::from_raw(builder)),
-        }
-    }
-}
-
-impl<O: ListOffset> From<ListArrayData<O>> for ArrayDataList {
-    fn from(value: ListArrayData<O>) -> Self {
-        O::upcast(value)
-    }
-}
+impl private::ListOffsetSealed for i64 {}
 
 /// ArrayData for [variable-size list arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout)
 #[derive(Debug, Clone)]
@@ -185,7 +48,7 @@ pub struct ListArrayData<O: ListOffset> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
     offsets: OffsetBuffer<O>,
-    values: Box<ArrayData>,
+    values: ArrayData,
 }
 
 impl<O: ListOffset> ListArrayData<O> {
@@ -194,7 +57,7 @@ impl<O: ListOffset> ListArrayData<O> {
     /// # Safety
     ///
     /// - `PhysicalType::from(&data_type) == PhysicalType::List(O::TYPE)`
-    /// - Each consecutive window of `offsets` must identify a valid slice of `child`
+    /// - Each consecutive window of `offsets` must identify a valid slice of `values`
     /// - `nulls.len() == offsets.len() - 1`
     pub unsafe fn new_unchecked(
         data_type: DataType,
@@ -206,33 +69,7 @@ impl<O: ListOffset> ListArrayData<O> {
             data_type,
             nulls,
             offsets,
-            values: Box::new(values),
-        }
-    }
-
-    /// Creates a new [`ListArrayData`] from an [`ArrayDataBuilder`]
-    ///
-    /// # Safety
-    ///
-    /// See [`Self::new_unchecked`]
-    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder) -> Self {
-        let offsets = builder.buffers.into_iter().next().unwrap();
-        let values = builder.child_data.into_iter().next().unwrap();
-
-        let offsets = match builder.len {
-            0 => OffsetBuffer::new_empty(),
-            _ => OffsetBuffer::new_unchecked(ScalarBuffer::new(
-                offsets,
-                builder.offset,
-                builder.len + 1,
-            )),
-        };
-
-        Self {
-            offsets,
-            data_type: builder.data_type,
-            nulls: builder.nulls,
-            values: Box::new(values),
+            values,
         }
     }
 
@@ -263,7 +100,7 @@ impl<O: ListOffset> ListArrayData<O> {
     /// Returns the values of this [`ListArrayData`]
     #[inline]
     pub fn values(&self) -> &ArrayData {
-        self.values.as_ref()
+        &self.values
     }
 
     /// Returns the data type of this array
@@ -276,7 +113,7 @@ impl<O: ListOffset> ListArrayData<O> {
     pub fn into_parts(
         self,
     ) -> (DataType, OffsetBuffer<O>, Option<NullBuffer>, ArrayData) {
-        (self.data_type, self.offsets, self.nulls, *self.values)
+        (self.data_type, self.offsets, self.nulls, self.values)
     }
 
     /// Returns a zero-copy slice of this array
@@ -288,16 +125,44 @@ impl<O: ListOffset> ListArrayData<O> {
             values: self.values.clone(),
         }
     }
+}
 
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        ArrayDataLayout {
-            data_type: &self.data_type,
-            len: self.len(),
+impl<O: ListOffset> From<ArrayData> for ListArrayData<O> {
+    fn from(data: ArrayData) -> Self {
+        let offsets = data.buffers.into_iter().next().unwrap();
+        let values = data.child_data.into_iter().next().unwrap();
+
+        let offsets = match data.len {
+            0 => OffsetBuffer::new_empty(),
+            // Safety:
+            // ArrayData is valid
+            _ => unsafe {
+                OffsetBuffer::new_unchecked(ScalarBuffer::new(
+                    offsets,
+                    data.offset,
+                    data.len + 1,
+                ))
+            },
+        };
+
+        Self {
+            offsets,
+            data_type: data.data_type,
+            nulls: data.nulls,
+            values,
+        }
+    }
+}
+
+impl<O: ListOffset> From<ListArrayData<O>> for ArrayData {
+    fn from(value: ListArrayData<O>) -> Self {
+        Self {
+            data_type: value.data_type,
+            len: value.offsets.len().wrapping_sub(1),
             offset: 0,
-            nulls: self.nulls.as_ref(),
-            buffers: Buffers::one(self.offsets.inner().inner()),
-            child_data: std::slice::from_ref(self.values.as_ref()),
+            nulls: value.nulls,
+            buffers: vec![value.offsets.into_inner().into_inner()],
+            child_data: vec![value.values],
         }
     }
 }
@@ -309,7 +174,7 @@ pub struct FixedSizeListArrayData {
     len: usize,
     element_size: usize,
     nulls: Option<NullBuffer>,
-    child: Box<ArrayData>,
+    values: ArrayData,
 }
 
 impl FixedSizeListArrayData {
@@ -324,31 +189,14 @@ impl FixedSizeListArrayData {
         len: usize,
         element_size: usize,
         nulls: Option<NullBuffer>,
-        child: ArrayData,
+        values: ArrayData,
     ) -> Self {
         Self {
             data_type,
             len,
             element_size,
             nulls,
-            child: Box::new(child),
-        }
-    }
-
-    /// Creates a new [`FixedSizeListArrayData`] from raw buffers
-    ///
-    /// # Safety
-    ///
-    /// See [`FixedSizeListArrayData::new_unchecked`]
-    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder, size: usize) -> Self {
-        let child =
-            builder.child_data[0].slice(builder.offset * size, builder.len * size);
-        Self {
-            data_type: builder.data_type,
-            len: builder.len,
-            element_size: size,
-            nulls: builder.nulls,
-            child: Box::new(child),
+            values,
         }
     }
 
@@ -379,7 +227,7 @@ impl FixedSizeListArrayData {
     /// Returns the child data
     #[inline]
     pub fn child(&self) -> &ArrayData {
-        self.child.as_ref()
+        &self.values
     }
 
     /// Returns the data type of this array
@@ -390,33 +238,52 @@ impl FixedSizeListArrayData {
 
     /// Returns the underlying parts of this [`FixedSizeListArrayData`]
     pub fn into_parts(self) -> (DataType, Option<NullBuffer>, ArrayData) {
-        (self.data_type, self.nulls, *self.child)
+        (self.data_type, self.nulls, self.values)
     }
 
     /// Returns a zero-copy slice of this array
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         let offset_element = offset.checked_mul(self.element_size).expect("overflow");
         let len_element = len.checked_mul(self.element_size).expect("overflow");
-        let child = self.child.slice(offset_element, len_element);
+        let values = self.values.slice(offset_element, len_element);
 
         Self {
             len,
             data_type: self.data_type.clone(),
             element_size: self.element_size,
             nulls: self.nulls.as_ref().map(|x| x.slice(offset, len)),
-            child: Box::new(child),
+            values,
         }
     }
+}
 
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        ArrayDataLayout {
-            data_type: &self.data_type,
-            len: self.len,
+impl From<ArrayData> for FixedSizeListArrayData {
+    fn from(data: ArrayData) -> Self {
+        let size = match data.data_type {
+            DataType::FixedSizeList(_, size) => size as _,
+            d => panic!("invalid data type for FixedSizeListArrayData: {d}"),
+        };
+
+        let values = data.child_data[0].slice(data.offset * size, data.len * size);
+        Self {
+            data_type: data.data_type,
+            len: data.len,
+            element_size: size,
+            nulls: data.nulls,
+            values,
+        }
+    }
+}
+
+impl From<FixedSizeListArrayData> for ArrayData {
+    fn from(value: FixedSizeListArrayData) -> Self {
+        Self {
+            data_type: value.data_type,
+            len: value.len,
             offset: 0,
-            nulls: self.nulls.as_ref(),
-            buffers: Buffers::default(),
-            child_data: std::slice::from_ref(self.child.as_ref()),
+            buffers: vec![],
+            child_data: vec![value.values],
+            nulls: value.nulls,
         }
     }
 }

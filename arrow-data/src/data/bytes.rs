@@ -16,16 +16,13 @@
 // under the License.
 
 use crate::data::types::{BytesType, OffsetType};
-use crate::data::ArrayDataLayout;
-use crate::{ArrayDataBuilder, Buffers};
+use crate::{ArrayData, ArrayDataBuilder, Buffers};
 use arrow_buffer::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
 use std::marker::PhantomData;
 
 mod private {
-    use super::*;
-
     pub trait BytesSealed {
         /// Create from bytes without performing any validation
         ///
@@ -33,45 +30,8 @@ mod private {
         ///
         /// If `str`, `b` must be a valid UTF-8 sequence
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self;
-
-        /// Downcast [`ArrayDataBytes`] to `[ArrayDataBytesOffset`]
-        fn downcast_ref(data: &ArrayDataBytes) -> Option<&ArrayDataBytesOffset<Self>>
-        where
-            Self: Bytes;
-
-        /// Downcast [`ArrayDataBytes`] to `[ArrayDataBytesOffset`]
-        fn downcast(data: ArrayDataBytes) -> Option<ArrayDataBytesOffset<Self>>
-        where
-            Self: Bytes;
-
-        /// Cast [`ArrayDataBytesOffset`] to [`ArrayDataBytes`]
-        fn upcast(v: ArrayDataBytesOffset<Self>) -> ArrayDataBytes
-        where
-            Self: Bytes;
     }
-
-    pub trait BytesOffsetSealed {
-        /// Downcast [`ArrayDataBytesOffset`] to `[BytesArrayData`]
-        fn downcast_ref<B: Bytes + ?Sized>(
-            data: &ArrayDataBytesOffset<B>,
-        ) -> Option<&BytesArrayData<Self, B>>
-        where
-            Self: BytesOffset;
-
-        /// Downcast [`ArrayDataBytesOffset`] to `[BytesArrayData`]
-        fn downcast<B: Bytes + ?Sized>(
-            data: ArrayDataBytesOffset<B>,
-        ) -> Option<BytesArrayData<Self, B>>
-        where
-            Self: BytesOffset;
-
-        /// Cast [`BytesArrayData`] to [`ArrayDataBytesOffset`]
-        fn upcast<B: Bytes + ?Sized>(
-            v: BytesArrayData<Self, B>,
-        ) -> ArrayDataBytesOffset<B>
-        where
-            Self: BytesOffset;
-    }
+    pub trait BytesOffsetSealed {}
 }
 
 /// Types backed by a variable length slice of bytes
@@ -87,24 +47,6 @@ impl private::BytesSealed for [u8] {
     unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
         b
     }
-
-    fn downcast_ref(data: &ArrayDataBytes) -> Option<&ArrayDataBytesOffset<Self>> {
-        match data {
-            ArrayDataBytes::Binary(v) => Some(v),
-            ArrayDataBytes::Utf8(_) => None,
-        }
-    }
-
-    fn downcast(data: ArrayDataBytes) -> Option<ArrayDataBytesOffset<Self>> {
-        match data {
-            ArrayDataBytes::Binary(v) => Some(v),
-            ArrayDataBytes::Utf8(_) => None,
-        }
-    }
-
-    fn upcast(v: ArrayDataBytesOffset<Self>) -> ArrayDataBytes {
-        ArrayDataBytes::Binary(v)
-    }
 }
 
 impl Bytes for str {
@@ -114,24 +56,6 @@ impl Bytes for str {
 impl private::BytesSealed for str {
     unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
         std::str::from_utf8_unchecked(b)
-    }
-
-    fn downcast_ref(data: &ArrayDataBytes) -> Option<&ArrayDataBytesOffset<Self>> {
-        match data {
-            ArrayDataBytes::Binary(_) => None,
-            ArrayDataBytes::Utf8(v) => Some(v),
-        }
-    }
-
-    fn downcast(data: ArrayDataBytes) -> Option<ArrayDataBytesOffset<Self>> {
-        match data {
-            ArrayDataBytes::Binary(_) => None,
-            ArrayDataBytes::Utf8(v) => Some(v),
-        }
-    }
-
-    fn upcast(v: ArrayDataBytesOffset<Self>) -> ArrayDataBytes {
-        ArrayDataBytes::Utf8(v)
     }
 }
 
@@ -144,160 +68,13 @@ impl BytesOffset for i32 {
     const TYPE: OffsetType = OffsetType::Int32;
 }
 
-impl private::BytesOffsetSealed for i32 {
-    fn downcast_ref<B: Bytes + ?Sized>(
-        data: &ArrayDataBytesOffset<B>,
-    ) -> Option<&BytesArrayData<Self, B>> {
-        match data {
-            ArrayDataBytesOffset::Small(v) => Some(v),
-            ArrayDataBytesOffset::Large(_) => None,
-        }
-    }
-
-    fn downcast<B: Bytes + ?Sized>(
-        data: ArrayDataBytesOffset<B>,
-    ) -> Option<BytesArrayData<Self, B>> {
-        match data {
-            ArrayDataBytesOffset::Small(v) => Some(v),
-            ArrayDataBytesOffset::Large(_) => None,
-        }
-    }
-
-    fn upcast<B: Bytes + ?Sized>(v: BytesArrayData<Self, B>) -> ArrayDataBytesOffset<B> {
-        ArrayDataBytesOffset::Small(v)
-    }
-}
+impl private::BytesOffsetSealed for i32 {}
 
 impl BytesOffset for i64 {
     const TYPE: OffsetType = OffsetType::Int64;
 }
 
-impl private::BytesOffsetSealed for i64 {
-    fn downcast_ref<B: Bytes + ?Sized>(
-        data: &ArrayDataBytesOffset<B>,
-    ) -> Option<&BytesArrayData<Self, B>> {
-        match data {
-            ArrayDataBytesOffset::Small(_) => None,
-            ArrayDataBytesOffset::Large(v) => Some(v),
-        }
-    }
-
-    fn downcast<B: Bytes + ?Sized>(
-        data: ArrayDataBytesOffset<B>,
-    ) -> Option<BytesArrayData<Self, B>> {
-        match data {
-            ArrayDataBytesOffset::Small(_) => None,
-            ArrayDataBytesOffset::Large(v) => Some(v),
-        }
-    }
-
-    fn upcast<B: Bytes + ?Sized>(v: BytesArrayData<Self, B>) -> ArrayDataBytesOffset<B> {
-        ArrayDataBytesOffset::Large(v)
-    }
-}
-
-/// Applies op to each variant of [`ArrayDataBytes`]
-macro_rules! bytes_op {
-    ($array:ident, $op:block) => {
-        match $array {
-            ArrayDataBytes::Binary($array) => match $array {
-                ArrayDataBytesOffset::Small($array) => $op
-                ArrayDataBytesOffset::Large($array) => $op
-            }
-            ArrayDataBytes::Utf8($array) => match $array {
-                ArrayDataBytesOffset::Small($array) => $op
-                ArrayDataBytesOffset::Large($array) => $op
-            }
-        }
-    };
-}
-
-/// An enumeration of the types of [`ArrayDataBytesOffset`]
-#[derive(Debug, Clone)]
-pub enum ArrayDataBytes {
-    Binary(ArrayDataBytesOffset<[u8]>),
-    Utf8(ArrayDataBytesOffset<str>),
-}
-
-impl ArrayDataBytes {
-    /// Downcast this [`ArrayDataBytes`] to the corresponding [`BytesArrayData`]
-    pub fn downcast_ref<O: BytesOffset, B: Bytes + ?Sized>(
-        &self,
-    ) -> Option<&BytesArrayData<O, B>> {
-        O::downcast_ref(B::downcast_ref(self)?)
-    }
-
-    /// Downcast this [`ArrayDataBytes`] to the corresponding [`BytesArrayData`]
-    pub fn downcast<O: BytesOffset, B: Bytes + ?Sized>(
-        self,
-    ) -> Option<BytesArrayData<O, B>> {
-        O::downcast(B::downcast(self)?)
-    }
-
-    /// Returns a zero-copy slice of this array
-    pub fn slice(&self, offset: usize, len: usize) -> Self {
-        let s = self;
-        bytes_op!(s, { s.slice(offset, len).into() })
-    }
-
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        let s = self;
-        bytes_op!(s, { s.layout() })
-    }
-
-    /// Creates a new [`ArrayDataBytes`] from raw buffers
-    ///
-    /// # Safety
-    ///
-    /// See [`BytesArrayData::new_unchecked`]
-    pub(crate) unsafe fn from_raw(
-        builder: ArrayDataBuilder,
-        offset: OffsetType,
-        bytes: BytesType,
-    ) -> Self {
-        match bytes {
-            BytesType::Binary => Self::Binary(match offset {
-                OffsetType::Int32 => {
-                    ArrayDataBytesOffset::Small(BytesArrayData::from_raw(builder))
-                }
-                OffsetType::Int64 => {
-                    ArrayDataBytesOffset::Large(BytesArrayData::from_raw(builder))
-                }
-            }),
-            BytesType::Utf8 => Self::Utf8(match offset {
-                OffsetType::Int32 => {
-                    ArrayDataBytesOffset::Small(BytesArrayData::from_raw(builder))
-                }
-                OffsetType::Int64 => {
-                    ArrayDataBytesOffset::Large(BytesArrayData::from_raw(builder))
-                }
-            }),
-        }
-    }
-}
-
-/// An enumeration of the types of [`BytesArrayData`]
-#[derive(Debug)]
-pub enum ArrayDataBytesOffset<B: Bytes + ?Sized> {
-    Small(BytesArrayData<i32, B>),
-    Large(BytesArrayData<i64, B>),
-}
-
-impl<B: Bytes + ?Sized> Clone for ArrayDataBytesOffset<B> {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Small(v) => Self::Small(v.clone()),
-            Self::Large(v) => Self::Large(v.clone()),
-        }
-    }
-}
-
-impl<O: BytesOffset, B: Bytes + ?Sized> From<BytesArrayData<O, B>> for ArrayDataBytes {
-    fn from(value: BytesArrayData<O, B>) -> Self {
-        B::upcast(O::upcast(value))
-    }
-}
+impl private::BytesOffsetSealed for i64 {}
 
 /// ArrayData for [variable-sized arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-layout) of [`Bytes`]
 #[derive(Debug)]
@@ -340,34 +117,6 @@ impl<O: BytesOffset, B: Bytes + ?Sized> BytesArrayData<O, B> {
             nulls,
             offsets,
             values,
-            phantom: Default::default(),
-        }
-    }
-
-    /// Creates a new [`BytesArrayData`] from an [`ArrayDataBuilder`]
-    ///
-    /// # Safety
-    ///
-    /// See [`Self::new_unchecked`]
-    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder) -> Self {
-        let mut iter = builder.buffers.into_iter();
-        let offsets = iter.next().unwrap();
-        let values = iter.next().unwrap();
-
-        let offsets = match builder.len {
-            0 => OffsetBuffer::new_empty(),
-            _ => OffsetBuffer::new_unchecked(ScalarBuffer::new(
-                offsets,
-                builder.offset,
-                builder.len + 1,
-            )),
-        };
-
-        Self {
-            values,
-            offsets,
-            data_type: builder.data_type,
-            nulls: builder.nulls,
             phantom: Default::default(),
         }
     }
@@ -425,16 +174,46 @@ impl<O: BytesOffset, B: Bytes + ?Sized> BytesArrayData<O, B> {
             phantom: Default::default(),
         }
     }
+}
 
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        ArrayDataLayout {
-            data_type: &self.data_type,
-            len: self.offsets.len().wrapping_sub(1),
+impl<O: BytesOffset, B: Bytes + ?Sized> From<ArrayData> for BytesArrayData<O, B> {
+    fn from(data: ArrayData) -> Self {
+        let mut iter = data.buffers.into_iter();
+        let offsets = iter.next().unwrap();
+        let values = iter.next().unwrap();
+
+        let offsets = match data.len {
+            0 => OffsetBuffer::new_empty(),
+            // Safety:
+            // ArrayData is valid
+            _ => unsafe {
+                OffsetBuffer::new_unchecked(ScalarBuffer::new(
+                    offsets,
+                    data.offset,
+                    data.len + 1,
+                ))
+            },
+        };
+
+        Self {
+            values,
+            offsets,
+            data_type: data.data_type,
+            nulls: data.nulls,
+            phantom: Default::default(),
+        }
+    }
+}
+
+impl<O: BytesOffset, B: Bytes + ?Sized> From<BytesArrayData<O, B>> for ArrayData {
+    fn from(value: BytesArrayData<O, B>) -> Self {
+        Self {
+            data_type: value.data_type,
+            len: value.offsets.len().wrapping_sub(1),
             offset: 0,
-            nulls: self.nulls.as_ref(),
-            buffers: Buffers::two(self.offsets.inner().inner(), &self.values),
-            child_data: &[],
+            nulls: value.nulls,
+            buffers: vec![value.offsets.into_inner().into_inner(), value.values],
+            child_data: vec![],
         }
     }
 }
@@ -469,23 +248,6 @@ impl FixedSizeBinaryArrayData {
             values,
             len,
             element_size,
-        }
-    }
-
-    /// Creates a new [`FixedSizeBinaryArrayData`] from raw buffers
-    ///
-    /// # Safety
-    ///
-    /// See [`FixedSizeBinaryArrayData::new_unchecked`]
-    pub(crate) unsafe fn from_raw(builder: ArrayDataBuilder, size: usize) -> Self {
-        let values = builder.buffers[0]
-            .slice_with_length(builder.offset * size, builder.len * size);
-        Self {
-            values,
-            data_type: builder.data_type,
-            len: builder.len,
-            element_size: size,
-            nulls: builder.nulls,
         }
     }
 
@@ -544,16 +306,36 @@ impl FixedSizeBinaryArrayData {
             nulls: self.nulls().as_ref().map(|x| x.slice(offset, len)),
         }
     }
+}
 
-    /// Returns an [`ArrayDataLayout`] representation of this
-    pub(crate) fn layout(&self) -> ArrayDataLayout<'_> {
-        ArrayDataLayout {
-            data_type: &self.data_type,
-            len: self.len,
+impl From<ArrayData> for FixedSizeBinaryArrayData {
+    fn from(data: ArrayData) -> Self {
+        let size = match data.data_type {
+            DataType::FixedSizeBinary(size) => size as usize,
+            d => panic!("invalid data type for FixedSizeBinaryArrayData: {d}"),
+        };
+
+        let values =
+            data.buffers[0].slice_with_length(data.offset * size, data.len * size);
+        Self {
+            values,
+            data_type: data.data_type,
+            len: data.len,
+            element_size: size,
+            nulls: data.nulls,
+        }
+    }
+}
+
+impl From<FixedSizeBinaryArrayData> for ArrayData {
+    fn from(value: FixedSizeBinaryArrayData) -> Self {
+        Self {
+            data_type: value.data_type,
+            len: value.len,
             offset: 0,
-            nulls: self.nulls.as_ref(),
-            buffers: Buffers::one(&self.values),
-            child_data: &[],
+            buffers: vec![value.values],
+            child_data: vec![],
+            nulls: value.nulls,
         }
     }
 }
