@@ -305,10 +305,12 @@ fn string_to_time(s: &str) -> Option<NaiveTime> {
     }
 
     let (am, bytes) = match bytes.get(bytes.len() - 3..) {
-        Some(b" AM") => (Some(true), &bytes[..bytes.len() - 3]),
-        Some(b" am") => (Some(true), &bytes[..bytes.len() - 3]),
-        Some(b" PM") => (Some(false), &bytes[..bytes.len() - 3]),
-        Some(b" pm") => (Some(false), &bytes[..bytes.len() - 3]),
+        Some(b" AM" | b" am" | b" Am" | b" aM") => {
+            (Some(true), &bytes[..bytes.len() - 3])
+        }
+        Some(b" PM" | b" pm" | b" pM" | b" Pm") => {
+            (Some(false), &bytes[..bytes.len() - 3])
+        }
         _ => (None, bytes),
     };
 
@@ -1447,6 +1449,10 @@ mod tests {
             "09:01:0",
             "1:00.123",
             "1:00:00.123f",
+            " 9:00:00",
+            ":09:00",
+            "T9:00:00",
+            "AM",
         ];
         for case in cases {
             assert!(string_to_time(case).is_none(), "{case}");
@@ -1474,14 +1480,22 @@ mod tests {
             ("1:00 PM", "%I:%M %P"),
             ("12:00 PM", "%I:%M %P"),
             ("13:00 PM", "%I:%M %P"),
+            ("1:00 pM", "%I:%M %P"),
+            ("1:00 Pm", "%I:%M %P"),
+            ("1:00 aM", "%I:%M %P"),
+            ("1:00 Am", "%I:%M %P"),
             ("1:00:30.123456 PM", "%I:%M:%S%.f %P"),
             ("1:00:30.123456789 PM", "%I:%M:%S%.f %P"),
             ("1:00:30.123456789123 PM", "%I:%M:%S%.f %P"),
+            ("1:00:30.1234 PM", "%I:%M:%S%.f %P"),
+            ("1:00:30.123456 PM", "%I:%M:%S%.f %P"),
+            ("1:00:30.123456789123456789 PM", "%I:%M:%S%.f %P"),
+            ("1:00:30.12F456 PM", "%I:%M:%S%.f %P"),
         ];
         for (s, format) in cases {
             let chrono = NaiveTime::parse_from_str(s, format).ok();
             let custom = string_to_time(s);
-            assert_eq!(chrono, custom);
+            assert_eq!(chrono, custom, "{s}");
         }
     }
 
