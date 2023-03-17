@@ -18,11 +18,12 @@
 use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
-use crate::{Array, ArrayAccessor};
+use crate::{Array, ArrayAccessor, ArrayRef};
 use arrow_buffer::{bit_util, Buffer, MutableBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
+use std::sync::Arc;
 
 /// Array of bools
 ///
@@ -186,7 +187,7 @@ impl BooleanArray {
     where
         F: FnMut(T::Item) -> bool,
     {
-        let null_bit_buffer = left.data().nulls().map(|x| x.inner().sliced());
+        let null_bit_buffer = left.nulls().map(|x| x.inner().sliced());
         let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
             op(left.value_unchecked(i))
@@ -232,7 +233,7 @@ impl BooleanArray {
     {
         assert_eq!(left.len(), right.len());
 
-        let nulls = NullBuffer::union(left.data().nulls(), right.data().nulls());
+        let nulls = NullBuffer::union(left.nulls(), right.nulls());
         let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
             op(left.value_unchecked(i), right.value_unchecked(i))
@@ -258,8 +259,21 @@ impl Array for BooleanArray {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 }
 
@@ -448,7 +462,7 @@ mod tests {
         assert_eq!(4, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
-        assert!(arr.data().nulls().is_none());
+        assert!(arr.nulls().is_none());
         for i in 0..3 {
             assert!(!arr.is_null(i));
             assert!(arr.is_valid(i));
@@ -463,7 +477,7 @@ mod tests {
         assert_eq!(4, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(2, arr.null_count());
-        assert!(arr.data().nulls().is_some());
+        assert!(arr.nulls().is_some());
 
         assert!(arr.is_valid(0));
         assert!(arr.is_null(1));

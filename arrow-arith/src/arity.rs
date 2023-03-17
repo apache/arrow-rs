@@ -215,7 +215,7 @@ where
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
-    let nulls = NullBuffer::union(a.data().nulls(), b.data().nulls());
+    let nulls = NullBuffer::union(a.nulls(), b.nulls());
 
     let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
     // JUSTIFICATION
@@ -266,7 +266,7 @@ where
         ))));
     }
 
-    let nulls = NullBuffer::union(a.data().nulls(), b.data().nulls());
+    let nulls = NullBuffer::union(a.nulls(), b.nulls());
 
     let mut builder = a.into_builder()?;
 
@@ -314,7 +314,7 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls(len, a, b, op)
     } else {
-        let nulls = NullBuffer::union(a.data().nulls(), b.data().nulls()).unwrap();
+        let nulls = NullBuffer::union(a.nulls(), b.nulls()).unwrap();
 
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
@@ -372,7 +372,7 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
-        let nulls = NullBuffer::union(a.data().nulls(), b.data().nulls()).unwrap();
+        let nulls = NullBuffer::union(a.nulls(), b.nulls()).unwrap();
         let mut builder = a.into_builder()?;
 
         let slice = builder.values_slice_mut();
@@ -388,7 +388,7 @@ where
             Err(err) => return Ok(Err(err)),
         };
 
-        let array_builder = builder.finish().data().clone().into_builder();
+        let array_builder = builder.finish().into_data().into_builder();
         let array_data = unsafe { array_builder.nulls(Some(nulls)).build_unchecked() };
         Ok(Ok(PrimitiveArray::<T>::from(array_data)))
     }

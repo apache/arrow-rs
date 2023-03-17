@@ -45,7 +45,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
                 .to_string(),
         ));
     }
-    let nulls = NullBuffer::union(array.data().nulls(), regex_array.data().nulls());
+    let nulls = NullBuffer::union(array.nulls(), regex_array.nulls());
 
     let mut patterns: HashMap<String, Regex> = HashMap::new();
     let mut result = BooleanBufferBuilder::new(array.len());
@@ -117,7 +117,7 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     regex: &str,
     flag: Option<&str>,
 ) -> Result<BooleanArray, ArrowError> {
-    let null_bit_buffer = array.data().nulls().map(|x| x.inner().sliced());
+    let null_bit_buffer = array.nulls().map(|x| x.inner().sliced());
     let mut result = BooleanBufferBuilder::new(array.len());
 
     let pattern = match flag {

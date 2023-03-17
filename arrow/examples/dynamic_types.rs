@@ -100,7 +100,7 @@ fn process(batch: &RecordBatch) {
         Arc::new(projected_schema),
         vec![
             id.clone(), // NOTE: this is cloning the Arc not the array data
-            Arc::new(Float64Array::from(nested_c.data().clone())),
+            Arc::new(Float64Array::from(nested_c.to_data())),
         ],
     )
     .unwrap();

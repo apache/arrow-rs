@@ -581,7 +581,7 @@ where
         ));
     }
 
-    let nulls = NullBuffer::union(left.data().nulls(), right.data().nulls());
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
     let mut result = BooleanBufferBuilder::new(left.len());
     for i in 0..left.len() {

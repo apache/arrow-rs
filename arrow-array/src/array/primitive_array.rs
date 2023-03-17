@@ -23,8 +23,8 @@ use crate::temporal_conversions::{
 };
 use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
-use crate::{types::*, ArrowNativeTypeOp};
-use crate::{Array, ArrayAccessor};
+use crate::types::*;
+use crate::{Array, ArrayAccessor, ArrayRef};
 use arrow_buffer::{
     i256, ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, ScalarBuffer,
 };
@@ -34,6 +34,7 @@ use arrow_schema::{ArrowError, DataType};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
 use std::any::Any;
+use std::sync::Arc;
 
 ///
 /// # Example: Using `collect`
@@ -231,27 +232,7 @@ pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
 /// scale less or equal to 76.
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
-/// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
-/// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
-pub trait ArrowPrimitiveType: 'static {
-    /// Corresponding Rust native type for the primitive type.
-    type Native: ArrowNativeTypeOp;
-
-    /// the corresponding Arrow data type of this primitive type.
-    const DATA_TYPE: DataType;
-
-    /// Returns the byte width of this primitive type.
-    fn get_byte_width() -> usize {
-        std::mem::size_of::<Self::Native>()
-    }
-
-    /// Returns a default value of this primitive type.
-    ///
-    /// This is useful for aggregate array ops like `sum()`, `mean()`.
-    fn default_value() -> Self::Native {
-        Default::default()
-    }
-}
+pub use crate::types::ArrowPrimitiveType;
 
 /// Array whose elements are of primitive types.
 ///
@@ -696,8 +677,21 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 }
 
@@ -1788,7 +1782,7 @@ mod tests {
         let primitive_array = PrimitiveArray::<Int32Type>::from_iter(iter);
         assert_eq!(primitive_array.len(), 10);
         assert_eq!(primitive_array.null_count(), 0);
-        assert!(primitive_array.data().nulls().is_none());
+        assert!(primitive_array.nulls().is_none());
         assert_eq!(primitive_array.values(), &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     }
 

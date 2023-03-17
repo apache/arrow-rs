@@ -38,7 +38,7 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
         )));
     }
 
-    let nulls = NullBuffer::union(left.data().nulls(), right.data().nulls());
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
     let left_offsets = left.value_offsets();
     let right_offsets = right.value_offsets();

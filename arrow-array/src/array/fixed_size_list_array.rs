@@ -18,9 +18,11 @@
 use crate::array::print_long_array;
 use crate::builder::{FixedSizeListBuilder, PrimitiveBuilder};
 use crate::{make_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
+use std::sync::Arc;
 
 /// A list array where each element is a fixed-size sequence of values with the same
 /// type whose maximum length is represented by a i32.
@@ -205,8 +207,21 @@ impl Array for FixedSizeListArray {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 }
 

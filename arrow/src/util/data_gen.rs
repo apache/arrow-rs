@@ -191,7 +191,7 @@ fn create_random_list_array(
     // Create list's child data
     let child_array =
         create_random_array(list_field, child_len, null_density, true_density)?;
-    let child_data = child_array.data();
+    let child_data = child_array.to_data();
     // Create list's null buffers, if it is nullable
     let null_buffer = match field.is_nullable() {
         true => Some(create_random_null_buffer(size, null_density)),
@@ -205,7 +205,7 @@ fn create_random_list_array(
             null_buffer,
             0,
             vec![offsets],
-            vec![child_data.clone()],
+            vec![child_data],
         )
     };
     Ok(make_array(list_data))
