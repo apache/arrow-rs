@@ -23,8 +23,8 @@ use crate::temporal_conversions::{
 };
 use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
-use crate::{types::*, ArrayRef, ArrowNativeTypeOp};
-use crate::{Array, ArrayAccessor};
+use crate::types::*;
+use crate::{Array, ArrayAccessor, ArrayRef};
 use arrow_buffer::{i256, ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::ArrayData;
@@ -230,27 +230,7 @@ pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
 /// scale less or equal to 76.
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
-/// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
-/// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
-pub trait ArrowPrimitiveType: 'static {
-    /// Corresponding Rust native type for the primitive type.
-    type Native: ArrowNativeTypeOp;
-
-    /// the corresponding Arrow data type of this primitive type.
-    const DATA_TYPE: DataType;
-
-    /// Returns the byte width of this primitive type.
-    fn get_byte_width() -> usize {
-        std::mem::size_of::<Self::Native>()
-    }
-
-    /// Returns a default value of this primitive type.
-    ///
-    /// This is useful for aggregate array ops like `sum()`, `mean()`.
-    fn default_value() -> Self::Native {
-        Default::default()
-    }
-}
+pub use crate::types::ArrowPrimitiveType;
 
 /// Array whose elements are of primitive types.
 ///
