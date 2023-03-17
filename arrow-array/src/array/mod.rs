@@ -94,15 +94,17 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn as_any(&self) -> &dyn Any;
 
-    /// Returns a reference to the underlying data of this array.
+    /// Returns a reference to the underlying data of this array
     ///
     /// This will be deprecated in a future release [(#3880)](https://github.com/apache/arrow-rs/issues/3880)
     fn data(&self) -> &ArrayData;
 
-    /// Returns the underlying data of this array.
+    /// Returns the underlying data of this array
     fn to_data(&self) -> ArrayData;
 
-    /// Returns the underlying data of this array.
+    /// Returns the underlying data of this array
+    ///
+    /// Unlike [`Array::to_data`] this consumes self, allowing it avoid unnecessary clones
     fn into_data(self) -> ArrayData;
 
     /// Returns a reference-counted pointer to the underlying data of this array.
