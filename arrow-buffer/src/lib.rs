@@ -19,7 +19,7 @@
 
 pub mod alloc;
 pub mod buffer;
-pub use buffer::{Buffer, MutableBuffer};
+pub use buffer::*;
 
 mod bigint;
 mod bytes;

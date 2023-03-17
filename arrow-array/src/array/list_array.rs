@@ -20,8 +20,8 @@ use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
     iterator::GenericListArrayIter, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
 };
-use arrow_buffer::buffer::OffsetBuffer;
 use arrow_buffer::ArrowNativeType;
+use arrow_buffer::OffsetBuffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
 use num::Integer;

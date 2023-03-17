@@ -17,8 +17,7 @@
 
 use std::any::Any;
 
-use arrow_buffer::buffer::RunEndBuffer;
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, RunEndBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
