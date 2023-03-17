@@ -79,11 +79,11 @@ impl From<CompressionArgs> for Compression {
         match value {
             CompressionArgs::None => Self::UNCOMPRESSED,
             CompressionArgs::Snappy => Self::SNAPPY,
-            CompressionArgs::Gzip => Self::GZIP,
+            CompressionArgs::Gzip => Self::GZIP(Default::default()),
             CompressionArgs::Lzo => Self::LZO,
-            CompressionArgs::Brotli => Self::BROTLI,
+            CompressionArgs::Brotli => Self::BROTLI(Default::default()),
             CompressionArgs::Lz4 => Self::LZ4,
-            CompressionArgs::Zstd => Self::ZSTD,
+            CompressionArgs::Zstd => Self::ZSTD(Default::default()),
             CompressionArgs::Lz4Raw => Self::LZ4_RAW,
         }
     }

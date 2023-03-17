@@ -27,21 +27,25 @@ use crate::{
     Result as ObjectStoreResult,
 };
 
+#[doc(hidden)]
+#[deprecated(note = "Use PrefixStore")]
+pub type PrefixObjectStore<T> = PrefixStore<T>;
+
 /// Store wrapper that applies a constant prefix to all paths handled by the store.
 #[derive(Debug, Clone)]
-pub struct PrefixObjectStore<T: ObjectStore> {
+pub struct PrefixStore<T: ObjectStore> {
     prefix: Path,
     inner: T,
 }
 
-impl<T: ObjectStore> std::fmt::Display for PrefixObjectStore<T> {
+impl<T: ObjectStore> std::fmt::Display for PrefixStore<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "PrefixObjectStore({})", self.prefix.as_ref())
     }
 }
 
-impl<T: ObjectStore> PrefixObjectStore<T> {
-    /// Create a new instance of [`PrefixObjectStore`]
+impl<T: ObjectStore> PrefixStore<T> {
+    /// Create a new instance of [`PrefixStore`]
     pub fn new(store: T, prefix: impl Into<Path>) -> Self {
         Self {
             prefix: prefix.into(),
@@ -61,21 +65,25 @@ impl<T: ObjectStore> PrefixObjectStore<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
-    /// Save the provided bytes to the specified location.
+impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
         let full_path = self.full_path(location);
         self.inner.put(&full_path, bytes).await
     }
 
-    /// Return the bytes that are stored at the specified location.
+    async fn append(
+        &self,
+        location: &Path,
+    ) -> ObjectStoreResult<Box<dyn AsyncWrite + Unpin + Send>> {
+        let full_path = self.full_path(location);
+        self.inner.append(&full_path).await
+    }
+
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
         let full_path = self.full_path(location);
         self.inner.get(&full_path).await
     }
 
-    /// Return the bytes that are stored at the specified location
-    /// in the given byte range
     async fn get_range(
         &self,
         location: &Path,
@@ -85,7 +93,15 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
         self.inner.get_range(&full_path, range).await
     }
 
-    /// Return the metadata for the specified location
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> ObjectStoreResult<Vec<Bytes>> {
+        let full_path = self.full_path(location);
+        self.inner.get_ranges(&full_path, ranges).await
+    }
+
     async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
         let full_path = self.full_path(location);
         self.inner.head(&full_path).await.map(|meta| ObjectMeta {
@@ -95,16 +111,11 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
         })
     }
 
-    /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
         let full_path = self.full_path(location);
         self.inner.delete(&full_path).await
     }
 
-    /// List all the objects with the given prefix.
-    ///
-    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
-    /// `foo/bar_baz/x`.
     async fn list(
         &self,
         prefix: Option<&Path>,
@@ -121,12 +132,6 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
             .boxed())
     }
 
-    /// List objects with the given prefix and an implementation specific
-    /// delimiter. Returns common prefixes (directories) in addition to object
-    /// metadata.
-    ///
-    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
-    /// `foo/bar_baz/x`.
     async fn list_with_delimiter(
         &self,
         prefix: Option<&Path>,
@@ -156,27 +161,24 @@ impl<T: ObjectStore> ObjectStore for PrefixObjectStore<T> {
             })
     }
 
-    /// Copy an object from one path to another in the same object store.
-    ///
-    /// If there exists an object at the destination, it will be overwritten.
     async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
         let full_from = self.full_path(from);
         let full_to = self.full_path(to);
         self.inner.copy(&full_from, &full_to).await
     }
 
-    /// Copy an object from one path to another, only if destination is empty.
-    ///
-    /// Will return an error if the destination already has an object.
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
         let full_from = self.full_path(from);
         let full_to = self.full_path(to);
         self.inner.copy_if_not_exists(&full_from, &full_to).await
     }
 
-    /// Move an object from one path to another in the same object store.
-    ///
-    /// Will return an error if the destination already has an object.
+    async fn rename(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        let full_from = self.full_path(from);
+        let full_to = self.full_path(to);
+        self.inner.rename(&full_from, &full_to).await
+    }
+
     async fn rename_if_not_exists(
         &self,
         from: &Path,
@@ -221,7 +223,7 @@ mod tests {
     async fn prefix_test() {
         let root = TempDir::new().unwrap();
         let inner = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-        let integration = PrefixObjectStore::new(inner, "prefix");
+        let integration = PrefixStore::new(inner, "prefix");
 
         put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
@@ -242,7 +244,7 @@ mod tests {
 
         local.put(&location, data).await.unwrap();
 
-        let prefix = PrefixObjectStore::new(local, "prefix");
+        let prefix = PrefixStore::new(local, "prefix");
         let location_prefix = Path::from("test_file.json");
 
         let content_list = flatten_list_stream(&prefix, None).await.unwrap();

@@ -23,6 +23,15 @@ use arrow_schema::ArrowError;
 use chrono::prelude::*;
 use std::str::FromStr;
 
+/// Parse nanoseconds from the first `N` values in digits, subtracting the offset `O`
+#[inline]
+fn parse_nanos<const N: usize, const O: u8>(digits: &[u8]) -> u32 {
+    digits[..N]
+        .iter()
+        .fold(0_u32, |acc, v| acc * 10 + v.wrapping_sub(O) as u32)
+        * 10_u32.pow((9 - N) as _)
+}
+
 /// Helper for parsing timestamps
 struct TimestampParser {
     /// The timestamp bytes to parse minus `b'0'`
@@ -81,43 +90,40 @@ impl TimestampParser {
     ///
     /// Returning the end byte offset
     fn time(&self) -> Option<(NaiveTime, usize)> {
+        // Make a NaiveTime handling leap seconds
+        let time = |hour, min, sec, nano| match sec {
+            60 => {
+                let nano = 1_000_000_000 + nano;
+                NaiveTime::from_hms_nano_opt(hour as _, min as _, 59, nano)
+            }
+            _ => NaiveTime::from_hms_nano_opt(hour as _, min as _, sec as _, nano),
+        };
+
         match (self.mask >> 11) & 0b11111111 {
             // 09:26:56
             0b11011011 if self.test(13, b':') && self.test(16, b':') => {
                 let hour = self.digits[11] * 10 + self.digits[12];
                 let minute = self.digits[14] * 10 + self.digits[15];
                 let second = self.digits[17] * 10 + self.digits[18];
-                let time = NaiveTime::from_hms_opt(hour as _, minute as _, second as _)?;
-
-                let millis = || {
-                    self.digits[20] as u32 * 100_000_000
-                        + self.digits[21] as u32 * 10_000_000
-                        + self.digits[22] as u32 * 1_000_000
-                };
-
-                let micros = || {
-                    self.digits[23] as u32 * 100_000
-                        + self.digits[24] as u32 * 10_000
-                        + self.digits[25] as u32 * 1_000
-                };
-
-                let nanos = || {
-                    self.digits[26] as u32 * 100
-                        + self.digits[27] as u32 * 10
-                        + self.digits[28] as u32
-                };
 
                 match self.test(19, b'.') {
-                    true => match (self.mask >> 20).trailing_ones() {
-                        3 => Some((time.with_nanosecond(millis())?, 23)),
-                        6 => Some((time.with_nanosecond(millis() + micros())?, 26)),
-                        9 => Some((
-                            time.with_nanosecond(millis() + micros() + nanos())?,
-                            29,
-                        )),
-                        _ => None,
-                    },
-                    false => Some((time, 19)),
+                    true => {
+                        let digits = (self.mask >> 20).trailing_ones();
+                        let nanos = match digits {
+                            0 => return None,
+                            1 => parse_nanos::<1, 0>(&self.digits[20..21]),
+                            2 => parse_nanos::<2, 0>(&self.digits[20..22]),
+                            3 => parse_nanos::<3, 0>(&self.digits[20..23]),
+                            4 => parse_nanos::<4, 0>(&self.digits[20..24]),
+                            5 => parse_nanos::<5, 0>(&self.digits[20..25]),
+                            6 => parse_nanos::<6, 0>(&self.digits[20..26]),
+                            7 => parse_nanos::<7, 0>(&self.digits[20..27]),
+                            8 => parse_nanos::<8, 0>(&self.digits[20..28]),
+                            _ => parse_nanos::<9, 0>(&self.digits[20..29]),
+                        };
+                        Some((time(hour, minute, second, nanos)?, 20 + digits as usize))
+                    }
+                    false => Some((time(hour, minute, second, 0)?, 19)),
                 }
             }
             // 092656
@@ -125,7 +131,7 @@ impl TimestampParser {
                 let hour = self.digits[11] * 10 + self.digits[12];
                 let minute = self.digits[13] * 10 + self.digits[14];
                 let second = self.digits[15] * 10 + self.digits[16];
-                let time = NaiveTime::from_hms_opt(hour as _, minute as _, second as _)?;
+                let time = time(hour, minute, second, 0)?;
                 Some((time, 17))
             }
             _ => None,
@@ -191,12 +197,20 @@ pub fn string_to_datetime<T: TimeZone>(
         return Ok(DateTime::from_local(date.and_time(time), offset));
     }
 
-    if !parser.test(10, b'T') && !parser.test(10, b' ') {
+    if !parser.test(10, b'T') && !parser.test(10, b't') && !parser.test(10, b' ') {
         return Err(err("invalid timestamp separator"));
     }
 
-    let (time, tz_offset) = parser.time().ok_or_else(|| err("error parsing time"))?;
+    let (time, mut tz_offset) = parser.time().ok_or_else(|| err("error parsing time"))?;
     let datetime = date.and_time(time);
+
+    if tz_offset == 32 {
+        // Decimal overrun
+        while bytes[tz_offset].is_ascii_digit() && tz_offset < bytes.len() {
+            tz_offset += 1;
+        }
+    }
+
     if bytes.len() <= tz_offset {
         let offset = timezone.offset_from_local_datetime(&datetime);
         let offset = offset
@@ -286,79 +300,120 @@ fn to_timestamp_nanos(dt: NaiveDateTime) -> Result<i64, ArrowError> {
 /// This function does not support parsing strings with a timezone
 /// or offset specified, as it considers only time since midnight.
 pub fn string_to_time_nanoseconds(s: &str) -> Result<i64, ArrowError> {
-    // colon count, presence of decimal, presence of whitespace
-    fn preprocess_time_string(string: &str) -> (usize, bool, bool) {
-        string
-            .as_bytes()
-            .iter()
-            .fold((0, false, false), |tup, char| match char {
-                b':' => (tup.0 + 1, tup.1, tup.2),
-                b'.' => (tup.0, true, tup.2),
-                b' ' => (tup.0, tup.1, true),
-                _ => tup,
-            })
+    let nt = string_to_time(s).ok_or_else(|| {
+        ArrowError::ParseError(format!("Failed to parse \'{s}\' as time"))
+    })?;
+    Ok(nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64)
+}
+
+fn string_to_time(s: &str) -> Option<NaiveTime> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 4 {
+        return None;
     }
 
-    // Do a preprocess pass of the string to prune which formats to attempt parsing for
-    let formats: &[&str] = match preprocess_time_string(s.trim()) {
-        // 24-hour clock, with hour, minutes, seconds and fractions of a second specified
-        // Examples:
-        // * 09:50:12.123456789
-        // *  9:50:12.123456789
-        (2, true, false) => &["%H:%M:%S%.f", "%k:%M:%S%.f"],
-
-        // 12-hour clock, with hour, minutes, seconds and fractions of a second specified
-        // Examples:
-        // * 09:50:12.123456789 PM
-        // * 09:50:12.123456789 pm
-        // *  9:50:12.123456789 AM
-        // *  9:50:12.123456789 am
-        (2, true, true) => &[
-            "%I:%M:%S%.f %P",
-            "%I:%M:%S%.f %p",
-            "%l:%M:%S%.f %P",
-            "%l:%M:%S%.f %p",
-        ],
-
-        // 24-hour clock, with hour, minutes and seconds specified
-        // Examples:
-        // * 09:50:12
-        // *  9:50:12
-        (2, false, false) => &["%H:%M:%S", "%k:%M:%S"],
-
-        // 12-hour clock, with hour, minutes and seconds specified
-        // Examples:
-        // * 09:50:12 PM
-        // * 09:50:12 pm
-        // *  9:50:12 AM
-        // *  9:50:12 am
-        (2, false, true) => &["%I:%M:%S %P", "%I:%M:%S %p", "%l:%M:%S %P", "%l:%M:%S %p"],
-
-        // 24-hour clock, with hour and minutes specified
-        // Examples:
-        // * 09:50
-        // *  9:50
-        (1, false, false) => &["%H:%M", "%k:%M"],
-
-        // 12-hour clock, with hour and minutes specified
-        // Examples:
-        // * 09:50 PM
-        // * 09:50 pm
-        // *  9:50 AM
-        // *  9:50 am
-        (1, false, true) => &["%I:%M %P", "%I:%M %p", "%l:%M %P", "%l:%M %p"],
-
-        _ => &[],
+    let (am, bytes) = match bytes.get(bytes.len() - 3..) {
+        Some(b" AM" | b" am" | b" Am" | b" aM") => {
+            (Some(true), &bytes[..bytes.len() - 3])
+        }
+        Some(b" PM" | b" pm" | b" pM" | b" Pm") => {
+            (Some(false), &bytes[..bytes.len() - 3])
+        }
+        _ => (None, bytes),
     };
 
-    formats
-        .iter()
-        .find_map(|f| NaiveTime::parse_from_str(s, f).ok())
-        .map(|nt| {
-            nt.num_seconds_from_midnight() as i64 * 1_000_000_000 + nt.nanosecond() as i64
-        })
-        // Return generic error if failed to parse as unknown which format user intended for the string
-        .ok_or_else(|| ArrowError::CastError(format!("Error parsing '{s}' as time")))
+    if bytes.len() < 4 {
+        return None;
+    }
+
+    let mut digits = [b'0'; 6];
+
+    // Extract hour
+    let bytes = match (bytes[1], bytes[2]) {
+        (b':', _) => {
+            digits[1] = bytes[0];
+            &bytes[2..]
+        }
+        (_, b':') => {
+            digits[0] = bytes[0];
+            digits[1] = bytes[1];
+            &bytes[3..]
+        }
+        _ => return None,
+    };
+
+    if bytes.len() < 2 {
+        return None; // Minutes required
+    }
+
+    // Extract minutes
+    digits[2] = bytes[0];
+    digits[3] = bytes[1];
+
+    let nanoseconds = match bytes.get(2) {
+        Some(b':') => {
+            if bytes.len() < 5 {
+                return None;
+            }
+
+            // Extract seconds
+            digits[4] = bytes[3];
+            digits[5] = bytes[4];
+
+            // Extract sub-seconds if any
+            match bytes.get(5) {
+                Some(b'.') => {
+                    let decimal = &bytes[6..];
+                    if decimal.iter().any(|x| !x.is_ascii_digit()) {
+                        return None;
+                    }
+                    match decimal.len() {
+                        0 => return None,
+                        1 => parse_nanos::<1, b'0'>(decimal),
+                        2 => parse_nanos::<2, b'0'>(decimal),
+                        3 => parse_nanos::<3, b'0'>(decimal),
+                        4 => parse_nanos::<4, b'0'>(decimal),
+                        5 => parse_nanos::<5, b'0'>(decimal),
+                        6 => parse_nanos::<6, b'0'>(decimal),
+                        7 => parse_nanos::<7, b'0'>(decimal),
+                        8 => parse_nanos::<8, b'0'>(decimal),
+                        _ => parse_nanos::<9, b'0'>(decimal),
+                    }
+                }
+                Some(_) => return None,
+                None => 0,
+            }
+        }
+        Some(_) => return None,
+        None => 0,
+    };
+
+    digits.iter_mut().for_each(|x| *x = x.wrapping_sub(b'0'));
+    if digits.iter().any(|x| *x > 9) {
+        return None;
+    }
+
+    let hour = match (digits[0] * 10 + digits[1], am) {
+        (12, Some(true)) => 0,               // 12:00 AM -> 00:00
+        (h @ 1..=11, Some(true)) => h,       // 1:00 AM -> 01:00
+        (12, Some(false)) => 12,             // 12:00 PM -> 12:00
+        (h @ 1..=11, Some(false)) => h + 12, // 1:00 PM -> 13:00
+        (_, Some(_)) => return None,
+        (h, None) => h,
+    };
+
+    // Handle leap second
+    let (second, nanoseconds) = match digits[4] * 10 + digits[5] {
+        60 => (59, nanoseconds + 1_000_000_000),
+        s => (s, nanoseconds),
+    };
+
+    NaiveTime::from_hms_nano_opt(
+        hour as _,
+        (digits[2] * 10 + digits[3]) as _,
+        second as _,
+        nanoseconds,
+    )
 }
 
 /// Specialized parsing implementations
@@ -881,6 +936,13 @@ mod tests {
     use arrow_buffer::i256;
 
     #[test]
+    fn test_parse_nanos() {
+        assert_eq!(parse_nanos::<3, 0>(&[1, 2, 3]), 123_000_000);
+        assert_eq!(parse_nanos::<5, 0>(&[1, 2, 3, 4, 5]), 123_450_000);
+        assert_eq!(parse_nanos::<6, b'0'>(b"123456"), 123_456_000);
+    }
+
+    #[test]
     fn string_to_timestamp_timezone() {
         // Explicit timezone
         assert_eq!(
@@ -977,6 +1039,46 @@ mod tests {
     }
 
     #[test]
+    fn string_to_timestamp_chrono() {
+        let cases = [
+            "2020-09-08T13:42:29Z",
+            "1969-01-01T00:00:00.1Z",
+            "2020-09-08T12:00:12.12345678+00:00",
+            "2020-09-08T12:00:12+00:00",
+            "2020-09-08T12:00:12.1+00:00",
+            "2020-09-08T12:00:12.12+00:00",
+            "2020-09-08T12:00:12.123+00:00",
+            "2020-09-08T12:00:12.1234+00:00",
+            "2020-09-08T12:00:12.12345+00:00",
+            "2020-09-08T12:00:12.123456+00:00",
+            "2020-09-08T12:00:12.1234567+00:00",
+            "2020-09-08T12:00:12.12345678+00:00",
+            "2020-09-08T12:00:12.123456789+00:00",
+            "2020-09-08T12:00:12.12345678912z",
+            "2020-09-08T12:00:12.123456789123Z",
+            "2020-09-08T12:00:12.123456789123+02:00",
+            "2020-09-08T12:00:12.12345678912345Z",
+            "2020-09-08T12:00:12.1234567891234567+02:00",
+            "2020-09-08T12:00:60Z",
+            "2020-09-08T12:00:60.123Z",
+            "2020-09-08T12:00:60.123456+02:00",
+            "2020-09-08T12:00:60.1234567891234567+02:00",
+            "2020-09-08T12:00:60.999999999+02:00",
+            "2020-09-08t12:00:12.12345678+00:00",
+            "2020-09-08t12:00:12+00:00",
+            "2020-09-08t12:00:12Z",
+        ];
+
+        for case in cases {
+            let chrono = DateTime::parse_from_rfc3339(case).unwrap();
+            let chrono_utc = chrono.with_timezone(&Utc);
+
+            let custom = string_to_datetime(&Utc, case).unwrap();
+            assert_eq!(chrono_utc, custom)
+        }
+    }
+
+    #[test]
     fn string_to_timestamp_invalid() {
         // Test parsing invalid formats
         let cases = [
@@ -995,11 +1097,10 @@ mod tests {
             ("2015-01-20T25:35:20-08:00", "error parsing time"),
             ("1997-01-10T09:61:56.123Z", "error parsing time"),
             ("1997-01-10T09:61:90.123Z", "error parsing time"),
-            ("1997-01-10T12:00:56.12Z", "error parsing time"),
-            ("1997-01-10T12:00:56.1234Z", "error parsing time"),
-            ("1997-01-10T12:00:56.12345Z", "error parsing time"),
             ("1997-01-10T12:00:6.123Z", "error parsing time"),
             ("1997-01-31T092656.123Z", "error parsing time"),
+            ("1997-01-10T12:00:06.", "error parsing time"),
+            ("1997-01-10T12:00:06. ", "error parsing time"),
         ];
 
         for (s, ctx) in cases {
@@ -1337,6 +1438,74 @@ mod tests {
             Time32SecondType::parse_formatted("02 - 10 - 01", "%H - %M - %S"),
             Some(7_801)
         );
+    }
+
+    #[test]
+    fn test_string_to_time_invalid() {
+        let cases = [
+            "25:00",
+            "9:00:",
+            "009:00",
+            "09:0:00",
+            "25:00:00",
+            "13:00 AM",
+            "13:00 PM",
+            "12:00. AM",
+            "09:0:00",
+            "09:01:0",
+            "09:01:1",
+            "9:1:0",
+            "09:01:0",
+            "1:00.123",
+            "1:00:00.123f",
+            " 9:00:00",
+            ":09:00",
+            "T9:00:00",
+            "AM",
+        ];
+        for case in cases {
+            assert!(string_to_time(case).is_none(), "{case}");
+        }
+    }
+
+    #[test]
+    fn test_string_to_time_chrono() {
+        let cases = [
+            ("1:00", "%H:%M"),
+            ("12:00", "%H:%M"),
+            ("13:00", "%H:%M"),
+            ("24:00", "%H:%M"),
+            ("1:00:00", "%H:%M:%S"),
+            ("12:00:30", "%H:%M:%S"),
+            ("13:00:59", "%H:%M:%S"),
+            ("24:00:60", "%H:%M:%S"),
+            ("09:00:00", "%H:%M:%S%.f"),
+            ("0:00:30.123456", "%H:%M:%S%.f"),
+            ("0:00 AM", "%I:%M %P"),
+            ("1:00 AM", "%I:%M %P"),
+            ("12:00 AM", "%I:%M %P"),
+            ("13:00 AM", "%I:%M %P"),
+            ("0:00 PM", "%I:%M %P"),
+            ("1:00 PM", "%I:%M %P"),
+            ("12:00 PM", "%I:%M %P"),
+            ("13:00 PM", "%I:%M %P"),
+            ("1:00 pM", "%I:%M %P"),
+            ("1:00 Pm", "%I:%M %P"),
+            ("1:00 aM", "%I:%M %P"),
+            ("1:00 Am", "%I:%M %P"),
+            ("1:00:30.123456 PM", "%I:%M:%S%.f %P"),
+            ("1:00:30.123456789 PM", "%I:%M:%S%.f %P"),
+            ("1:00:30.123456789123 PM", "%I:%M:%S%.f %P"),
+            ("1:00:30.1234 PM", "%I:%M:%S%.f %P"),
+            ("1:00:30.123456 PM", "%I:%M:%S%.f %P"),
+            ("1:00:30.123456789123456789 PM", "%I:%M:%S%.f %P"),
+            ("1:00:30.12F456 PM", "%I:%M:%S%.f %P"),
+        ];
+        for (s, format) in cases {
+            let chrono = NaiveTime::parse_from_str(s, format).ok();
+            let custom = string_to_time(s);
+            assert_eq!(chrono, custom, "{s}");
+        }
     }
 
     #[test]
