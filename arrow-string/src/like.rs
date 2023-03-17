@@ -18,8 +18,8 @@
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::*;
-use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_buffer::NullBuffer;
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::*;
 use arrow_select::take::take;
 use regex::Regex;
@@ -581,8 +581,7 @@ where
         ));
     }
 
-    let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len());
+    let nulls = NullBuffer::union(left.data().nulls(), right.data().nulls());
 
     let mut result = BooleanBufferBuilder::new(left.len());
     for i in 0..left.len() {
@@ -605,15 +604,11 @@ where
     }
 
     let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.finish()],
-            vec![],
-        )
+        ArrayDataBuilder::new(DataType::Boolean)
+            .len(left.len())
+            .nulls(nulls)
+            .buffers(vec![result.finish()])
+            .build_unchecked()
     };
     Ok(BooleanArray::from(data))
 }

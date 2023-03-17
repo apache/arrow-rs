@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::bit_iterator::BitIndexIterator;
 use crate::buffer::BooleanBuffer;
 use crate::{Buffer, MutableBuffer};
 
@@ -48,6 +49,18 @@ impl NullBuffer {
     /// `buffer` must contain `null_count` `0` bits
     pub unsafe fn new_unchecked(buffer: BooleanBuffer, null_count: usize) -> Self {
         Self { buffer, null_count }
+    }
+
+    /// Computes the union of two optional [`NullBuffer`]
+    pub fn union(
+        lhs: Option<&NullBuffer>,
+        rhs: Option<&NullBuffer>,
+    ) -> Option<NullBuffer> {
+        match (lhs, rhs) {
+            (Some(lhs), Some(rhs)) => Some(Self::new(lhs.inner() & rhs.inner())),
+            (Some(n), None) | (None, Some(n)) => Some(n.clone()),
+            (None, None) => None,
+        }
     }
 
     /// Returns the length of this [`NullBuffer`]
@@ -97,10 +110,28 @@ impl NullBuffer {
         Self::new(self.buffer.slice(offset, len))
     }
 
+    /// Calls the provided closure for each index in this null mask that is set
+    #[inline]
+    pub fn try_for_each_valid_idx<E, F: FnMut(usize) -> Result<(), E>>(
+        &self,
+        f: F,
+    ) -> Result<(), E> {
+        if self.null_count == self.len() {
+            return Ok(());
+        }
+        BitIndexIterator::new(self.validity(), self.offset(), self.len()).try_for_each(f)
+    }
+
     /// Returns the inner [`BooleanBuffer`]
     #[inline]
     pub fn inner(&self) -> &BooleanBuffer {
         &self.buffer
+    }
+
+    /// Returns the inner [`BooleanBuffer`]
+    #[inline]
+    pub fn into_inner(self) -> BooleanBuffer {
+        self.buffer
     }
 
     /// Returns the underlying [`Buffer`]

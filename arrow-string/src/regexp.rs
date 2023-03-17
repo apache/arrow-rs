@@ -20,8 +20,8 @@
 
 use arrow_array::builder::{BooleanBufferBuilder, GenericStringBuilder, ListBuilder};
 use arrow_array::*;
-use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_buffer::NullBuffer;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use regex::Regex;
 use std::collections::HashMap;
@@ -45,8 +45,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
                 .to_string(),
         ));
     }
-    let null_bit_buffer =
-        combine_option_bitmap(&[array.data_ref(), regex_array.data_ref()], array.len());
+    let nulls = NullBuffer::union(array.data().nulls(), regex_array.data().nulls());
 
     let mut patterns: HashMap<String, Regex> = HashMap::new();
     let mut result = BooleanBufferBuilder::new(array.len());
@@ -100,15 +99,11 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
         .collect::<Result<Vec<()>, ArrowError>>()?;
 
     let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            array.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.finish()],
-            vec![],
-        )
+        ArrayDataBuilder::new(DataType::Boolean)
+            .len(array.len())
+            .buffers(vec![result.finish()])
+            .nulls(nulls)
+            .build_unchecked()
     };
     Ok(BooleanArray::from(data))
 }

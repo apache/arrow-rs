@@ -21,11 +21,9 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::iterator::ArrayIter;
 use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
-use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::ArrowError;
 use std::sync::Arc;
 
@@ -33,18 +31,15 @@ use std::sync::Arc;
 unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
     len: usize,
     buffer: Buffer,
-    null_count: usize,
-    null_buffer: Option<Buffer>,
+    nulls: Option<NullBuffer>,
 ) -> PrimitiveArray<O> {
-    PrimitiveArray::from(ArrayData::new_unchecked(
-        O::DATA_TYPE,
-        len,
-        Some(null_count),
-        null_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    ))
+    PrimitiveArray::from(
+        ArrayDataBuilder::new(O::DATA_TYPE)
+            .len(len)
+            .nulls(nulls)
+            .buffers(vec![buffer])
+            .build_unchecked(),
+    )
 }
 
 /// See [`PrimitiveArray::unary`]
@@ -220,11 +215,7 @@ where
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
-    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
-    let null_count = null_buffer
-        .as_ref()
-        .map(|x| len - x.count_set_bits_offset(0, len))
-        .unwrap_or_default();
+    let nulls = NullBuffer::union(a.data().nulls(), b.data().nulls());
 
     let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
     // JUSTIFICATION
@@ -234,7 +225,7 @@ where
     //      `values` is an iterator with a known size from a PrimitiveArray
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
 
-    Ok(unsafe { build_primitive_array(len, buffer, null_count, null_buffer) })
+    Ok(unsafe { build_primitive_array(len, buffer, nulls) })
 }
 
 /// Given two arrays of length `len`, calls `op(a[i], b[i])` for `i` in `0..len`, mutating
@@ -275,10 +266,7 @@ where
         ))));
     }
 
-    let len = a.len();
-
-    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
-    let nulls = null_buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, len)));
+    let nulls = NullBuffer::union(a.data().nulls(), b.data().nulls());
 
     let mut builder = a.into_builder()?;
 
@@ -326,18 +314,13 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls(len, a, b, op)
     } else {
-        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
-
-        let null_count = null_buffer
-            .as_ref()
-            .map(|x| len - x.count_set_bits_offset(0, len))
-            .unwrap_or_default();
+        let nulls = NullBuffer::union(a.data().nulls(), b.data().nulls()).unwrap();
 
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
         let slice = buffer.as_slice_mut();
 
-        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        nulls.try_for_each_valid_idx(|idx| {
             unsafe {
                 *slice.get_unchecked_mut(idx) =
                     op(a.value_unchecked(idx), b.value_unchecked(idx))?
@@ -345,9 +328,7 @@ where
             Ok::<_, ArrowError>(())
         })?;
 
-        Ok(unsafe {
-            build_primitive_array(len, buffer.finish(), null_count, null_buffer)
-        })
+        Ok(unsafe { build_primitive_array(len, buffer.finish(), Some(nulls)) })
     }
 }
 
@@ -391,17 +372,12 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
-        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
-        let null_count = null_buffer
-            .as_ref()
-            .map(|x| len - x.count_set_bits_offset(0, len))
-            .unwrap_or_default();
-
+        let nulls = NullBuffer::union(a.data().nulls(), b.data().nulls()).unwrap();
         let mut builder = a.into_builder()?;
 
         let slice = builder.values_slice_mut();
 
-        match try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        match nulls.try_for_each_valid_idx(|idx| {
             unsafe {
                 *slice.get_unchecked_mut(idx) =
                     op(*slice.get_unchecked(idx), b.value_unchecked(idx))?
@@ -412,15 +388,8 @@ where
             Err(err) => return Ok(Err(err)),
         };
 
-        let array_builder = builder
-            .finish()
-            .data()
-            .clone()
-            .into_builder()
-            .null_bit_buffer(null_buffer)
-            .null_count(null_count);
-
-        let array_data = unsafe { array_builder.build_unchecked() };
+        let array_builder = builder.finish().data().clone().into_builder();
+        let array_data = unsafe { array_builder.nulls(Some(nulls)).build_unchecked() };
         Ok(Ok(PrimitiveArray::<T>::from(array_data)))
     }
 }
@@ -443,7 +412,7 @@ where
             buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
         };
     }
-    Ok(unsafe { build_primitive_array(len, buffer.into(), 0, None) })
+    Ok(unsafe { build_primitive_array(len, buffer.into(), None) })
 }
 
 /// This intentional inline(never) attribute helps LLVM optimize the loop.

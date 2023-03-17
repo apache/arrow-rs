@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
@@ -38,7 +38,7 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
         )));
     }
 
-    let output_bitmap = combine_option_bitmap(&[left.data(), right.data()], left.len());
+    let nulls = NullBuffer::union(left.data().nulls(), right.data().nulls());
 
     let left_offsets = left.value_offsets();
     let right_offsets = right.value_offsets();
@@ -67,7 +67,7 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
         .len(left.len())
         .add_buffer(output_offsets.finish())
         .add_buffer(output_values.finish())
-        .null_bit_buffer(output_bitmap);
+        .nulls(nulls);
 
     // SAFETY - offsets valid by construction
     Ok(unsafe { builder.build_unchecked() }.into())

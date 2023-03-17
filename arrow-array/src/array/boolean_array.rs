@@ -19,9 +19,8 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor};
-use arrow_buffer::{bit_util, Buffer, MutableBuffer};
-use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_buffer::{bit_util, Buffer, MutableBuffer, NullBuffer};
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
 
@@ -233,24 +232,18 @@ impl BooleanArray {
     {
         assert_eq!(left.len(), right.len());
 
-        let null_bit_buffer =
-            combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len());
-
+        let nulls = NullBuffer::union(left.data().nulls(), right.data().nulls());
         let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
             op(left.value_unchecked(i), right.value_unchecked(i))
         });
 
         let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                left.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![Buffer::from(buffer)],
-                vec![],
-            )
+            ArrayDataBuilder::new(DataType::Boolean)
+                .len(left.len())
+                .nulls(nulls)
+                .buffers(vec![buffer.into()])
+                .build_unchecked()
         };
         Self::from(data)
     }
