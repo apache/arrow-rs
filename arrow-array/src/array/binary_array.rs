@@ -77,7 +77,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
             .offset(v.offset())
             .add_buffer(v.data_ref().buffers()[0].clone())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
-            .nulls(v.data().nulls().cloned());
+            .nulls(v.nulls().cloned());
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)

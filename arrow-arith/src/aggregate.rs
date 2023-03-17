@@ -117,7 +117,7 @@ where
             .map(|i| unsafe { array.value_unchecked(i) })
             .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
     } else {
-        let nulls = array.data().nulls().unwrap();
+        let nulls = array.nulls().unwrap();
         let iter = BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len());
         unsafe {
             let idx = iter.reduce(|acc_idx, idx| {
@@ -288,7 +288,7 @@ where
 
     let data: &[T::Native] = array.values();
 
-    match array.data().nulls() {
+    match array.nulls() {
         None => {
             let sum = data.iter().fold(T::default_value(), |accumulator, value| {
                 accumulator.add_wrapping(*value)
@@ -347,7 +347,7 @@ where
 
     let data: &[T::Native] = array.values();
 
-    match array.data().nulls() {
+    match array.nulls() {
         None => {
             let sum = data
                 .iter()
@@ -665,7 +665,7 @@ mod simd {
         let mut chunk_acc = A::init_accumulator_chunk();
         let mut rem_acc = A::init_accumulator_scalar();
 
-        match array.data().nulls() {
+        match array.nulls() {
             None => {
                 let data_chunks = data.chunks_exact(64);
                 let remainder = data_chunks.remainder();

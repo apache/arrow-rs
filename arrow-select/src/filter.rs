@@ -222,7 +222,7 @@ impl FilterBuilder {
     /// Create a new [`FilterBuilder`] that can be used to construct a [`FilterPredicate`]
     pub fn new(filter: &BooleanArray) -> Self {
         let filter = match filter.null_count() {
-            0 => BooleanArray::from(filter.data().clone()),
+            0 => filter.clone(),
             _ => prep_null_mask_filter(filter),
         };
 

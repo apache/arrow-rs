@@ -414,8 +414,7 @@ where
 
         let array_builder = builder
             .finish()
-            .data()
-            .clone()
+            .into_data()
             .into_builder()
             .null_bit_buffer(null_buffer)
             .null_count(null_count);

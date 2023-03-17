@@ -289,7 +289,7 @@ mod tests {
 
         let array = builder.finish();
         assert_eq!(0, array.null_count());
-        assert!(array.data().nulls().is_none());
+        assert!(array.nulls().is_none());
     }
 
     #[test]
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(4, array.false_count());
 
         assert_eq!(0, array.null_count());
-        assert!(array.data().nulls().is_none());
+        assert!(array.nulls().is_none());
     }
 
     #[test]

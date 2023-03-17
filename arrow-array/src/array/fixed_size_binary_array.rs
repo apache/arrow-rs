@@ -17,11 +17,13 @@
 
 use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
-use crate::{Array, ArrayAccessor, FixedSizeListArray};
+use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
+use std::sync::Arc;
 
 /// An array where each element is a fixed-size sequence of bytes.
 ///
@@ -462,8 +464,21 @@ impl Array for FixedSizeBinaryArray {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 }
 

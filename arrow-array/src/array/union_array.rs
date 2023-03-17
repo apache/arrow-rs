@@ -16,12 +16,14 @@
 // under the License.
 
 use crate::{make_array, Array, ArrayRef};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field, UnionMode};
 /// Contains the `UnionArray` type.
 ///
 use std::any::Any;
+use std::sync::Arc;
 
 /// An Array that can represent slots of varying types.
 ///
@@ -317,8 +319,20 @@ impl Array for UnionArray {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        None
     }
 
     /// Union types always return non null as there is no validity buffer.

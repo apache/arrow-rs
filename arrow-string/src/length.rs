@@ -349,7 +349,7 @@ mod tests {
                 let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
 
                 let expected: Int32Array = expected.into();
-                assert_eq!(expected.data(), result.data());
+                assert_eq!(&expected, result);
             })
     }
 
@@ -369,7 +369,7 @@ mod tests {
                     .map(|e| e.map(|e| e as i64))
                     .collect::<Vec<_>>()
                     .into();
-                assert_eq!(expected.data(), result.data());
+                assert_eq!(&expected, result);
             })
     }
 
@@ -528,7 +528,7 @@ mod tests {
                 let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
 
                 let expected: Int32Array = expected.into();
-                assert_eq!(expected.data(), result.data());
+                assert_eq!(&expected, result);
             })
     }
 
@@ -548,7 +548,7 @@ mod tests {
                     .map(|e| e.map(|e| e as i64))
                     .collect::<Vec<_>>()
                     .into();
-                assert_eq!(expected.data(), result.data());
+                assert_eq!(&expected, result);
             })
     }
 

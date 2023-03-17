@@ -610,7 +610,7 @@ mod tests {
         let a = BooleanArray::from(vec![false, false, false, true, true, true]);
 
         // ensure null bitmap of a is absent
-        assert!(a.data().nulls().is_none());
+        assert!(a.nulls().is_none());
 
         let b = BooleanArray::from(vec![
             Some(true),
@@ -622,7 +622,7 @@ mod tests {
         ]);
 
         // ensure null bitmap of b is present
-        assert!(b.data().nulls().is_some());
+        assert!(b.nulls().is_some());
 
         let c = or_kleene(&a, &b).unwrap();
 
@@ -650,12 +650,12 @@ mod tests {
         ]);
 
         // ensure null bitmap of b is absent
-        assert!(a.data().nulls().is_some());
+        assert!(a.nulls().is_some());
 
         let b = BooleanArray::from(vec![false, false, false, true, true, true]);
 
         // ensure null bitmap of a is present
-        assert!(b.data().nulls().is_none());
+        assert!(b.nulls().is_none());
 
         let c = or_kleene(&a, &b).unwrap();
 
@@ -852,7 +852,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, false, false, false]);
 
         assert_eq!(expected, res);
-        assert!(res.data().nulls().is_none());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -865,7 +865,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, false, false, false]);
 
         assert_eq!(expected, res);
-        assert!(res.data().nulls().is_none());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -877,7 +877,7 @@ mod tests {
         let expected = BooleanArray::from(vec![true, true, true, true]);
 
         assert_eq!(expected, res);
-        assert!(res.data().nulls().is_none());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -890,7 +890,7 @@ mod tests {
         let expected = BooleanArray::from(vec![true, true, true, true]);
 
         assert_eq!(expected, res);
-        assert!(res.data().nulls().is_none());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -902,7 +902,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, true, false, true]);
 
         assert_eq!(expected, res);
-        assert!(res.data().nulls().is_none());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -933,7 +933,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, true, false, true]);
 
         assert_eq!(expected, res);
-        assert!(res.data().nulls().is_none());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -945,7 +945,7 @@ mod tests {
         let expected = BooleanArray::from(vec![true, false, true, false]);
 
         assert_eq!(expected, res);
-        assert!(res.data().nulls().is_none());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -976,6 +976,6 @@ mod tests {
         let expected = BooleanArray::from(vec![true, false, true, false]);
 
         assert_eq!(expected, res);
-        assert!(res.data().nulls().is_none());
+        assert!(res.nulls().is_none());
     }
 }
