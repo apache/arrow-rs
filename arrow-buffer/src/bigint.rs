@@ -774,7 +774,7 @@ mod tests {
         assert_eq!(actual.to_string(), expected.to_string());
 
         let actual = il ^ ir;
-        let (expected, _) = i256::from_bigint_with_overflow(bl.clone() ^ br.clone());
+        let (expected, _) = i256::from_bigint_with_overflow(bl.clone() ^ br);
         assert_eq!(actual.to_string(), expected.to_string());
 
         for shift in [0_u8, 1, 4, 126, 128, 129, 254, 255] {
