@@ -21,7 +21,7 @@ use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
 use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait};
-use arrow_buffer::buffer::{NullBuffer, OffsetBuffer};
+use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;

@@ -152,7 +152,7 @@
 //!
 //! [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html
 //! [`&dyn Array`]: Array
-//! [`NullBuffer`]: arrow_buffer::buffer::NullBuffer
+//! [`NullBuffer`]: arrow_buffer::NullBuffer
 //! [`Buffer`]: arrow_buffer::Buffer
 //! [`compute`]: https://docs.rs/arrow/latest/arrow/compute/index.html
 //! [`json`]: https://docs.rs/arrow/latest/arrow/json/index.html

@@ -287,30 +287,28 @@ impl ArrowTemporalType for DurationMicrosecondType {}
 impl ArrowTemporalType for DurationNanosecondType {}
 
 /// A timestamp type allows us to create array builders that take a timestamp.
-pub trait ArrowTimestampType: ArrowTemporalType {
+pub trait ArrowTimestampType: ArrowTemporalType<Native = i64> {
+    /// The [`TimeUnit`] of this timestamp.
+    const UNIT: TimeUnit;
+
     /// Returns the `TimeUnit` of this timestamp.
-    fn get_time_unit() -> TimeUnit;
+    #[deprecated(note = "Use Self::UNIT")]
+    fn get_time_unit() -> TimeUnit {
+        Self::UNIT
+    }
 }
 
 impl ArrowTimestampType for TimestampSecondType {
-    fn get_time_unit() -> TimeUnit {
-        TimeUnit::Second
-    }
+    const UNIT: TimeUnit = TimeUnit::Second;
 }
 impl ArrowTimestampType for TimestampMillisecondType {
-    fn get_time_unit() -> TimeUnit {
-        TimeUnit::Millisecond
-    }
+    const UNIT: TimeUnit = TimeUnit::Millisecond;
 }
 impl ArrowTimestampType for TimestampMicrosecondType {
-    fn get_time_unit() -> TimeUnit {
-        TimeUnit::Microsecond
-    }
+    const UNIT: TimeUnit = TimeUnit::Microsecond;
 }
 impl ArrowTimestampType for TimestampNanosecondType {
-    fn get_time_unit() -> TimeUnit {
-        TimeUnit::Nanosecond
-    }
+    const UNIT: TimeUnit = TimeUnit::Nanosecond;
 }
 
 impl IntervalYearMonthType {

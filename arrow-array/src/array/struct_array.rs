@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::{make_array, Array, ArrayRef};
-use arrow_buffer::buffer::{buffer_bin_or, NullBuffer};
-use arrow_buffer::Buffer;
+use arrow_buffer::{buffer_bin_or, Buffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
 use std::sync::Arc;

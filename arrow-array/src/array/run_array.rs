@@ -18,8 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_buffer::buffer::{NullBuffer, RunEndBuffer};
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, NullBuffer, RunEndBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 

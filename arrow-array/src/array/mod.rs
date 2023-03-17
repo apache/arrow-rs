@@ -20,8 +20,7 @@
 mod binary_array;
 
 use crate::types::*;
-use arrow_buffer::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;

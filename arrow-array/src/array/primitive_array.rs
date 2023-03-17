@@ -25,8 +25,7 @@ use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::{types::*, ArrayRef, ArrowNativeTypeOp};
 use crate::{Array, ArrayAccessor};
-use arrow_buffer::buffer::{NullBuffer, ScalarBuffer};
-use arrow_buffer::{i256, ArrowNativeType, Buffer};
+use arrow_buffer::{i256, ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
@@ -1063,7 +1062,7 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
             self.data
                 .clone()
                 .into_builder()
-                .data_type(DataType::Timestamp(T::get_time_unit(), timezone))
+                .data_type(DataType::Timestamp(T::UNIT, timezone))
                 .build_unchecked()
         };
         PrimitiveArray::from(array_data)
