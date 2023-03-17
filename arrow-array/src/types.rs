@@ -44,6 +44,8 @@ impl BooleanType {
 
 /// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
 /// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
+///
+/// [`ArrowNativeType`]: arrow_buffer::ArrowNativeType
 pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
     /// Corresponding Rust native type for the primitive type.
     type Native: ArrowNativeTypeOp;
