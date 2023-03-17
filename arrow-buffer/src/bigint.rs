@@ -18,7 +18,7 @@
 use num::cast::AsPrimitive;
 use num::{BigInt, FromPrimitive, Num, ToPrimitive};
 use std::cmp::Ordering;
-use std::ops::{BitAnd, BitOr, BitXor, Shl};
+use std::ops::{BitAnd, BitOr, BitXor, Shl, Shr};
 
 /// A signed 256-bit integer
 #[allow(non_camel_case_types)]
@@ -496,6 +496,7 @@ impl std::ops::Neg for i256 {
 impl BitAnd for i256 {
     type Output = i256;
 
+    #[inline]
     fn bitand(self, rhs: Self) -> Self::Output {
         Self {
             low: self.low & rhs.low,
@@ -507,6 +508,7 @@ impl BitAnd for i256 {
 impl BitOr for i256 {
     type Output = i256;
 
+    #[inline]
     fn bitor(self, rhs: Self) -> Self::Output {
         Self {
             low: self.low | rhs.low,
@@ -518,10 +520,53 @@ impl BitOr for i256 {
 impl BitXor for i256 {
     type Output = i256;
 
+    #[inline]
     fn bitxor(self, rhs: Self) -> Self::Output {
         Self {
             low: self.low ^ rhs.low,
             high: self.high ^ rhs.high,
+        }
+    }
+}
+
+impl Shl<u8> for i256 {
+    type Output = i256;
+
+    #[inline]
+    fn shl(self, rhs: u8) -> Self::Output {
+        if rhs == 0 {
+            self
+        } else if rhs < 128 {
+            Self {
+                high: self.high << rhs | (self.low >> (128 - rhs)) as i128,
+                low: self.low << rhs,
+            }
+        } else {
+            Self {
+                high: (self.low << (rhs - 128)) as i128,
+                low: 0,
+            }
+        }
+    }
+}
+
+impl Shr<u8> for i256 {
+    type Output = i256;
+
+    #[inline]
+    fn shr(self, rhs: u8) -> Self::Output {
+        if rhs == 0 {
+            self
+        } else if rhs < 128 {
+            Self {
+                high: self.high >> rhs,
+                low: self.low >> rhs | ((self.high as u128) << (128 - rhs)),
+            }
+        } else {
+            Self {
+                high: self.high >> 127,
+                low: (self.high >> (rhs - 128)) as u128,
+            }
         }
     }
 }
@@ -731,6 +776,16 @@ mod tests {
         let actual = il ^ ir;
         let (expected, _) = i256::from_bigint_with_overflow(bl.clone() ^ br.clone());
         assert_eq!(actual.to_string(), expected.to_string());
+
+        for shift in [0_u8, 1, 4, 126, 128, 129, 254, 255] {
+            let actual = il << shift;
+            let (expected, _) = i256::from_bigint_with_overflow(bl.clone() << shift);
+            assert_eq!(actual.to_string(), expected.to_string());
+
+            let actual = il >> shift;
+            let (expected, _) = i256::from_bigint_with_overflow(bl.clone() >> shift);
+            assert_eq!(actual.to_string(), expected.to_string());
+        }
     }
 
     #[test]
