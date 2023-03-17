@@ -29,7 +29,7 @@ pub struct BitIterator<'a> {
 }
 
 impl<'a> BitIterator<'a> {
-    /// Create a new [`BitSliceIterator`] from the provide `buffer`,
+    /// Create a new [`BitIterator`] from the provided `buffer`,
     /// and `offset` and `len` in bits
     ///
     /// # Panic
@@ -38,7 +38,12 @@ impl<'a> BitIterator<'a> {
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         let end_offset = offset.checked_add(len).unwrap();
         let required_len = ceil(end_offset, 8);
-        assert!(buffer.len() >= required_len);
+        assert!(
+            buffer.len() >= required_len,
+            "BitIterator buffer too small, expected {required_len} got {}",
+            buffer.len()
+        );
+
         Self {
             buffer,
             current_offset: offset,
@@ -91,7 +96,7 @@ pub struct BitSliceIterator<'a> {
 }
 
 impl<'a> BitSliceIterator<'a> {
-    /// Create a new [`BitSliceIterator`] from the provide `buffer`,
+    /// Create a new [`BitSliceIterator`] from the provided `buffer`,
     /// and `offset` and `len` in bits
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         let chunk = UnalignedBitChunk::new(buffer, offset, len);
@@ -258,7 +263,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_fuzz() {
+    fn test_bit_iterator() {
         let mask = &[0b00010010, 0b00100011, 0b00000101, 0b00010001, 0b10010011];
         let actual: Vec<_> = BitIterator::new(mask, 0, 5).collect();
         assert_eq!(actual, &[false, true, false, false, true]);
@@ -274,5 +279,15 @@ mod tests {
                 false, true, false
             ]
         );
+
+        assert_eq!(BitIterator::new(mask, 0, 0).count(), 0);
+        assert_eq!(BitIterator::new(mask, 40, 0).count(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "BitIterator buffer too small, expected 3 got 2")]
+    fn test_bit_iterator_bounds() {
+        let mask = &[223, 23];
+        BitIterator::new(mask, 17, 0);
     }
 }
