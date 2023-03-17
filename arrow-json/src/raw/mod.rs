@@ -27,10 +27,13 @@ use crate::raw::primitive_array::PrimitiveArrayDecoder;
 use crate::raw::string_array::StringArrayDecoder;
 use crate::raw::struct_array::StructArrayDecoder;
 use crate::raw::tape::{Tape, TapeDecoder, TapeElement};
+use crate::raw::timestamp_array::TimestampArrayDecoder;
+use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, SchemaRef, TimeUnit};
+use chrono::Utc;
 use std::io::BufRead;
 
 mod boolean_array;
@@ -41,6 +44,7 @@ mod primitive_array;
 mod string_array;
 mod struct_array;
 mod tape;
+mod timestamp_array;
 
 /// A builder for [`RawReader`] and [`RawDecoder`]
 pub struct RawReaderBuilder {
@@ -293,10 +297,34 @@ fn make_decoder(
         data_type => (primitive_decoder, data_type),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
         DataType::Float64 => primitive_decoder!(Float64Type, data_type),
-        DataType::Timestamp(TimeUnit::Second, None) => primitive_decoder!(TimestampSecondType, data_type),
-        DataType::Timestamp(TimeUnit::Millisecond, None) => primitive_decoder!(TimestampMillisecondType, data_type),
-        DataType::Timestamp(TimeUnit::Microsecond, None) => primitive_decoder!(TimestampMicrosecondType, data_type),
-        DataType::Timestamp(TimeUnit::Nanosecond, None) => primitive_decoder!(TimestampNanosecondType, data_type),
+        DataType::Timestamp(TimeUnit::Second, None) => {
+            Ok(Box::new(TimestampArrayDecoder::<TimestampSecondType, _>::new(data_type, Utc)))
+        },
+        DataType::Timestamp(TimeUnit::Millisecond, None) => {
+            Ok(Box::new(TimestampArrayDecoder::<TimestampMillisecondType, _>::new(data_type, Utc)))
+        },
+        DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            Ok(Box::new(TimestampArrayDecoder::<TimestampMicrosecondType, _>::new(data_type, Utc)))
+        },
+        DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+            Ok(Box::new(TimestampArrayDecoder::<TimestampNanosecondType, _>::new(data_type, Utc)))
+        },
+        DataType::Timestamp(TimeUnit::Second, Some(ref tz)) => {
+            let tz: Tz = tz.parse()?;
+            Ok(Box::new(TimestampArrayDecoder::<TimestampSecondType, _>::new(data_type, tz)))
+        },
+        DataType::Timestamp(TimeUnit::Millisecond, Some(ref tz)) => {
+            let tz: Tz = tz.parse()?;
+            Ok(Box::new(TimestampArrayDecoder::<TimestampMillisecondType, _>::new(data_type, tz)))
+        },
+        DataType::Timestamp(TimeUnit::Microsecond, Some(ref tz)) => {
+            let tz: Tz = tz.parse()?;
+            Ok(Box::new(TimestampArrayDecoder::<TimestampMicrosecondType, _>::new(data_type, tz)))
+        },
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(ref tz)) => {
+            let tz: Tz = tz.parse()?;
+            Ok(Box::new(TimestampArrayDecoder::<TimestampNanosecondType, _>::new(data_type, tz)))
+        },
         DataType::Date32 => primitive_decoder!(Date32Type, data_type),
         DataType::Date64 => primitive_decoder!(Date64Type, data_type),
         DataType::Time32(TimeUnit::Second) => primitive_decoder!(Time32SecondType, data_type),
@@ -809,29 +837,27 @@ mod tests {
 
     fn test_timestamp<T: ArrowTimestampType>() {
         let buf = r#"
-        {"a": 1, "b": "2020-09-08T13:42:29.190855+00:00", "c": 38.30}
-        {"a": 2, "b": "2020-09-08T13:42:29.190855Z", "c": 123.456}
+        {"a": 1, "b": "2020-09-08T13:42:29.190855+00:00", "c": 38.30, "d": "1997-01-31T09:26:56.123"}
+        {"a": 2, "b": "2020-09-08T13:42:29.190855Z", "c": 123.456, "d": 123.456}
 
-        {"b": 1337, "b": "2020-09-08T13:42:29Z", "c": "1997-01-31T09:26:56.123"}
-        {"b": 40, "c": "2020-09-08T13:42:29.190855+00:00"}
-        {"b": 1234, "a": null, "c": "1997-01-31 09:26:56.123Z"}
-        {"c": "1997-01-31T14:26:56.123-05:00"}
+        {"b": 1337, "b": "2020-09-08T13:42:29Z", "c": "1997-01-31T09:26:56.123", "d": "1997-01-31T09:26:56.123Z"}
+        {"b": 40, "c": "2020-09-08T13:42:29.190855+00:00", "d": "1997-01-31 09:26:56.123-05:00"}
+        {"b": 1234, "a": null, "c": "1997-01-31 09:26:56.123Z", "d": "1997-01-31 092656"}
+        {"c": "1997-01-31T14:26:56.123-05:00", "d": "1997-01-31"}
         "#;
 
+        let with_timezone = DataType::Timestamp(T::UNIT, Some("+08:00".to_string()));
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", T::DATA_TYPE, true),
             Field::new("b", T::DATA_TYPE, true),
             Field::new("c", T::DATA_TYPE, true),
+            Field::new("d", with_timezone, true),
         ]));
 
         let batches = do_read(buf, 1024, true, schema);
         assert_eq!(batches.len(), 1);
 
-        let unit = match T::DATA_TYPE {
-            DataType::Timestamp(unit, _) => unit,
-            _ => unreachable!(),
-        };
-        let unit_in_nanos = match unit {
+        let unit_in_nanos: i64 = match T::UNIT {
             TimeUnit::Second => 1_000_000_000,
             TimeUnit::Millisecond => 1_000_000,
             TimeUnit::Microsecond => 1_000,
@@ -859,7 +885,6 @@ mod tests {
                 1234,
                 0
             ]
-            .map(T::Native::usize_as)
         );
 
         let col3 = as_primitive_array::<T>(batches[0].column(2));
@@ -874,7 +899,21 @@ mod tests {
                 854702816123000000 / unit_in_nanos,
                 854738816123000000 / unit_in_nanos
             ]
-            .map(T::Native::usize_as)
+        );
+
+        let col4 = as_primitive_array::<T>(batches[0].column(3));
+
+        assert_eq!(col4.null_count(), 0);
+        assert_eq!(
+            col4.values(),
+            &[
+                854674016123000000 / unit_in_nanos,
+                123,
+                854702816123000000 / unit_in_nanos,
+                854720816123000000 / unit_in_nanos,
+                854674016000000000 / unit_in_nanos,
+                854640000000000000 / unit_in_nanos
+            ]
         );
     }
 
