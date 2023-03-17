@@ -1271,8 +1271,8 @@ mod tests {
         ]);
         let struct_data = ArrayData::builder(struct_data_type)
             .len(3)
-            .add_child_data(structs_int32s.data().clone())
-            .add_child_data(structs_utf8s.data().clone())
+            .add_child_data(structs_int32s.into_data())
+            .add_child_data(structs_utf8s.into_data())
             .null_bit_buffer(Some(Buffer::from([0b00000011])))
             .build()
             .unwrap();

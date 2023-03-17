@@ -23,9 +23,9 @@ use crate::temporal_conversions::{
 };
 use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
-use crate::{types::*, ArrowNativeTypeOp};
+use crate::{types::*, ArrayRef, ArrowNativeTypeOp};
 use crate::{Array, ArrayAccessor};
-use arrow_buffer::buffer::ScalarBuffer;
+use arrow_buffer::buffer::{NullBuffer, ScalarBuffer};
 use arrow_buffer::{i256, ArrowNativeType, Buffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::ArrayData;
@@ -33,6 +33,7 @@ use arrow_schema::{ArrowError, DataType};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
 use std::any::Any;
+use std::sync::Arc;
 
 ///
 /// # Example: Using `collect`
@@ -697,8 +698,21 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 }
 

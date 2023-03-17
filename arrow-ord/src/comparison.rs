@@ -210,7 +210,7 @@ pub fn eq_bool_scalar(
             DataType::Boolean,
             len,
             None,
-            left.data().nulls().map(|b| b.inner().sliced()),
+            left.nulls().map(|b| b.inner().sliced()),
             0,
             vec![values],
             vec![],
@@ -1433,7 +1433,7 @@ where
         result_remainder.copy_from_slice(remainder_mask_as_bytes);
     }
 
-    let null_bit_buffer = left.data().nulls().map(|b| b.inner().sliced());
+    let null_bit_buffer = left.nulls().map(|b| b.inner().sliced());
 
     // null count is the same as in the input since the right side of the scalar comparison cannot be null
     let null_count = left.null_count();
@@ -3519,8 +3519,7 @@ mod tests {
             None,
             Some(7),
         ])
-        .data()
-        .clone();
+        .into_data();
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 6, 9]);
         let list_data_type =
             DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));

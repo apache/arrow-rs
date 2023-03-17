@@ -17,7 +17,7 @@
 
 use crate::array::{get_offsets, print_long_array};
 use crate::{make_array, Array, ArrayRef, StringArray, StructArray};
-use arrow_buffer::buffer::OffsetBuffer;
+use arrow_buffer::buffer::{NullBuffer, OffsetBuffer};
 use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
@@ -214,8 +214,21 @@ impl Array for MapArray {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 
     /// Returns the total number of bytes of memory occupied by the buffers owned by this [MapArray].

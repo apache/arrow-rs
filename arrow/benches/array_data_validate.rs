@@ -56,7 +56,7 @@ fn validate_benchmark(c: &mut Criterion) {
     let byte_array =
         BinaryArray::from_iter_values(std::iter::repeat(b"test").take(20000));
     c.bench_function("byte_array_to_string_array 20000", |b| {
-        b.iter(|| StringArray::from(BinaryArray::from(byte_array.data().clone())))
+        b.iter(|| StringArray::from(BinaryArray::from(byte_array.to_data())))
     });
 }
 

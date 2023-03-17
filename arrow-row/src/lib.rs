@@ -1314,7 +1314,7 @@ unsafe fn decode_column(
             rows.iter_mut().for_each(|row| *row = &row[1..]);
             let children = converter.convert_raw(rows, validate_utf8)?;
 
-            let child_data = children.iter().map(|c| c.data().clone()).collect();
+            let child_data = children.iter().map(|c| c.to_data()).collect();
             let builder = ArrayDataBuilder::new(field.data_type.clone())
                 .len(rows.len())
                 .null_count(null_count)
@@ -1532,7 +1532,7 @@ mod tests {
 
         // Construct dictionary with a timezone
         let dict = a.finish();
-        let values = TimestampNanosecondArray::from(dict.values().data().clone());
+        let values = TimestampNanosecondArray::from(dict.values().to_data());
         let dict_with_tz = dict.with_values(&values.with_timezone("+02:00".to_string()));
         let d = DataType::Dictionary(
             Box::new(DataType::Int32),

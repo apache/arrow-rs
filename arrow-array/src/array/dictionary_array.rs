@@ -23,10 +23,12 @@ use crate::{
     make_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, PrimitiveArray,
     StringArray,
 };
+use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
+use std::sync::Arc;
 
 ///
 /// A dictionary array where each element is a single value indexed by an integer key.
@@ -590,8 +592,21 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 }
 
@@ -669,8 +684,20 @@ impl<'a, K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'a, 
         &self.dictionary.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.dictionary.to_data()
+    }
+
     fn into_data(self) -> ArrayData {
         self.dictionary.into_data()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        self.dictionary.slice(offset, length)
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.dictionary.nulls()
     }
 }
 

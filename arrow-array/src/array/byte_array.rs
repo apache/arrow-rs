@@ -20,12 +20,13 @@ use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
-use crate::{Array, ArrayAccessor, OffsetSizeTrait};
-use arrow_buffer::buffer::OffsetBuffer;
+use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait};
+use arrow_buffer::buffer::{NullBuffer, OffsetBuffer};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
+use std::sync::Arc;
 
 /// Generic struct for variable-size byte arrays
 ///
@@ -237,8 +238,21 @@ impl<T: ByteArrayType> Array for GenericByteArray<T> {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 }
 

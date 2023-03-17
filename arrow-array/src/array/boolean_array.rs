@@ -18,12 +18,14 @@
 use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
-use crate::{Array, ArrayAccessor};
+use crate::{Array, ArrayAccessor, ArrayRef};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
+use std::sync::Arc;
 
 /// Array of bools
 ///
@@ -265,8 +267,21 @@ impl Array for BooleanArray {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 }
 

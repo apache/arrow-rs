@@ -20,7 +20,7 @@
 mod binary_array;
 
 use crate::types::*;
-use arrow_buffer::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow_buffer::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
@@ -96,12 +96,19 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 
     /// Returns a reference to the underlying data of this array.
+    ///
+    /// This will be deprecated in a future release [(#3880)](https://github.com/apache/arrow-rs/issues/3880)
     fn data(&self) -> &ArrayData;
+
+    /// Returns the underlying data of this array.
+    fn to_data(&self) -> ArrayData;
 
     /// Returns the underlying data of this array.
     fn into_data(self) -> ArrayData;
 
     /// Returns a reference-counted pointer to the underlying data of this array.
+    ///
+    /// This will be deprecated in a future release [(#3880)](https://github.com/apache/arrow-rs/issues/3880)
     fn data_ref(&self) -> &ArrayData {
         self.data()
     }
@@ -135,9 +142,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(array_slice.as_ref(), &Int32Array::from(vec![2, 3, 4]));
     /// ```
-    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        make_array(self.data_ref().slice(offset, length))
-    }
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef;
 
     /// Returns the length (i.e., number of elements) of this array.
     ///
@@ -189,6 +194,9 @@ pub trait Array: std::fmt::Debug + Send + Sync {
         self.data_ref().offset()
     }
 
+    /// Returns the null buffers of this array if any
+    fn nulls(&self) -> Option<&NullBuffer>;
+
     /// Returns whether the element at `index` is null.
     /// When using this function on a slice, the index is relative to the slice.
     ///
@@ -203,7 +211,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.is_null(1), true);
     /// ```
     fn is_null(&self, index: usize) -> bool {
-        self.data_ref().is_null(index)
+        self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
     }
 
     /// Returns whether the element at `index` is not null.
@@ -220,7 +228,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.is_valid(1), false);
     /// ```
     fn is_valid(&self, index: usize) -> bool {
-        self.data_ref().is_valid(index)
+        !self.is_null(index)
     }
 
     /// Returns the total number of null values in this array.
@@ -236,7 +244,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.null_count(), 2);
     /// ```
     fn null_count(&self) -> usize {
-        self.data_ref().null_count()
+        self.nulls().map(|n| n.null_count()).unwrap_or_default()
     }
 
     /// Returns the total number of bytes of memory pointed to by this array.
@@ -269,6 +277,10 @@ impl Array for ArrayRef {
         self.as_ref().data()
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.as_ref().to_data()
+    }
+
     fn into_data(self) -> ArrayData {
         self.data().clone()
     }
@@ -295,6 +307,10 @@ impl Array for ArrayRef {
 
     fn offset(&self) -> usize {
         self.as_ref().offset()
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.as_ref().nulls()
     }
 
     fn is_null(&self, index: usize) -> bool {
@@ -327,6 +343,10 @@ impl<'a, T: Array> Array for &'a T {
         T::data(self)
     }
 
+    fn to_data(&self) -> ArrayData {
+        T::to_data(self)
+    }
+
     fn into_data(self) -> ArrayData {
         self.data().clone()
     }
@@ -353,6 +373,10 @@ impl<'a, T: Array> Array for &'a T {
 
     fn offset(&self) -> usize {
         T::offset(self)
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        T::nulls(self)
     }
 
     fn is_null(&self, index: usize) -> bool {

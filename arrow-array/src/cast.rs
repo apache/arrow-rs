@@ -706,7 +706,7 @@ pub fn downcast_array<T>(array: &dyn Array) -> T
 where
     T: From<ArrayData>,
 {
-    T::from(array.data().clone())
+    T::from(array.to_data())
 }
 
 #[cfg(test)]

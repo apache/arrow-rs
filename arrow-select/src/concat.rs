@@ -539,7 +539,7 @@ mod tests {
     fn test_dictionary_concat_reuse() {
         let array: DictionaryArray<Int8Type> =
             vec!["a", "a", "b", "c"].into_iter().collect();
-        let copy: DictionaryArray<Int8Type> = array.data().clone().into();
+        let copy: DictionaryArray<Int8Type> = array.to_data().into();
 
         // dictionary is "a", "b", "c"
         assert_eq!(

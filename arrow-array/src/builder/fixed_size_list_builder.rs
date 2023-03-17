@@ -157,7 +157,7 @@ where
     pub fn finish(&mut self) -> FixedSizeListArray {
         let len = self.len();
         let values_arr = self.values_builder.finish();
-        let values_data = values_arr.data();
+        let values_data = values_arr.to_data();
 
         assert_eq!(
             values_data.len(), len * self.list_len as usize,
@@ -173,7 +173,7 @@ where
             self.list_len,
         ))
         .len(len)
-        .add_child_data(values_data.clone())
+        .add_child_data(values_data)
         .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data.build_unchecked() };
@@ -185,7 +185,7 @@ where
     pub fn finish_cloned(&self) -> FixedSizeListArray {
         let len = self.len();
         let values_arr = self.values_builder.finish_cloned();
-        let values_data = values_arr.data();
+        let values_data = values_arr.to_data();
 
         assert_eq!(
             values_data.len(), len * self.list_len as usize,
@@ -204,7 +204,7 @@ where
             self.list_len,
         ))
         .len(len)
-        .add_child_data(values_data.clone())
+        .add_child_data(values_data)
         .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data.build_unchecked() };

@@ -628,7 +628,7 @@ mod tests {
             .unwrap();
 
         // export it
-        let array = ArrowArray::try_from(Array::data(&original_array).clone())?;
+        let array = ArrowArray::try_from(Array::to_data(&original_array))?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1122,7 +1122,7 @@ mod tests {
         .unwrap();
 
         // export it
-        let array = ArrowArray::try_from(map_array.data().clone())?;
+        let array = ArrowArray::try_from(map_array.to_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1209,7 +1209,7 @@ mod tests {
         let union = builder.build().unwrap();
 
         // export it
-        let array = ArrowArray::try_from(union.data().clone())?;
+        let array = ArrowArray::try_from(union.to_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;

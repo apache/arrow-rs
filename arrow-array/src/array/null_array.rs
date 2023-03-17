@@ -17,10 +17,12 @@
 
 //! Contains the `NullArray` type.
 
-use crate::Array;
+use crate::{Array, ArrayRef};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
+use std::sync::Arc;
 
 /// An Array where all elements are nulls
 ///
@@ -63,8 +65,21 @@ impl Array for NullArray {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        None
     }
 
     /// Returns whether the element at `index` is null.

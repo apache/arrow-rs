@@ -16,10 +16,11 @@
 // under the License.
 
 use crate::{make_array, Array, ArrayRef};
-use arrow_buffer::buffer::buffer_bin_or;
+use arrow_buffer::buffer::{buffer_bin_or, NullBuffer};
 use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
+use std::sync::Arc;
 use std::{any::Any, ops::Index};
 
 /// A nested array type where each child (called *field*) is represented by a separate
@@ -196,13 +197,21 @@ impl Array for StructArray {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
-    /// Returns the length (i.e., number of elements) of this array
-    fn len(&self) -> usize {
-        self.data_ref().len()
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 }
 

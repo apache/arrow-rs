@@ -1178,13 +1178,11 @@ impl Decoder {
             DataType::Utf8 => flatten_json_string_values(rows)
                 .into_iter()
                 .collect::<StringArray>()
-                .data()
-                .clone(),
+                .into_data(),
             DataType::LargeUtf8 => flatten_json_string_values(rows)
                 .into_iter()
                 .collect::<LargeStringArray>()
-                .data()
-                .clone(),
+                .into_data(),
             DataType::List(field) => {
                 let child = self
                     .build_nested_list_array::<i32>(&flatten_json_values(rows), field)?;
@@ -2411,7 +2409,7 @@ mod tests {
         ]);
         let c = ArrayDataBuilder::new(c_field.data_type().clone())
             .len(7)
-            .add_child_data(d.data().clone())
+            .add_child_data(d.to_data())
             .null_bit_buffer(Some(Buffer::from(vec![0b00111011])))
             .build()
             .unwrap();
@@ -2426,7 +2424,7 @@ mod tests {
         ]);
         let a = ArrayDataBuilder::new(a_struct_field.data_type().clone())
             .len(7)
-            .add_child_data(b.data().clone())
+            .add_child_data(b.to_data())
             .add_child_data(c.clone())
             .null_bit_buffer(Some(Buffer::from(vec![0b00111111])))
             .build()
@@ -2452,7 +2450,7 @@ mod tests {
             Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7])
         );
         // compare list null buffers
-        assert_eq!(read.data().nulls(), expected.data().nulls());
+        assert_eq!(read.nulls(), expected.nulls());
         // build struct from list
         let struct_array = as_struct_array(read.values());
         let expected_struct_array = as_struct_array(expected.values());
@@ -2462,10 +2460,7 @@ mod tests {
         assert_eq!(7, expected_struct_array.len());
         assert_eq!(1, expected_struct_array.null_count());
         // test struct's nulls
-        assert_eq!(
-            struct_array.data().nulls(),
-            expected_struct_array.data().nulls()
-        );
+        assert_eq!(struct_array.nulls(), expected_struct_array.nulls());
         // test struct's fields
         let read_b = struct_array.column(0);
         assert_eq!(b.data_ref(), read_b.data_ref());
@@ -2512,13 +2507,11 @@ mod tests {
         let expected_keys = StringArray::from(vec![
             "long", "short", "long", "short", "hedged", "long", "short",
         ])
-        .data()
-        .clone();
+        .into_data();
         let expected_value_array_data = StringArray::from(vec![
             "$AAA", "$BBB", "$CCC", "$D", "$AAA", "$CCC", "$D", "$YYY", "$D",
         ])
-        .data()
-        .clone();
+        .into_data();
         // Create the list that holds ["$_", "$_"]
         let expected_values = ArrayDataBuilder::new(value_list_type)
             .len(7)

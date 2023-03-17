@@ -20,12 +20,13 @@ use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
     iterator::GenericListArrayIter, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
 };
-use arrow_buffer::buffer::OffsetBuffer;
+use arrow_buffer::buffer::{NullBuffer, OffsetBuffer};
 use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
 use num::Integer;
 use std::any::Any;
+use std::sync::Arc;
 
 /// trait declaring an offset size, relevant for i32 vs i64 array types.
 pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
@@ -244,8 +245,21 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.data.nulls()
     }
 }
 

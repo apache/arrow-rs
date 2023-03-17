@@ -290,7 +290,7 @@ where
         .len(size)
         .null_bit_buffer(nulls)
         .add_buffer(keys)
-        .add_child_data(values.data().clone())
+        .add_child_data(values.to_data())
         .build()
         .unwrap();
 

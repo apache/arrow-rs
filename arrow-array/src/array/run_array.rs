@@ -16,8 +16,9 @@
 // under the License.
 
 use std::any::Any;
+use std::sync::Arc;
 
-use arrow_buffer::buffer::RunEndBuffer;
+use arrow_buffer::buffer::{NullBuffer, RunEndBuffer};
 use arrow_buffer::ArrowNativeType;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
@@ -288,8 +289,21 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         &self.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.data.clone()
+    }
+
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        // TODO: Slice buffers directly (#3880)
+        Arc::new(Self::from(self.data.slice(offset, length)))
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        None
     }
 }
 
@@ -473,8 +487,20 @@ impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
         &self.run_array.data
     }
 
+    fn to_data(&self) -> ArrayData {
+        self.run_array.to_data()
+    }
+
     fn into_data(self) -> ArrayData {
         self.run_array.into_data()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        self.run_array.slice(offset, length)
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.run_array.nulls()
     }
 }
 
