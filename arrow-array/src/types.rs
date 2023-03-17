@@ -17,9 +17,8 @@
 
 //! Zero-sized types used to parameterize generic array implementations
 
-use crate::array::ArrowPrimitiveType;
 use crate::delta::shift_months;
-use crate::OffsetSizeTrait;
+use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
 use arrow_buffer::i256;
 use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
 use arrow_schema::{
@@ -39,8 +38,34 @@ use std::ops::{Add, Sub};
 pub struct BooleanType {}
 
 impl BooleanType {
-    /// Type represetings is arrow [`DataType`]
+    /// The corresponding Arrow data type
     pub const DATA_TYPE: DataType = DataType::Boolean;
+}
+
+/// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
+/// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
+pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
+    /// Corresponding Rust native type for the primitive type.
+    type Native: ArrowNativeTypeOp;
+
+    /// the corresponding Arrow data type of this primitive type.
+    const DATA_TYPE: DataType;
+
+    /// Returns the byte width of this primitive type.
+    fn get_byte_width() -> usize {
+        std::mem::size_of::<Self::Native>()
+    }
+
+    /// Returns a default value of this primitive type.
+    ///
+    /// This is useful for aggregate array ops like `sum()`, `mean()`.
+    fn default_value() -> Self::Native {
+        Default::default()
+    }
+}
+
+mod primitive {
+    pub trait PrimitiveTypeSealed {}
 }
 
 macro_rules! make_type {
@@ -53,6 +78,8 @@ macro_rules! make_type {
             type Native = $native_ty;
             const DATA_TYPE: DataType = $data_ty;
         }
+
+        impl primitive::PrimitiveTypeSealed for $name {}
     };
 }
 
@@ -240,24 +267,12 @@ impl ArrowDictionaryKeyType for UInt32Type {}
 
 impl ArrowDictionaryKeyType for UInt64Type {}
 
-mod run {
-    use super::*;
-
-    pub trait RunEndTypeSealed {}
-
-    impl RunEndTypeSealed for Int16Type {}
-
-    impl RunEndTypeSealed for Int32Type {}
-
-    impl RunEndTypeSealed for Int64Type {}
-}
-
 /// A subtype of primitive type that is used as run-ends index
 /// in `RunArray`.
 /// See <https://arrow.apache.org/docs/format/Columnar.html>
 ///
 /// Note: The implementation of this trait is sealed to avoid accidental misuse.
-pub trait RunEndIndexType: ArrowPrimitiveType + run::RunEndTypeSealed {}
+pub trait RunEndIndexType: ArrowPrimitiveType {}
 
 impl RunEndIndexType for Int16Type {}
 
@@ -648,6 +663,8 @@ impl ArrowPrimitiveType for Decimal128Type {
     const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
 }
 
+impl primitive::PrimitiveTypeSealed for Decimal128Type {}
+
 /// The decimal type for a Decimal256Array
 #[derive(Debug)]
 pub struct Decimal256Type {}
@@ -675,6 +692,8 @@ impl ArrowPrimitiveType for Decimal256Type {
 
     const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
 }
+
+impl primitive::PrimitiveTypeSealed for Decimal256Type {}
 
 fn format_decimal_str(value_str: &str, precision: usize, scale: i8) -> String {
     let (sign, rest) = match value_str.strip_prefix('-') {
