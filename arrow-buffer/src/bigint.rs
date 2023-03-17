@@ -18,6 +18,7 @@
 use num::cast::AsPrimitive;
 use num::{BigInt, FromPrimitive, Num, ToPrimitive};
 use std::cmp::Ordering;
+use std::ops::{BitAnd, BitOr, BitXor, Shl};
 
 /// A signed 256-bit integer
 #[allow(non_camel_case_types)]
@@ -492,6 +493,39 @@ impl std::ops::Neg for i256 {
     }
 }
 
+impl BitAnd for i256 {
+    type Output = i256;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self {
+            low: self.low & rhs.low,
+            high: self.high & rhs.high,
+        }
+    }
+}
+
+impl BitOr for i256 {
+    type Output = i256;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self {
+            low: self.low | rhs.low,
+            high: self.high | rhs.high,
+        }
+    }
+}
+
+impl BitXor for i256 {
+    type Output = i256;
+
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        Self {
+            low: self.low ^ rhs.low,
+            high: self.high ^ rhs.high,
+        }
+    }
+}
+
 macro_rules! define_as_primitive {
     ($native_ty:ty) => {
         impl AsPrimitive<i256> for $native_ty {
@@ -684,6 +718,19 @@ mod tests {
                 ),
             }
         }
+
+        // Bit operations
+        let actual = il & ir;
+        let (expected, _) = i256::from_bigint_with_overflow(bl.clone() & br.clone());
+        assert_eq!(actual.to_string(), expected.to_string());
+
+        let actual = il | ir;
+        let (expected, _) = i256::from_bigint_with_overflow(bl.clone() | br.clone());
+        assert_eq!(actual.to_string(), expected.to_string());
+
+        let actual = il ^ ir;
+        let (expected, _) = i256::from_bigint_with_overflow(bl.clone() ^ br.clone());
+        assert_eq!(actual.to_string(), expected.to_string());
     }
 
     #[test]
