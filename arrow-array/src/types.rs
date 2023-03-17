@@ -272,8 +272,6 @@ impl ArrowDictionaryKeyType for UInt64Type {}
 /// A subtype of primitive type that is used as run-ends index
 /// in `RunArray`.
 /// See <https://arrow.apache.org/docs/format/Columnar.html>
-///
-/// Note: The implementation of this trait is sealed to avoid accidental misuse.
 pub trait RunEndIndexType: ArrowPrimitiveType {}
 
 impl RunEndIndexType for Int16Type {}
