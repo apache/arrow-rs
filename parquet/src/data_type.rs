@@ -199,6 +199,16 @@ impl From<Vec<u8>> for ByteArray {
     }
 }
 
+impl<'a> From<&'a [u8]> for ByteArray {
+    fn from(b: &'a [u8]) -> ByteArray {
+        let mut v = Vec::new();
+        v.extend_from_slice(b);
+        Self {
+            data: Some(ByteBufferPtr::new(v)),
+        }
+    }
+}
+
 impl<'a> From<&'a str> for ByteArray {
     fn from(s: &'a str) -> ByteArray {
         let mut v = Vec::new();
