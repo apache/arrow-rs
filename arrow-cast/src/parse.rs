@@ -838,13 +838,13 @@ fn parse_interval(leading_field: &str, value: &str) -> Result<MonthDayNano, Arro
 
         match it {
             IntervalType::Century => {
-                align_interval_parts(interval_period * 1200_f64, 0.0, 0.0)
+                align_interval_parts(interval_period.mul_checked(1200_f64)?, 0.0, 0.0)
             }
             IntervalType::Decade => {
-                align_interval_parts(interval_period * 120_f64, 0.0, 0.0)
+                align_interval_parts(interval_period.mul_checked(120_f64)?, 0.0, 0.0)
             }
             IntervalType::Year => {
-                align_interval_parts(interval_period * 12_f64, 0.0, 0.0)
+                align_interval_parts(interval_period.mul_checked(12_f64)?, 0.0, 0.0)
             }
             IntervalType::Month => align_interval_parts(interval_period, 0.0, 0.0),
             IntervalType::Week => align_interval_parts(0.0, interval_period * 7_f64, 0.0),
@@ -852,16 +852,21 @@ fn parse_interval(leading_field: &str, value: &str) -> Result<MonthDayNano, Arro
             IntervalType::Hour => Ok((
                 0,
                 0,
-                (interval_period * SECONDS_PER_HOUR * NANOS_PER_SECOND) as i64,
+                (interval_period.mul_checked(SECONDS_PER_HOUR * NANOS_PER_SECOND))?
+                    as i64,
             )),
-            IntervalType::Minute => {
-                Ok((0, 0, (interval_period * 60_f64 * NANOS_PER_SECOND) as i64))
-            }
-            IntervalType::Second => {
-                Ok((0, 0, (interval_period * NANOS_PER_SECOND) as i64))
-            }
+            IntervalType::Minute => Ok((
+                0,
+                0,
+                (interval_period.mul_checked(60_f64 * NANOS_PER_SECOND))? as i64,
+            )),
+            IntervalType::Second => Ok((
+                0,
+                0,
+                (interval_period.mul_checked(NANOS_PER_SECOND))? as i64,
+            )),
             IntervalType::Millisecond => {
-                Ok((0, 0, (interval_period * 1_000_000f64) as i64))
+                Ok((0, 0, (interval_period.mul_checked(1_000_000f64))? as i64))
             }
         }
     };
