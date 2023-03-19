@@ -60,6 +60,7 @@ cli = ["arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subscriber", "t
 [dev-dependencies]
 arrow-cast = { version = "35.0.0", path = "../arrow-cast", features = ["prettyprint"] }
 assert_cmd = "2.0.8"
+paste = "1.0"
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"

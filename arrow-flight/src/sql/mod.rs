@@ -17,6 +17,7 @@
 
 use arrow_schema::ArrowError;
 use bytes::Bytes;
+use paste::paste;
 use prost::Message;
 
 mod gen {
@@ -71,22 +72,58 @@ pub trait ProstMessageExt: prost::Message + Default {
     fn as_any(&self) -> Any;
 }
 
-macro_rules! prost_message_ext {
-    ($($name:ty,)*) => {
-        $(
-            impl ProstMessageExt for $name {
-                fn type_url() -> &'static str {
-                    concat!("type.googleapis.com/arrow.flight.protocol.sql.", stringify!($name))
-                }
+/// Macro to coerce a token to an item, specifically
+/// to build the `Commands` enum.
+///
+/// See: <https://danielkeep.github.io/tlborm/book/blk-ast-coercion.html>
+macro_rules! as_item {
+    ($i:item) => { $i };
+}
 
-                fn as_any(&self) -> Any {
-                    Any {
-                        type_url: <$name>::type_url().to_string(),
-                        value: self.encode_to_vec().into(),
+macro_rules! prost_message_ext {
+    ($($name:tt,)*) => {
+        paste! {
+            $(
+            const [<$name:snake:upper _TYPE_URL>]: &'static str = concat!("type.googleapis.com/arrow.flight.protocol.sql.", stringify!($name));
+            )*
+
+            as_item! {
+                pub enum Commands {
+                    $($name($name),)*
+                }
+            }
+
+            impl Commands {
+                pub fn unpack(any: Any) -> Result<Commands, ArrowError> {
+                    match any.type_url.as_str() {
+                        $(
+                        [<$name:snake:upper _TYPE_URL>]
+                            => {
+                                let m: $name = Message::decode(&*any.value).map_err(|err| {
+                                    ArrowError::ParseError(format!("Unable to decode Any value: {err}"))
+                                })?;
+                                Ok(Self::$name(m))
+                            }
+                        )*
+                        _ => Err(ArrowError::ParseError(format!("Unable to decode Any value: {}", any.type_url)))
                     }
                 }
             }
-        )*
+            $(
+                impl ProstMessageExt for $name {
+                    fn type_url() -> &'static str {
+                        [<$name:snake:upper _TYPE_URL>]
+                    }
+
+                    fn as_any(&self) -> Any {
+                        Any {
+                            type_url: <$name>::type_url().to_string(),
+                            value: self.encode_to_vec().into(),
+                        }
+                    }
+                }
+            )*
+        }
     };
 }
 
@@ -189,5 +226,14 @@ mod tests {
         assert!(any.is::<CommandStatementQuery>());
         let unpack_query: CommandStatementQuery = any.unpack().unwrap().unwrap();
         assert_eq!(query, unpack_query);
+    }
+
+    #[test]
+    fn test_commands() {
+        let query = CommandStatementQuery {
+            query: "select 1".to_string(),
+        };
+        let any = Any::pack(&query).unwrap();
+        assert!(matches!(Commands::unpack(any).unwrap(), Commands::CommandStatementQuery(_)));
     }
 }
