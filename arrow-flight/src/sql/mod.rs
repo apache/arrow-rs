@@ -89,7 +89,28 @@ macro_rules! prost_message_ext {
             const [<$name:snake:upper _TYPE_URL>]: &'static str = concat!("type.googleapis.com/arrow.flight.protocol.sql.", stringify!($name));
             )*
 
-            as_item! {
+                as_item! {
+                /// Helper to convert to/from protobuf [`Any`] to a strongly typed enum.
+                ///
+                /// # Example
+                /// ```rust
+                /// # use arrow_flight::sql::{Any, CommandStatementQuery, Commands};
+                /// let flightsql_message = CommandStatementQuery {
+                ///   query: "SELECT * FROM foo".to_string(),
+                /// };
+                ///
+                /// // Given a packed FlightSQL Any message
+                /// let any_message = Any::pack(&flightsql_message).unwrap();
+                ///
+                /// // decode it to Commands:
+                /// match Commands::try_from(any_message).unwrap() {
+                ///   Commands::CommandStatementQuery(decoded) => {
+                ///    assert_eq!(flightsql_message, decoded);
+                ///   }
+                ///   _ => panic!("Unexpected decoded message"),
+                /// }
+                /// ```
+                #[derive(Clone, Debug, PartialEq)]
                 pub enum Commands {
                     $($name($name),)*
                 }
@@ -109,6 +130,13 @@ macro_rules! prost_message_ext {
                         )*
                         _ => Err(ArrowError::ParseError(format!("Unable to decode Any value: {}", any.type_url)))
                     }
+                }
+            }
+
+            impl TryFrom<Any> for Commands {
+                type Error = ArrowError;
+                fn try_from(any: Any) -> Result<Self, ArrowError> {
+                    Commands::unpack(any)
                 }
             }
             $(
