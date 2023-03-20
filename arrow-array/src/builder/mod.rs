@@ -132,9 +132,70 @@ pub trait ArrayBuilder: Any + Send {
     fn into_box_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
-/// A list array builder with i32 offsets
+/// Builder for [`ListArray`]s (i32 offsets)
+///
+/// [`ListArray`]: crate::array::ListArray
+///
+/// # Example
+///
+/// ```
+/// # use arrow_array::builder::{StringBuilder, ListBuilder};
+/// # use arrow_array::ListArray;
+/// // Build a 3 element array of lists:
+/// //
+/// // column
+/// // ---------
+/// // {one},
+/// // {},
+/// // {two, three}
+///
+/// let mut builder = ListBuilder::new(StringBuilder::new());
+/// //{one}
+/// builder.values().append_value("one");
+/// builder.append(true);
+/// // {}
+/// builder.append(true);
+/// // {two, three}
+/// builder.values().append_value("two");
+/// builder.values().append_value("three");
+/// builder.append(true);
+///
+/// // Create an array
+/// let list_array: ListArray = builder.finish();
+/// ```
 pub type ListBuilder<T> = GenericListBuilder<i32, T>;
-/// A list array builder with i64 offsets
+
+/// Builder for [`LargeListArray`]s (i64 offsets)
+///
+/// [`LargeListArray`]: crate::array::LargeListArray
+///
+/// # Example
+///
+/// ```
+/// # use arrow_array::builder::{StringBuilder, LargeListBuilder};
+/// # use arrow_array::LargeListArray;
+/// // Build a 3 element array of lists:
+/// //
+/// // column
+/// // ---------
+/// // {one},
+/// // {},
+/// // {two, three}
+///
+/// let mut builder = LargeListBuilder::new(StringBuilder::new());
+/// //{one}
+/// builder.values().append_value("one");
+/// builder.append(true);
+/// // {}
+/// builder.append(true);
+/// // {two, three}
+/// builder.values().append_value("two");
+/// builder.values().append_value("three");
+/// builder.append(true);
+///
+/// // Create an array
+/// let list_array: LargeListArray = builder.finish();
+/// ```
 pub type LargeListBuilder<T> = GenericListBuilder<i64, T>;
 
 /// A binary array builder with i32 offsets
