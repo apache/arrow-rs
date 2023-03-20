@@ -77,7 +77,9 @@ pub trait ProstMessageExt: prost::Message + Default {
 ///
 /// See: <https://danielkeep.github.io/tlborm/book/blk-ast-coercion.html>
 macro_rules! as_item {
-    ($i:item) => { $i };
+    ($i:item) => {
+        $i
+    };
 }
 
 macro_rules! prost_message_ext {
@@ -234,6 +236,9 @@ mod tests {
             query: "select 1".to_string(),
         };
         let any = Any::pack(&query).unwrap();
-        assert!(matches!(Commands::unpack(any).unwrap(), Commands::CommandStatementQuery(_)));
+        assert!(matches!(
+            Commands::unpack(any).unwrap(),
+            Commands::CommandStatementQuery(_)
+        ));
     }
 }
