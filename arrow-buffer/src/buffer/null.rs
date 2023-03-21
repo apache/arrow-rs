@@ -94,7 +94,7 @@ impl NullBuffer {
     /// Returns `true` if the value at `idx` is not null
     #[inline]
     pub fn is_valid(&self, idx: usize) -> bool {
-        self.buffer.is_set(idx)
+        self.buffer.value(idx)
     }
 
     /// Returns `true` if the value at `idx` is null

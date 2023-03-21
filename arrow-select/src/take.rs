@@ -524,7 +524,7 @@ where
     IndexType: ArrowPrimitiveType,
     IndexType::Native: ToPrimitive,
 {
-    let val_buf = take_bits(values.values(), values.offset(), indices)?;
+    let val_buf = take_bits(values.values().inner(), values.offset(), indices)?;
     let null_buf = match values.nulls() {
         Some(nulls) if nulls.null_count() > 0 => {
             Some(take_bits(nulls.buffer(), nulls.offset(), indices)?)
