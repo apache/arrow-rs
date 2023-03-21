@@ -90,7 +90,8 @@ macro_rules! prost_message_ext {
             )*
 
                 as_item! {
-                /// Helper to convert to/from protobuf [`Any`] to a strongly typed enum.
+                /// Helper to convert to/from protobuf [`arrow_flight::sql::Any`]
+                /// to a strongly typed enum.
                 ///
                 /// # Example
                 /// ```rust
@@ -102,7 +103,7 @@ macro_rules! prost_message_ext {
                 /// // Given a packed FlightSQL Any message
                 /// let any_message = Any::pack(&flightsql_message).unwrap();
                 ///
-                /// // decode it to Commands:
+                /// // decode it to Command:
                 /// match Command::try_from(any_message).unwrap() {
                 ///   Command::CommandStatementQuery(decoded) => {
                 ///    assert_eq!(flightsql_message, decoded);
