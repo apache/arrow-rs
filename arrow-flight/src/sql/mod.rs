@@ -114,6 +114,9 @@ macro_rules! prost_message_ext {
                 #[derive(Clone, Debug, PartialEq)]
                 pub enum Command {
                     $($name($name),)*
+
+                    /// Any message that is not any FlightSQL command.
+                    Unknown(Any),
                 }
             }
 
@@ -124,15 +127,17 @@ macro_rules! prost_message_ext {
                         $(
                         Self::$name(cmd) => cmd.as_any(),
                         )*
+                        Self::Unknown(any) => any,
                     }
                 }
 
                 /// Get the URL for the command.
-                pub fn type_url(&self) -> &'static str {
+                pub fn type_url(&self) -> &str {
                     match self {
                         $(
                         Self::$name(_) => [<$name:snake:upper _TYPE_URL>],
                         )*
+                        Self::Unknown(any) => any.type_url.as_str(),
                     }
                 }
             }
@@ -151,7 +156,7 @@ macro_rules! prost_message_ext {
                                 Ok(Self::$name(m))
                             }
                         )*
-                        _ => Err(ArrowError::ParseError(format!("Unable to decode Any value: {}", any.type_url)))
+                        _ => Ok(Self::Unknown(any)),
                     }
                 }
             }
@@ -276,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn test_commands() {
+    fn test_command() {
         let query = CommandStatementQuery {
             query: "select 1".to_string(),
         };
@@ -285,5 +290,16 @@ mod tests {
 
         assert!(matches!(cmd, Command::CommandStatementQuery(_)));
         assert_eq!(cmd.type_url(), COMMAND_STATEMENT_QUERY_TYPE_URL);
+
+        // Unknown variant
+
+        let any = Any {
+            type_url: "fake_url".to_string(),
+            value: Default::default(),
+        };
+
+        let cmd: Command = any.try_into().unwrap();
+        assert!(matches!(cmd, Command::Unknown(_)));
+        assert_eq!(cmd.type_url(), "fake_url");
     }
 }

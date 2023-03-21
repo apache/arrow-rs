@@ -315,9 +315,7 @@ where
         let message =
             Any::decode(&*request.get_ref().cmd).map_err(decode_error_to_status)?;
 
-        let command = Command::try_from(message).map_err(arrow_error_to_status)?;
-
-        match command {
+        match Command::try_from(message).map_err(arrow_error_to_status)? {
             Command::CommandStatementQuery(token) => {
                 self.get_flight_info_statement(token, request).await
             }
@@ -364,6 +362,9 @@ where
                     command.type_url()
                 )))
             }
+            Command::Unknown(Any { ref type_url, .. }) => Err(Status::invalid_argument(
+                format!("get_flight_info: The defined request is invalid: {type_url}"),
+            )),
         }
     }
 
@@ -381,47 +382,42 @@ where
         let msg: Any = Message::decode(&*request.get_ref().ticket)
             .map_err(decode_error_to_status)?;
 
-        fn unpack<T: ProstMessageExt>(msg: Any) -> Result<T, Status> {
-            msg.unpack()
-                .map_err(arrow_error_to_status)?
-                .ok_or_else(|| Status::internal("Expected a command, but found none."))
+        match Command::try_from(msg).map_err(arrow_error_to_status)? {
+            Command::TicketStatementQuery(command) => {
+                self.do_get_statement(command, request).await
+            }
+            Command::CommandPreparedStatementQuery(command) => {
+                self.do_get_prepared_statement(command, request).await
+            }
+            Command::CommandGetCatalogs(command) => {
+                self.do_get_catalogs(command, request).await
+            }
+            Command::CommandGetDbSchemas(command) => {
+                self.do_get_schemas(command, request).await
+            }
+            Command::CommandGetTables(command) => {
+                self.do_get_tables(command, request).await
+            }
+            Command::CommandGetTableTypes(command) => {
+                self.do_get_table_types(command, request).await
+            }
+            Command::CommandGetSqlInfo(command) => {
+                self.do_get_sql_info(command, request).await
+            }
+            Command::CommandGetPrimaryKeys(command) => {
+                self.do_get_primary_keys(command, request).await
+            }
+            Command::CommandGetExportedKeys(command) => {
+                self.do_get_exported_keys(command, request).await
+            }
+            Command::CommandGetImportedKeys(command) => {
+                self.do_get_imported_keys(command, request).await
+            }
+            Command::CommandGetCrossReference(command) => {
+                self.do_get_cross_reference(command, request).await
+            }
+            cmd @ _ => self.do_get_fallback(request, cmd.into_any()).await,
         }
-
-        if msg.is::<TicketStatementQuery>() {
-            return self.do_get_statement(unpack(msg)?, request).await;
-        }
-        if msg.is::<CommandPreparedStatementQuery>() {
-            return self.do_get_prepared_statement(unpack(msg)?, request).await;
-        }
-        if msg.is::<CommandGetCatalogs>() {
-            return self.do_get_catalogs(unpack(msg)?, request).await;
-        }
-        if msg.is::<CommandGetDbSchemas>() {
-            return self.do_get_schemas(unpack(msg)?, request).await;
-        }
-        if msg.is::<CommandGetTables>() {
-            return self.do_get_tables(unpack(msg)?, request).await;
-        }
-        if msg.is::<CommandGetTableTypes>() {
-            return self.do_get_table_types(unpack(msg)?, request).await;
-        }
-        if msg.is::<CommandGetSqlInfo>() {
-            return self.do_get_sql_info(unpack(msg)?, request).await;
-        }
-        if msg.is::<CommandGetPrimaryKeys>() {
-            return self.do_get_primary_keys(unpack(msg)?, request).await;
-        }
-        if msg.is::<CommandGetExportedKeys>() {
-            return self.do_get_exported_keys(unpack(msg)?, request).await;
-        }
-        if msg.is::<CommandGetImportedKeys>() {
-            return self.do_get_imported_keys(unpack(msg)?, request).await;
-        }
-        if msg.is::<CommandGetCrossReference>() {
-            return self.do_get_cross_reference(unpack(msg)?, request).await;
-        }
-
-        self.do_get_fallback(request, msg).await
     }
 
     async fn do_put(
@@ -431,44 +427,33 @@ where
         let cmd = request.get_mut().message().await?.unwrap();
         let message = Any::decode(&*cmd.flight_descriptor.unwrap().cmd)
             .map_err(decode_error_to_status)?;
-        if message.is::<CommandStatementUpdate>() {
-            let token = message
-                .unpack()
-                .map_err(arrow_error_to_status)?
-                .expect("unreachable");
-            let record_count = self.do_put_statement_update(token, request).await?;
-            let result = DoPutUpdateResult { record_count };
-            let output = futures::stream::iter(vec![Ok(PutResult {
-                app_metadata: result.encode_to_vec().into(),
-            })]);
-            return Ok(Response::new(Box::pin(output)));
+        match Command::try_from(message).map_err(arrow_error_to_status)? {
+            Command::CommandStatementUpdate(command) => {
+                let record_count = self.do_put_statement_update(command, request).await?;
+                let result = DoPutUpdateResult { record_count };
+                let output = futures::stream::iter(vec![Ok(PutResult {
+                    app_metadata: result.encode_to_vec().into(),
+                })]);
+                Ok(Response::new(Box::pin(output)))
+            }
+            Command::CommandPreparedStatementQuery(command) => {
+                self.do_put_prepared_statement_query(command, request).await
+            }
+            Command::CommandPreparedStatementUpdate(command) => {
+                let record_count = self
+                    .do_put_prepared_statement_update(command, request)
+                    .await?;
+                let result = DoPutUpdateResult { record_count };
+                let output = futures::stream::iter(vec![Ok(PutResult {
+                    app_metadata: result.encode_to_vec().into(),
+                })]);
+                Ok(Response::new(Box::pin(output)))
+            }
+            cmd @ _ => Err(Status::invalid_argument(format!(
+                "do_put: The defined request is invalid: {}",
+                cmd.type_url()
+            ))),
         }
-        if message.is::<CommandPreparedStatementQuery>() {
-            let token = message
-                .unpack()
-                .map_err(arrow_error_to_status)?
-                .expect("unreachable");
-            return self.do_put_prepared_statement_query(token, request).await;
-        }
-        if message.is::<CommandPreparedStatementUpdate>() {
-            let handle = message
-                .unpack()
-                .map_err(arrow_error_to_status)?
-                .expect("unreachable");
-            let record_count = self
-                .do_put_prepared_statement_update(handle, request)
-                .await?;
-            let result = DoPutUpdateResult { record_count };
-            let output = futures::stream::iter(vec![Ok(PutResult {
-                app_metadata: result.encode_to_vec().into(),
-            })]);
-            return Ok(Response::new(Box::pin(output)));
-        }
-
-        Err(Status::invalid_argument(format!(
-            "do_put: The defined request is invalid: {}",
-            message.type_url
-        )))
     }
 
     async fn list_actions(
