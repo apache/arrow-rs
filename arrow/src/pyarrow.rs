@@ -19,7 +19,7 @@
 //! arrays from and to Python.
 
 use std::convert::{From, TryFrom};
-use std::ptr::addr_of_mut;
+use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 
 use pyo3::ffi::Py_uintptr_t;
@@ -133,16 +133,16 @@ impl PyArrowConvert for ArrayData {
     }
 
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        let array = ffi::ArrowArray::try_from(self.clone()).map_err(to_py_err)?;
-        let (array_pointer, schema_pointer) = ffi::ArrowArray::into_raw(array);
+        let array = FFI_ArrowArray::new(self);
+        let schema = FFI_ArrowSchema::try_from(self.data_type()).map_err(to_py_err)?;
 
         let module = py.import("pyarrow")?;
         let class = module.getattr("Array")?;
         let array = class.call_method1(
             "_import_from_c",
             (
-                array_pointer as Py_uintptr_t,
-                schema_pointer as Py_uintptr_t,
+                addr_of!(array) as Py_uintptr_t,
+                addr_of!(schema) as Py_uintptr_t,
             ),
         )?;
         Ok(array.to_object(py))

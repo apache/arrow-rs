@@ -25,7 +25,7 @@ use crate::{
     ffi::ArrowArrayRef,
 };
 
-use super::{make_array, ArrayData, ArrayRef};
+use super::{ArrayData, ArrayRef};
 
 impl TryFrom<ffi::ArrowArray> for ArrayData {
     type Error = ArrowError;
@@ -41,21 +41,6 @@ impl TryFrom<ArrayData> for ffi::ArrowArray {
     fn try_from(value: ArrayData) -> Result<Self> {
         ffi::ArrowArray::try_new(value)
     }
-}
-
-/// Creates a new array from two FFI pointers. Used to import arrays from the C Data Interface
-/// # Safety
-/// Assumes that these pointers represent valid C Data Interfaces, both in memory
-/// representation and lifetime via the `release` mechanism.
-#[deprecated(note = "Use ArrowArray::new")]
-#[allow(deprecated)]
-pub unsafe fn make_array_from_raw(
-    array: *const ffi::FFI_ArrowArray,
-    schema: *const ffi::FFI_ArrowSchema,
-) -> Result<ArrayRef> {
-    let array = ffi::ArrowArray::try_from_raw(array, schema)?;
-    let data = ArrayData::try_from(array)?;
-    Ok(make_array(data))
 }
 
 /// Exports an array to raw pointers of the C Data Interface provided by the consumer.

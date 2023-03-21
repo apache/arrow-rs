@@ -394,14 +394,10 @@ pub trait ArrowArrayRef {
 /// Its main responsibility is to expose functionality that requires
 /// both [FFI_ArrowArray] and [FFI_ArrowSchema].
 ///
-/// This struct has two main paths:
-///
 /// ## Import from the C Data Interface
-/// * [ArrowArray::empty] to allocate memory to be filled by an external call
-/// * [ArrowArray::try_from_raw] to consume two non-null allocated pointers
+/// * [ArrowArray::new] to create an array from [`FFI_ArrowArray`] and [`FFI_ArrowSchema`]
 /// ## Export to the C Data Interface
-/// * [ArrowArray::try_new] to create a new [ArrowArray] from Rust-specific information
-/// * [ArrowArray::into_raw] to expose two pointers for [FFI_ArrowArray] and [FFI_ArrowSchema].
+/// * Use [`FFI_ArrowArray`] and [`FFI_ArrowSchema`] directly
 ///
 /// # Safety
 /// Whoever creates this struct is responsible for releasing their resources. Specifically,
@@ -480,38 +476,6 @@ impl ArrowArray {
         Ok(ArrowArray { array, schema })
     }
 
-    /// creates a new [ArrowArray] from two pointers. Used to import from the C Data Interface.
-    /// # Safety
-    /// See safety of [ArrowArray]
-    /// Note that this function will copy the content pointed by the raw pointers. Considering
-    /// the raw pointers can be from `Arc::into_raw` or other raw pointers, users must be responsible
-    /// on managing the allocation of the structs by themselves.
-    /// # Error
-    /// Errors if any of the pointers is null
-    #[deprecated(note = "Use ArrowArray::new")]
-    pub unsafe fn try_from_raw(
-        array: *const FFI_ArrowArray,
-        schema: *const FFI_ArrowSchema,
-    ) -> Result<Self> {
-        if array.is_null() || schema.is_null() {
-            return Err(ArrowError::MemoryError(
-                "At least one of the pointers passed to `try_from_raw` is null"
-                    .to_string(),
-            ));
-        };
-
-        let array_mut = array as *mut FFI_ArrowArray;
-        let schema_mut = schema as *mut FFI_ArrowSchema;
-
-        let array_data = std::ptr::replace(array_mut, FFI_ArrowArray::empty());
-        let schema_data = std::ptr::replace(schema_mut, FFI_ArrowSchema::empty());
-
-        Ok(Self {
-            array: Arc::new(array_data),
-            schema: Arc::new(schema_data),
-        })
-    }
-
     /// creates a new empty [ArrowArray]. Used to import from the C Data Interface.
     /// # Safety
     /// See safety of [ArrowArray]
@@ -519,12 +483,6 @@ impl ArrowArray {
         let schema = Arc::new(FFI_ArrowSchema::empty());
         let array = Arc::new(FFI_ArrowArray::empty());
         ArrowArray { array, schema }
-    }
-
-    /// exports [ArrowArray] to the C Data Interface
-    #[deprecated(note = "Use FFI_ArrowArray and FFI_ArrowSchema directly")]
-    pub fn into_raw(this: ArrowArray) -> (*const FFI_ArrowArray, *const FFI_ArrowSchema) {
-        (Arc::into_raw(this.array), Arc::into_raw(this.schema))
     }
 }
 
