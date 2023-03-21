@@ -49,6 +49,7 @@ arrow-buffer = { version = "35.0.0", path = "../arrow-buffer" }
 arrow-data = { version = "35.0.0", path = "../arrow-data" }
 arrow-schema = { version = "35.0.0", path = "../arrow-schema" }
 arrow-select = { version = "35.0.0", path = "../arrow-select" }
+arrow-ord = { version = "35.0.0", path = "../arrow-ord" }
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
 lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
