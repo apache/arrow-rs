@@ -94,7 +94,7 @@ macro_rules! prost_message_ext {
                 ///
                 /// # Example
                 /// ```rust
-                /// # use arrow_flight::sql::{Any, CommandStatementQuery, Commands};
+                /// # use arrow_flight::sql::{Any, CommandStatementQuery, Command};
                 /// let flightsql_message = CommandStatementQuery {
                 ///   query: "SELECT * FROM foo".to_string(),
                 /// };
@@ -113,6 +113,26 @@ macro_rules! prost_message_ext {
                 #[derive(Clone, Debug, PartialEq)]
                 pub enum Command {
                     $($name($name),)*
+                }
+            }
+
+            impl Command {
+                /// Convert the command to [`Any`].
+                pub fn into_any(self) -> Any {
+                    match self {
+                        $(
+                        Self::$name(cmd) => cmd.as_any(),
+                        )*
+                    }
+                }
+
+                /// Get the URL for the command.
+                pub fn type_url(&self) -> &'static str {
+                    match self {
+                        $(
+                        Self::$name(_) => [<$name:snake:upper _TYPE_URL>],
+                        )*
+                    }
                 }
             }
 
@@ -260,9 +280,9 @@ mod tests {
             query: "select 1".to_string(),
         };
         let any = Any::pack(&query).unwrap();
-        assert!(matches!(
-            any.try_into().unwrap(),
-            Command::CommandStatementQuery(_)
-        ));
+        let cmd: Command = any.try_into().unwrap();
+
+        assert!(matches!(cmd, Command::CommandStatementQuery(_)));
+        assert_eq!(cmd.type_url(), COMMAND_STATEMENT_QUERY_TYPE_URL);
     }
 }
