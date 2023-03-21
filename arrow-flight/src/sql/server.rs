@@ -350,21 +350,10 @@ where
             Command::CommandGetCrossReference(token) => {
                 self.get_flight_info_cross_reference(token, request).await
             }
-            command @ Command::ActionClosePreparedStatementRequest(_)
-            | command @ Command::ActionCreatePreparedStatementRequest(_)
-            | command @ Command::CommandPreparedStatementUpdate(_)
-            | command @ Command::CommandStatementUpdate(_)
-            | command @ Command::DoPutUpdateResult(_)
-            | command @ Command::TicketStatementQuery(_)
-            | command @ Command::ActionCreatePreparedStatementResult(_) => {
-                Err(Status::unimplemented(format!(
-                    "get_flight_info: The defined request is invalid: {}",
-                    command.type_url()
-                )))
-            }
-            Command::Unknown(Any { ref type_url, .. }) => Err(Status::invalid_argument(
-                format!("get_flight_info: The defined request is invalid: {type_url}"),
-            )),
+            cmd => Err(Status::invalid_argument(format!(
+                "get_flight_info: The defined request is invalid: {}",
+                cmd.type_url()
+            ))),
         }
     }
 
