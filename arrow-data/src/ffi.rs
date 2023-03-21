@@ -118,9 +118,6 @@ struct ArrayPrivateData {
 
 impl FFI_ArrowArray {
     /// creates a new `FFI_ArrowArray` from existing data.
-    /// # Memory Leaks
-    /// This method releases `buffers`. Consumers of this struct *must* call `release` before
-    /// releasing this struct, or contents in `buffers` leak.
     pub fn new(data: &ArrayData) -> Self {
         let data_layout = layout(data.data_type());
 
