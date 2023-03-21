@@ -396,15 +396,13 @@ pub trait ArrowArrayRef {
 ///
 /// ## Import from the C Data Interface
 /// * [ArrowArray::new] to create an array from [`FFI_ArrowArray`] and [`FFI_ArrowSchema`]
+///
 /// ## Export to the C Data Interface
 /// * Use [`FFI_ArrowArray`] and [`FFI_ArrowSchema`] directly
 ///
 /// # Safety
-/// Whoever creates this struct is responsible for releasing their resources. Specifically,
-/// consumers *must* call [ArrowArray::into_raw] and take ownership of the individual pointers,
-/// calling [FFI_ArrowArray::release] and [FFI_ArrowSchema::release] accordingly.
 ///
-/// Furthermore, this struct assumes that the incoming data agrees with the C data interface.
+/// This struct assumes that the incoming data agrees with the C data interface.
 #[derive(Debug)]
 pub struct ArrowArray {
     pub(crate) array: Arc<FFI_ArrowArray>,
