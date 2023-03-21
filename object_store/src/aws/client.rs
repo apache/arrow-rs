@@ -287,20 +287,17 @@ impl S3Client {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
         let mut builder = self.client.request(Method::PUT, url);
-
-        let mut payload_checksum = None;
+        let mut payload_sha256 = None;
 
         if let Some(bytes) = bytes {
-            payload_checksum = match self.config().checksum {
-                Some(checksum) => {
-                    let digest = checksum.digest(&bytes);
-                    builder = builder
-                        .header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
-                    Some(digest)
+            if let Some(checksum) = self.config().checksum {
+                let digest = checksum.digest(&bytes);
+                builder = builder
+                    .header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
+                if checksum == Checksum::SHA256 {
+                    payload_sha256 = Some(digest);
                 }
-                None => None,
-            };
-
+            }
             builder = builder.body(bytes);
         }
 
@@ -315,7 +312,7 @@ impl S3Client {
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
-                payload_checksum,
+                payload_sha256,
             )
             .send_retry(&self.config.retry_config)
             .await
