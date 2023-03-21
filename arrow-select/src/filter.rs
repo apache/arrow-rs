@@ -24,7 +24,7 @@ use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::*;
 use arrow_buffer::bit_util;
-use arrow_buffer::{buffer::buffer_bin_and, Buffer, MutableBuffer};
+use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -109,9 +109,7 @@ impl<'a> Iterator for IndexIterator<'a> {
 
 /// Counts the number of set bits in `filter`
 fn filter_count(filter: &BooleanArray) -> usize {
-    filter
-        .values()
-        .count_set_bits_offset(filter.offset(), filter.len())
+    filter.values().count_set_bits()
 }
 
 /// Function that can filter arbitrary arrays
@@ -154,15 +152,12 @@ pub fn build_filter(filter: &BooleanArray) -> Result<Filter, ArrowError> {
 pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     let array_data = filter.data_ref();
     let nulls = array_data.nulls().unwrap();
-    let mask = filter.values();
-    let offset = filter.offset();
-
-    let new_mask =
-        buffer_bin_and(mask, offset, nulls.buffer(), nulls.offset(), filter.len());
+    let mask = filter.values() & nulls.inner();
 
     let array_data = ArrayData::builder(DataType::Boolean)
-        .len(filter.len())
-        .add_buffer(new_mask);
+        .len(mask.len())
+        .offset(mask.offset())
+        .add_buffer(mask.into_inner());
 
     let array_data = unsafe { array_data.build_unchecked() };
 

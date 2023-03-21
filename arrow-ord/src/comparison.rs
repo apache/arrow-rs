@@ -26,7 +26,6 @@
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::buffer::buffer_unary_not;
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
 use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
@@ -196,23 +195,19 @@ pub fn eq_bool_scalar(
     left: &BooleanArray,
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
-    let len = left.len();
-    let left_offset = left.offset();
-
-    let values = if right {
-        left.values().bit_slice(left_offset, len)
-    } else {
-        buffer_unary_not(left.values(), left.offset(), left.len())
+    let values = match right {
+        true => left.values().clone(),
+        false => !left.values(),
     };
 
     let data = unsafe {
         ArrayData::new_unchecked(
             DataType::Boolean,
-            len,
+            values.len(),
             None,
             left.nulls().map(|b| b.inner().sliced()),
-            0,
-            vec![values],
+            values.offset(),
+            vec![values.into_inner()],
             vec![],
         )
     };
