@@ -337,7 +337,6 @@ where
             Command::CommandGetTableTypes(token) => {
                 self.get_flight_info_table_types(token, request).await
             }
-
             Command::CommandGetSqlInfo(token) => {
                 self.get_flight_info_sql_info(token, request).await
             }
@@ -361,7 +360,8 @@ where
             | Command::TicketStatementQuery(_)
             | Command::ActionCreatePreparedStatementResult(_) => {
                 Err(Status::unimplemented(format!(
-                    "get_flight_info: The defined request is invalid: {command:?}",
+                    "get_flight_info: The defined request is invalid: {}", command.type_url()
+
                 )))
             }
         }

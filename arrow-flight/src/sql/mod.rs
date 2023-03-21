@@ -90,7 +90,7 @@ macro_rules! prost_message_ext {
             )*
 
                 as_item! {
-                /// Helper to convert to/from protobuf [`arrow_flight::sql::Any`]
+                /// Helper to convert to/from protobuf [`Any`]
                 /// to a strongly typed enum.
                 ///
                 /// # Example
