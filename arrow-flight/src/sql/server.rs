@@ -350,7 +350,7 @@ where
             Command::CommandGetCrossReference(token) => {
                 self.get_flight_info_cross_reference(token, request).await
             }
-            cmd => Err(Status::invalid_argument(format!(
+            cmd => Err(Status::unimplemented(format!(
                 "get_flight_info: The defined request is invalid: {}",
                 cmd.type_url()
             ))),
