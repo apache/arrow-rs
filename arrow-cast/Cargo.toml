@@ -67,3 +67,7 @@ harness = false
 [[bench]]
 name = "parse_time"
 harness = false
+
+[[bench]]
+name = "parse_decimal"
+harness = false
