@@ -103,9 +103,7 @@ enum Error {
         source: std::num::ParseIntError,
     },
 
-    #[snafu(display(
-        "Invalid Checksum algorithm, valid values are sha256, sha1, crc32, crc32c"
-    ))]
+    #[snafu(display("Invalid Checksum algorithm"))]
     InvalidChecksumAlgorithm,
 
     #[snafu(display("Missing region"))]
@@ -1290,7 +1288,7 @@ mod tests {
         let integration = config.build().unwrap();
         put_get_delete_list_opts(&integration, is_local).await;
 
-        // run integration test with unsigned payload enabled
+        // run integration test with checksum set to sha256
         let config = maybe_skip_integration!().with_checksum_algorithm(Checksum::SHA256);
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
         let integration = config.build().unwrap();
