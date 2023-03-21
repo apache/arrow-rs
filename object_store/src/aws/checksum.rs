@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use ring::digest::digest as ring_digest;
-use ring::digest::SHA256 as DigestSha256;
+use ring::digest::{self, digest as ring_digest};
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,45 +23,18 @@ use ring::digest::SHA256 as DigestSha256;
 pub enum Checksum {
     /// SHA-256 algorithm.
     SHA256,
-
-    #[cfg(feature = "sha1")]
-    SHA1,
-
-    #[cfg(feature = "crc32")]
-    CRC32,
-
-    #[cfg(feature = "crc32c")]
-    CRC32C,
 }
 
 impl Checksum {
     pub(super) fn digest(&self, bytes: &[u8]) -> Vec<u8> {
         match self {
-            Self::SHA256 => ring_digest(&DigestSha256, bytes).as_ref().to_owned(),
-
-            #[cfg(feature = "sha1")]
-            Checksum::SHA1 => todo!(),
-
-            #[cfg(feature = "crc32")]
-            Checksum::CRC32 => todo!(),
-
-            #[cfg(feature = "crc32c")]
-            Checksum::CRC32C => todo!(),
+            Self::SHA256 => ring_digest(&digest::SHA256, bytes).as_ref().to_owned(),
         }
     }
 
     pub(super) fn header_name(&self) -> &'static str {
         match self {
             Self::SHA256 => "x-amz-checksum-sha256",
-
-            #[cfg(feature = "sha1")]
-            Checksum::SHA1 => "x-amz-checksum-sha1",
-
-            #[cfg(feature = "crc32")]
-            Checksum::CRC32 => "x-amz-checksum-crc32",
-
-            #[cfg(feature = "crc32c")]
-            Checksum::CRC32C => "x-amz-checksum-crc32c",
         }
     }
 }
@@ -73,7 +45,7 @@ impl TryFrom<&String> for Checksum {
     fn try_from(value: &String) -> Result<Self, Self::Error> {
         match value.as_str() {
             "sha256" => Ok(Self::SHA256),
-            _ => unreachable!(),
+            _ => Err(()),
         }
     }
 }
