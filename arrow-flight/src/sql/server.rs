@@ -360,8 +360,8 @@ where
             | Command::TicketStatementQuery(_)
             | Command::ActionCreatePreparedStatementResult(_) => {
                 Err(Status::unimplemented(format!(
-                    "get_flight_info: The defined request is invalid: {}", command.type_url()
-
+                    "get_flight_info: The defined request is invalid: {}",
+                    command.type_url()
                 )))
             }
         }
