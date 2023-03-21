@@ -329,7 +329,7 @@ impl LevelInfoBuilder {
             }
         };
 
-        match array.data().nulls() {
+        match array.nulls() {
             Some(validity) => {
                 let mut last_non_null_idx = None;
                 let mut last_null_idx = None;
@@ -378,7 +378,7 @@ impl LevelInfoBuilder {
                 def_levels.reserve(len);
                 info.non_null_indices.reserve(len);
 
-                match array.data().nulls() {
+                match array.nulls() {
                     Some(nulls) => {
                         // TODO: Faster bitmask iteration (#1757)
                         for i in range {

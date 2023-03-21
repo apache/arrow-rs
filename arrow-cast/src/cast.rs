@@ -3324,7 +3324,7 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
             to_type.clone(),
             array.len(),
             Some(cast_array.null_count()),
-            cast_array.data().nulls().map(|b| b.inner().sliced()),
+            cast_array.nulls().map(|b| b.inner().sliced()),
             0,
             vec![offsets.into()],
             vec![cast_array.into_data()],
