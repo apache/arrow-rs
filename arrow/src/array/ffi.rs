@@ -51,6 +51,7 @@ impl TryFrom<ArrayData> for ffi::ArrowArray {
 /// This function copies the content of two FFI structs [ffi::FFI_ArrowArray] and
 /// [ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
 /// Usually the raw pointers are provided by the array data consumer.
+#[deprecated(note = "Use FFI_ArrowArray::new and FFI_ArrowSchema::try_from")]
 pub unsafe fn export_array_into_raw(
     src: ArrayRef,
     out_array: *mut ffi::FFI_ArrowArray,
