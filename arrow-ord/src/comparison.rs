@@ -104,7 +104,7 @@ pub fn eq_utf8<OffsetSize: OffsetSizeTrait>(
 fn utf8_empty<OffsetSize: OffsetSizeTrait, const EQ: bool>(
     left: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray, ArrowError> {
-    let null_bit_buffer = left.data().nulls().map(|b| b.inner().sliced());
+    let null_bit_buffer = left.nulls().map(|b| b.inner().sliced());
 
     let buffer = unsafe {
         MutableBuffer::from_trusted_len_iter_bool(left.value_offsets().windows(2).map(

@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::bit_chunk_iterator::{UnalignedBitChunk, UnalignedBitChunkIterator};
-use arrow_buffer::bit_util::{ceil, get_bit_raw};
-use std::result::Result;
+use crate::bit_chunk_iterator::{UnalignedBitChunk, UnalignedBitChunkIterator};
+use crate::bit_util::{ceil, get_bit_raw};
 
 /// Iterator over the bits within a packed bitmask
 ///

@@ -525,11 +525,11 @@ where
     IndexType::Native: ToPrimitive,
 {
     let val_buf = take_bits(values.values(), values.offset(), indices)?;
-    let null_buf = match values.data().nulls() {
+    let null_buf = match values.nulls() {
         Some(nulls) if nulls.null_count() > 0 => {
             Some(take_bits(nulls.buffer(), nulls.offset(), indices)?)
         }
-        _ => indices.data().nulls().map(|b| b.inner().sliced()),
+        _ => indices.nulls().map(|b| b.inner().sliced()),
     };
 
     let data = unsafe {
@@ -618,7 +618,7 @@ where
             }
             *offset = length_so_far;
         }
-        nulls = indices.data().nulls().map(|b| b.inner().sliced());
+        nulls = indices.nulls().map(|b| b.inner().sliced());
     } else {
         let num_bytes = bit_util::ceil(data_len, 8);
 
@@ -1631,7 +1631,7 @@ mod tests {
             let expected_list_data = ArrayData::builder(list_data_type)
                 .len(5)
                 // null buffer remains the same as only the indices have nulls
-                .nulls(index.data().nulls().cloned())
+                .nulls(index.nulls().cloned())
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
                 .build()
@@ -1705,7 +1705,7 @@ mod tests {
             let expected_list_data = ArrayData::builder(list_data_type)
                 .len(5)
                 // null buffer remains the same as only the indices have nulls
-                .nulls(index.data().nulls().cloned())
+                .nulls(index.nulls().cloned())
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
                 .build()
