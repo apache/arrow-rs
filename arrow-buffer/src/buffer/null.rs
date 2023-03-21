@@ -51,7 +51,11 @@ impl NullBuffer {
         Self { buffer, null_count }
     }
 
-    /// Computes the union of two optional [`NullBuffer`]
+    /// Computes the union of the nulls in two optional [`NullBuffer`]
+    ///
+    /// This is commonly used by binary operations where the result is NULL if either
+    /// of the input values is NULL. Handling the null mask separately in this way
+    /// can yield significant performance improvements over an iterator approach
     pub fn union(
         lhs: Option<&NullBuffer>,
         rhs: Option<&NullBuffer>,
