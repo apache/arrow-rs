@@ -488,11 +488,10 @@ impl ArrowArray {
 mod tests {
     use super::*;
     use crate::array::{
-        export_array_into_raw, make_array, Array, ArrayData, BooleanArray,
-        Decimal128Array, DictionaryArray, DurationSecondArray, FixedSizeBinaryArray,
-        FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, MapArray, OffsetSizeTrait, Time32MillisecondArray,
-        TimestampMillisecondArray, UInt32Array,
+        make_array, Array, ArrayData, BooleanArray, Decimal128Array, DictionaryArray,
+        DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray,
+        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array, MapArray,
+        OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray, UInt32Array,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -996,7 +995,9 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_export_array_into_raw() -> Result<()> {
+        use crate::array::export_array_into_raw;
         let array = make_array(Int32Array::from(vec![1, 2, 3]).into_data());
 
         // Assume two raw pointers provided by the consumer
