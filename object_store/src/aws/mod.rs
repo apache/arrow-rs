@@ -47,6 +47,7 @@ use tokio::io::AsyncWrite;
 use tracing::info;
 use url::Url;
 
+pub use crate::aws::checksum::Checksum;
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
     AwsCredential, CredentialProvider, InstanceCredentialProvider,
@@ -59,6 +60,7 @@ use crate::{
     Result, RetryConfig, StreamExt,
 };
 
+mod checksum;
 mod client;
 mod credential;
 
@@ -100,6 +102,9 @@ enum Error {
         content_length: String,
         source: std::num::ParseIntError,
     },
+
+    #[snafu(display("Invalid Checksum algorithm"))]
+    InvalidChecksumAlgorithm,
 
     #[snafu(display("Missing region"))]
     MissingRegion,
@@ -386,6 +391,7 @@ pub struct AmazonS3Builder {
     imdsv1_fallback: bool,
     virtual_hosted_style_request: bool,
     unsigned_payload: bool,
+    checksum_algorithm: Option<Checksum>,
     metadata_endpoint: Option<String>,
     profile: Option<String>,
     client_options: ClientOptions,
@@ -514,6 +520,11 @@ pub enum AmazonS3ConfigKey {
     /// - `unsigned_payload`
     UnsignedPayload,
 
+    /// Set the checksum algorithm for this client
+    ///
+    /// See [`AmazonS3Builder::with_checksum_algorithm`]
+    Checksum,
+
     /// Set the instance metadata endpoint
     ///
     /// See [`AmazonS3Builder::with_metadata_endpoint`] for details.
@@ -546,6 +557,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::MetadataEndpoint => "aws_metadata_endpoint",
             Self::Profile => "aws_profile",
             Self::UnsignedPayload => "aws_unsigned_payload",
+            Self::Checksum => "aws_checksum_algorithm",
         }
     }
 }
@@ -575,6 +587,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_imdsv1_fallback" | "imdsv1_fallback" => Ok(Self::ImdsV1Fallback),
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
+            "aws_checksum_algorithm" | "checksum_algorithm" => Ok(Self::Checksum),
             _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
         }
     }
@@ -693,6 +706,11 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
             AmazonS3ConfigKey::UnsignedPayload => {
                 self.unsigned_payload = str_is_truthy(&value.into())
+            }
+            AmazonS3ConfigKey::Checksum => {
+                let algorithm = Checksum::try_from(&value.into())
+                    .map_err(|_| Error::InvalidChecksumAlgorithm)?;
+                self.checksum_algorithm = Some(algorithm)
             }
         };
         Ok(self)
@@ -846,6 +864,14 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Sets the [checksum algorithm] which has to be used for object integrity check during upload.
+    ///
+    /// [checksum algorithm]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
+    pub fn with_checksum_algorithm(mut self, checksum_algorithm: Checksum) -> Self {
+        self.checksum_algorithm = Some(checksum_algorithm);
+        self
+    }
+
     /// Set the [instance metadata endpoint](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html),
     /// used primarily within AWS EC2.
     ///
@@ -992,6 +1018,7 @@ impl AmazonS3Builder {
             retry_config: self.retry_config,
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload,
+            checksum: self.checksum_algorithm,
         };
 
         let client = Arc::new(S3Client::new(config)?);
@@ -1151,6 +1178,7 @@ mod tests {
             &container_creds_relative_uri,
         );
         env::set_var("AWS_UNSIGNED_PAYLOAD", "true");
+        env::set_var("AWS_CHECKSUM_ALGORITHM", "sha256");
 
         let builder = AmazonS3Builder::from_env();
         assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
@@ -1164,6 +1192,7 @@ mod tests {
         assert_eq!(builder.token.unwrap(), aws_session_token);
         let metadata_uri = format!("{METADATA_ENDPOINT}{container_creds_relative_uri}");
         assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
+        assert_eq!(builder.checksum_algorithm.unwrap(), Checksum::SHA256);
         assert!(builder.unsigned_payload);
     }
 
@@ -1181,6 +1210,7 @@ mod tests {
             ("aws_endpoint", aws_endpoint.clone()),
             ("aws_session_token", aws_session_token.clone()),
             ("aws_unsigned_payload", "true".to_string()),
+            ("aws_checksum_algorithm", "sha256".to_string()),
         ]);
 
         let builder = AmazonS3Builder::new()
@@ -1193,6 +1223,7 @@ mod tests {
         assert_eq!(builder.region.unwrap(), aws_default_region);
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
+        assert_eq!(builder.checksum_algorithm.unwrap(), Checksum::SHA256);
         assert!(builder.unsigned_payload);
     }
 
@@ -1253,6 +1284,12 @@ mod tests {
 
         // run integration test with unsigned payload enabled
         let config = maybe_skip_integration!().with_unsigned_payload(true);
+        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
+        let integration = config.build().unwrap();
+        put_get_delete_list_opts(&integration, is_local).await;
+
+        // run integration test with checksum set to sha256
+        let config = maybe_skip_integration!().with_checksum_algorithm(Checksum::SHA256);
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
         let integration = config.build().unwrap();
         put_get_delete_list_opts(&integration, is_local).await;
