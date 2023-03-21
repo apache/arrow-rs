@@ -277,7 +277,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
     /// Returns a slice of the values of this array
     #[inline]
-    pub fn values(&self) -> &[T::Native] {
+    pub fn values(&self) -> &ScalarBuffer<T::Native> {
         &self.raw_values
     }
 
