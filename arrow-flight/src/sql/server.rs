@@ -350,13 +350,13 @@ where
             Command::CommandGetCrossReference(token) => {
                 self.get_flight_info_cross_reference(token, request).await
             }
-            Command::ActionClosePreparedStatementRequest(_)
-            | Command::ActionCreatePreparedStatementRequest(_)
-            | Command::CommandPreparedStatementUpdate(_)
-            | Command::CommandStatementUpdate(_)
-            | Command::DoPutUpdateResult(_)
-            | Command::TicketStatementQuery(_)
-            | Command::ActionCreatePreparedStatementResult(_) => {
+            command @ Command::ActionClosePreparedStatementRequest(_)
+            | command @ Command::ActionCreatePreparedStatementRequest(_)
+            | command @ Command::CommandPreparedStatementUpdate(_)
+            | command @ Command::CommandStatementUpdate(_)
+            | command @ Command::DoPutUpdateResult(_)
+            | command @ Command::TicketStatementQuery(_)
+            | command @ Command::ActionCreatePreparedStatementResult(_) => {
                 Err(Status::unimplemented(format!(
                     "get_flight_info: The defined request is invalid: {}",
                     command.type_url()
@@ -416,7 +416,7 @@ where
             Command::CommandGetCrossReference(command) => {
                 self.do_get_cross_reference(command, request).await
             }
-            cmd @ _ => self.do_get_fallback(request, cmd.into_any()).await,
+            cmd => self.do_get_fallback(request, cmd.into_any()).await,
         }
     }
 
@@ -449,7 +449,7 @@ where
                 })]);
                 Ok(Response::new(Box::pin(output)))
             }
-            cmd @ _ => Err(Status::invalid_argument(format!(
+            cmd => Err(Status::invalid_argument(format!(
                 "do_put: The defined request is invalid: {}",
                 cmd.type_url()
             ))),
