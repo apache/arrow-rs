@@ -103,21 +103,23 @@ macro_rules! prost_message_ext {
                 /// let any_message = Any::pack(&flightsql_message).unwrap();
                 ///
                 /// // decode it to Commands:
-                /// match Commands::try_from(any_message).unwrap() {
-                ///   Commands::CommandStatementQuery(decoded) => {
+                /// match Command::try_from(any_message).unwrap() {
+                ///   Command::CommandStatementQuery(decoded) => {
                 ///    assert_eq!(flightsql_message, decoded);
                 ///   }
                 ///   _ => panic!("Unexpected decoded message"),
                 /// }
                 /// ```
                 #[derive(Clone, Debug, PartialEq)]
-                pub enum Commands {
+                pub enum Command {
                     $($name($name),)*
                 }
             }
 
-            impl Commands {
-                pub fn unpack(any: Any) -> Result<Commands, ArrowError> {
+            impl TryFrom<Any> for Command {
+                type Error = ArrowError;
+
+                fn try_from(any: Any) -> Result<Self, Self::Error> {
                     match any.type_url.as_str() {
                         $(
                         [<$name:snake:upper _TYPE_URL>]
@@ -133,12 +135,6 @@ macro_rules! prost_message_ext {
                 }
             }
 
-            impl TryFrom<Any> for Commands {
-                type Error = ArrowError;
-                fn try_from(any: Any) -> Result<Self, ArrowError> {
-                    Commands::unpack(any)
-                }
-            }
             $(
                 impl ProstMessageExt for $name {
                     fn type_url() -> &'static str {
@@ -265,8 +261,8 @@ mod tests {
         };
         let any = Any::pack(&query).unwrap();
         assert!(matches!(
-            Commands::unpack(any).unwrap(),
-            Commands::CommandStatementQuery(_)
+            any.try_into().unwrap(),
+            Command::CommandStatementQuery(_)
         ));
     }
 }

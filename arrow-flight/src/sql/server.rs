@@ -17,7 +17,7 @@
 
 use std::pin::Pin;
 
-use crate::sql::{Any, Commands};
+use crate::sql::{Any, Command};
 use futures::Stream;
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
@@ -315,51 +315,51 @@ where
         let message =
             Any::decode(&*request.get_ref().cmd).map_err(decode_error_to_status)?;
 
-        let command = Commands::unpack(message).map_err(arrow_error_to_status)?;
+        let command = Command::try_from(message).map_err(arrow_error_to_status)?;
 
         match command {
-            Commands::CommandStatementQuery(token) => {
+            Command::CommandStatementQuery(token) => {
                 self.get_flight_info_statement(token, request).await
             }
-            Commands::CommandPreparedStatementQuery(handle) => {
+            Command::CommandPreparedStatementQuery(handle) => {
                 self.get_flight_info_prepared_statement(handle, request)
                     .await
             }
-            Commands::CommandGetCatalogs(token) => {
+            Command::CommandGetCatalogs(token) => {
                 self.get_flight_info_catalogs(token, request).await
             }
-            Commands::CommandGetDbSchemas(token) => {
+            Command::CommandGetDbSchemas(token) => {
                 return self.get_flight_info_schemas(token, request).await
             }
-            Commands::CommandGetTables(token) => {
+            Command::CommandGetTables(token) => {
                 self.get_flight_info_tables(token, request).await
             }
-            Commands::CommandGetTableTypes(token) => {
+            Command::CommandGetTableTypes(token) => {
                 self.get_flight_info_table_types(token, request).await
             }
 
-            Commands::CommandGetSqlInfo(token) => {
+            Command::CommandGetSqlInfo(token) => {
                 self.get_flight_info_sql_info(token, request).await
             }
-            Commands::CommandGetPrimaryKeys(token) => {
+            Command::CommandGetPrimaryKeys(token) => {
                 self.get_flight_info_primary_keys(token, request).await
             }
-            Commands::CommandGetExportedKeys(token) => {
+            Command::CommandGetExportedKeys(token) => {
                 self.get_flight_info_exported_keys(token, request).await
             }
-            Commands::CommandGetImportedKeys(token) => {
+            Command::CommandGetImportedKeys(token) => {
                 self.get_flight_info_imported_keys(token, request).await
             }
-            Commands::CommandGetCrossReference(token) => {
+            Command::CommandGetCrossReference(token) => {
                 self.get_flight_info_cross_reference(token, request).await
             }
-            Commands::ActionClosePreparedStatementRequest(_)
-            | Commands::ActionCreatePreparedStatementRequest(_)
-            | Commands::CommandPreparedStatementUpdate(_)
-            | Commands::CommandStatementUpdate(_)
-            | Commands::DoPutUpdateResult(_)
-            | Commands::TicketStatementQuery(_)
-            | Commands::ActionCreatePreparedStatementResult(_) => {
+            Command::ActionClosePreparedStatementRequest(_)
+            | Command::ActionCreatePreparedStatementRequest(_)
+            | Command::CommandPreparedStatementUpdate(_)
+            | Command::CommandStatementUpdate(_)
+            | Command::DoPutUpdateResult(_)
+            | Command::TicketStatementQuery(_)
+            | Command::ActionCreatePreparedStatementResult(_) => {
                 Err(Status::unimplemented(format!(
                     "get_flight_info: The defined request is invalid: {command:?}",
                 )))
