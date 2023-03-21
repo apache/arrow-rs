@@ -96,9 +96,7 @@ impl BooleanArray {
         BooleanBuilder::with_capacity(capacity)
     }
 
-    /// Returns the underlying [`BooleanBuffer`] holding all the values of this array.
-    ///
-    /// Note this doesn't take the offset of this array into account.
+    /// Returns the underlying [`BooleanBuffer`] holding all the values of this array
     pub fn values(&self) -> &BooleanBuffer {
         &self.values
     }
