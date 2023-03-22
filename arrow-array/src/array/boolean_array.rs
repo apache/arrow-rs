@@ -105,15 +105,10 @@ impl BooleanArray {
     pub fn true_count(&self) -> usize {
         match self.data.nulls() {
             Some(nulls) => {
-                let null_chunks = nulls.inner().bit_chunks();
-                let value_chunks = self.values().bit_chunks();
+                let null_chunks = nulls.inner().bit_chunks().iter_padded();
+                let value_chunks = self.values().bit_chunks().iter_padded();
                 null_chunks
-                    .iter()
-                    .zip(value_chunks.iter())
-                    .chain(std::iter::once((
-                        null_chunks.remainder_bits(),
-                        value_chunks.remainder_bits(),
-                    )))
+                    .zip(value_chunks)
                     .map(|(a, b)| (a & b).count_ones() as usize)
                     .sum()
             }

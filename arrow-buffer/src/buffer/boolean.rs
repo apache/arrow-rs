@@ -33,13 +33,9 @@ impl PartialEq for BooleanBuffer {
             return false;
         }
 
-        let lhs = self.bit_chunks();
-        let rhs = other.bit_chunks();
-
-        if lhs.iter().zip(rhs.iter()).any(|(a, b)| a != b) {
-            return false;
-        }
-        lhs.remainder_bits() == rhs.remainder_bits()
+        let lhs = self.bit_chunks().iter_padded();
+        let rhs = other.bit_chunks().iter_padded();
+        lhs.zip(rhs).all(|(a, b)| a == b)
     }
 }
 
