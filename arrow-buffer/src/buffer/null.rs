@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::bit_iterator::BitIndexIterator;
+use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
 use crate::buffer::BooleanBuffer;
 use crate::{Buffer, MutableBuffer};
 
@@ -114,6 +114,23 @@ impl NullBuffer {
         Self::new(self.buffer.slice(offset, len))
     }
 
+    /// Returns an iterator over the bits in this [`NullBuffer`]
+    ///
+    /// Note: [`Self::valid_indices`] will be significantly faster for most use-cases
+    pub fn iter(&self) -> BitIterator<'_> {
+        self.buffer.iter()
+    }
+
+    /// Returns a [`BitIndexIterator`] over the valid indices in this [`NullBuffer`]
+    pub fn valid_indices(&self) -> BitIndexIterator<'_> {
+        self.buffer.set_indices()
+    }
+
+    /// Returns a [`BitSliceIterator`] yielding contiguous ranges of valid indices
+    pub fn valid_slices(&self) -> BitSliceIterator<'_> {
+        self.buffer.set_slices()
+    }
+
     /// Calls the provided closure for each index in this null mask that is set
     #[inline]
     pub fn try_for_each_valid_idx<E, F: FnMut(usize) -> Result<(), E>>(
@@ -123,7 +140,7 @@ impl NullBuffer {
         if self.null_count == self.len() {
             return Ok(());
         }
-        BitIndexIterator::new(self.validity(), self.offset(), self.len()).try_for_each(f)
+        self.valid_indices().try_for_each(f)
     }
 
     /// Returns the inner [`BooleanBuffer`]
@@ -142,6 +159,15 @@ impl NullBuffer {
     #[inline]
     pub fn buffer(&self) -> &Buffer {
         self.buffer.inner()
+    }
+}
+
+impl<'a> IntoIterator for &'a NullBuffer {
+    type Item = bool;
+    type IntoIter = BitIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.buffer.iter()
     }
 }
 

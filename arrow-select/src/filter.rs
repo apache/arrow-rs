@@ -81,8 +81,7 @@ struct IndexIterator<'a> {
 impl<'a> IndexIterator<'a> {
     fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
-        let data = filter.data();
-        let iter = BitIndexIterator::new(data.buffers()[0], data.offset(), data.len());
+        let iter = filter.values().set_indices();
         Self { remaining, iter }
     }
 }
