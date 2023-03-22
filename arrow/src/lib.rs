@@ -69,7 +69,7 @@
 //!
 //! let collected: Vec<_> = array.iter().collect();
 //! assert_eq!(collected, vec![Some(1), None, Some(3)]);
-//! assert_eq!(array.values(), [1, 0, 3])
+//! assert_eq!(array.values(), &[1, 0, 3])
 //! ```
 //!
 //! It is also possible to write generic code. For example, the following is generic over
@@ -168,7 +168,7 @@
 //!
 //! let array = parse_strings(["1", "2", "3"], DataType::Int32);
 //! let integers = array.as_any().downcast_ref::<Int32Array>().unwrap();
-//! assert_eq!(integers.values(), [1, 2, 3])
+//! assert_eq!(integers.values(), &[1, 2, 3])
 //! ```
 //!
 //! # Compute Kernels
@@ -192,7 +192,7 @@
 //!
 //! let array = parse_strings(["1", "2", "3"], &DataType::UInt32).unwrap();
 //! let integers = array.as_any().downcast_ref::<UInt32Array>().unwrap();
-//! assert_eq!(integers.values(), [1, 2, 3])
+//! assert_eq!(integers.values(), &[1, 2, 3])
 //! ```
 //!
 //! This module also implements many common vertical operations:
