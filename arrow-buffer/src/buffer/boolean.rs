@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::bit_chunk_iterator::BitChunks;
-use crate::{bit_util, Buffer};
+use crate::{bit_util, buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer};
+use std::ops::{BitAnd, BitOr, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
 #[derive(Debug, Clone, Eq)]
@@ -76,9 +77,9 @@ impl BooleanBuffer {
     ///
     /// Panics if `i >= self.len()`
     #[inline]
+    #[deprecated(note = "use BooleanBuffer::value")]
     pub fn is_set(&self, i: usize) -> bool {
-        assert!(i < self.len);
-        unsafe { bit_util::get_bit_raw(self.buffer.as_ptr(), i + self.offset) }
+        self.value(i)
     }
 
     /// Returns the offset of this [`BooleanBuffer`] in bits
@@ -97,6 +98,25 @@ impl BooleanBuffer {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Returns the boolean value at index `i`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
+    pub fn value(&self, idx: usize) -> bool {
+        assert!(idx < self.len);
+        unsafe { self.value_unchecked(idx) }
+    }
+
+    /// Returns the boolean value at index `i`.
+    ///
+    /// # Safety
+    /// This doesn't check bounds, the caller must ensure that index < self.len()
+    #[inline]
+    pub unsafe fn value_unchecked(&self, i: usize) -> bool {
+        unsafe { bit_util::get_bit_raw(self.buffer.as_ptr(), i + self.offset) }
     }
 
     /// Returns the packed values of this [`BooleanBuffer`] not including any offset
@@ -143,5 +163,55 @@ impl BooleanBuffer {
     /// Returns the inner [`Buffer`], consuming self
     pub fn into_inner(self) -> Buffer {
         self.buffer
+    }
+}
+
+impl Not for &BooleanBuffer {
+    type Output = BooleanBuffer;
+
+    fn not(self) -> Self::Output {
+        BooleanBuffer {
+            buffer: buffer_unary_not(&self.buffer, self.offset, self.len),
+            offset: 0,
+            len: self.len,
+        }
+    }
+}
+
+impl BitAnd<&BooleanBuffer> for &BooleanBuffer {
+    type Output = BooleanBuffer;
+
+    fn bitand(self, rhs: &BooleanBuffer) -> Self::Output {
+        assert_eq!(self.len, rhs.len);
+        BooleanBuffer {
+            buffer: buffer_bin_and(
+                &self.buffer,
+                self.offset,
+                &rhs.buffer,
+                rhs.offset,
+                self.len,
+            ),
+            offset: 0,
+            len: self.len,
+        }
+    }
+}
+
+impl BitOr<&BooleanBuffer> for &BooleanBuffer {
+    type Output = BooleanBuffer;
+
+    fn bitor(self, rhs: &BooleanBuffer) -> Self::Output {
+        assert_eq!(self.len, rhs.len);
+        BooleanBuffer {
+            buffer: buffer_bin_or(
+                &self.buffer,
+                self.offset,
+                &rhs.buffer,
+                rhs.offset,
+                self.len,
+            ),
+            offset: 0,
+            len: self.len,
+        }
     }
 }

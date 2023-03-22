@@ -25,9 +25,11 @@ use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{Array, ArrayAccessor, ArrayRef};
-use arrow_buffer::{i256, ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
+use arrow_buffer::{
+    i256, ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, ScalarBuffer,
+};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
@@ -273,9 +275,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         self.data.is_empty()
     }
 
-    /// Returns a slice of the values of this array
+    /// Returns the values of this array
     #[inline]
-    pub fn values(&self) -> &[T::Native] {
+    pub fn values(&self) -> &ScalarBuffer<T::Native> {
         &self.raw_values
     }
 
@@ -344,7 +346,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn from_value(value: T::Native, count: usize) -> Self {
         unsafe {
             let val_buf = Buffer::from_trusted_len_iter((0..count).map(|_| value));
-            build_primitive_array(count, val_buf, 0, None)
+            build_primitive_array(count, val_buf, None)
         }
     }
 
@@ -421,9 +423,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     {
         let data = self.data();
         let len = self.len();
-        let null_count = self.null_count();
 
-        let null_buffer = data.nulls().map(|b| b.inner().sliced());
+        let nulls = data.nulls().cloned();
         let values = self.values().iter().map(|v| op(*v));
         // JUSTIFICATION
         //  Benefit
@@ -431,7 +432,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         //  Soundness
         //      `values` is an iterator with a known size because arrays are sized.
         let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-        unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
+        unsafe { build_primitive_array(len, buffer, nulls) }
     }
 
     /// Applies an unary and infallible function to a mutable primitive array.
@@ -478,21 +479,23 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     {
         let data = self.data();
         let len = self.len();
-        let null_count = self.null_count();
 
-        let null_buffer = data.nulls().map(|b| b.inner().sliced());
+        let nulls = data.nulls().cloned();
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
         let slice = buffer.as_slice_mut();
 
-        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        let f = |idx| {
             unsafe { *slice.get_unchecked_mut(idx) = op(self.value_unchecked(idx))? };
             Ok::<_, E>(())
-        })?;
+        };
 
-        Ok(unsafe {
-            build_primitive_array(len, buffer.finish(), null_count, null_buffer)
-        })
+        match &nulls {
+            Some(nulls) => nulls.try_for_each_valid_idx(f)?,
+            None => (0..len).try_for_each(f)?,
+        }
+
+        Ok(unsafe { build_primitive_array(len, buffer.finish(), nulls) })
     }
 
     /// Applies an unary and fallible function to all valid values in a mutable primitive array.
@@ -575,12 +578,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             Ok::<_, ()>(())
         });
 
+        let nulls = BooleanBuffer::new(null_builder.finish(), 0, len);
         unsafe {
             build_primitive_array(
                 len,
                 buffer.finish(),
-                out_null_count,
-                Some(null_builder.finish()),
+                Some(NullBuffer::new_unchecked(nulls, out_null_count)),
             )
         }
     }
@@ -648,18 +651,15 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
     len: usize,
     buffer: Buffer,
-    null_count: usize,
-    null_buffer: Option<Buffer>,
+    nulls: Option<NullBuffer>,
 ) -> PrimitiveArray<O> {
-    PrimitiveArray::from(ArrayData::new_unchecked(
-        O::DATA_TYPE,
-        len,
-        Some(null_count),
-        null_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    ))
+    PrimitiveArray::from(
+        ArrayDataBuilder::new(O::DATA_TYPE)
+            .len(len)
+            .buffers(vec![buffer])
+            .nulls(nulls)
+            .build_unchecked(),
+    )
 }
 
 impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
@@ -1782,7 +1782,7 @@ mod tests {
         let primitive_array = PrimitiveArray::<Int32Type>::from_iter(iter);
         assert_eq!(primitive_array.len(), 10);
         assert_eq!(primitive_array.null_count(), 0);
-        assert!(primitive_array.data().nulls().is_none());
+        assert!(primitive_array.nulls().is_none());
         assert_eq!(primitive_array.values(), &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     }
 

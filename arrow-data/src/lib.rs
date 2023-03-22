@@ -23,7 +23,7 @@ pub use data::*;
 mod equal;
 pub mod transform;
 
-pub mod bit_iterator;
+pub use arrow_buffer::bit_iterator;
 pub mod bit_mask;
 pub mod decimal;
 
