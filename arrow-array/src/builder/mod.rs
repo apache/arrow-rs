@@ -145,17 +145,17 @@ pub trait ArrayBuilder: Any + Send {
 /// //
 /// // column
 /// // ---------
-/// // {one},
-/// // {},
-/// // {two, three}
+/// // [one]
+/// // []
+/// // [two, three]
 ///
 /// let mut builder = ListBuilder::new(StringBuilder::new());
-/// //{one}
+/// // [one]
 /// builder.values().append_value("one");
 /// builder.append(true);
-/// // {}
+/// // []
 /// builder.append(true);
-/// // {two, three}
+/// // [two, three]
 /// builder.values().append_value("two");
 /// builder.values().append_value("three");
 /// builder.append(true);
@@ -178,17 +178,17 @@ pub type ListBuilder<T> = GenericListBuilder<i32, T>;
 /// //
 /// // column
 /// // ---------
-/// // {one},
-/// // {},
-/// // {two, three}
+/// // [one],
+/// // [],
+/// // [two, three]
 ///
 /// let mut builder = LargeListBuilder::new(StringBuilder::new());
-/// //{one}
+/// // [one]
 /// builder.values().append_value("one");
 /// builder.append(true);
-/// // {}
+/// // []
 /// builder.append(true);
-/// // {two, three}
+/// // [two, three]
 /// builder.values().append_value("two");
 /// builder.values().append_value("three");
 /// builder.append(true);
