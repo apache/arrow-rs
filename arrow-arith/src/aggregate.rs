@@ -22,7 +22,6 @@ use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_data::bit_iterator::BitIndexIterator;
 use arrow_schema::ArrowError;
 use arrow_schema::*;
 
