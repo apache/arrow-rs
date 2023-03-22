@@ -1092,7 +1092,8 @@ mod tests {
             "2030-12-04T17:11:10.123456",
         ];
         for case in cases {
-            let chrono = NaiveDateTime::parse_from_str(case, "%Y-%m-%dT%H:%M:%S%.f").unwrap();
+            let chrono =
+                NaiveDateTime::parse_from_str(case, "%Y-%m-%dT%H:%M:%S%.f").unwrap();
             let custom = string_to_datetime(&Utc, case).unwrap();
             assert_eq!(chrono, custom.naive_utc())
         }
