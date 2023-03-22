@@ -514,8 +514,8 @@ mod tests {
             Field::new(
                 "nested",
                 DataType::Struct(vec![
-                    Field::new("a", DataType::Int32, false),
-                    Field::new("b", DataType::Int32, false),
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
                 ]),
                 true,
             ),
@@ -594,7 +594,7 @@ mod tests {
                     "list2",
                     DataType::List(Box::new(Field::new(
                         "element",
-                        DataType::Struct(vec![Field::new("d", DataType::Int32, false)]),
+                        DataType::Struct(vec![Field::new("d", DataType::Int32, true)]),
                         false,
                     ))),
                     true,
