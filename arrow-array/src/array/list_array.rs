@@ -843,7 +843,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "memory is not aligned")]
     fn test_primitive_array_alignment() {
-        let buf = Buffer::from_slice_ref(&[0_u64]);
+        let buf = Buffer::from_slice_ref([0_u64]);
         let buf2 = buf.slice(1);
         let array_data = ArrayData::builder(DataType::Int32)
             .add_buffer(buf2)
@@ -858,7 +858,7 @@ mod tests {
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
     fn test_list_array_alignment() {
-        let buf = Buffer::from_slice_ref(&[0_u64]);
+        let buf = Buffer::from_slice_ref([0_u64]);
         let buf2 = buf.slice(1);
 
         let values: [i32; 8] = [0; 8];
