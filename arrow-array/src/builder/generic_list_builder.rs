@@ -24,7 +24,15 @@ use arrow_schema::Field;
 use std::any::Any;
 use std::sync::Arc;
 
-///  Array builder for [`GenericListArray`]
+/// Array builder for [`GenericListArray`]s.
+///
+/// Use [`ListBuilder`] to build [`ListArray`]s and [`LargeListBuilder`] to build [`LargeListArray`]s.
+///
+///
+/// [`ListBuilder`]: crate::builder::ListBuilder
+/// [`ListArray`]: crate::array::ListArray
+/// [`LargeListBuilder`]: crate::builder::LargeListBuilder
+/// [`LargeListArray`]: crate::array::LargeListArray
 #[derive(Debug)]
 pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
     offsets_builder: BufferBuilder<OffsetSize>,
