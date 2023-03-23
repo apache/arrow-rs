@@ -71,20 +71,10 @@ impl Buffer {
         }
     }
 
-    /// Create a [`Buffer`] from the provided `Vec` without copying
+    /// Create a [`Buffer`] from the provided [`Vec`] without copying
     #[inline]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
-        // Safety
-        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
-        let ptr = unsafe { NonNull::new_unchecked(vec.as_ptr() as _) };
-        let len = vec.len() * std::mem::size_of::<T>();
-        // Safety
-        // Vec guaranteed to have a valid layout matching that of `Layout::array`
-        // This is based on `RawVec::current_memory`
-        let layout = unsafe { Layout::array::<T>(vec.capacity()).unwrap_unchecked() };
-        std::mem::forget(vec);
-        let b = unsafe { Bytes::new(ptr, len, Deallocation::Standard(layout)) };
-        Self::from_bytes(b)
+        MutableBuffer::from_vec(vec).into()
     }
 
     /// Initializes a [Buffer] from a slice of items.
@@ -810,7 +800,8 @@ mod tests {
         b.into_mutable().unwrap();
 
         let b = Buffer::from_vec(vec![1_u32, 3, 5]);
-        let b = b.into_mutable().unwrap_err(); // Invalid layout
+        let b = b.into_mutable().unwrap();
+        let b = Buffer::from(b);
         let b = b.into_vec::<u32>().unwrap();
         assert_eq!(b, &[1, 3, 5]);
     }
