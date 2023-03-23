@@ -116,17 +116,24 @@ impl NullBuffer {
 
     /// Returns an iterator over the bits in this [`NullBuffer`]
     ///
+    /// * `true` indicates that the corresponding value is not NULL
+    /// * `false` indicates that the corresponding value is NULL
+    ///
     /// Note: [`Self::valid_indices`] will be significantly faster for most use-cases
     pub fn iter(&self) -> BitIterator<'_> {
         self.buffer.iter()
     }
 
     /// Returns a [`BitIndexIterator`] over the valid indices in this [`NullBuffer`]
+    ///
+    /// Valid indices indicate the corresponding value is not NULL
     pub fn valid_indices(&self) -> BitIndexIterator<'_> {
         self.buffer.set_indices()
     }
 
     /// Returns a [`BitSliceIterator`] yielding contiguous ranges of valid indices
+    ///
+    /// Valid indices indicate the corresponding value is not NULL
     pub fn valid_slices(&self) -> BitSliceIterator<'_> {
         self.buffer.set_slices()
     }
