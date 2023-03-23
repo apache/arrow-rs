@@ -1146,7 +1146,7 @@ mod tests {
     use std::io::{Cursor, Write};
     use tempfile::NamedTempFile;
 
-    use arrow_array::cast::as_boolean_array;
+    use arrow_array::cast::AsArray;
     use chrono::prelude::*;
 
     #[test]
@@ -2059,14 +2059,14 @@ mod tests {
         assert_eq!(b.num_rows(), 4);
         assert_eq!(b.num_columns(), 2);
 
-        let c = as_boolean_array(b.column(0));
+        let c = b.column(0).as_boolean();
         assert_eq!(c.null_count(), 1);
         assert!(c.value(0));
         assert!(!c.value(1));
         assert!(c.is_null(2));
         assert!(!c.value(3));
 
-        let c = as_boolean_array(b.column(1));
+        let c = b.column(1).as_boolean();
         assert_eq!(c.null_count(), 1);
         assert!(!c.value(0));
         assert!(c.value(1));

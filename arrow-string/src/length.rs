@@ -214,7 +214,7 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::cast::as_primitive_array;
+    use arrow_array::cast::AsArray;
 
     fn double_vec<T: Clone>(v: Vec<T>) -> Vec<T> {
         [&v[..], &v[..]].concat()
@@ -427,7 +427,7 @@ mod tests {
         let a = StringArray::from(vec![Some("hello"), Some(" "), Some("world"), None]);
         let b = a.slice(1, 3);
         let result = length(b.as_ref()).unwrap();
-        let result: &Int32Array = as_primitive_array(&result);
+        let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(1), Some(5), None]);
         assert_eq!(&expected, result);
@@ -440,7 +440,7 @@ mod tests {
         let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
         let result = length(b.as_ref()).unwrap();
-        let result: &Int32Array = as_primitive_array(&result);
+        let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(1), Some(2), None]);
         assert_eq!(&expected, result);
@@ -582,7 +582,7 @@ mod tests {
         let a = StringArray::from(vec![Some("hello"), Some(" "), Some("world"), None]);
         let b = a.slice(1, 3);
         let result = bit_length(b.as_ref()).unwrap();
-        let result: &Int32Array = as_primitive_array(&result);
+        let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(8), Some(40), None]);
         assert_eq!(&expected, result);
@@ -595,7 +595,7 @@ mod tests {
         let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
         let result = bit_length(b.as_ref()).unwrap();
-        let result: &Int32Array = as_primitive_array(&result);
+        let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(0), Some(40), None]);
         assert_eq!(&expected, result);

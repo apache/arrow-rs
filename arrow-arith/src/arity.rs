@@ -507,7 +507,7 @@ mod tests {
         let input =
             Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
         let input_slice = input.slice(1, 4);
-        let input_slice: &Float64Array = as_primitive_array(&input_slice);
+        let input_slice: &Float64Array = input_slice.as_primitive();
         let result = unary(input_slice, |n| n.round());
         assert_eq!(
             result,

@@ -1219,7 +1219,7 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_primitive_array::<Float64Type>(&sliced_input);
+        let sliced_input = sliced_input.as_primitive::<Float64Type>();
 
         assert_eq!(sliced_input, &input);
 
@@ -1242,7 +1242,7 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_boolean_array(&sliced_input);
+        let sliced_input = sliced_input.as_boolean();
 
         assert_eq!(sliced_input, &input);
 
@@ -1265,7 +1265,7 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_string_array(&sliced_input);
+        let sliced_input = sliced_input.as_string::<i32>();
 
         assert_eq!(sliced_input, &input);
 
@@ -1288,7 +1288,7 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_generic_binary_array::<i32>(&sliced_input);
+        let sliced_input = sliced_input.as_binary::<i32>();
 
         assert_eq!(sliced_input, &input);
 

@@ -225,7 +225,7 @@ fn interleave_fallback(
 mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, ListBuilder};
-    use arrow_array::cast::{as_primitive_array, as_string_array};
+    use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, ListArray, StringArray};
     use arrow_schema::DataType;
@@ -237,7 +237,7 @@ mod tests {
         let c = Int32Array::from_iter_values([8, 9, 10]);
         let values =
             interleave(&[&a, &b, &c], &[(0, 3), (0, 3), (2, 2), (2, 0), (1, 1)]).unwrap();
-        let v = as_primitive_array::<Int32Type>(&values);
+        let v = values.as_primitive::<Int32Type>();
         assert_eq!(v.values(), &[4, 4, 10, 8, 6]);
     }
 
@@ -247,9 +247,7 @@ mod tests {
         let b = Int32Array::from_iter([Some(1), Some(4), None]);
         let values =
             interleave(&[&a, &b], &[(0, 1), (1, 2), (1, 2), (0, 3), (0, 2)]).unwrap();
-        let v: Vec<_> = as_primitive_array::<Int32Type>(&values)
-            .into_iter()
-            .collect();
+        let v: Vec<_> = values.as_primitive::<Int32Type>().into_iter().collect();
         assert_eq!(&v, &[Some(2), None, None, Some(4), Some(3)])
     }
 
@@ -267,7 +265,7 @@ mod tests {
         let b = StringArray::from_iter_values(["hello", "world", "foo"]);
         let values =
             interleave(&[&a, &b], &[(0, 2), (0, 2), (1, 0), (1, 1), (0, 1)]).unwrap();
-        let v = as_string_array(&values);
+        let v = values.as_string::<i32>();
         let values: Vec<_> = v.into_iter().collect();
         assert_eq!(
             &values,

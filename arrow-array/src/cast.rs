@@ -709,6 +709,165 @@ where
     T::from(array.to_data())
 }
 
+mod private {
+    pub trait Sealed {}
+}
+
+/// An extension trait for `dyn Array` that provides ergonomic downcasting
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int32Array};
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_array::types::Int32Type;
+/// let col = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+/// assert_eq!(col.as_primitive::<Int32Type>().values(), &[1, 2, 3]);
+/// ```
+pub trait AsArray: private::Sealed {
+    /// Downcast this to a [`BooleanArray`] returning `None` if not possible
+    fn as_boolean_opt(&self) -> Option<&BooleanArray>;
+
+    /// Downcast this to a [`BooleanArray`] panicking if not possible
+    fn as_boolean(&self) -> &BooleanArray {
+        self.as_boolean_opt().expect("boolean array")
+    }
+
+    /// Downcast this to a [`PrimitiveArray`] returning `None` if not possible
+    fn as_primitive_opt<T: ArrowPrimitiveType>(&self) -> Option<&PrimitiveArray<T>>;
+
+    /// Downcast this to a [`PrimitiveArray`] panicking if not possible
+    fn as_primitive<T: ArrowPrimitiveType>(&self) -> &PrimitiveArray<T> {
+        self.as_primitive_opt().expect("primitive array")
+    }
+
+    /// Downcast this to a [`GenericByteArray`] returning `None` if not possible
+    fn as_bytes_opt<T: ByteArrayType>(&self) -> Option<&GenericByteArray<T>>;
+
+    /// Downcast this to a [`GenericByteArray`] panicking if not possible
+    fn as_bytes<T: ByteArrayType>(&self) -> &GenericByteArray<T> {
+        self.as_bytes_opt().expect("byte array")
+    }
+
+    /// Downcast this to a [`GenericStringArray`] returning `None` if not possible
+    fn as_string_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericStringArray<O>> {
+        self.as_bytes_opt()
+    }
+
+    /// Downcast this to a [`GenericStringArray`] panicking if not possible
+    fn as_string<O: OffsetSizeTrait>(&self) -> &GenericStringArray<O> {
+        self.as_bytes_opt().expect("string array")
+    }
+
+    /// Downcast this to a [`GenericBinaryArray`] returning `None` if not possible
+    fn as_binary_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericBinaryArray<O>> {
+        self.as_bytes_opt()
+    }
+
+    /// Downcast this to a [`GenericBinaryArray`] panicking if not possible
+    fn as_binary<O: OffsetSizeTrait>(&self) -> &GenericBinaryArray<O> {
+        self.as_bytes_opt().expect("binary array")
+    }
+
+    /// Downcast this to a [`StructArray`] returning `None` if not possible
+    fn as_struct_opt(&self) -> Option<&StructArray>;
+
+    /// Downcast this to a [`StructArray`] panicking if not possible
+    fn as_struct(&self) -> &StructArray {
+        self.as_struct_opt().expect("struct array")
+    }
+
+    /// Downcast this to a [`GenericListArray`] returning `None` if not possible
+    fn as_list_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericListArray<O>>;
+
+    /// Downcast this to a [`GenericListArray`] panicking if not possible
+    fn as_list<O: OffsetSizeTrait>(&self) -> &GenericListArray<O> {
+        self.as_list_opt().expect("list array")
+    }
+
+    /// Downcast this to a [`MapArray`] returning `None` if not possible
+    fn as_map_opt(&self) -> Option<&MapArray>;
+
+    /// Downcast this to a [`MapArray`] panicking if not possible
+    fn as_map(&self) -> &MapArray {
+        self.as_map_opt().expect("map array")
+    }
+
+    /// Downcast this to a [`DictionaryArray`] returning `None` if not possible
+    fn as_dictionary_opt<K: ArrowDictionaryKeyType>(&self)
+        -> Option<&DictionaryArray<K>>;
+
+    /// Downcast this to a [`DictionaryArray`] panicking if not possible
+    fn as_dictionary<K: ArrowDictionaryKeyType>(&self) -> &DictionaryArray<K> {
+        self.as_dictionary_opt().expect("dictionary array")
+    }
+}
+
+impl private::Sealed for dyn Array + '_ {}
+impl AsArray for dyn Array + '_ {
+    fn as_boolean_opt(&self) -> Option<&BooleanArray> {
+        self.as_any().downcast_ref()
+    }
+
+    fn as_primitive_opt<T: ArrowPrimitiveType>(&self) -> Option<&PrimitiveArray<T>> {
+        self.as_any().downcast_ref()
+    }
+
+    fn as_bytes_opt<T: ByteArrayType>(&self) -> Option<&GenericByteArray<T>> {
+        self.as_any().downcast_ref()
+    }
+
+    fn as_struct_opt(&self) -> Option<&StructArray> {
+        self.as_any().downcast_ref()
+    }
+
+    fn as_list_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericListArray<O>> {
+        self.as_any().downcast_ref()
+    }
+
+    fn as_map_opt(&self) -> Option<&MapArray> {
+        self.as_any().downcast_ref()
+    }
+
+    fn as_dictionary_opt<K: ArrowDictionaryKeyType>(
+        &self,
+    ) -> Option<&DictionaryArray<K>> {
+        self.as_any().downcast_ref()
+    }
+}
+
+impl private::Sealed for ArrayRef {}
+impl AsArray for ArrayRef {
+    fn as_boolean_opt(&self) -> Option<&BooleanArray> {
+        self.as_ref().as_boolean_opt()
+    }
+
+    fn as_primitive_opt<T: ArrowPrimitiveType>(&self) -> Option<&PrimitiveArray<T>> {
+        self.as_ref().as_primitive_opt()
+    }
+
+    fn as_bytes_opt<T: ByteArrayType>(&self) -> Option<&GenericByteArray<T>> {
+        self.as_ref().as_bytes_opt()
+    }
+
+    fn as_struct_opt(&self) -> Option<&StructArray> {
+        self.as_ref().as_struct_opt()
+    }
+
+    fn as_list_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericListArray<O>> {
+        self.as_ref().as_list_opt()
+    }
+
+    fn as_map_opt(&self) -> Option<&MapArray> {
+        self.as_any().downcast_ref()
+    }
+
+    fn as_dictionary_opt<K: ArrowDictionaryKeyType>(
+        &self,
+    ) -> Option<&DictionaryArray<K>> {
+        self.as_ref().as_dictionary_opt()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use arrow_buffer::i256;
