@@ -22,7 +22,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
@@ -1145,9 +1145,9 @@ where
 }
 
 type LexicographicalCompareItem<'a> = (
-    &'a ArrayData, // data
-    DynComparator, // comparator
-    SortOptions,   // sort_option
+    Option<&'a NullBuffer>, // nulls
+    DynComparator,          // comparator
+    SortOptions,            // sort_option
 );
 
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
@@ -1159,8 +1159,13 @@ pub struct LexicographicalComparator<'a> {
 impl LexicographicalComparator<'_> {
     /// lexicographically compare values at the wrapped columns with given indices.
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
-        for (data, comparator, sort_option) in &self.compare_items {
-            match (data.is_valid(a_idx), data.is_valid(b_idx)) {
+        for (nulls, comparator, sort_option) in &self.compare_items {
+            let (lhs_valid, rhs_valid) = match nulls {
+                Some(n) => (n.is_valid(a_idx), n.is_valid(b_idx)),
+                None => (true, true),
+            };
+
+            match (lhs_valid, rhs_valid) {
                 (true, true) => {
                     match (comparator)(a_idx, b_idx) {
                         // equal, move on to next column
@@ -1205,11 +1210,9 @@ impl LexicographicalComparator<'_> {
             .iter()
             .map(|column| {
                 // flatten and convert build comparators
-                // use ArrayData for is_valid checks later to avoid dynamic call
                 let values = column.values.as_ref();
-                let data = values.data_ref();
                 Ok((
-                    data,
+                    values.nulls(),
                     build_compare(values, values)?,
                     column.options.unwrap_or_default(),
                 ))

@@ -53,11 +53,7 @@ pub struct SlicesIterator<'a>(BitSliceIterator<'a>);
 
 impl<'a> SlicesIterator<'a> {
     pub fn new(filter: &'a BooleanArray) -> Self {
-        let values = &filter.data_ref().buffers()[0];
-        let len = filter.len();
-        let offset = filter.offset();
-
-        Self(BitSliceIterator::new(values, offset, len))
+        Self(filter.values().set_slices())
     }
 }
 
@@ -149,18 +145,9 @@ pub fn build_filter(filter: &BooleanArray) -> Result<Filter, ArrowError> {
 
 /// Remove null values by do a bitmask AND operation with null bits and the boolean bits.
 pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
-    let array_data = filter.data_ref();
-    let nulls = array_data.nulls().unwrap();
+    let nulls = filter.nulls().unwrap();
     let mask = filter.values() & nulls.inner();
-
-    let array_data = ArrayData::builder(DataType::Boolean)
-        .len(mask.len())
-        .offset(mask.offset())
-        .add_buffer(mask.into_inner());
-
-    let array_data = unsafe { array_data.build_unchecked() };
-
-    BooleanArray::from(array_data)
+    BooleanArray::new(mask, None)
 }
 
 /// Filters an [Array], returning elements matching the filter (i.e. where the values are true).
@@ -365,9 +352,10 @@ fn filter_array(
                 t => unimplemented!("Filter not supported for dictionary type {:?}", t)
             }
             _ => {
+                let data = values.to_data();
                 // fallback to using MutableArrayData
                 let mut mutable = MutableArrayData::new(
-                    vec![values.data_ref()],
+                    vec![&data],
                     false,
                     predicate.count,
                 );

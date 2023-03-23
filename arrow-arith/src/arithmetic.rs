@@ -103,8 +103,7 @@ fn math_checked_divide_op_on_iters<T, F>(
     left: impl Iterator<Item = Option<T::Native>>,
     right: impl Iterator<Item = Option<T::Native>>,
     op: F,
-    len: usize,
-    null_bit_buffer: Option<arrow_buffer::Buffer>,
+    nulls: Option<NullBuffer>,
 ) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
@@ -130,18 +129,7 @@ where
         unsafe { arrow_buffer::Buffer::try_from_trusted_len_iter(values) }
     }?;
 
-    let data = unsafe {
-        arrow_data::ArrayData::new_unchecked(
-            T::DATA_TYPE,
-            len,
-            None,
-            null_bit_buffer,
-            0,
-            vec![buffer],
-            vec![],
-        )
-    };
-    Ok(PrimitiveArray::<T>::from(data))
+    Ok(PrimitiveArray::new(T::DATA_TYPE, buffer.into(), nulls))
 }
 
 /// Calculates the modulus operation `left % right` on two SIMD inputs.
@@ -284,10 +272,7 @@ where
     }
 
     // Create the combined `Bitmap`
-    let null_bit_buffer = arrow_data::bit_mask::combine_option_bitmap(
-        &[left.data_ref(), right.data_ref()],
-        left.len(),
-    );
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
     let lanes = T::lanes();
     let buffer_size = left.len() * std::mem::size_of::<T::Native>();
@@ -372,18 +357,7 @@ where
         }
     }
 
-    let data = unsafe {
-        arrow_data::ArrayData::new_unchecked(
-            T::DATA_TYPE,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.into()],
-            vec![],
-        )
-    };
-    Ok(PrimitiveArray::<T>::from(data))
+    Ok(PrimitiveArray::new(T::DATA_TYPE, result.into(), nulls))
 }
 
 /// Applies $OP to $LEFT and $RIGHT which are two dictionaries which have (the same) key type $KT
@@ -628,10 +602,7 @@ where
         )));
     }
 
-    let null_bit_buffer = arrow_data::bit_mask::combine_option_bitmap(
-        &[left.data_ref(), right.data_ref()],
-        left.len(),
-    );
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
     // Safety justification: Since the inputs are valid Arrow arrays, all values are
     // valid indexes into the dictionary (which is verified during construction)
@@ -653,13 +624,7 @@ where
             .take_iter_unchecked(right.keys_iter())
     };
 
-    math_checked_divide_op_on_iters(
-        left_iter,
-        right_iter,
-        op,
-        left.len(),
-        null_bit_buffer,
-    )
+    math_checked_divide_op_on_iters(left_iter, right_iter, op, nulls)
 }
 
 #[cfg(feature = "dyn_arith_dict")]
