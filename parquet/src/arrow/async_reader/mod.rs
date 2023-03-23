@@ -840,7 +840,7 @@ mod tests {
     use crate::file::page_index::index_reader;
     use crate::file::properties::WriterProperties;
     use arrow::error::Result as ArrowResult;
-    use arrow_array::cast::{as_primitive_array, AsArray};
+    use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
     use futures::TryStreamExt;
