@@ -335,7 +335,7 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
 pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
     let len = input.len();
 
-    let output = match input.data_ref().nulls() {
+    let output = match input.nulls() {
         None => {
             let len_bytes = ceil(len, 8);
             MutableBuffer::new(len_bytes)

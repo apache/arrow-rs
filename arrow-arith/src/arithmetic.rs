@@ -103,13 +103,13 @@ fn math_checked_divide_op_on_iters<T, F>(
     left: impl Iterator<Item = Option<T::Native>>,
     right: impl Iterator<Item = Option<T::Native>>,
     op: F,
-    nulls: Option<NullBuffer>,
+    nulls: Option<arrow_buffer::NullBuffer>,
 ) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: ArrowNumericType,
     F: Fn(T::Native, T::Native) -> Result<T::Native, ArrowError>,
 {
-    let buffer = if null_bit_buffer.is_some() {
+    let buffer = if nulls.is_some() {
         let values = left.zip(right).map(|(left, right)| {
             if let (Some(l), Some(r)) = (left, right) {
                 op(l, r)
@@ -272,17 +272,16 @@ where
     }
 
     // Create the combined `Bitmap`
-    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+    let nulls = arrow_buffer::NullBuffer::union(left.nulls(), right.nulls());
 
     let lanes = T::lanes();
     let buffer_size = left.len() * std::mem::size_of::<T::Native>();
     let mut result =
         arrow_buffer::MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
-    match &null_bit_buffer {
+    match &nulls {
         Some(b) => {
-            // combine_option_bitmap returns a slice or new buffer starting at 0
-            let valid_chunks = b.bit_chunks(0, left.len());
+            let valid_chunks = b.inner().bit_chunks();
 
             // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
 
@@ -602,7 +601,7 @@ where
         )));
     }
 
-    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+    let nulls = arrow_buffer::NullBuffer::union(left.nulls(), right.nulls());
 
     // Safety justification: Since the inputs are valid Arrow arrays, all values are
     // valid indexes into the dictionary (which is verified during construction)
