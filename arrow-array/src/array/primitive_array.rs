@@ -297,7 +297,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     fn assert_compatible(data_type: &DataType) {
         assert!(
             Self::is_compatible(data_type),
-            "PrimitiveArray expected ArrayData with type {} got {}",
+            "PrimitiveArray expected data type {} got {}",
             T::DATA_TYPE,
             data_type
         );
@@ -1849,7 +1849,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "PrimitiveArray expected ArrayData with type Int64 got Int32"
+        expected = "PrimitiveArray expected data type Int64 got Int32"
     )]
     fn test_from_array_data_validation() {
         let foo = PrimitiveArray::<Int32Type>::from_iter([1, 2, 3]);
@@ -2226,7 +2226,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "PrimitiveArray expected ArrayData with type Interval(MonthDayNano) got Interval(DayTime)"
+        expected = "PrimitiveArray expected data type Interval(MonthDayNano) got Interval(DayTime)"
     )]
     fn test_invalid_interval_type() {
         let array = IntervalDayTimeArray::from(vec![1, 2, 3]);
