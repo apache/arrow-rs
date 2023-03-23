@@ -971,7 +971,7 @@ macro_rules! def_numeric_from_vec {
             fn from(data: Vec<<$ty as ArrowPrimitiveType>::Native>) -> Self {
                 let array_data = ArrayData::builder($ty::DATA_TYPE)
                     .len(data.len())
-                    .add_buffer(Buffer::from_slice_ref(&data));
+                    .add_buffer(Buffer::from_vec(data));
                 let array_data = unsafe { array_data.build_unchecked() };
                 PrimitiveArray::from(array_data)
             }
