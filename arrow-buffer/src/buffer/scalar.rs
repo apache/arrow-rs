@@ -17,6 +17,8 @@
 
 use crate::buffer::Buffer;
 use crate::native::ArrowNativeType;
+use crate::MutableBuffer;
+use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -26,11 +28,17 @@ use std::ops::Deref;
 ///
 /// All [`ArrowNativeType`] are valid for all possible backing byte representations, and as
 /// a result they are "trivially safely transmutable".
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ScalarBuffer<T: ArrowNativeType> {
     /// Underlying data buffer
     buffer: Buffer,
     phantom: PhantomData<T>,
+}
+
+impl<T: ArrowNativeType> std::fmt::Debug for ScalarBuffer<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ScalarBuffer").field(&self.as_ref()).finish()
+    }
 }
 
 impl<T: ArrowNativeType> ScalarBuffer<T> {
@@ -89,6 +97,12 @@ impl<T: ArrowNativeType> AsRef<[T]> for ScalarBuffer<T> {
     }
 }
 
+impl<T: ArrowNativeType> From<MutableBuffer> for ScalarBuffer<T> {
+    fn from(value: MutableBuffer) -> Self {
+        Buffer::from(value).into()
+    }
+}
+
 impl<T: ArrowNativeType> From<Buffer> for ScalarBuffer<T> {
     fn from(buffer: Buffer) -> Self {
         let align = std::mem::align_of::<T>();
@@ -114,6 +128,39 @@ impl<T: ArrowNativeType> From<Vec<T>> for ScalarBuffer<T> {
     }
 }
 
+impl<'a, T: ArrowNativeType> IntoIterator for &'a ScalarBuffer<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_ref().iter()
+    }
+}
+
+impl<T: ArrowNativeType, S: AsRef<[T]> + ?Sized> PartialEq<S> for ScalarBuffer<T> {
+    fn eq(&self, other: &S) -> bool {
+        self.as_ref().eq(other.as_ref())
+    }
+}
+
+impl<T: ArrowNativeType, const N: usize> PartialEq<ScalarBuffer<T>> for [T; N] {
+    fn eq(&self, other: &ScalarBuffer<T>) -> bool {
+        self.as_ref().eq(other.as_ref())
+    }
+}
+
+impl<T: ArrowNativeType> PartialEq<ScalarBuffer<T>> for [T] {
+    fn eq(&self, other: &ScalarBuffer<T>) -> bool {
+        self.as_ref().eq(other.as_ref())
+    }
+}
+
+impl<T: ArrowNativeType> PartialEq<ScalarBuffer<T>> for Vec<T> {
+    fn eq(&self, other: &ScalarBuffer<T>) -> bool {
+        self.as_slice().eq(other.as_ref())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,6 +180,12 @@ mod tests {
 
         let typed = ScalarBuffer::<i32>::new(buffer, 3, 0);
         assert!(typed.is_empty());
+    }
+
+    #[test]
+    fn test_debug() {
+        let buffer = ScalarBuffer::from(vec![1, 2, 3]);
+        assert_eq!(format!("{buffer:?}"), "ScalarBuffer([1, 2, 3])");
     }
 
     #[test]
