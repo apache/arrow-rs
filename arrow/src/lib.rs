@@ -135,6 +135,25 @@
 //! }
 //! ```
 //!
+//! To facilitate downcasting, the [`AsArray`](crate::array::AsArray) extension trait can be used
+//!
+//! ```rust
+//! # use arrow::array::{Array, Float32Array, AsArray};
+//! # use arrow::array::StringArray;
+//! # use arrow::datatypes::DataType;
+//! #
+//! fn impl_string(array: &StringArray) {}
+//! fn impl_f32(array: &Float32Array) {}
+//!
+//! fn impl_dyn(array: &dyn Array) {
+//!     match array.data_type() {
+//!         DataType::Utf8 => impl_string(array.as_string()),
+//!         DataType::Float32 => impl_f32(array.as_primitive()),
+//!         _ => unimplemented!()
+//!     }
+//! }
+//! ```
+//!
 //! It is also common to want to write a function that returns one of a number of possible
 //! array implementations. [`ArrayRef`] is a type-alias for [`Arc<dyn Array>`](array::Array)
 //! which is frequently used for this purpose
