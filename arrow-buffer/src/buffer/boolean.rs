@@ -17,7 +17,9 @@
 
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
-use crate::{bit_util, buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer};
+use crate::{
+    bit_util, buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer, MutableBuffer,
+};
 use std::ops::{BitAnd, BitOr, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
@@ -59,6 +61,12 @@ impl BooleanBuffer {
             offset,
             len,
         }
+    }
+
+    /// Invokes `f` with indexes `0..len` collecting the boolean results into a new `BooleanBuffer`
+    pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, f: F) -> Self {
+        let buffer = MutableBuffer::collect_bool(len, f);
+        Self::new(buffer.into(), 0, len)
     }
 
     /// Returns the number of set bits in this buffer
