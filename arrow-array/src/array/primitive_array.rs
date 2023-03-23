@@ -1848,9 +1848,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "PrimitiveArray expected data type Int64 got Int32"
-    )]
+    #[should_panic(expected = "PrimitiveArray expected data type Int64 got Int32")]
     fn test_from_array_data_validation() {
         let foo = PrimitiveArray::<Int32Type>::from_iter([1, 2, 3]);
         let _ = PrimitiveArray::<Int64Type>::from(foo.into_data());
