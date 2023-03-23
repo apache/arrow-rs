@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder};
-use crate::cast::as_primitive_array;
+use crate::cast::AsArray;
 use crate::iterator::ArrayIter;
 use crate::types::*;
 use crate::{
@@ -410,8 +410,8 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
             return Err(self);
         }
 
-        let key_array = as_primitive_array::<K>(self.keys()).clone();
-        let value_array = as_primitive_array::<V>(self.values()).clone();
+        let key_array = self.keys().clone();
+        let value_array = self.values().as_primitive::<V>().clone();
 
         drop(self.data);
         drop(self.keys);

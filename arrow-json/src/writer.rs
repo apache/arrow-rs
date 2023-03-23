@@ -112,7 +112,8 @@ where
     T: ArrowPrimitiveType,
     T::Native: JsonSerializable,
 {
-    Ok(as_primitive_array::<T>(array)
+    Ok(array
+        .as_primitive::<T>()
         .iter()
         .map(|maybe_value| match maybe_value {
             Some(v) => v.into_json_value().unwrap_or(Value::Null),
@@ -146,7 +147,8 @@ fn struct_array_to_jsonmap_array(
 pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
     match array.data_type() {
         DataType::Null => Ok(iter::repeat(Value::Null).take(array.len()).collect()),
-        DataType::Boolean => Ok(as_boolean_array(array)
+        DataType::Boolean => Ok(array
+            .as_boolean()
             .iter()
             .map(|maybe_value| match maybe_value {
                 Some(v) => v.into(),
@@ -154,14 +156,16 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
             })
             .collect()),
 
-        DataType::Utf8 => Ok(as_string_array(array)
+        DataType::Utf8 => Ok(array
+            .as_string::<i32>()
             .iter()
             .map(|maybe_value| match maybe_value {
                 Some(v) => v.into(),
                 None => Value::Null,
             })
             .collect()),
-        DataType::LargeUtf8 => Ok(as_largestring_array(array)
+        DataType::LargeUtf8 => Ok(array
+            .as_string::<i64>()
             .iter()
             .map(|maybe_value| match maybe_value {
                 Some(v) => v.into(),
@@ -225,7 +229,7 @@ fn set_column_by_primitive_type<T>(
     T: ArrowPrimitiveType,
     T::Native: JsonSerializable,
 {
-    let primitive_arr = as_primitive_array::<T>(array);
+    let primitive_arr = array.as_primitive::<T>();
 
     rows.iter_mut()
         .zip(primitive_arr.iter())
@@ -369,7 +373,7 @@ fn set_column_for_json_rows(
                 )));
             }
 
-            let keys = as_string_array(keys);
+            let keys = keys.as_string::<i32>();
             let values = array_to_json_array(values)?;
 
             let mut kv = keys.iter().zip(values.into_iter());

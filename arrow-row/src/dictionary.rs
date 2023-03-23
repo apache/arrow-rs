@@ -45,11 +45,11 @@ pub fn compute_dictionary_mapping(
             interner.intern(iter)
         }
         DataType::Utf8 => {
-            let iter = as_string_array(values).iter().map(|x| x.map(|x| x.as_bytes()));
+            let iter = values.as_string::<i32>().iter().map(|x| x.map(|x| x.as_bytes()));
             interner.intern(iter)
         }
         DataType::LargeUtf8 => {
-            let iter = as_largestring_array(values).iter().map(|x| x.map(|x| x.as_bytes()));
+            let iter = values.as_string::<i64>().iter().map(|x| x.map(|x| x.as_bytes()));
             interner.intern(iter)
         }
         _ => unreachable!(),

@@ -21,7 +21,7 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow_array::cast::as_primitive_array;
+use arrow_array::cast::AsArray;
 use arrow_array::types::Decimal128Type;
 use arrow_array::{types, Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
@@ -400,7 +400,8 @@ fn write_leaf(
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int32 to represent the decimal with low precision
-                    let array = as_primitive_array::<Decimal128Type>(column)
+                    let array = column
+                        .as_primitive::<Decimal128Type>()
                         .unary::<_, types::Int32Type>(|v| v as i32);
                     write_primitive(typed, array.values(), levels)?
                 }
@@ -444,7 +445,8 @@ fn write_leaf(
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int64 to represent the decimal with low precision
-                    let array = as_primitive_array::<Decimal128Type>(column)
+                    let array = column
+                        .as_primitive::<Decimal128Type>()
                         .unary::<_, types::Int64Type>(|v| v as i64);
                     write_primitive(typed, array.values(), levels)?
                 }

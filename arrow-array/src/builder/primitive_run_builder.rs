@@ -30,7 +30,7 @@ use arrow_buffer::ArrowNativeType;
 /// ```
 ///
 /// # use arrow_array::builder::PrimitiveRunBuilder;
-/// # use arrow_array::cast::as_primitive_array;
+/// # use arrow_array::cast::AsArray;
 /// # use arrow_array::types::{UInt32Type, Int16Type};
 /// # use arrow_array::{Array, UInt32Array, Int16Array};
 ///
@@ -53,7 +53,7 @@ use arrow_buffer::ArrowNativeType;
 /// assert!(!av.is_null(2));
 ///
 /// // Values are polymorphic and so require a downcast.
-/// let ava: &UInt32Array = as_primitive_array::<UInt32Type>(av.as_ref());
+/// let ava: &UInt32Array = av.as_primitive::<UInt32Type>();
 ///
 /// assert_eq!(ava, &UInt32Array::from(vec![Some(1234), None, Some(5678)]));
 /// ```
@@ -265,7 +265,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::builder::PrimitiveRunBuilder;
-    use crate::cast::as_primitive_array;
+    use crate::cast::AsArray;
     use crate::types::{Int16Type, UInt32Type};
     use crate::{Array, UInt32Array};
 
@@ -293,7 +293,7 @@ mod tests {
         assert!(!av.is_null(2));
 
         // Values are polymorphic and so require a downcast.
-        let ava: &UInt32Array = as_primitive_array::<UInt32Type>(av.as_ref());
+        let ava: &UInt32Array = av.as_primitive::<UInt32Type>();
 
         assert_eq!(ava, &UInt32Array::from(vec![Some(1234), None, Some(5678)]));
     }
@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(array.null_count(), 0);
         assert_eq!(array.run_ends().values(), &[1, 3, 5, 9, 10, 11]);
         assert_eq!(
-            as_primitive_array::<Int16Type>(array.values().as_ref()).values(),
+            array.values().as_primitive::<Int16Type>().values(),
             &[1, 2, 5, 4, 6, 2]
         );
     }

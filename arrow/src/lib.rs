@@ -207,7 +207,7 @@
 //!
 //! ```
 //! # use arrow::compute::gt_scalar;
-//! # use arrow_array::cast::as_primitive_array;
+//! # use arrow_array::cast::AsArray;
 //! # use arrow_array::Int32Array;
 //! # use arrow_array::types::Int32Type;
 //! # use arrow_select::filter::filter;
@@ -216,7 +216,7 @@
 //! let filtered = filter(&array, &predicate).unwrap();
 //!
 //! let expected = Int32Array::from_iter(61..100);
-//! assert_eq!(&expected, as_primitive_array::<Int32Type>(&filtered));
+//! assert_eq!(&expected, filtered.as_primitive::<Int32Type>());
 //! ```
 //!
 //! As well as some horizontal operations, such as:

@@ -2024,7 +2024,7 @@ mod tests {
         );
 
         let sliced = array.slice(1, 2);
-        let read_sliced: &UInt32Array = as_primitive_array(&sliced);
+        let read_sliced: &UInt32Array = sliced.as_primitive();
         assert_eq!(
             vec![Some(2), Some(3)],
             read_sliced.iter().collect::<Vec<_>>()
@@ -2044,7 +2044,7 @@ mod tests {
         let mut reader = StreamReader::try_new(&outbuf[..], None).expect("new reader");
         let read_batch = reader.next().unwrap().expect("read batch");
 
-        let read_array: &UInt32Array = as_primitive_array(read_batch.column(0));
+        let read_array: &UInt32Array = read_batch.column(0).as_primitive();
         assert_eq!(
             vec![Some(2), Some(3)],
             read_array.iter().collect::<Vec<_>>()

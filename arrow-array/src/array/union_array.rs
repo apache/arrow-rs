@@ -398,7 +398,7 @@ mod tests {
     use super::*;
 
     use crate::builder::UnionBuilder;
-    use crate::cast::{as_primitive_array, as_string_array};
+    use crate::cast::AsArray;
     use crate::types::{Float32Type, Float64Type, Int32Type, Int64Type};
     use crate::RecordBatch;
     use crate::{Float64Array, Int32Array, Int64Array, StringArray};
@@ -1078,36 +1078,36 @@ mod tests {
         let v = array.value(0);
         assert_eq!(v.data_type(), &DataType::Int32);
         assert_eq!(v.len(), 1);
-        assert_eq!(as_primitive_array::<Int32Type>(v.as_ref()).value(0), 5);
+        assert_eq!(v.as_primitive::<Int32Type>().value(0), 5);
 
         let v = array.value(1);
         assert_eq!(v.data_type(), &DataType::Utf8);
         assert_eq!(v.len(), 1);
-        assert_eq!(as_string_array(v.as_ref()).value(0), "foo");
+        assert_eq!(v.as_string::<i32>().value(0), "foo");
 
         let v = array.value(2);
         assert_eq!(v.data_type(), &DataType::Int32);
         assert_eq!(v.len(), 1);
-        assert_eq!(as_primitive_array::<Int32Type>(v.as_ref()).value(0), 6);
+        assert_eq!(v.as_primitive::<Int32Type>().value(0), 6);
 
         let v = array.value(3);
         assert_eq!(v.data_type(), &DataType::Utf8);
         assert_eq!(v.len(), 1);
-        assert_eq!(as_string_array(v.as_ref()).value(0), "bar");
+        assert_eq!(v.as_string::<i32>().value(0), "bar");
 
         let v = array.value(4);
         assert_eq!(v.data_type(), &DataType::Float64);
         assert_eq!(v.len(), 1);
-        assert_eq!(as_primitive_array::<Float64Type>(v.as_ref()).value(0), 10.0);
+        assert_eq!(v.as_primitive::<Float64Type>().value(0), 10.0);
 
         let v = array.value(5);
         assert_eq!(v.data_type(), &DataType::Int32);
         assert_eq!(v.len(), 1);
-        assert_eq!(as_primitive_array::<Int32Type>(v.as_ref()).value(0), 4);
+        assert_eq!(v.as_primitive::<Int32Type>().value(0), 4);
 
         let v = array.value(6);
         assert_eq!(v.data_type(), &DataType::Utf8);
         assert_eq!(v.len(), 1);
-        assert_eq!(as_string_array(v.as_ref()).value(0), "baz");
+        assert_eq!(v.as_string::<i32>().value(0), "baz");
     }
 }

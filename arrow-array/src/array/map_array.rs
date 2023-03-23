@@ -253,7 +253,7 @@ impl std::fmt::Debug for MapArray {
 
 #[cfg(test)]
 mod tests {
-    use crate::cast::as_primitive_array;
+    use crate::cast::AsArray;
     use crate::types::UInt32Type;
     use crate::{Int32Array, UInt32Array};
     use std::sync::Arc;
@@ -522,7 +522,7 @@ mod tests {
 
         assert_eq!(
             &values_data,
-            as_primitive_array::<UInt32Type>(map_array.values())
+            map_array.values().as_primitive::<UInt32Type>()
         );
         assert_eq!(&DataType::UInt32, map_array.value_type());
         assert_eq!(3, map_array.len());
