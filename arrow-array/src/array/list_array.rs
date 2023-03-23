@@ -85,7 +85,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
     /// Returns a clone of the value type of this list.
     pub fn value_type(&self) -> DataType {
-        self.values.data_ref().data_type().clone()
+        self.values.data_type().clone()
     }
 
     /// Returns ith value of this list array.
