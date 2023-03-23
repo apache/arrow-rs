@@ -62,7 +62,7 @@ impl BooleanBuffer {
         }
     }
 
-    /// Invokes `f` with values `0..len` collecting the boolean results into a new `BooleanBuffer`
+    /// Invokes `f` with indexes `0..len` collecting the boolean results into a new `BooleanBuffer`
     pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, f: F) -> Self {
         let buffer = MutableBuffer::collect_bool(len, f);
         Self::new(buffer.into(), 0, len)
