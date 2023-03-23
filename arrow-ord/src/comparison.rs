@@ -5841,11 +5841,11 @@ mod tests {
     #[test]
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_gt_dyn_gt_eq_dyn_dict_non_dict_float_nan() {
-        let array1: Float16Array = vec![f16::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
             .into_iter()
             .map(Some)
             .collect();
-        let values = Float16Array::from(vec![f16::NAN, 8.0, 9.0, 10.0, 1.0]);
+        let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
         let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
 
