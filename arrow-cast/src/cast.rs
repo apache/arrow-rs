@@ -3448,9 +3448,9 @@ where
     OffsetSizeFrom: OffsetSizeTrait + ToPrimitive,
     OffsetSizeTo: OffsetSizeTrait + NumCast,
 {
-    let data = array.data_ref();
+    let list = array.as_list::<OffsetSizeFrom>();
     // the value data stored by the list
-    let value_data = data.child_data()[0].clone();
+    let values = list.values();
 
     let out_dtype = match array.data_type() {
         DataType::List(value_type) => {
@@ -3473,7 +3473,7 @@ where
                 std::mem::size_of::<OffsetSizeTo>(),
                 std::mem::size_of::<i32>()
             );
-            if value_data.len() > i32::MAX as usize {
+            if values.len() > i32::MAX as usize {
                 return Err(ArrowError::ComputeError(
                     "LargeList too large to cast to List".into(),
                 ));
@@ -3484,14 +3484,7 @@ where
         _ => unreachable!(),
     };
 
-    // Safety:
-    //      The first buffer is the offsets and they are aligned to OffSetSizeFrom: (i64 or i32)
-    // Justification:
-    //      The safe variant data.buffer::<OffsetSizeFrom> take the offset into account and we
-    //      cannot create a list array with offsets starting at non zero.
-    let offsets = unsafe { data.buffers()[0].as_slice().align_to::<OffsetSizeFrom>() }.1;
-
-    let iter = offsets.iter().map(|idx| {
+    let iter = list.value_offsets().iter().map(|idx| {
         let idx: OffsetSizeTo = NumCast::from(*idx).unwrap();
         idx
     });
@@ -3502,14 +3495,13 @@ where
 
     // wrap up
     let builder = ArrayData::builder(out_dtype)
-        .offset(array.offset())
-        .len(array.len())
+        .len(list.len())
         .add_buffer(offset_buffer)
-        .add_child_data(value_data)
-        .nulls(data.nulls().cloned());
+        .add_child_data(values.to_data())
+        .nulls(list.nulls().cloned());
 
     let array_data = unsafe { builder.build_unchecked() };
-    Ok(make_array(array_data))
+    Ok(Arc::new(GenericListArray::<OffsetSizeTo>::from(array_data)))
 }
 
 #[cfg(test)]

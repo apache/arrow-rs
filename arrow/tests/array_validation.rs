@@ -16,9 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    make_array, Array, BooleanBuilder, Decimal128Builder, FixedSizeListBuilder,
-    Int32Array, Int32Builder, Int64Array, StringArray, StructBuilder, UInt64Array,
-    UInt8Builder,
+    make_array, Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder,
+    Int64Array, StringArray, StructBuilder, UInt64Array,
 };
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
@@ -996,28 +995,8 @@ fn test_string_data_from_foreign() {
 
 #[test]
 fn test_decimal_full_validation() {
-    let values_builder = UInt8Builder::with_capacity(10);
-    let byte_width = 16;
-    let mut fixed_size_builder = FixedSizeListBuilder::new(values_builder, byte_width);
-    let value_as_bytes = 123456_i128.to_le_bytes();
-    fixed_size_builder
-        .values()
-        .append_slice(value_as_bytes.as_slice());
-    fixed_size_builder.append(true);
-    let fixed_size_array = fixed_size_builder.finish();
-
-    // Build ArrayData for Decimal
-    let builder = ArrayData::builder(DataType::Decimal128(5, 3))
-        .len(fixed_size_array.len())
-        .add_buffer(fixed_size_array.data_ref().child_data()[0].buffers()[0].clone());
-    let array_data = unsafe { builder.build_unchecked() };
-    array_data.validate_full().unwrap();
-
-    let array = Decimal128Array::from(array_data);
-    let error = array
-        .validate_decimal_precision(array.precision())
-        .unwrap_err();
-
+    let array = Decimal128Array::from(vec![123456_i128]);
+    let error = array.validate_decimal_precision(5).unwrap_err();
     assert_eq!(
         "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
         error.to_string()
