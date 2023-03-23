@@ -829,14 +829,8 @@ pub fn eq_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            eq_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            eq_binary_scalar(left, right)
-        }
+        DataType::Binary => eq_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => eq_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "eq_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
         )),
@@ -850,14 +844,8 @@ pub fn neq_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            neq_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            neq_binary_scalar(left, right)
-        }
+        DataType::Binary => neq_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => neq_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "neq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
                 .to_string(),
@@ -872,14 +860,8 @@ pub fn lt_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            lt_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            lt_binary_scalar(left, right)
-        }
+        DataType::Binary => lt_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => lt_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "lt_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
         )),
@@ -893,14 +875,8 @@ pub fn lt_eq_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            lt_eq_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            lt_eq_binary_scalar(left, right)
-        }
+        DataType::Binary => lt_eq_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => lt_eq_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "lt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
                 .to_string(),
@@ -915,14 +891,8 @@ pub fn gt_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            gt_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            gt_binary_scalar(left, right)
-        }
+        DataType::Binary => gt_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => gt_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "gt_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
         )),
@@ -936,14 +906,8 @@ pub fn gt_eq_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            gt_eq_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            gt_eq_binary_scalar(left, right)
-        }
+        DataType::Binary => gt_eq_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => gt_eq_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "gt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
                 .to_string(),
@@ -967,12 +931,10 @@ pub fn eq_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            eq_utf8_scalar(left, right)
+            eq_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            eq_utf8_scalar(left, right)
+            eq_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -997,12 +959,10 @@ pub fn lt_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            lt_utf8_scalar(left, right)
+            lt_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            lt_utf8_scalar(left, right)
+            lt_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "lt_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1027,12 +987,10 @@ pub fn gt_eq_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            gt_eq_utf8_scalar(left, right)
+            gt_eq_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            gt_eq_utf8_scalar(left, right)
+            gt_eq_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "gt_eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1057,12 +1015,10 @@ pub fn lt_eq_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            lt_eq_utf8_scalar(left, right)
+            lt_eq_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            lt_eq_utf8_scalar(left, right)
+            lt_eq_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "lt_eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1087,12 +1043,10 @@ pub fn gt_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            gt_utf8_scalar(left, right)
+            gt_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            gt_utf8_scalar(left, right)
+            gt_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "gt_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1117,12 +1071,10 @@ pub fn neq_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            neq_utf8_scalar(left, right)
+            neq_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            neq_utf8_scalar(left, right)
+            neq_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "neq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1138,10 +1090,7 @@ pub fn eq_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            eq_bool_scalar(left, right)
-        }
+        DataType::Boolean => eq_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "eq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1156,10 +1105,7 @@ pub fn lt_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            lt_bool_scalar(left, right)
-        }
+        DataType::Boolean => lt_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "lt_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1174,10 +1120,7 @@ pub fn gt_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            gt_bool_scalar(left, right)
-        }
+        DataType::Boolean => gt_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "gt_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1192,10 +1135,7 @@ pub fn lt_eq_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            lt_eq_bool_scalar(left, right)
-        }
+        DataType::Boolean => lt_eq_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "lt_eq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1210,10 +1150,7 @@ pub fn gt_eq_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            gt_eq_bool_scalar(left, right)
-        }
+        DataType::Boolean => gt_eq_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "gt_eq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1228,10 +1165,7 @@ pub fn neq_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            neq_bool_scalar(left, right)
-        }
+        DataType::Boolean => neq_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "neq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1455,8 +1389,8 @@ fn cmp_primitive_array<T: ArrowPrimitiveType, F>(
 where
     F: Fn(T::Native, T::Native) -> bool,
 {
-    let left_array = as_primitive_array::<T>(left);
-    let right_array = as_primitive_array::<T>(right);
+    let left_array = left.as_primitive::<T>();
+    let right_array = right.as_primitive::<T>();
     compare_op(left_array, right_array, op)
 }
 
@@ -2036,7 +1970,7 @@ where
 {
     compare_op(
         left.downcast_dict::<PrimitiveArray<T>>().unwrap(),
-        as_primitive_array::<T>(right),
+        right.as_primitive::<T>(),
         op,
     )
 }
@@ -3046,7 +2980,7 @@ mod tests {
     fn test_primitive_array_eq_scalar_with_slice() {
         let a = Int32Array::from(vec![Some(1), None, Some(2), Some(3)]);
         let a = a.slice(1, 3);
-        let a: &Int32Array = as_primitive_array(&a);
+        let a: &Int32Array = a.as_primitive();
         let a_eq = eq_scalar(a, 2).unwrap();
         assert_eq!(
             a_eq,
@@ -3848,7 +3782,7 @@ mod tests {
             vec![Some("hi"), None, Some("hello"), Some("world"), Some("")],
         );
         let a = a.slice(1, 4);
-        let a = as_string_array(&a);
+        let a = a.as_string::<i32>();
         let a_eq = eq_utf8_scalar(a, "hello").unwrap();
         assert_eq!(
             a_eq,

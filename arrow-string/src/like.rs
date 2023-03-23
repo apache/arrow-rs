@@ -71,13 +71,13 @@ macro_rules! dyn_function {
 pub fn $fn_name(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match (left.data_type(), right.data_type()) {
         (DataType::Utf8, DataType::Utf8)  => {
-            let left = as_string_array(left);
-            let right = as_string_array(right);
+            let left = left.as_string::<i32>();
+            let right = right.as_string::<i32>();
             $fn_utf8(left, right)
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = as_largestring_array(left);
-            let right = as_largestring_array(right);
+            let left = left.as_string::<i64>();
+            let right = right.as_string::<i64>();
             $fn_utf8(left, right)
         }
         #[cfg(feature = "dyn_cmp_dict")]
@@ -139,11 +139,11 @@ pub fn $fn_name(
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Utf8 => {
-            let left = as_string_array(left);
+            let left = left.as_string::<i32>();
             $fn_scalar(left, right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
+            let left = left.as_string::<i64>();
             $fn_scalar(left, right)
         }
         DataType::Dictionary(_, _) => {

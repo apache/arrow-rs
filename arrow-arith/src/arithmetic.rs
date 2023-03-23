@@ -728,20 +728,20 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
             typed_dict_math_op!(left, right, |a, b| a.add_wrapping(b), math_op_dict)
         }
         DataType::Date32 => {
-            let l = as_primitive_array::<Date32Type>(left);
+            let l = left.as_primitive::<Date32Type>();
             match right.data_type() {
                 DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = as_primitive_array::<IntervalYearMonthType>(right);
+                    let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_op(l, r, Date32Type::add_year_months)?;
                     Ok(Arc::new(res))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = as_primitive_array::<IntervalDayTimeType>(right);
+                    let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_op(l, r, Date32Type::add_day_time)?;
                     Ok(Arc::new(res))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = as_primitive_array::<IntervalMonthDayNanoType>(right);
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_op(l, r, Date32Type::add_month_day_nano)?;
                     Ok(Arc::new(res))
                 }
@@ -752,20 +752,20 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
             }
         }
         DataType::Date64 => {
-            let l = as_primitive_array::<Date64Type>(left);
+            let l = left.as_primitive::<Date64Type>();
             match right.data_type() {
                 DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = as_primitive_array::<IntervalYearMonthType>(right);
+                    let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_op(l, r, Date64Type::add_year_months)?;
                     Ok(Arc::new(res))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = as_primitive_array::<IntervalDayTimeType>(right);
+                    let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_op(l, r, Date64Type::add_day_time)?;
                     Ok(Arc::new(res))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = as_primitive_array::<IntervalMonthDayNanoType>(right);
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_op(l, r, Date64Type::add_month_day_nano)?;
                     Ok(Arc::new(res))
                 }
@@ -808,20 +808,20 @@ pub fn add_dyn_checked(
             )
         }
         DataType::Date32 => {
-            let l = as_primitive_array::<Date32Type>(left);
+            let l = left.as_primitive::<Date32Type>();
             match right.data_type() {
                 DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = as_primitive_array::<IntervalYearMonthType>(right);
+                    let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_op(l, r, Date32Type::add_year_months)?;
                     Ok(Arc::new(res))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = as_primitive_array::<IntervalDayTimeType>(right);
+                    let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_op(l, r, Date32Type::add_day_time)?;
                     Ok(Arc::new(res))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = as_primitive_array::<IntervalMonthDayNanoType>(right);
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_op(l, r, Date32Type::add_month_day_nano)?;
                     Ok(Arc::new(res))
                 }
@@ -832,20 +832,20 @@ pub fn add_dyn_checked(
             }
         }
         DataType::Date64 => {
-            let l = as_primitive_array::<Date64Type>(left);
+            let l = left.as_primitive::<Date64Type>();
             match right.data_type() {
                 DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = as_primitive_array::<IntervalYearMonthType>(right);
+                    let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_op(l, r, Date64Type::add_year_months)?;
                     Ok(Arc::new(res))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = as_primitive_array::<IntervalDayTimeType>(right);
+                    let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_op(l, r, Date64Type::add_day_time)?;
                     Ok(Arc::new(res))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = as_primitive_array::<IntervalMonthDayNanoType>(right);
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_op(l, r, Date64Type::add_month_day_nano)?;
                     Ok(Arc::new(res))
                 }
@@ -2079,8 +2079,7 @@ mod tests {
     fn test_primitive_array_add_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
-        let a = as_primitive_array(&a);
-        let actual = add_scalar(a, 3).unwrap();
+        let actual = add_scalar(a.as_primitive(), 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(12), Some(11), None]);
         assert_eq!(actual, expected);
     }
@@ -2110,8 +2109,7 @@ mod tests {
     fn test_primitive_array_subtract_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
-        let a = as_primitive_array(&a);
-        let actual = subtract_scalar(a, 3).unwrap();
+        let actual = subtract_scalar(a.as_primitive(), 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(6), Some(5), None]);
         assert_eq!(actual, expected);
     }
@@ -2141,8 +2139,7 @@ mod tests {
     fn test_primitive_array_multiply_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
-        let a = as_primitive_array(&a);
-        let actual = multiply_scalar(a, 3).unwrap();
+        let actual = multiply_scalar(a.as_primitive(), 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(27), Some(24), None]);
         assert_eq!(actual, expected);
     }
@@ -2171,7 +2168,7 @@ mod tests {
         assert_eq!(0, c.value(4));
 
         let c = modulus_dyn(&a, &b).unwrap();
-        let c = as_primitive_array::<Int32Type>(&c);
+        let c = c.as_primitive::<Int32Type>();
         assert_eq!(0, c.value(0));
         assert_eq!(3, c.value(1));
         assert_eq!(0, c.value(2));
@@ -2262,8 +2259,7 @@ mod tests {
     fn test_primitive_array_divide_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
-        let a = as_primitive_array(&a);
-        let actual = divide_scalar(a, 3).unwrap();
+        let actual = divide_scalar(a.as_primitive(), 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(3), Some(2), None]);
         assert_eq!(actual, expected);
     }
@@ -2277,7 +2273,7 @@ mod tests {
         assert_eq!(c, expected);
 
         let c = modulus_scalar_dyn::<Int32Type>(&a, b).unwrap();
-        let c = as_primitive_array::<Int32Type>(&c);
+        let c = c.as_primitive::<Int32Type>();
         let expected = Int32Array::from(vec![0, 2, 0, 2, 1]);
         assert_eq!(c, &expected);
     }
@@ -2286,13 +2282,13 @@ mod tests {
     fn test_int_array_modulus_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
-        let a = as_primitive_array(&a);
+        let a = a.as_primitive();
         let actual = modulus_scalar(a, 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(0), Some(2), None]);
         assert_eq!(actual, expected);
 
         let actual = modulus_scalar_dyn::<Int32Type>(a, 3).unwrap();
-        let actual = as_primitive_array::<Int32Type>(&actual);
+        let actual = actual.as_primitive::<Int32Type>();
         let expected = Int32Array::from(vec![None, Some(0), Some(2), None]);
         assert_eq!(actual, &expected);
     }
@@ -2313,7 +2309,7 @@ mod tests {
         assert_eq!(0, result.value(0));
 
         let result = modulus_scalar_dyn::<Int32Type>(&a, -1).unwrap();
-        let result = as_primitive_array::<Int32Type>(&result);
+        let result = result.as_primitive::<Int32Type>();
         assert_eq!(0, result.value(0));
     }
 
@@ -3295,7 +3291,8 @@ mod tests {
             .unwrap();
 
         let result = add_scalar_dyn::<Decimal128Type>(&a, 1).unwrap();
-        let result = as_primitive_array::<Decimal128Type>(&result)
+        let result = result
+            .as_primitive::<Decimal128Type>()
             .clone()
             .with_precision_and_scale(38, 2)
             .unwrap();

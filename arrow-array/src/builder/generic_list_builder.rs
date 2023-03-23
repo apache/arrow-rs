@@ -24,7 +24,15 @@ use arrow_schema::Field;
 use std::any::Any;
 use std::sync::Arc;
 
-///  Array builder for [`GenericListArray`]
+/// Array builder for [`GenericListArray`]s.
+///
+/// Use [`ListBuilder`] to build [`ListArray`]s and [`LargeListBuilder`] to build [`LargeListArray`]s.
+///
+///
+/// [`ListBuilder`]: crate::builder::ListBuilder
+/// [`ListArray`]: crate::array::ListArray
+/// [`LargeListBuilder`]: crate::builder::LargeListBuilder
+/// [`LargeListArray`]: crate::array::LargeListArray
 #[derive(Debug)]
 pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
     offsets_builder: BufferBuilder<OffsetSize>,
@@ -206,7 +214,7 @@ where
 mod tests {
     use super::*;
     use crate::builder::{Int32Builder, ListBuilder};
-    use crate::cast::as_primitive_array;
+    use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Array, Int32Array};
     use arrow_buffer::Buffer;
@@ -405,8 +413,7 @@ mod tests {
         assert_eq!(array.value_offsets(), [0, 4, 4, 6, 6]);
         assert_eq!(array.null_count(), 1);
         assert!(array.is_null(3));
-        let a_values = array.values();
-        let elements = as_primitive_array::<Int32Type>(a_values.as_ref());
+        let elements = array.values().as_primitive::<Int32Type>();
         assert_eq!(elements.values(), &[1, 2, 7, 0, 4, 5]);
         assert_eq!(elements.null_count(), 1);
         assert!(elements.is_null(3));

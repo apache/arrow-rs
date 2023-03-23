@@ -489,7 +489,7 @@ where
 {
     // create tuples that are used for sorting
     let valids = {
-        let values = as_primitive_array::<T>(values);
+        let values = values.as_primitive::<T>();
         value_indices
             .into_iter()
             .map(|index| (index, values.value(index as usize)))
@@ -1043,7 +1043,7 @@ pub struct SortColumn {
 /// # use std::sync::Arc;
 /// # use arrow_array::{ArrayRef, StringArray, PrimitiveArray};
 /// # use arrow_array::types::Int64Type;
-/// # use arrow_array::cast::as_primitive_array;
+/// # use arrow_array::cast::AsArray;
 /// # use arrow_ord::sort::{SortColumn, SortOptions, lexsort};
 ///
 /// let sorted_columns = lexsort(&vec![
@@ -1072,7 +1072,7 @@ pub struct SortColumn {
 ///     },
 /// ], None).unwrap();
 ///
-/// assert_eq!(as_primitive_array::<Int64Type>(&sorted_columns[0]).value(1), -64);
+/// assert_eq!(sorted_columns[0].as_primitive::<Int64Type>().value(1), -64);
 /// assert!(sorted_columns[0].is_null(0));
 /// ```
 ///

@@ -43,17 +43,15 @@
 //! }
 //! ```
 //!
-//! Additionally, there are convenient functions to do this casting
-//! such as [`cast::as_primitive_array<T>`] and [`cast::as_string_array`]:
+//! The [`cast::AsArray`] extension trait can make this more ergonomic
 //!
 //! ```
 //! # use arrow_array::Array;
-//! # use arrow_array::cast::as_primitive_array;
+//! # use arrow_array::cast::{AsArray, as_primitive_array};
 //! # use arrow_array::types::Float32Type;
 //!
 //! fn as_f32_slice(array: &dyn Array) -> &[f32] {
-//!     // use as_primtive_array
-//!     as_primitive_array::<Float32Type>(array).values()
+//!     array.as_primitive::<Float32Type>().values()
 //! }
 //! ```
 

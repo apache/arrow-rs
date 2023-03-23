@@ -17,6 +17,7 @@
 
 use crate::buffer::Buffer;
 use crate::native::ArrowNativeType;
+use crate::MutableBuffer;
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -93,6 +94,12 @@ impl<T: ArrowNativeType> AsRef<[T]> for ScalarBuffer<T> {
     #[inline]
     fn as_ref(&self) -> &[T] {
         self
+    }
+}
+
+impl<T: ArrowNativeType> From<MutableBuffer> for ScalarBuffer<T> {
+    fn from(value: MutableBuffer) -> Self {
+        Buffer::from(value).into()
     }
 }
 

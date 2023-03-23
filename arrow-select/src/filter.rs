@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array};
+use arrow_array::cast::AsArray;
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::*;
 use arrow_buffer::bit_util;
@@ -81,8 +81,7 @@ struct IndexIterator<'a> {
 impl<'a> IndexIterator<'a> {
     fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
-        let data = filter.data();
-        let iter = BitIndexIterator::new(data.buffers()[0], data.offset(), data.len());
+        let iter = filter.values().set_indices();
         Self { remaining, iter }
     }
 }
@@ -350,16 +349,16 @@ fn filter_array(
                 Ok(Arc::new(filter_boolean(values, predicate)))
             }
             DataType::Utf8 => {
-                Ok(Arc::new(filter_bytes(as_string_array(values), predicate)))
+                Ok(Arc::new(filter_bytes(values.as_string::<i32>(), predicate)))
             }
             DataType::LargeUtf8 => {
-                Ok(Arc::new(filter_bytes(as_largestring_array(values), predicate)))
+                Ok(Arc::new(filter_bytes(values.as_string::<i64>(), predicate)))
             }
             DataType::Binary => {
-                Ok(Arc::new(filter_bytes(as_generic_binary_array::<i32>(values), predicate)))
+                Ok(Arc::new(filter_bytes(values.as_binary::<i32>(), predicate)))
             }
             DataType::LargeBinary => {
-                Ok(Arc::new(filter_bytes(as_generic_binary_array::<i64>(values), predicate)))
+                Ok(Arc::new(filter_bytes(values.as_binary::<i64>(), predicate)))
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 values => Ok(Arc::new(filter_dict(values, predicate))),

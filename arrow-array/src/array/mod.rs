@@ -425,13 +425,13 @@ pub trait ArrayAccessor: Array {
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
 }
 
-impl PartialEq for dyn Array {
+impl PartialEq for dyn Array + '_ {
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
 }
 
-impl<T: Array> PartialEq<T> for dyn Array {
+impl<T: Array> PartialEq<T> for dyn Array + '_ {
     fn eq(&self, other: &T) -> bool {
         self.data().eq(other.data())
     }
