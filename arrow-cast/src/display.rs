@@ -818,7 +818,7 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let id = self.type_id(idx);
         let idx = match s.1 {
-            UnionMode::Dense => self.value_offset(idx) as usize,
+            UnionMode::Dense => self.value_offset(idx),
             UnionMode::Sparse => idx,
         };
         let (name, field) = s.0[id as usize].as_ref().unwrap();
