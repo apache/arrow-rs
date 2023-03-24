@@ -37,6 +37,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
+use std::hash::Hasher;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -170,10 +171,16 @@ impl TryFrom<ListContents> for ObjectMeta {
     type Error = crate::Error;
 
     fn try_from(value: ListContents) -> Result<Self> {
+        let nanos = value.last_modified.clone().timestamp_nanos();
+        let mut hasher = ahash::AHasher::default();
+        hasher.write_i64(nanos);
+        let e_tag = hasher.finish().to_string();
+
         Ok(Self {
             location: Path::parse(value.key)?,
             last_modified: value.last_modified,
             size: value.size,
+            e_tag,
         })
     }
 }

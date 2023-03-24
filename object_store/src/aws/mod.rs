@@ -40,6 +40,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
+use std::hash::Hasher;
 use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -256,10 +257,17 @@ impl ObjectStore for AmazonS3 {
         let content_length = content_length
             .parse()
             .context(InvalidContentLengthSnafu { content_length })?;
+
+        let nanos = last_modified.clone().timestamp_nanos();
+        let mut hasher = ahash::AHasher::default();
+        hasher.write_i64(nanos);
+        let e_tag = hasher.finish().to_string();
+
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified,
             size: content_length,
+            e_tag,
         })
     }
 

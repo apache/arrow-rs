@@ -30,6 +30,7 @@
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
 use std::collections::BTreeSet;
+use std::hash::Hasher;
 use std::io;
 use std::ops::Range;
 use std::str::FromStr;
@@ -1171,10 +1172,16 @@ fn convert_object_meta(object: &Object) -> Result<ObjectMeta> {
     let last_modified = object.updated;
     let size = object.size.parse().context(InvalidSizeSnafu)?;
 
+    let nanos = last_modified.clone().timestamp_nanos();
+    let mut hasher = ahash::AHasher::default();
+    hasher.write_i64(nanos);
+    let e_tag = hasher.finish().to_string();
+
     Ok(ObjectMeta {
         location,
         last_modified,
         size,
+        e_tag,
     })
 }
 

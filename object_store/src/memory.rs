@@ -26,6 +26,7 @@ use parking_lot::RwLock;
 use snafu::{ensure, OptionExt, Snafu};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::hash::Hasher;
 use std::io;
 use std::ops::Range;
 use std::pin::Pin;
@@ -151,10 +152,17 @@ impl ObjectStore for InMemory {
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let entry = self.entry(location).await?;
+
+        let nanos = entry.1.clone().timestamp_nanos();
+        let mut hasher = ahash::AHasher::default();
+        hasher.write_i64(nanos);
+        let e_tag = hasher.finish().to_string();
+
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified: entry.1,
             size: entry.0.len(),
+            e_tag,
         })
     }
 
@@ -181,10 +189,16 @@ impl ObjectStore for InMemory {
                     .unwrap_or(false)
             })
             .map(|(key, value)| {
+                let nanos = value.1.clone().timestamp_nanos();
+                let mut hasher = ahash::AHasher::default();
+                hasher.write_i64(nanos);
+                let e_tag = hasher.finish().to_string();
+
                 Ok(ObjectMeta {
                     location: key.clone(),
                     last_modified: value.1,
                     size: value.0.len(),
+                    e_tag,
                 })
             })
             .collect();
@@ -224,10 +238,16 @@ impl ObjectStore for InMemory {
             if parts.next().is_some() {
                 common_prefixes.insert(prefix.child(common_prefix));
             } else {
+                let nanos = v.1.clone().timestamp_nanos();
+                let mut hasher = ahash::AHasher::default();
+                hasher.write_i64(nanos);
+                let e_tag = hasher.finish().to_string();
+
                 let object = ObjectMeta {
                     location: k.clone(),
                     last_modified: v.1,
                     size: v.0.len(),
+                    e_tag,
                 };
                 objects.push(object);
             }

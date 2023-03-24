@@ -23,11 +23,11 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{stream::BoxStream, StreamExt};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
-use std::fs::{metadata, symlink_metadata, File, OpenOptions};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::pin::Pin;
@@ -35,6 +35,10 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{collections::BTreeSet, convert::TryFrom, io};
 use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    fs::{metadata, symlink_metadata, File, OpenOptions},
+    hash::Hasher,
+};
 use tokio::io::AsyncWrite;
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
@@ -887,7 +891,7 @@ fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
 }
 
 fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<ObjectMeta> {
-    let last_modified = metadata
+    let last_modified: DateTime<Utc> = metadata
         .modified()
         .expect("Modified file time should be supported on this platform")
         .into();
@@ -896,10 +900,16 @@ fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<Objec
         path: location.as_ref(),
     })?;
 
+    let nanos = last_modified.clone().timestamp_nanos();
+    let mut hasher = ahash::AHasher::default();
+    hasher.write_i64(nanos);
+    let e_tag = hasher.finish().to_string();
+
     Ok(ObjectMeta {
         location,
         last_modified,
         size,
+        e_tag,
     })
 }
 

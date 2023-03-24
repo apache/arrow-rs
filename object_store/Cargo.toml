@@ -58,9 +58,11 @@ aws-config = { version = "0.54", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util", "fs"] }
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util"] }
+ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = "0.26.1"

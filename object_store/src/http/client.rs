@@ -26,6 +26,7 @@ use reqwest::header::{CONTENT_TYPE, RANGE};
 use reqwest::{Method, Response, StatusCode};
 use serde::Deserialize;
 use snafu::{OptionExt, ResultExt, Snafu};
+use std::hash::Hasher;
 use std::ops::Range;
 use url::Url;
 
@@ -335,10 +336,18 @@ impl MultiStatusResponse {
 
     /// Returns this objects metadata as [`ObjectMeta`]
     pub fn object_meta(&self, base_url: &Url) -> Result<ObjectMeta> {
+        let last_modified = self.prop_stat.prop.last_modified;
+
+        let nanos = last_modified.clone().timestamp_nanos();
+        let mut hasher = ahash::AHasher::default();
+        hasher.write_i64(nanos);
+        let e_tag = hasher.finish().to_string();
+
         Ok(ObjectMeta {
             location: self.path(base_url)?,
-            last_modified: self.prop_stat.prop.last_modified,
+            last_modified,
             size: self.size()?,
+            e_tag,
         })
     }
 
