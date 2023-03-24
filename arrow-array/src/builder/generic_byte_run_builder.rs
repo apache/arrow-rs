@@ -40,7 +40,7 @@ use arrow_buffer::ArrowNativeType;
 /// # use arrow_array::{GenericByteArray, BinaryArray};
 /// # use arrow_array::types::{BinaryType, Int16Type};
 /// # use arrow_array::{Array, Int16Array};
-/// # use arrow_array::cast::as_generic_binary_array;
+/// # use arrow_array::cast::AsArray;
 ///
 /// let mut builder =
 /// GenericByteRunBuilder::<Int16Type, BinaryType>::new();
@@ -59,7 +59,7 @@ use arrow_buffer::ArrowNativeType;
 /// assert!(av.is_null(3));
 ///
 /// // Values are polymorphic and so require a downcast.
-/// let ava: &BinaryArray = as_generic_binary_array(av.as_ref());
+/// let ava: &BinaryArray = av.as_binary();
 ///
 /// assert_eq!(ava.value(0), b"abc");
 /// assert_eq!(ava.value(2), b"def");
@@ -318,7 +318,7 @@ where
 /// # use arrow_array::builder::StringRunBuilder;
 /// # use arrow_array::{Int16Array, StringArray};
 /// # use arrow_array::types::Int16Type;
-/// # use arrow_array::cast::as_string_array;
+/// # use arrow_array::cast::AsArray;
 ///
 /// let mut builder = StringRunBuilder::<Int16Type>::new();
 ///
@@ -332,7 +332,7 @@ where
 ///
 /// // Values are polymorphic and so require a downcast.
 /// let av = array.values();
-/// let ava: &StringArray = as_string_array(av.as_ref());
+/// let ava: &StringArray = av.as_string::<i32>();
 ///
 /// assert_eq!(ava.value(0), "abc");
 /// assert!(av.is_null(1));
@@ -353,8 +353,8 @@ pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 ///
 /// # use arrow_array::builder::BinaryRunBuilder;
 /// # use arrow_array::{BinaryArray, Int16Array};
+/// # use arrow_array::cast::AsArray;
 /// # use arrow_array::types::Int16Type;
-/// # use arrow_array::cast::as_generic_binary_array;
 ///
 /// let mut builder = BinaryRunBuilder::<Int16Type>::new();
 ///
@@ -368,7 +368,7 @@ pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 ///
 /// // Values are polymorphic and so require a downcast.
 /// let av = array.values();
-/// let ava: &BinaryArray = as_generic_binary_array::<i32>(av.as_ref());
+/// let ava: &BinaryArray = av.as_binary();
 ///
 /// assert_eq!(ava.value(0), b"abc");
 /// assert!(av.is_null(1));
@@ -387,7 +387,7 @@ mod tests {
     use super::*;
 
     use crate::array::Array;
-    use crate::cast::as_string_array;
+    use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type};
     use crate::GenericByteArray;
     use crate::Int16RunArray;
@@ -518,7 +518,7 @@ mod tests {
         assert_eq!(array.len(), 10);
         assert_eq!(array.run_ends().values(), &[3, 5, 8, 10]);
 
-        let str_array = as_string_array(array.values().as_ref());
+        let str_array = array.values().as_string::<i32>();
         assert_eq!(str_array.value(0), "a");
         assert_eq!(str_array.value(1), "");
         assert_eq!(str_array.value(2), "b");

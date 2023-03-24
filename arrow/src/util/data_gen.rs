@@ -335,10 +335,8 @@ mod tests {
         let col_c = struct_array.column_by_name("c").unwrap();
         let col_c = col_c.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(col_c.len(), size);
-        let col_c_values = col_c.values();
-        assert!(col_c_values.len() > size);
-        // col_c_values should be a list
-        let col_c_list = as_list_array(col_c_values);
+        let col_c_list = col_c.values().as_list::<i32>();
+        assert!(col_c_list.len() > size);
         // Its values should be FixedSizeBinary(6)
         let fsb = col_c_list.values();
         assert_eq!(fsb.data_type(), &DataType::FixedSizeBinary(6));

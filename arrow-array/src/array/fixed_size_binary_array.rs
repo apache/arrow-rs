@@ -425,7 +425,7 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
             .len(v.len())
             .offset(v.offset())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
-            .nulls(v.data_ref().nulls().cloned());
+            .nulls(v.nulls().cloned());
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)

@@ -22,7 +22,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
@@ -183,6 +183,14 @@ pub fn sort_to_indices(
         DataType::UInt64 => {
             sort_primitive::<UInt64Type, _>(values, v, n, cmp, &options, limit)
         }
+        DataType::Float16 => sort_primitive::<Float16Type, _>(
+            values,
+            v,
+            n,
+            |x, y| x.total_cmp(&y),
+            &options,
+            limit,
+        ),
         DataType::Float32 => sort_primitive::<Float32Type, _>(
             values,
             v,
@@ -283,6 +291,9 @@ pub fn sort_to_indices(
             DataType::UInt64 => {
                 sort_list::<i32, UInt64Type>(values, v, n, &options, limit)
             }
+            DataType::Float16 => {
+                sort_list::<i32, Float16Type>(values, v, n, &options, limit)
+            }
             DataType::Float32 => {
                 sort_list::<i32, Float32Type>(values, v, n, &options, limit)
             }
@@ -309,6 +320,9 @@ pub fn sort_to_indices(
             }
             DataType::UInt64 => {
                 sort_list::<i64, UInt64Type>(values, v, n, &options, limit)
+            }
+            DataType::Float16 => {
+                sort_list::<i64, Float16Type>(values, v, n, &options, limit)
             }
             DataType::Float32 => {
                 sort_list::<i64, Float32Type>(values, v, n, &options, limit)
@@ -489,7 +503,7 @@ where
 {
     // create tuples that are used for sorting
     let valids = {
-        let values = as_primitive_array::<T>(values);
+        let values = values.as_primitive::<T>();
         value_indices
             .into_iter()
             .map(|index| (index, values.value(index as usize)))
@@ -1043,7 +1057,7 @@ pub struct SortColumn {
 /// # use std::sync::Arc;
 /// # use arrow_array::{ArrayRef, StringArray, PrimitiveArray};
 /// # use arrow_array::types::Int64Type;
-/// # use arrow_array::cast::as_primitive_array;
+/// # use arrow_array::cast::AsArray;
 /// # use arrow_ord::sort::{SortColumn, SortOptions, lexsort};
 ///
 /// let sorted_columns = lexsort(&vec![
@@ -1072,7 +1086,7 @@ pub struct SortColumn {
 ///     },
 /// ], None).unwrap();
 ///
-/// assert_eq!(as_primitive_array::<Int64Type>(&sorted_columns[0]).value(1), -64);
+/// assert_eq!(sorted_columns[0].as_primitive::<Int64Type>().value(1), -64);
 /// assert!(sorted_columns[0].is_null(0));
 /// ```
 ///
@@ -1145,9 +1159,9 @@ where
 }
 
 type LexicographicalCompareItem<'a> = (
-    &'a ArrayData, // data
-    DynComparator, // comparator
-    SortOptions,   // sort_option
+    Option<&'a NullBuffer>, // nulls
+    DynComparator,          // comparator
+    SortOptions,            // sort_option
 );
 
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
@@ -1159,8 +1173,13 @@ pub struct LexicographicalComparator<'a> {
 impl LexicographicalComparator<'_> {
     /// lexicographically compare values at the wrapped columns with given indices.
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
-        for (data, comparator, sort_option) in &self.compare_items {
-            match (data.is_valid(a_idx), data.is_valid(b_idx)) {
+        for (nulls, comparator, sort_option) in &self.compare_items {
+            let (lhs_valid, rhs_valid) = match nulls {
+                Some(n) => (n.is_valid(a_idx), n.is_valid(b_idx)),
+                None => (true, true),
+            };
+
+            match (lhs_valid, rhs_valid) {
                 (true, true) => {
                     match (comparator)(a_idx, b_idx) {
                         // equal, move on to next column
@@ -1205,11 +1224,9 @@ impl LexicographicalComparator<'_> {
             .iter()
             .map(|column| {
                 // flatten and convert build comparators
-                // use ArrayData for is_valid checks later to avoid dynamic call
                 let values = column.values.as_ref();
-                let data = values.data_ref();
                 Ok((
-                    data,
+                    values.nulls(),
                     build_compare(values, values)?,
                     column.options.unwrap_or_default(),
                 ))
@@ -1263,6 +1280,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::PrimitiveRunBuilder;
     use arrow_buffer::i256;
+    use half::f16;
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
     use std::convert::TryFrom;
@@ -1699,6 +1717,19 @@ mod tests {
             None,
             vec![0, 5, 3, 1, 4, 2],
         );
+        test_sort_to_indices_primitive_arrays::<Float16Type>(
+            vec![
+                None,
+                Some(f16::from_f32(-0.05)),
+                Some(f16::from_f32(2.225)),
+                Some(f16::from_f32(-1.01)),
+                Some(f16::from_f32(-0.05)),
+                None,
+            ],
+            None,
+            None,
+            vec![0, 5, 3, 1, 4, 2],
+        );
         test_sort_to_indices_primitive_arrays::<Float32Type>(
             vec![
                 None,
@@ -1767,6 +1798,23 @@ mod tests {
             vec![2, 1, 4, 3, 5, 0],
         );
 
+        test_sort_to_indices_primitive_arrays::<Float16Type>(
+            vec![
+                None,
+                Some(f16::from_f32(0.005)),
+                Some(f16::from_f32(20.22)),
+                Some(f16::from_f32(-10.3)),
+                Some(f16::from_f32(0.005)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+            None,
+            vec![2, 1, 4, 3, 5, 0],
+        );
+
         test_sort_to_indices_primitive_arrays::<Float32Type>(
             vec![
                 None,
@@ -1827,6 +1875,23 @@ mod tests {
 
         test_sort_to_indices_primitive_arrays::<Int64Type>(
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            None,
+            vec![5, 0, 2, 1, 4, 3],
+        );
+
+        test_sort_to_indices_primitive_arrays::<Float16Type>(
+            vec![
+                None,
+                Some(f16::from_f32(0.1)),
+                Some(f16::from_f32(0.2)),
+                Some(f16::from_f32(-1.3)),
+                Some(f16::from_f32(0.01)),
+                None,
+            ],
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
@@ -2647,6 +2712,30 @@ mod tests {
             vec![None, None, Some(2)],
         );
 
+        test_sort_primitive_arrays::<Float16Type>(
+            vec![
+                None,
+                Some(f16::from_f32(0.0)),
+                Some(f16::from_f32(2.0)),
+                Some(f16::from_f32(-1.0)),
+                Some(f16::from_f32(0.0)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            None,
+            vec![
+                None,
+                None,
+                Some(f16::from_f32(2.0)),
+                Some(f16::from_f32(0.0)),
+                Some(f16::from_f32(0.0)),
+                Some(f16::from_f32(-1.0)),
+            ],
+        );
+
         test_sort_primitive_arrays::<Float32Type>(
             vec![None, Some(0.0), Some(2.0), Some(-1.0), Some(0.0), None],
             Some(SortOptions {
@@ -2711,6 +2800,29 @@ mod tests {
             }),
             None,
             vec![None, None, Some(-1), Some(0), Some(0), Some(2)],
+        );
+        test_sort_primitive_arrays::<Float16Type>(
+            vec![
+                None,
+                Some(f16::from_f32(0.0)),
+                Some(f16::from_f32(2.0)),
+                Some(f16::from_f32(-1.0)),
+                Some(f16::from_f32(0.0)),
+                None,
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            None,
+            vec![
+                None,
+                None,
+                Some(f16::from_f32(-1.0)),
+                Some(f16::from_f32(0.0)),
+                Some(f16::from_f32(0.0)),
+                Some(f16::from_f32(2.0)),
+            ],
         );
         test_sort_primitive_arrays::<Float32Type>(
             vec![None, Some(0.0), Some(2.0), Some(-1.0), Some(0.0), None],
@@ -3386,6 +3498,57 @@ mod tests {
                 Some(vec![Some(4)]),
             ],
             Some(1),
+        );
+
+        test_sort_list_arrays::<Float16Type>(
+            vec![
+                Some(vec![Some(f16::from_f32(1.0)), Some(f16::from_f32(0.0))]),
+                Some(vec![
+                    Some(f16::from_f32(4.0)),
+                    Some(f16::from_f32(3.0)),
+                    Some(f16::from_f32(2.0)),
+                    Some(f16::from_f32(1.0)),
+                ]),
+                Some(vec![
+                    Some(f16::from_f32(2.0)),
+                    Some(f16::from_f32(3.0)),
+                    Some(f16::from_f32(4.0)),
+                ]),
+                Some(vec![
+                    Some(f16::from_f32(3.0)),
+                    Some(f16::from_f32(3.0)),
+                    Some(f16::from_f32(3.0)),
+                    Some(f16::from_f32(3.0)),
+                ]),
+                Some(vec![Some(f16::from_f32(1.0)), Some(f16::from_f32(1.0))]),
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            None,
+            vec![
+                Some(vec![Some(f16::from_f32(1.0)), Some(f16::from_f32(0.0))]),
+                Some(vec![Some(f16::from_f32(1.0)), Some(f16::from_f32(1.0))]),
+                Some(vec![
+                    Some(f16::from_f32(2.0)),
+                    Some(f16::from_f32(3.0)),
+                    Some(f16::from_f32(4.0)),
+                ]),
+                Some(vec![
+                    Some(f16::from_f32(3.0)),
+                    Some(f16::from_f32(3.0)),
+                    Some(f16::from_f32(3.0)),
+                    Some(f16::from_f32(3.0)),
+                ]),
+                Some(vec![
+                    Some(f16::from_f32(4.0)),
+                    Some(f16::from_f32(3.0)),
+                    Some(f16::from_f32(2.0)),
+                    Some(f16::from_f32(1.0)),
+                ]),
+            ],
+            None,
         );
 
         test_sort_list_arrays::<Float32Type>(

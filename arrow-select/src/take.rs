@@ -20,13 +20,13 @@
 use std::sync::Arc;
 
 use arrow_array::builder::BufferBuilder;
+use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
-use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array};
 use num::{ToPrimitive, Zero};
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
@@ -128,24 +128,16 @@ where
             Ok(Arc::new(take_boolean(values, indices)?))
         }
         DataType::Utf8 => {
-            Ok(Arc::new(take_bytes(as_string_array(values), indices)?))
+            Ok(Arc::new(take_bytes(values.as_string::<i32>(), indices)?))
         }
         DataType::LargeUtf8 => {
-            Ok(Arc::new(take_bytes(as_largestring_array(values), indices)?))
+            Ok(Arc::new(take_bytes(values.as_string::<i64>(), indices)?))
         }
         DataType::List(_) => {
-            let values = values
-                .as_any()
-                .downcast_ref::<GenericListArray<i32>>()
-                .unwrap();
-            Ok(Arc::new(take_list::<_, Int32Type>(values, indices)?))
+            Ok(Arc::new(take_list::<_, Int32Type>(values.as_list(), indices)?))
         }
         DataType::LargeList(_) => {
-            let values = values
-                .as_any()
-                .downcast_ref::<GenericListArray<i64>>()
-                .unwrap();
-            Ok(Arc::new(take_list::<_, Int64Type>(values, indices)?))
+            Ok(Arc::new(take_list::<_, Int64Type>(values.as_list(), indices)?))
         }
         DataType::FixedSizeList(_, length) => {
             let values = values
@@ -193,10 +185,10 @@ where
             t => unimplemented!("Take not supported for run type {:?}", t)
         }
         DataType::Binary => {
-            Ok(Arc::new(take_bytes(as_generic_binary_array::<i32>(values), indices)?))
+            Ok(Arc::new(take_bytes(values.as_binary::<i32>(), indices)?))
         }
         DataType::LargeBinary => {
-            Ok(Arc::new(take_bytes(as_generic_binary_array::<i64>(values), indices)?))
+            Ok(Arc::new(take_bytes(values.as_binary::<i64>(), indices)?))
         }
         DataType::FixedSizeBinary(size) => {
             let values = values
@@ -969,7 +961,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{builder::*, cast::as_primitive_array};
+    use arrow_array::builder::*;
     use arrow_schema::TimeUnit;
 
     fn test_take_decimal_arrays(
@@ -2160,7 +2152,7 @@ mod tests {
         assert_eq!(take_out.run_ends().len(), 7);
         assert_eq!(take_out.run_ends().values(), &[1_i32, 3, 4, 5, 7]);
 
-        let take_out_values = as_primitive_array::<Int32Type>(take_out.values());
+        let take_out_values = take_out.values().as_primitive::<Int32Type>();
         assert_eq!(take_out_values.values(), &[2, 2, 2, 2, 1]);
     }
 

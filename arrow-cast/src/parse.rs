@@ -206,7 +206,7 @@ pub fn string_to_datetime<T: TimeZone>(
 
     if tz_offset == 32 {
         // Decimal overrun
-        while bytes[tz_offset].is_ascii_digit() && tz_offset < bytes.len() {
+        while tz_offset < bytes.len() && bytes[tz_offset].is_ascii_digit() {
             tz_offset += 1;
         }
     }
@@ -751,19 +751,22 @@ const NANOS_PER_HOUR: f64 = 60_f64 * NANOS_PER_MINUTE;
 #[cfg(test)]
 const NANOS_PER_DAY: f64 = 24_f64 * NANOS_PER_HOUR;
 
+#[rustfmt::skip]
 #[derive(Clone, Copy)]
 #[repr(u16)]
 enum IntervalType {
-    Century = 0b_00_0000_0001,
-    Decade = 0b_00_0000_0010,
-    Year = 0b_00_0000_0100,
-    Month = 0b_00_0000_1000,
-    Week = 0b_00_0001_0000,
-    Day = 0b_00_0010_0000,
-    Hour = 0b_00_0100_0000,
-    Minute = 0b_00_1000_0000,
-    Second = 0b_01_0000_0000,
-    Millisecond = 0b_10_0000_0000,
+    Century     = 0b_0000_0000_0001,
+    Decade      = 0b_0000_0000_0010,
+    Year        = 0b_0000_0000_0100,
+    Month       = 0b_0000_0000_1000,
+    Week        = 0b_0000_0001_0000,
+    Day         = 0b_0000_0010_0000,
+    Hour        = 0b_0000_0100_0000,
+    Minute      = 0b_0000_1000_0000,
+    Second      = 0b_0001_0000_0000,
+    Millisecond = 0b_0010_0000_0000,
+    Microsecond = 0b_0100_0000_0000,
+    Nanosecond  = 0b_1000_0000_0000,
 }
 
 impl FromStr for IntervalType {
@@ -781,6 +784,8 @@ impl FromStr for IntervalType {
             "minute" | "minutes" => Ok(Self::Minute),
             "second" | "seconds" => Ok(Self::Second),
             "millisecond" | "milliseconds" => Ok(Self::Millisecond),
+            "microsecond" | "microseconds" => Ok(Self::Microsecond),
+            "nanosecond" | "nanoseconds" => Ok(Self::Nanosecond),
             _ => Err(ArrowError::NotYetImplemented(format!(
                 "Unknown interval type: {s}"
             ))),
@@ -861,6 +866,10 @@ fn parse_interval(leading_field: &str, value: &str) -> Result<MonthDayNano, Arro
             IntervalType::Millisecond => {
                 Ok((0, 0, (interval_period.mul_checked(1_000_000f64))? as i64))
             }
+            IntervalType::Microsecond => {
+                Ok((0, 0, (interval_period.mul_checked(1_000f64)?) as i64))
+            }
+            IntervalType::Nanosecond => Ok((0, 0, interval_period as i64)),
         }
     };
 
@@ -1080,6 +1089,22 @@ mod tests {
 
             let custom = string_to_datetime(&Utc, case).unwrap();
             assert_eq!(chrono_utc, custom)
+        }
+    }
+
+    #[test]
+    fn string_to_timestamp_naive() {
+        let cases = [
+            "2018-11-13T17:11:10.011375885995",
+            "2030-12-04T17:11:10.123",
+            "2030-12-04T17:11:10.1234",
+            "2030-12-04T17:11:10.123456",
+        ];
+        for case in cases {
+            let chrono =
+                NaiveDateTime::parse_from_str(case, "%Y-%m-%dT%H:%M:%S%.f").unwrap();
+            let custom = string_to_datetime(&Utc, case).unwrap();
+            assert_eq!(chrono, custom.naive_utc())
         }
     }
 
@@ -1611,6 +1636,16 @@ mod tests {
         assert_eq!(
             (12i32, 1i32, (0.1 * NANOS_PER_MILLIS) as i64),
             parse_interval("months", "1 year 1 day 0.1 milliseconds").unwrap(),
+        );
+
+        assert_eq!(
+            (12i32, 1i32, 1000i64),
+            parse_interval("months", "1 year 1 day 1 microsecond").unwrap(),
+        );
+
+        assert_eq!(
+            (12i32, 1i32, 1i64),
+            parse_interval("months", "1 year 1 day 1 nanoseconds").unwrap(),
         );
 
         assert_eq!(

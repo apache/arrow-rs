@@ -23,24 +23,9 @@ use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 use std::sync::Arc;
-
-#[inline]
-unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
-    len: usize,
-    buffer: Buffer,
-    nulls: Option<NullBuffer>,
-) -> PrimitiveArray<O> {
-    PrimitiveArray::from(
-        ArrayDataBuilder::new(O::DATA_TYPE)
-            .len(len)
-            .nulls(nulls)
-            .buffers(vec![buffer])
-            .build_unchecked(),
-    )
-}
 
 /// See [`PrimitiveArray::unary`]
 pub fn unary<I, F, O>(array: &PrimitiveArray<I>, op: F) -> PrimitiveArray<O>
@@ -209,7 +194,6 @@ where
             "Cannot perform binary operation on arrays of different length".to_string(),
         ));
     }
-    let len = a.len();
 
     if a.is_empty() {
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
@@ -224,8 +208,7 @@ where
     //  Soundness
     //      `values` is an iterator with a known size from a PrimitiveArray
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-
-    Ok(unsafe { build_primitive_array(len, buffer, nulls) })
+    Ok(PrimitiveArray::new(O::DATA_TYPE, buffer.into(), nulls))
 }
 
 /// Given two arrays of length `len`, calls `op(a[i], b[i])` for `i` in `0..len`, mutating
@@ -328,7 +311,8 @@ where
             Ok::<_, ArrowError>(())
         })?;
 
-        Ok(unsafe { build_primitive_array(len, buffer.finish(), Some(nulls)) })
+        let values = buffer.finish().into();
+        Ok(PrimitiveArray::new(O::DATA_TYPE, values, Some(nulls)))
     }
 }
 
@@ -412,7 +396,7 @@ where
             buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
         };
     }
-    Ok(unsafe { build_primitive_array(len, buffer.into(), None) })
+    Ok(PrimitiveArray::new(O::DATA_TYPE, buffer.into(), None))
 }
 
 /// This intentional inline(never) attribute helps LLVM optimize the loop.
@@ -523,7 +507,7 @@ mod tests {
         let input =
             Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
         let input_slice = input.slice(1, 4);
-        let input_slice: &Float64Array = as_primitive_array(&input_slice);
+        let input_slice: &Float64Array = input_slice.as_primitive();
         let result = unary(input_slice, |n| n.round());
         assert_eq!(
             result,

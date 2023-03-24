@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::bit_chunk_iterator::BitChunks;
-use crate::{bit_util, buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer};
+use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
+use crate::{
+    bit_util, buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer, MutableBuffer,
+};
 use std::ops::{BitAnd, BitOr, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
@@ -54,6 +57,12 @@ impl BooleanBuffer {
             offset,
             len,
         }
+    }
+
+    /// Invokes `f` with indexes `0..len` collecting the boolean results into a new `BooleanBuffer`
+    pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, f: F) -> Self {
+        let buffer = MutableBuffer::collect_bool(len, f);
+        Self::new(buffer.into(), 0, len)
     }
 
     /// Returns the number of set bits in this buffer
@@ -160,6 +169,21 @@ impl BooleanBuffer {
     pub fn into_inner(self) -> Buffer {
         self.buffer
     }
+
+    /// Returns an iterator over the bits in this [`BooleanBuffer`]
+    pub fn iter(&self) -> BitIterator<'_> {
+        self.into_iter()
+    }
+
+    /// Returns an iterator over the set bit positions in this [`BooleanBuffer`]
+    pub fn set_indices(&self) -> BitIndexIterator<'_> {
+        BitIndexIterator::new(self.values(), self.offset, self.len)
+    }
+
+    /// Returns a [`BitSliceIterator`] yielding contiguous ranges of set bits
+    pub fn set_slices(&self) -> BitSliceIterator<'_> {
+        BitSliceIterator::new(self.values(), self.offset, self.len)
+    }
 }
 
 impl Not for &BooleanBuffer {
@@ -209,5 +233,14 @@ impl BitOr<&BooleanBuffer> for &BooleanBuffer {
             offset: 0,
             len: self.len,
         }
+    }
+}
+
+impl<'a> IntoIterator for &'a BooleanBuffer {
+    type Item = bool;
+    type IntoIter = BitIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        BitIterator::new(self.values(), self.offset, self.len)
     }
 }

@@ -357,10 +357,7 @@ mod tests {
     use super::*;
     use crate::reader::infer_json_schema;
     use crate::ReaderBuilder;
-    use arrow_array::cast::{
-        as_boolean_array, as_largestring_array, as_list_array, as_map_array,
-        as_primitive_array, as_string_array, as_struct_array,
-    };
+    use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::Array;
     use arrow_buffer::ArrowNativeType;
@@ -431,29 +428,29 @@ mod tests {
         let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
 
-        let col1 = as_primitive_array::<Int64Type>(batches[0].column(0));
+        let col1 = batches[0].column(0).as_primitive::<Int64Type>();
         assert_eq!(col1.null_count(), 2);
         assert_eq!(col1.values(), &[1, 2, 2, 2, 0, 0]);
         assert!(col1.is_null(4));
         assert!(col1.is_null(5));
 
-        let col2 = as_primitive_array::<Int32Type>(batches[0].column(1));
+        let col2 = batches[0].column(1).as_primitive::<Int32Type>();
         assert_eq!(col2.null_count(), 0);
         assert_eq!(col2.values(), &[2, 4, 6, 5, 4, 7]);
 
-        let col3 = as_boolean_array(batches[0].column(2));
+        let col3 = batches[0].column(2).as_boolean();
         assert_eq!(col3.null_count(), 4);
         assert!(col3.value(0));
         assert!(!col3.is_null(0));
         assert!(!col3.value(1));
         assert!(!col3.is_null(1));
 
-        let col4 = as_primitive_array::<Date32Type>(batches[0].column(3));
+        let col4 = batches[0].column(3).as_primitive::<Date32Type>();
         assert_eq!(col4.null_count(), 3);
         assert!(col4.is_null(3));
         assert_eq!(col4.values(), &[1, 2, 45, 0, 0, 0]);
 
-        let col5 = as_primitive_array::<Date64Type>(batches[0].column(4));
+        let col5 = batches[0].column(4).as_primitive::<Date64Type>();
         assert_eq!(col5.null_count(), 5);
         assert!(col5.is_null(0));
         assert!(col5.is_null(2));
@@ -480,7 +477,7 @@ mod tests {
         let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
 
-        let col1 = as_string_array(batches[0].column(0));
+        let col1 = batches[0].column(0).as_string::<i32>();
         assert_eq!(col1.null_count(), 2);
         assert_eq!(col1.value(0), "1");
         assert_eq!(col1.value(1), "hello");
@@ -488,7 +485,7 @@ mod tests {
         assert!(col1.is_null(3));
         assert!(col1.is_null(4));
 
-        let col2 = as_largestring_array(batches[0].column(1));
+        let col2 = batches[0].column(1).as_string::<i64>();
         assert_eq!(col2.null_count(), 1);
         assert_eq!(col2.value(0), "2");
         assert_eq!(col2.value(1), "shoo");
@@ -537,41 +534,41 @@ mod tests {
         let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
 
-        let list = as_list_array(batches[0].column(0).as_ref());
+        let list = batches[0].column(0).as_list::<i32>();
         assert_eq!(list.len(), 3);
         assert_eq!(list.value_offsets(), &[0, 0, 2, 2]);
         assert_eq!(list.null_count(), 1);
         assert!(list.is_null(2));
-        let list_values = as_primitive_array::<Int32Type>(list.values().as_ref());
+        let list_values = list.values().as_primitive::<Int32Type>();
         assert_eq!(list_values.values(), &[5, 6]);
 
-        let nested = as_struct_array(batches[0].column(1).as_ref());
-        let a = as_primitive_array::<Int32Type>(nested.column(0).as_ref());
+        let nested = batches[0].column(1).as_struct();
+        let a = nested.column(0).as_primitive::<Int32Type>();
         assert_eq!(list.null_count(), 1);
         assert_eq!(a.values(), &[1, 7, 0]);
         assert!(list.is_null(2));
 
-        let b = as_primitive_array::<Int32Type>(nested.column(1).as_ref());
+        let b = nested.column(1).as_primitive::<Int32Type>();
         assert_eq!(b.null_count(), 2);
         assert_eq!(b.len(), 3);
         assert_eq!(b.value(0), 2);
         assert!(b.is_null(1));
         assert!(b.is_null(2));
 
-        let nested_list = as_struct_array(batches[0].column(2).as_ref());
+        let nested_list = batches[0].column(2).as_struct();
         assert_eq!(nested_list.len(), 3);
         assert_eq!(nested_list.null_count(), 1);
         assert!(nested_list.is_null(2));
 
-        let list2 = as_list_array(nested_list.column(0).as_ref());
+        let list2 = nested_list.column(0).as_list::<i32>();
         assert_eq!(list2.len(), 3);
         assert_eq!(list2.null_count(), 1);
         assert_eq!(list2.value_offsets(), &[0, 2, 2, 2]);
         assert!(list2.is_null(2));
 
-        let list2_values = as_struct_array(list2.values().as_ref());
+        let list2_values = list2.values().as_struct();
 
-        let c = as_primitive_array::<Int32Type>(list2_values.column(0));
+        let c = list2_values.column(0).as_primitive::<Int32Type>();
         assert_eq!(c.values(), &[3, 4]);
     }
 
@@ -606,26 +603,26 @@ mod tests {
         let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
 
-        let nested = as_struct_array(batches[0].column(0).as_ref());
+        let nested = batches[0].column(0).as_struct();
         assert_eq!(nested.num_columns(), 1);
-        let a = as_primitive_array::<Int32Type>(nested.column(0).as_ref());
+        let a = nested.column(0).as_primitive::<Int32Type>();
         assert_eq!(a.null_count(), 0);
         assert_eq!(a.values(), &[1, 7]);
 
-        let nested_list = as_struct_array(batches[0].column(1).as_ref());
+        let nested_list = batches[0].column(1).as_struct();
         assert_eq!(nested_list.num_columns(), 1);
         assert_eq!(nested_list.null_count(), 0);
 
-        let list2 = as_list_array(nested_list.column(0).as_ref());
+        let list2 = nested_list.column(0).as_list::<i32>();
         assert_eq!(list2.value_offsets(), &[0, 2, 2]);
         assert_eq!(list2.null_count(), 0);
 
-        let child = as_struct_array(list2.values().as_ref());
+        let child = list2.values().as_struct();
         assert_eq!(child.num_columns(), 1);
         assert_eq!(child.len(), 2);
         assert_eq!(child.null_count(), 0);
 
-        let c = as_primitive_array::<Int32Type>(child.column(0).as_ref());
+        let c = child.column(0).as_primitive::<Int32Type>();
         assert_eq!(c.values(), &[5, 0]);
         assert_eq!(c.null_count(), 1);
         assert!(c.is_null(1));
@@ -650,15 +647,15 @@ mod tests {
         let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
 
-        let map = as_map_array(batches[0].column(0).as_ref());
-        let map_keys = as_string_array(map.keys().as_ref());
-        let map_values = as_list_array(map.values().as_ref());
+        let map = batches[0].column(0).as_map();
+        let map_keys = map.keys().as_string::<i32>();
+        let map_values = map.values().as_list::<i32>();
         assert_eq!(map.value_offsets(), &[0, 1, 3, 5]);
 
         let k: Vec<_> = map_keys.iter().map(|x| x.unwrap()).collect();
         assert_eq!(&k, &["a", "a", "b", "c", "a"]);
 
-        let list_values = as_string_array(map_values.values().as_ref());
+        let list_values = map_values.values().as_string::<i32>();
         let lv: Vec<_> = list_values.iter().collect();
         assert_eq!(&lv, &[Some("foo"), None, None, Some("baz")]);
         assert_eq!(map_values.value_offsets(), &[0, 2, 3, 3, 3, 4]);
@@ -751,7 +748,7 @@ mod tests {
         let batches = do_read(buf, 1024, true, schema);
         assert_eq!(batches.len(), 1);
 
-        let col1 = as_string_array(batches[0].column(0));
+        let col1 = batches[0].column(0).as_string::<i32>();
         assert_eq!(col1.null_count(), 2);
         assert_eq!(col1.value(0), "1");
         assert_eq!(col1.value(1), "2E0");
@@ -760,7 +757,7 @@ mod tests {
         assert!(col1.is_null(4));
         assert!(col1.is_null(5));
 
-        let col2 = as_string_array(batches[0].column(1));
+        let col2 = batches[0].column(1).as_string::<i32>();
         assert_eq!(col2.null_count(), 0);
         assert_eq!(col2.value(0), "2");
         assert_eq!(col2.value(1), "4");
@@ -769,7 +766,7 @@ mod tests {
         assert_eq!(col2.value(4), "4e0");
         assert_eq!(col2.value(5), "7");
 
-        let col3 = as_string_array(batches[0].column(2));
+        let col3 = batches[0].column(2).as_string::<i32>();
         assert_eq!(col3.null_count(), 4);
         assert_eq!(col3.value(0), "true");
         assert_eq!(col3.value(1), "false");
@@ -799,7 +796,7 @@ mod tests {
         let batches = do_read(buf, 1024, true, schema);
         assert_eq!(batches.len(), 1);
 
-        let col1 = as_primitive_array::<T>(batches[0].column(0));
+        let col1 = batches[0].column(0).as_primitive::<T>();
         assert_eq!(col1.null_count(), 2);
         assert!(col1.is_null(4));
         assert!(col1.is_null(5));
@@ -808,14 +805,14 @@ mod tests {
             &[100, 200, 204, 1103420, 0, 0].map(T::Native::usize_as)
         );
 
-        let col2 = as_primitive_array::<T>(batches[0].column(1));
+        let col2 = batches[0].column(1).as_primitive::<T>();
         assert_eq!(col2.null_count(), 0);
         assert_eq!(
             col2.values(),
             &[200, 400, 133700, 500, 4000, 123400].map(T::Native::usize_as)
         );
 
-        let col3 = as_primitive_array::<T>(batches[0].column(2));
+        let col3 = batches[0].column(2).as_primitive::<T>();
         assert_eq!(col3.null_count(), 4);
         assert!(!col3.is_null(0));
         assert!(!col3.is_null(1));
@@ -864,7 +861,7 @@ mod tests {
             TimeUnit::Nanosecond => 1,
         };
 
-        let col1 = as_primitive_array::<T>(batches[0].column(0));
+        let col1 = batches[0].column(0).as_primitive::<T>();
         assert_eq!(col1.null_count(), 4);
         assert!(col1.is_null(2));
         assert!(col1.is_null(3));
@@ -872,7 +869,7 @@ mod tests {
         assert!(col1.is_null(5));
         assert_eq!(col1.values(), &[1, 2, 0, 0, 0, 0].map(T::Native::usize_as));
 
-        let col2 = as_primitive_array::<T>(batches[0].column(1));
+        let col2 = batches[0].column(1).as_primitive::<T>();
         assert_eq!(col2.null_count(), 1);
         assert!(col2.is_null(5));
         assert_eq!(
@@ -887,7 +884,7 @@ mod tests {
             ]
         );
 
-        let col3 = as_primitive_array::<T>(batches[0].column(2));
+        let col3 = batches[0].column(2).as_primitive::<T>();
         assert_eq!(col3.null_count(), 0);
         assert_eq!(
             col3.values(),
@@ -901,7 +898,7 @@ mod tests {
             ]
         );
 
-        let col4 = as_primitive_array::<T>(batches[0].column(3));
+        let col4 = batches[0].column(3).as_primitive::<T>();
 
         assert_eq!(col4.null_count(), 0);
         assert_eq!(
@@ -957,7 +954,7 @@ mod tests {
         let batches = do_read(buf, 1024, true, schema);
         assert_eq!(batches.len(), 1);
 
-        let col1 = as_primitive_array::<T>(batches[0].column(0));
+        let col1 = batches[0].column(0).as_primitive::<T>();
         assert_eq!(col1.null_count(), 4);
         assert!(col1.is_null(2));
         assert!(col1.is_null(3));
@@ -965,7 +962,7 @@ mod tests {
         assert!(col1.is_null(5));
         assert_eq!(col1.values(), &[1, 2, 0, 0, 0, 0].map(T::Native::usize_as));
 
-        let col2 = as_primitive_array::<T>(batches[0].column(1));
+        let col2 = batches[0].column(1).as_primitive::<T>();
         assert_eq!(col2.null_count(), 1);
         assert!(col2.is_null(5));
         assert_eq!(
@@ -981,7 +978,7 @@ mod tests {
             .map(T::Native::usize_as)
         );
 
-        let col3 = as_primitive_array::<T>(batches[0].column(2));
+        let col3 = batches[0].column(2).as_primitive::<T>();
         assert_eq!(col3.null_count(), 0);
         assert_eq!(
             col3.values(),

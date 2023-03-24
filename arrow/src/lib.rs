@@ -135,6 +135,25 @@
 //! }
 //! ```
 //!
+//! To facilitate downcasting, the [`AsArray`](crate::array::AsArray) extension trait can be used
+//!
+//! ```rust
+//! # use arrow::array::{Array, Float32Array, AsArray};
+//! # use arrow::array::StringArray;
+//! # use arrow::datatypes::DataType;
+//! #
+//! fn impl_string(array: &StringArray) {}
+//! fn impl_f32(array: &Float32Array) {}
+//!
+//! fn impl_dyn(array: &dyn Array) {
+//!     match array.data_type() {
+//!         DataType::Utf8 => impl_string(array.as_string()),
+//!         DataType::Float32 => impl_f32(array.as_primitive()),
+//!         _ => unimplemented!()
+//!     }
+//! }
+//! ```
+//!
 //! It is also common to want to write a function that returns one of a number of possible
 //! array implementations. [`ArrayRef`] is a type-alias for [`Arc<dyn Array>`](array::Array)
 //! which is frequently used for this purpose
@@ -207,7 +226,7 @@
 //!
 //! ```
 //! # use arrow::compute::gt_scalar;
-//! # use arrow_array::cast::as_primitive_array;
+//! # use arrow_array::cast::AsArray;
 //! # use arrow_array::Int32Array;
 //! # use arrow_array::types::Int32Type;
 //! # use arrow_select::filter::filter;
@@ -216,7 +235,7 @@
 //! let filtered = filter(&array, &predicate).unwrap();
 //!
 //! let expected = Int32Array::from_iter(61..100);
-//! assert_eq!(&expected, as_primitive_array::<Int32Type>(&filtered));
+//! assert_eq!(&expected, filtered.as_primitive::<Int32Type>());
 //! ```
 //!
 //! As well as some horizontal operations, such as:

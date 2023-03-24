@@ -437,6 +437,9 @@ impl GoogleCloudStorageClient {
 
         builder
             .bearer_auth(token)
+            // Needed if reqwest is compiled with native-tls instead of rustls-tls
+            // See https://github.com/apache/arrow-rs/pull/3921
+            .header(header::CONTENT_LENGTH, 0)
             .send_retry(&self.retry_config)
             .await
             .map_err(|err| {

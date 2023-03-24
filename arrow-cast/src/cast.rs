@@ -445,9 +445,7 @@ fn cast_reinterpret_arrays<
 >(
     array: &dyn Array,
 ) -> Result<ArrayRef, ArrowError> {
-    Ok(Arc::new(
-        as_primitive_array::<I>(array).reinterpret_cast::<O>(),
-    ))
+    Ok(Arc::new(array.as_primitive::<I>().reinterpret_cast::<O>()))
 }
 
 fn cast_decimal_to_integer<D, T>(
@@ -716,7 +714,7 @@ pub fn cast_with_options(
         }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal128Type, Decimal128Type>(
-                as_primitive_array(array),
+                array.as_primitive(),
                 *s1,
                 *p2,
                 *s2,
@@ -725,7 +723,7 @@ pub fn cast_with_options(
         }
         (Decimal256(_, s1), Decimal256(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal256Type, Decimal256Type>(
-                as_primitive_array(array),
+                array.as_primitive(),
                 *s1,
                 *p2,
                 *s2,
@@ -734,7 +732,7 @@ pub fn cast_with_options(
         }
         (Decimal128(_, s1), Decimal256(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal128Type, Decimal256Type>(
-                as_primitive_array(array),
+                array.as_primitive(),
                 *s1,
                 *p2,
                 *s2,
@@ -743,7 +741,7 @@ pub fn cast_with_options(
         }
         (Decimal256(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal256Type, Decimal128Type>(
-                as_primitive_array(array),
+                array.as_primitive(),
                 *s1,
                 *p2,
                 *s2,
@@ -888,69 +886,69 @@ pub fn cast_with_options(
             // cast data to decimal
             match from_type {
                 UInt8 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<UInt8Type>(array),
+                    array.as_primitive::<UInt8Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 UInt16 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<UInt16Type>(array),
+                    array.as_primitive::<UInt16Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 UInt32 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<UInt32Type>(array),
+                    array.as_primitive::<UInt32Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 UInt64 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<UInt64Type>(array),
+                    array.as_primitive::<UInt64Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 Int8 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<Int8Type>(array),
+                    array.as_primitive::<Int8Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 Int16 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<Int16Type>(array),
+                    array.as_primitive::<Int16Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 Int32 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<Int32Type>(array),
+                    array.as_primitive::<Int32Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 Int64 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<Int64Type>(array),
+                    array.as_primitive::<Int64Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal128(
-                    as_primitive_array::<Float32Type>(array),
+                    array.as_primitive::<Float32Type>(),
                     *precision,
                     *scale,
                     cast_options,
                 ),
                 Float64 => cast_floating_point_to_decimal128(
-                    as_primitive_array::<Float64Type>(array),
+                    array.as_primitive::<Float64Type>(),
                     *precision,
                     *scale,
                     cast_options,
@@ -977,69 +975,69 @@ pub fn cast_with_options(
             // cast data to decimal
             match from_type {
                 UInt8 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<UInt8Type>(array),
+                    array.as_primitive::<UInt8Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 UInt16 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<UInt16Type>(array),
+                    array.as_primitive::<UInt16Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 UInt32 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<UInt32Type>(array),
+                    array.as_primitive::<UInt32Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 UInt64 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<UInt64Type>(array),
+                    array.as_primitive::<UInt64Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Int8 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<Int8Type>(array),
+                    array.as_primitive::<Int8Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Int16 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<Int16Type>(array),
+                    array.as_primitive::<Int16Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Int32 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<Int32Type>(array),
+                    array.as_primitive::<Int32Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Int64 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<Int64Type>(array),
+                    array.as_primitive::<Int64Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal256(
-                    as_primitive_array::<Float32Type>(array),
+                    array.as_primitive::<Float32Type>(),
                     *precision,
                     *scale,
                     cast_options,
                 ),
                 Float64 => cast_floating_point_to_decimal256(
-                    as_primitive_array::<Float64Type>(array),
+                    array.as_primitive::<Float64Type>(),
                     *precision,
                     *scale,
                     cast_options,
@@ -1133,9 +1131,9 @@ pub fn cast_with_options(
             Float64 => cast_string_to_numeric::<Float64Type, i32>(array, cast_options),
             Date32 => cast_string_to_date32::<i32>(array, cast_options),
             Date64 => cast_string_to_date64::<i32>(array, cast_options),
-            Binary => Ok(Arc::new(BinaryArray::from(as_string_array(array).clone()))),
+            Binary => Ok(Arc::new(BinaryArray::from(array.as_string::<i32>().clone()))),
             LargeBinary => {
-                let binary = BinaryArray::from(as_string_array(array).clone());
+                let binary = BinaryArray::from(array.as_string::<i32>().clone());
                 cast_byte_container::<BinaryType, LargeBinaryType>(&binary)
             }
             LargeUtf8 => cast_byte_container::<Utf8Type, LargeUtf8Type>(array),
@@ -1192,11 +1190,11 @@ pub fn cast_with_options(
             Utf8 => cast_byte_container::<LargeUtf8Type, Utf8Type>(array),
             Binary => {
                 let large_binary =
-                    LargeBinaryArray::from(as_largestring_array(array).clone());
+                    LargeBinaryArray::from(array.as_string::<i64>().clone());
                 cast_byte_container::<LargeBinaryType, BinaryType>(&large_binary)
             }
             LargeBinary => Ok(Arc::new(LargeBinaryArray::from(
-                as_largestring_array(array).clone(),
+                array.as_string::<i64>().clone(),
             ))),
             Time32(TimeUnit::Second) => {
                 cast_string_to_time32second::<i64>(array, cast_options)
@@ -1580,71 +1578,71 @@ pub fn cast_with_options(
             cast_reinterpret_arrays::<Time64NanosecondType, Int64Type>(array)
         }
         (Date32, Date64) => Ok(Arc::new(
-            as_primitive_array::<Date32Type>(array)
+            array.as_primitive::<Date32Type>()
                 .unary::<_, Date64Type>(|x| x as i64 * MILLISECONDS_IN_DAY),
         )),
         (Date64, Date32) => Ok(Arc::new(
-            as_primitive_array::<Date64Type>(array)
+            array.as_primitive::<Date64Type>()
                 .unary::<_, Date32Type>(|x| (x / MILLISECONDS_IN_DAY) as i32),
         )),
 
         (Time32(TimeUnit::Second), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            as_primitive_array::<Time32SecondType>(array)
+            array.as_primitive::<Time32SecondType>()
                 .unary::<_, Time32MillisecondType>(|x| x * MILLISECONDS as i32),
         )),
         (Time32(TimeUnit::Second), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
-            as_primitive_array::<Time32SecondType>(array)
+            array.as_primitive::<Time32SecondType>()
                 .unary::<_, Time64MicrosecondType>(|x| x as i64 * MICROSECONDS),
         )),
         (Time32(TimeUnit::Second), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
-            as_primitive_array::<Time32SecondType>(array)
+            array.as_primitive::<Time32SecondType>()
                 .unary::<_, Time64NanosecondType>(|x| x as i64 * NANOSECONDS),
         )),
 
         (Time32(TimeUnit::Millisecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
-            as_primitive_array::<Time32MillisecondType>(array)
+            array.as_primitive::<Time32MillisecondType>()
                 .unary::<_, Time32SecondType>(|x| x / MILLISECONDS as i32),
         )),
         (Time32(TimeUnit::Millisecond), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
-            as_primitive_array::<Time32MillisecondType>(array)
+            array.as_primitive::<Time32MillisecondType>()
                 .unary::<_, Time64MicrosecondType>(|x| {
                     x as i64 * (MICROSECONDS / MILLISECONDS)
                 }),
         )),
         (Time32(TimeUnit::Millisecond), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
-            as_primitive_array::<Time32MillisecondType>(array)
+            array.as_primitive::<Time32MillisecondType>()
                 .unary::<_, Time64NanosecondType>(|x| {
                     x as i64 * (MICROSECONDS / NANOSECONDS)
                 }),
         )),
 
         (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
-            as_primitive_array::<Time64MicrosecondType>(array)
+            array.as_primitive::<Time64MicrosecondType>()
                 .unary::<_, Time32SecondType>(|x| (x / MICROSECONDS) as i32),
         )),
         (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            as_primitive_array::<Time64MicrosecondType>(array)
+            array.as_primitive::<Time64MicrosecondType>()
                 .unary::<_, Time32MillisecondType>(|x| {
                     (x / (MICROSECONDS / MILLISECONDS)) as i32
                 }),
         )),
         (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
-            as_primitive_array::<Time64MicrosecondType>(array)
+            array.as_primitive::<Time64MicrosecondType>()
                 .unary::<_, Time64NanosecondType>(|x| x * (NANOSECONDS / MICROSECONDS)),
         )),
 
         (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
-            as_primitive_array::<Time64NanosecondType>(array)
+            array.as_primitive::<Time64NanosecondType>()
                 .unary::<_, Time32SecondType>(|x| (x / NANOSECONDS) as i32),
         )),
         (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            as_primitive_array::<Time64NanosecondType>(array)
+            array.as_primitive::<Time64NanosecondType>()
                 .unary::<_, Time32MillisecondType>(|x| {
                     (x / (NANOSECONDS / MILLISECONDS)) as i32
                 }),
         )),
         (Time64(TimeUnit::Nanosecond), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
-            as_primitive_array::<Time64NanosecondType>(array)
+            array.as_primitive::<Time64NanosecondType>()
                 .unary::<_, Time64MicrosecondType>(|x| x / (NANOSECONDS / MICROSECONDS)),
         )),
 
@@ -1662,14 +1660,14 @@ pub fn cast_with_options(
         }
 
         (Int64, Timestamp(unit, tz)) => Ok(make_timestamp_array(
-            as_primitive_array(array),
+            array.as_primitive(),
             unit.clone(),
             tz.clone(),
         )),
 
         (Timestamp(from_unit, _), Timestamp(to_unit, to_tz)) => {
             let array = cast_with_options(array, &Int64, cast_options)?;
-            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
+            let time_array = array.as_primitive::<Int64Type>();
             let from_size = time_unit_multiple(from_unit);
             let to_size = time_unit_multiple(to_unit);
             // we either divide or multiply, depending on size of each unit
@@ -1697,7 +1695,7 @@ pub fn cast_with_options(
         }
         (Timestamp(from_unit, _), Date32) => {
             let array = cast_with_options(array, &Int64, cast_options)?;
-            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
+            let time_array = array.as_primitive::<Int64Type>();
             let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
 
             let mut b = Date32Builder::with_capacity(array.len());
@@ -1716,13 +1714,13 @@ pub fn cast_with_options(
             match cast_options.safe {
                 true => {
                     // change error to None
-                    as_primitive_array::<TimestampSecondType>(array)
+                    array.as_primitive::<TimestampSecondType>()
                         .unary_opt::<_, Date64Type>(|x| {
                             x.checked_mul(MILLISECONDS)
                         })
                 }
                 false => {
-                            as_primitive_array::<TimestampSecondType>(array).try_unary::<_, Date64Type, _>(
+                            array.as_primitive::<TimestampSecondType>().try_unary::<_, Date64Type, _>(
                                 |x| {
                                     x.mul_checked(MILLISECONDS)
                                 },
@@ -1734,17 +1732,17 @@ pub fn cast_with_options(
             cast_reinterpret_arrays::<TimestampMillisecondType, Date64Type>(array)
         }
         (Timestamp(TimeUnit::Microsecond, _), Date64) => Ok(Arc::new(
-            as_primitive_array::<TimestampMicrosecondType>(array)
+            array.as_primitive::<TimestampMicrosecondType>()
                 .unary::<_, Date64Type>(|x| x / (MICROSECONDS / MILLISECONDS)),
         )),
         (Timestamp(TimeUnit::Nanosecond, _), Date64) => Ok(Arc::new(
-            as_primitive_array::<TimestampNanosecondType>(array)
+            array.as_primitive::<TimestampNanosecondType>()
                 .unary::<_, Date64Type>(|x| x / (NANOSECONDS / MILLISECONDS)),
         )),
         (Timestamp(TimeUnit::Second, tz), Time64(TimeUnit::Microsecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampSecondType>(array)
+                array.as_primitive::<TimestampSecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
                         Ok(time_to_time64us(as_time_res_with_timezone::<
                             TimestampSecondType,
@@ -1755,7 +1753,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Second, tz), Time64(TimeUnit::Nanosecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampSecondType>(array)
+                array.as_primitive::<TimestampSecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
                         Ok(time_to_time64ns(as_time_res_with_timezone::<
                             TimestampSecondType,
@@ -1766,7 +1764,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Millisecond, tz), Time64(TimeUnit::Microsecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMillisecondType>(array)
+                array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
                     Ok(time_to_time64us(as_time_res_with_timezone::<
                         TimestampMillisecondType,
@@ -1777,7 +1775,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Millisecond, tz), Time64(TimeUnit::Nanosecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMillisecondType>(array)
+                array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
                     Ok(time_to_time64ns(as_time_res_with_timezone::<
                         TimestampMillisecondType,
@@ -1788,7 +1786,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Microsecond, tz), Time64(TimeUnit::Microsecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMicrosecondType>(array)
+                array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
                     Ok(time_to_time64us(as_time_res_with_timezone::<
                         TimestampMicrosecondType,
@@ -1799,7 +1797,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Microsecond, tz), Time64(TimeUnit::Nanosecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMicrosecondType>(array)
+                array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
                     Ok(time_to_time64ns(as_time_res_with_timezone::<
                         TimestampMicrosecondType,
@@ -1810,7 +1808,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Nanosecond, tz), Time64(TimeUnit::Microsecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampNanosecondType>(array)
+                array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
                     Ok(time_to_time64us(as_time_res_with_timezone::<
                         TimestampNanosecondType,
@@ -1821,7 +1819,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Nanosecond, tz), Time64(TimeUnit::Nanosecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampNanosecondType>(array)
+                array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
                     Ok(time_to_time64ns(as_time_res_with_timezone::<
                         TimestampNanosecondType,
@@ -1832,7 +1830,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Second, tz), Time32(TimeUnit::Second)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampSecondType>(array)
+                array.as_primitive::<TimestampSecondType>()
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
                         Ok(time_to_time32s(as_time_res_with_timezone::<
                             TimestampSecondType,
@@ -1843,7 +1841,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Second, tz), Time32(TimeUnit::Millisecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampSecondType>(array)
+                array.as_primitive::<TimestampSecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
                         Ok(time_to_time32ms(as_time_res_with_timezone::<
                             TimestampSecondType,
@@ -1854,7 +1852,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Millisecond, tz), Time32(TimeUnit::Second)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMillisecondType>(array)
+                array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
                         Ok(time_to_time32s(as_time_res_with_timezone::<
                             TimestampMillisecondType,
@@ -1865,7 +1863,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Millisecond, tz), Time32(TimeUnit::Millisecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMillisecondType>(array)
+                array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
                     Ok(time_to_time32ms(as_time_res_with_timezone::<
                         TimestampMillisecondType,
@@ -1876,7 +1874,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Microsecond, tz), Time32(TimeUnit::Second)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMicrosecondType>(array)
+                array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
                         Ok(time_to_time32s(as_time_res_with_timezone::<
                             TimestampMicrosecondType,
@@ -1887,7 +1885,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Microsecond, tz), Time32(TimeUnit::Millisecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMicrosecondType>(array)
+                array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
                     Ok(time_to_time32ms(as_time_res_with_timezone::<
                         TimestampMicrosecondType,
@@ -1898,7 +1896,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Nanosecond, tz), Time32(TimeUnit::Second)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampNanosecondType>(array)
+                array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
                         Ok(time_to_time32s(as_time_res_with_timezone::<
                             TimestampNanosecondType,
@@ -1909,7 +1907,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Nanosecond, tz), Time32(TimeUnit::Millisecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampNanosecondType>(array)
+                array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
                     Ok(time_to_time32ms(as_time_res_with_timezone::<
                         TimestampNanosecondType,
@@ -1919,38 +1917,38 @@ pub fn cast_with_options(
         }
 
         (Date64, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
-            as_primitive_array::<Date64Type>(array)
+            array.as_primitive::<Date64Type>()
                 .unary::<_, TimestampSecondType>(|x| x / MILLISECONDS),
         )),
         (Date64, Timestamp(TimeUnit::Millisecond, None)) => {
             cast_reinterpret_arrays::<Date64Type, TimestampMillisecondType>(array)
         }
         (Date64, Timestamp(TimeUnit::Microsecond, None)) => Ok(Arc::new(
-            as_primitive_array::<Date64Type>(array).unary::<_, TimestampMicrosecondType>(
+            array.as_primitive::<Date64Type>().unary::<_, TimestampMicrosecondType>(
                 |x| x * (MICROSECONDS / MILLISECONDS),
             ),
         )),
         (Date64, Timestamp(TimeUnit::Nanosecond, None)) => Ok(Arc::new(
-            as_primitive_array::<Date64Type>(array).unary::<_, TimestampNanosecondType>(
+            array.as_primitive::<Date64Type>().unary::<_, TimestampNanosecondType>(
                 |x| x * (NANOSECONDS / MILLISECONDS),
             ),
         )),
         (Date32, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
-            as_primitive_array::<Date32Type>(array)
+            array.as_primitive::<Date32Type>()
                 .unary::<_, TimestampSecondType>(|x| (x as i64) * SECONDS_IN_DAY),
         )),
         (Date32, Timestamp(TimeUnit::Millisecond, None)) => Ok(Arc::new(
-            as_primitive_array::<Date32Type>(array).unary::<_, TimestampMillisecondType>(
+            array.as_primitive::<Date32Type>().unary::<_, TimestampMillisecondType>(
                 |x| (x as i64) * MILLISECONDS_IN_DAY,
             ),
         )),
         (Date32, Timestamp(TimeUnit::Microsecond, None)) => Ok(Arc::new(
-            as_primitive_array::<Date32Type>(array).unary::<_, TimestampMicrosecondType>(
+            array.as_primitive::<Date32Type>().unary::<_, TimestampMicrosecondType>(
                 |x| (x as i64) * MICROSECONDS_IN_DAY,
             ),
         )),
         (Date32, Timestamp(TimeUnit::Nanosecond, None)) => Ok(Arc::new(
-            as_primitive_array::<Date32Type>(array)
+            array.as_primitive::<Date32Type>()
                 .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY),
         )),
         (Int64, Duration(TimeUnit::Second)) => {
@@ -3736,7 +3734,7 @@ mod tests {
         let result = cast(&array, &DataType::Decimal128(2, 2));
         assert!(result.is_ok());
         let array = result.unwrap();
-        let array: &Decimal128Array = as_primitive_array(&array);
+        let array: &Decimal128Array = array.as_primitive();
         let err = array.validate_decimal_precision(2);
         assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 2. Max is 99",
                    err.unwrap_err().to_string());
@@ -4306,7 +4304,7 @@ mod tests {
         let casted_array = cast(&array, &DataType::Decimal128(3, 1));
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
-        let array: &Decimal128Array = as_primitive_array(&array);
+        let array: &Decimal128Array = array.as_primitive();
         let err = array.validate_decimal_precision(3);
         assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", err.unwrap_err().to_string());
 
@@ -4316,7 +4314,7 @@ mod tests {
         let casted_array = cast(&array, &DataType::Decimal128(3, 1));
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
-        let array: &Decimal128Array = as_primitive_array(&array);
+        let array: &Decimal128Array = array.as_primitive();
         let err = array.validate_decimal_precision(3);
         assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", err.unwrap_err().to_string());
 
@@ -4475,7 +4473,7 @@ mod tests {
         let casted_array = cast(&array, &DataType::Decimal256(3, 1));
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
-        let array: &Decimal256Array = as_primitive_array(&array);
+        let array: &Decimal256Array = array.as_primitive();
         let err = array.validate_decimal_precision(3);
         assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal256 of precision 3. Max is 999", err.unwrap_err().to_string());
 
@@ -4603,14 +4601,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(5, b.len());
-        let arr = b.as_any().downcast_ref::<ListArray>().unwrap();
+        let arr = b.as_list::<i32>();
         assert_eq!(&[0, 1, 2, 3, 4, 5], arr.value_offsets());
         assert_eq!(1, arr.value_length(0));
         assert_eq!(1, arr.value_length(1));
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
         assert_eq!(1, arr.value_length(4));
-        let c = as_primitive_array::<Int32Type>(arr.values());
+        let c = arr.values().as_primitive::<Int32Type>();
         assert_eq!(5, c.value(0));
         assert_eq!(6, c.value(1));
         assert_eq!(7, c.value(2));
@@ -4628,7 +4626,7 @@ mod tests {
         .unwrap();
         assert_eq!(5, b.len());
         assert_eq!(1, b.null_count());
-        let arr = b.as_any().downcast_ref::<ListArray>().unwrap();
+        let arr = b.as_list::<i32>();
         assert_eq!(&[0, 1, 2, 3, 4, 5], arr.value_offsets());
         assert_eq!(1, arr.value_length(0));
         assert_eq!(1, arr.value_length(1));
@@ -4636,7 +4634,7 @@ mod tests {
         assert_eq!(1, arr.value_length(3));
         assert_eq!(1, arr.value_length(4));
 
-        let c = as_primitive_array::<Int32Type>(arr.values());
+        let c = arr.values().as_primitive::<Int32Type>();
         assert_eq!(1, c.null_count());
         assert_eq!(5, c.value(0));
         assert!(!c.is_valid(1));
@@ -4657,13 +4655,13 @@ mod tests {
         .unwrap();
         assert_eq!(4, b.len());
         assert_eq!(1, b.null_count());
-        let arr = b.as_any().downcast_ref::<ListArray>().unwrap();
+        let arr = b.as_list::<i32>();
         assert_eq!(&[0, 1, 2, 3, 4], arr.value_offsets());
         assert_eq!(1, arr.value_length(0));
         assert_eq!(1, arr.value_length(1));
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
-        let c = as_primitive_array::<Float64Type>(arr.values());
+        let c = arr.values().as_primitive::<Float64Type>();
         assert_eq!(1, c.null_count());
         assert_eq!(7.0, c.value(0));
         assert_eq!(8.0, c.value(1));
@@ -4802,7 +4800,7 @@ mod tests {
         assert_eq!(2, array.value_length(2));
 
         // expect 4 nulls: negative numbers and overflow
-        let u16arr = as_primitive_array::<UInt16Type>(array.values());
+        let u16arr = array.values().as_primitive::<UInt16Type>();
         assert_eq!(4, u16arr.null_count());
 
         // expect 4 nulls: negative numbers and overflow
@@ -6946,7 +6944,7 @@ mod tests {
                     let expected = $ARR_TYPE::from(vec![None; 6]);
                     let cast_type = DataType::$DATATYPE;
                     let cast_array = cast(&array, &cast_type).expect("cast failed");
-                    let cast_array = as_primitive_array::<$TYPE>(&cast_array);
+                    let cast_array = cast_array.as_primitive::<$TYPE>();
                     assert_eq!(cast_array.data_type(), &cast_type);
                     assert_eq!(cast_array, &expected);
                 }
@@ -7439,7 +7437,7 @@ mod tests {
         );
 
         let casted_array = cast(&array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("1123450", decimal_arr.value_as_string(0));
         assert_eq!("2123460", decimal_arr.value_as_string(1));
@@ -7456,7 +7454,7 @@ mod tests {
         ])) as ArrayRef;
 
         let casted_array = cast(&array, &decimal_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("1123450", decimal_arr.value_as_string(0));
         assert_eq!("2123450", decimal_arr.value_as_string(1));
@@ -7469,7 +7467,7 @@ mod tests {
         ])) as ArrayRef;
 
         let casted_array = cast(&array, &decimal_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("1120", decimal_arr.value_as_string(0));
         assert_eq!("2120", decimal_arr.value_as_string(1));
@@ -7492,7 +7490,7 @@ mod tests {
         );
 
         let casted_array = cast(&array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("1200", decimal_arr.value_as_string(0));
 
@@ -7507,7 +7505,7 @@ mod tests {
         );
 
         let casted_array = cast(&array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("1300", decimal_arr.value_as_string(0));
     }
@@ -7632,7 +7630,7 @@ mod tests {
         assert!(can_cast_types(array.data_type(), &output_type));
 
         let casted_array = cast(&array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("123.45", decimal_arr.value_as_string(0));
         assert_eq!("1.23", decimal_arr.value_as_string(1));
@@ -7653,7 +7651,7 @@ mod tests {
         assert!(can_cast_types(array.data_type(), &output_type));
 
         let casted_array = cast(&array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal256Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal256Type>();
 
         assert_eq!("123.450", decimal_arr.value_as_string(0));
         assert_eq!("1.235", decimal_arr.value_as_string(1));
@@ -7751,7 +7749,7 @@ mod tests {
     fn test_cast_string_to_decimal128_overflow(overflow_array: ArrayRef) {
         let output_type = DataType::Decimal128(38, 2);
         let casted_array = cast(&overflow_array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert!(decimal_arr.is_null(0));
         assert!(decimal_arr.is_null(1));
@@ -7797,7 +7795,7 @@ mod tests {
     fn test_cast_string_to_decimal256_overflow(overflow_array: ArrayRef) {
         let output_type = DataType::Decimal256(76, 2);
         let casted_array = cast(&overflow_array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal256Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal256Type>();
 
         assert_eq!(
             "170141183460469231731687303715884105727.00",
@@ -7916,7 +7914,7 @@ mod tests {
         ]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
-        let v = as_primitive_array::<TimestampNanosecondType>(b.as_ref());
+        let v = b.as_primitive::<TimestampNanosecondType>();
 
         assert_eq!(v.value(0), 946728000000000000);
         assert_eq!(v.value(1), 1608035696000000000);
@@ -7926,7 +7924,7 @@ mod tests {
             &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_string())),
         )
         .unwrap();
-        let v = as_primitive_array::<TimestampNanosecondType>(b.as_ref());
+        let v = b.as_primitive::<TimestampNanosecondType>();
 
         assert_eq!(v.value(0), 946728000000000000);
         assert_eq!(v.value(1), 1608035696000000000);
@@ -7936,7 +7934,7 @@ mod tests {
             &DataType::Timestamp(TimeUnit::Millisecond, Some("+02:00".to_string())),
         )
         .unwrap();
-        let v = as_primitive_array::<TimestampMillisecondType>(b.as_ref());
+        let v = b.as_primitive::<TimestampMillisecondType>();
 
         assert_eq!(v.value(0), 946728000000);
         assert_eq!(v.value(1), 1608035696000);
@@ -7991,7 +7989,7 @@ mod tests {
         let s = BinaryArray::from(vec![v1, v2]);
         let options = CastOptions { safe: true };
         let array = cast_with_options(&s, &DataType::Utf8, &options).unwrap();
-        let a = as_string_array(array.as_ref());
+        let a = array.as_string::<i32>();
         a.data().validate_full().unwrap();
 
         assert_eq!(a.null_count(), 1);

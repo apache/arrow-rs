@@ -26,6 +26,22 @@ pub struct OffsetBuffer<O: ArrowNativeType>(ScalarBuffer<O>);
 impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// Create a new [`OffsetBuffer`] from the provided [`ScalarBuffer`]
     ///
+    /// # Panics
+    ///
+    /// Panics if `buffer` is not a non-empty buffer containing
+    /// monotonically increasing values greater than zero
+    pub fn new(buffer: ScalarBuffer<O>) -> Self {
+        assert!(!buffer.is_empty(), "offsets cannot be empty");
+        assert!(buffer[0] > O::usize_as(0), "offsets must be greater than 0");
+        assert!(
+            buffer.windows(2).all(|w| w[0] <= w[1]),
+            "offsets must be monotonically increasing"
+        );
+        Self(buffer)
+    }
+
+    /// Create a new [`OffsetBuffer`] from the provided [`ScalarBuffer`]
+    ///
     /// # Safety
     ///
     /// `buffer` must be a non-empty buffer containing monotonically increasing
@@ -69,5 +85,28 @@ impl<T: ArrowNativeType> AsRef<[T]> for OffsetBuffer<T> {
     #[inline]
     fn as_ref(&self) -> &[T] {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "offsets cannot be empty")]
+    fn empty_offsets() {
+        OffsetBuffer::new(Vec::<i32>::new().into());
+    }
+
+    #[test]
+    #[should_panic(expected = "offsets must be greater than 0")]
+    fn negative_offsets() {
+        OffsetBuffer::new(vec![-1, 0, 1].into());
+    }
+
+    #[test]
+    #[should_panic(expected = "offsets must be monotonically increasing")]
+    fn non_monotonic_offsets() {
+        OffsetBuffer::new(vec![1, 2, 0].into());
     }
 }

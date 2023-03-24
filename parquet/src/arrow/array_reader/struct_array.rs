@@ -257,7 +257,7 @@ mod tests {
         assert_eq!(
             vec![true, false, false, false, false],
             (0..5)
-                .map(|idx| struct_array.data_ref().is_null(idx))
+                .map(|idx| struct_array.is_null(idx))
                 .collect::<Vec<bool>>()
         );
         assert_eq!(

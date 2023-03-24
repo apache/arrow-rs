@@ -17,6 +17,8 @@
 
 use crate::buffer::Buffer;
 use crate::native::ArrowNativeType;
+use crate::MutableBuffer;
+use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -26,11 +28,17 @@ use std::ops::Deref;
 ///
 /// All [`ArrowNativeType`] are valid for all possible backing byte representations, and as
 /// a result they are "trivially safely transmutable".
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ScalarBuffer<T: ArrowNativeType> {
     /// Underlying data buffer
     buffer: Buffer,
     phantom: PhantomData<T>,
+}
+
+impl<T: ArrowNativeType> std::fmt::Debug for ScalarBuffer<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ScalarBuffer").field(&self.as_ref()).finish()
+    }
 }
 
 impl<T: ArrowNativeType> ScalarBuffer<T> {
@@ -86,6 +94,12 @@ impl<T: ArrowNativeType> AsRef<[T]> for ScalarBuffer<T> {
     #[inline]
     fn as_ref(&self) -> &[T] {
         self
+    }
+}
+
+impl<T: ArrowNativeType> From<MutableBuffer> for ScalarBuffer<T> {
+    fn from(value: MutableBuffer) -> Self {
+        Buffer::from(value).into()
     }
 }
 
@@ -166,6 +180,12 @@ mod tests {
 
         let typed = ScalarBuffer::<i32>::new(buffer, 3, 0);
         assert!(typed.is_empty());
+    }
+
+    #[test]
+    fn test_debug() {
+        let buffer = ScalarBuffer::from(vec![1, 2, 3]);
+        assert_eq!(format!("{buffer:?}"), "ScalarBuffer([1, 2, 3])");
     }
 
     #[test]
