@@ -611,9 +611,11 @@ where
 #[cfg(test)]
 mod tests {
     use std::fs::{read_to_string, File};
+    use std::io::BufReader;
     use std::sync::Arc;
 
     use crate::reader::*;
+    use crate::RawReaderBuilder;
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
     use serde_json::json;
@@ -1447,13 +1449,12 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_write_multi_batches() {
         let test_file = "test/data/basic.json";
 
         let schema = SchemaRef::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),
-            Field::new("b", DataType::Float32, true),
+            Field::new("b", DataType::Float64, true),
             Field::new("c", DataType::Boolean, true),
             Field::new("d", DataType::Utf8, true),
             Field::new("e", DataType::Utf8, true),
@@ -1461,10 +1462,8 @@ mod tests {
             Field::new("g", DataType::Timestamp(TimeUnit::Millisecond, None), true),
         ]));
 
-        let mut reader: Reader<File> = ReaderBuilder::new()
-            .with_schema(schema.clone())
-            .with_batch_size(1024)
-            .build::<File>(File::open(test_file).unwrap())
+        let mut reader = RawReaderBuilder::new(schema.clone())
+            .build(BufReader::new(File::open(test_file).unwrap()))
             .unwrap();
         let batch = reader.next().unwrap().unwrap();
 
