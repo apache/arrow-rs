@@ -323,6 +323,12 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
         self.keys.is_valid(i).then(|| self.keys.value(i).as_usize())
     }
 
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        // TODO: Slice buffers directly (#3880)
+        self.data.slice(offset, length).into()
+    }
+
     /// Downcast this dictionary to a [`TypedDictionaryArray`]
     ///
     /// ```
@@ -601,8 +607,7 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        // TODO: Slice buffers directly (#3880)
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
@@ -693,7 +698,7 @@ impl<'a, K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'a, 
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        self.dictionary.slice(offset, length)
+        Arc::new(self.dictionary.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {

@@ -253,6 +253,12 @@ impl<R: RunEndIndexType> RunArray<R> {
         }
         Ok(physical_indices)
     }
+
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        // TODO: Slice buffers directly (#3880)
+        self.data.slice(offset, length).into()
+    }
 }
 
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
@@ -307,8 +313,7 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        // TODO: Slice buffers directly (#3880)
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
@@ -505,7 +510,7 @@ impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        self.run_array.slice(offset, length)
+        Arc::new(self.run_array.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
