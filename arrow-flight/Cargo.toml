@@ -46,6 +46,11 @@ clap = { version = "4.1", default-features = false, features = ["std", "derive",
 tracing-log = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3.1", default-features = false, features = ["ansi", "fmt"], optional = true }
 
+# Build dependencies
+proc-macro2 = { version = "1.0.53", default-features = false, optional = true }
+prost-build = { version = "0.11.8", default-features = false, optional = true }
+tonic-build = { version = "0.8.4", default-features = false, features = ["transport", "prost"], optional = true }
+
 [package.metadata.docs.rs]
 all-features = true
 
@@ -53,6 +58,7 @@ all-features = true
 default = []
 flight-sql-experimental = []
 tls = ["tonic/tls"]
+gen-source = ["dep:proc-macro2", "dep:prost-build", "dep:tonic-build"]
 
 # Enable CLI tools
 cli = ["arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subscriber", "tonic/tls-webpki-roots"]
@@ -63,13 +69,6 @@ assert_cmd = "2.0.8"
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"
-
-[build-dependencies]
-# Pin specific version of the tonic-build dependencies to avoid auto-generated
-# (and checked in) arrow.flight.protocol.rs from changing
-proc-macro2 = { version = "=1.0.53", default-features = false }
-prost-build = { version = "=0.11.8", default-features = false }
-tonic-build = { version = "=0.8.4", default-features = false, features = ["transport", "prost"] }
 
 [[example]]
 name = "flight_sql_server"
@@ -83,3 +82,8 @@ required-features = ["cli", "flight-sql-experimental", "tls"]
 name = "flight_sql_client_cli"
 path = "tests/flight_sql_client_cli.rs"
 required-features = ["cli", "flight-sql-experimental", "tls"]
+
+[[bin]]
+name = "gen-source"
+path = "gen-source.rs"
+required-features = ["gen-source"]
