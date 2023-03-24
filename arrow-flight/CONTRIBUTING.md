@@ -32,10 +32,10 @@ valid installation of [protoc](https://github.com/protocolbuffers/protobuf#proto
 
 ### Why Vendor
 
-The standard approach to integrating `prost-build` / `tonic-build` is to use a `build.rs` script that automatically generates the code as part of the standard build process. 
+The standard approach to integrating `prost-build` / `tonic-build` is to use a `build.rs` script that automatically generates the code as part of the standard build process.
 
 Unfortunately this caused a lot of friction for users:
 
-* Requires all users to have a protoc install in order to compile the crate - [#2616](https://github.com/apache/arrow-rs/issues/2616)
-* Some distributions have very old versions of protoc that don't support required functionality - [#1574](https://github.com/apache/arrow-rs/issues/1574]
-* Inconsistent support within IDEs for code completion of automatically generated code
+- Requires all users to have a protoc install in order to compile the crate - [#2616](https://github.com/apache/arrow-rs/issues/2616)
+- Some distributions have very old versions of protoc that don't support required functionality - [#1574](https://github.com/apache/arrow-rs/issues/1574]
+- Inconsistent support within IDEs for code completion of automatically generated code
