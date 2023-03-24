@@ -306,14 +306,17 @@ fn set_column_for_json_rows(
             let options = FormatOptions::default();
             let formatter = ArrayFormatter::try_new(array.as_ref(), &options)?;
             let data = array.data();
-            rows.iter_mut().enumerate().for_each(|(idx, row)| {
-                if data.is_valid(idx) {
-                    row.insert(
-                        col_name.to_string(),
-                        formatter.value(idx).to_string().into(),
-                    );
-                }
-            });
+            rows.iter_mut()
+                .take(row_count)
+                .enumerate()
+                .for_each(|(idx, row)| {
+                    if data.is_valid(idx) {
+                        row.insert(
+                            col_name.to_string(),
+                            formatter.value(idx).to_string().into(),
+                        );
+                    }
+                });
         }
         DataType::Struct(_) => {
             let inner_objs =
@@ -608,9 +611,11 @@ where
 #[cfg(test)]
 mod tests {
     use std::fs::{read_to_string, File};
+    use std::io::BufReader;
     use std::sync::Arc;
 
     use crate::reader::*;
+    use crate::RawReaderBuilder;
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
     use serde_json::json;
@@ -1431,6 +1436,50 @@ mod tests {
 
         let result = String::from_utf8(buf).unwrap();
         let expected = read_to_string(test_file).unwrap();
+        for (r, e) in result.lines().zip(expected.lines()) {
+            let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
+            // remove null value from object to make comparision consistent:
+            if let Value::Object(obj) = expected_json {
+                expected_json = Value::Object(
+                    obj.into_iter().filter(|(_, v)| *v != Value::Null).collect(),
+                );
+            }
+            assert_eq!(serde_json::from_str::<Value>(r).unwrap(), expected_json,);
+        }
+    }
+
+    #[test]
+    fn test_write_multi_batches() {
+        let test_file = "test/data/basic.json";
+
+        let schema = SchemaRef::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Float64, true),
+            Field::new("c", DataType::Boolean, true),
+            Field::new("d", DataType::Utf8, true),
+            Field::new("e", DataType::Utf8, true),
+            Field::new("f", DataType::Utf8, true),
+            Field::new("g", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+        ]));
+
+        let mut reader = RawReaderBuilder::new(schema.clone())
+            .build(BufReader::new(File::open(test_file).unwrap()))
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        // test batches = an empty batch + 2 same batches, finally result should be eq to 2 same batches
+        let batches = [RecordBatch::new_empty(schema), batch.clone(), batch];
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&batches).unwrap();
+        }
+
+        let result = String::from_utf8(buf).unwrap();
+        let expected = read_to_string(test_file).unwrap();
+        // result is eq to 2 same batches
+        let expected = format!("{expected}\n{expected}");
         for (r, e) in result.lines().zip(expected.lines()) {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
             // remove null value from object to make comparision consistent:
