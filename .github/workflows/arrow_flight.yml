@@ -41,7 +41,6 @@ on:
       - .github/**
 
 jobs:
-  # test the crate
   linux-test:
     name: Test
     runs-on: ubuntu-latest
@@ -62,6 +61,18 @@ jobs:
       - name: Test --examples
         run: |
           cargo test -p arrow-flight  --features=flight-sql-experimental,tls --examples
+
+  vendor:
+    name: Verify Vendored Code
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Run gen
+        run: ./arrow-flight/regen.sh
       - name: Verify workspace clean
         run: git diff --exit-code
 

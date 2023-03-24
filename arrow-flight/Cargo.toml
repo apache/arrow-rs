@@ -64,13 +64,6 @@ tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"
 
-[build-dependencies]
-# Pin specific version of the tonic-build dependencies to avoid auto-generated
-# (and checked in) arrow.flight.protocol.rs from changing
-proc-macro2 = { version = "=1.0.53", default-features = false }
-prost-build = { version = "=0.11.8", default-features = false }
-tonic-build = { version = "=0.8.4", default-features = false, features = ["transport", "prost"] }
-
 [[example]]
 name = "flight_sql_server"
 required-features = ["flight-sql-experimental", "tls"]
