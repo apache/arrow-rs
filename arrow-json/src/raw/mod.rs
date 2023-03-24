@@ -359,7 +359,7 @@ mod tests {
     use crate::ReaderBuilder;
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::Array;
+    use arrow_array::{Array, StructArray};
     use arrow_buffer::ArrowNativeType;
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_schema::{DataType, Field, Schema};
@@ -1037,6 +1037,14 @@ mod tests {
 
         let batches = do_read(json, 1024, true, schema);
         assert_eq!(batches.len(), 1);
+
+        let s: StructArray = batches.into_iter().next().unwrap().into();
+        let opts = FormatOptions::default().with_null("null");
+        let formatter = ArrayFormatter::try_new(&s, &opts).unwrap();
+        assert_eq!(
+            formatter.value(0).to_string(),
+            "{protocol: {minReaderVersion: 1, minWriterVersion: 2}, add: null}"
+        );
     }
 
     #[test]
@@ -1054,6 +1062,12 @@ mod tests {
                 .unwrap();
             assert!(reader.next().unwrap().is_err()); // Should error as not nullable
 
+            let null = r#"{"foo": {bar: null}}"#;
+            let mut reader = RawReaderBuilder::new(schema.clone())
+                .build(Cursor::new(null.as_bytes()))
+                .unwrap();
+            assert!(reader.next().unwrap().is_err()); // Should error as not nullable
+
             // Test nulls in nullable parent can mask nulls in non-nullable child
             let null = r#"{"foo": null}"#;
             let mut reader = RawReaderBuilder::new(schema)
@@ -1061,7 +1075,7 @@ mod tests {
                 .unwrap();
             let batch = reader.next().unwrap().unwrap();
             assert_eq!(batch.num_columns(), 1);
-            let foo = as_struct_array(batch.column(0).as_ref());
+            let foo = batch.column(0).as_struct();
             assert_eq!(foo.len(), 1);
             assert!(foo.is_null(0));
             assert_eq!(foo.num_columns(), 1);
