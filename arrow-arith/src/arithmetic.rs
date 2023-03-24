@@ -2043,7 +2043,7 @@ mod tests {
     fn test_primitive_array_add_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
-        let actual = add_scalar(a.as_primitive(), 3).unwrap();
+        let actual = add_scalar(&a, 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(12), Some(11), None]);
         assert_eq!(actual, expected);
     }
@@ -2073,7 +2073,7 @@ mod tests {
     fn test_primitive_array_subtract_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
-        let actual = subtract_scalar(a.as_primitive(), 3).unwrap();
+        let actual = subtract_scalar(&a, 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(6), Some(5), None]);
         assert_eq!(actual, expected);
     }
@@ -2103,7 +2103,7 @@ mod tests {
     fn test_primitive_array_multiply_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
-        let actual = multiply_scalar(a.as_primitive(), 3).unwrap();
+        let actual = multiply_scalar(&a, 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(27), Some(24), None]);
         assert_eq!(actual, expected);
     }
@@ -2223,7 +2223,7 @@ mod tests {
     fn test_primitive_array_divide_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
-        let actual = divide_scalar(a.as_primitive(), 3).unwrap();
+        let actual = divide_scalar(&a, 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(3), Some(2), None]);
         assert_eq!(actual, expected);
     }
@@ -2246,12 +2246,11 @@ mod tests {
     fn test_int_array_modulus_scalar_sliced() {
         let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
         let a = a.slice(1, 4);
-        let a = a.as_primitive();
-        let actual = modulus_scalar(a, 3).unwrap();
+        let actual = modulus_scalar(&a, 3).unwrap();
         let expected = Int32Array::from(vec![None, Some(0), Some(2), None]);
         assert_eq!(actual, expected);
 
-        let actual = modulus_scalar_dyn::<Int32Type>(a, 3).unwrap();
+        let actual = modulus_scalar_dyn::<Int32Type>(&a, 3).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         let expected = Int32Array::from(vec![None, Some(0), Some(2), None]);
         assert_eq!(actual, &expected);

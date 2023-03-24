@@ -141,7 +141,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// // Make slice over the values [2, 3, 4]
     /// let array_slice = array.slice(1, 3);
     ///
-    /// assert_eq!(array_slice.as_ref(), &Int32Array::from(vec![2, 3, 4]));
+    /// assert_eq!(&array_slice, &Int32Array::from(vec![2, 3, 4]));
     /// ```
     fn slice(&self, offset: usize, length: usize) -> ArrayRef;
 

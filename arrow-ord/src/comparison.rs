@@ -2858,7 +2858,7 @@ mod tests {
             // slice and test if the dynamic array works
             let a = a.slice(0, a.len());
             let b = b.slice(0, b.len());
-            let c = $DYN_KERNEL(a.as_ref(), b.as_ref()).unwrap();
+            let c = $DYN_KERNEL(&a, &b).unwrap();
             assert_eq!(BooleanArray::from($EXPECTED), c);
 
             // test with a larger version of the same data to ensure we cover the chunked part of the comparison
@@ -2995,8 +2995,7 @@ mod tests {
     fn test_primitive_array_eq_scalar_with_slice() {
         let a = Int32Array::from(vec![Some(1), None, Some(2), Some(3)]);
         let a = a.slice(1, 3);
-        let a: &Int32Array = a.as_primitive();
-        let a_eq = eq_scalar(a, 2).unwrap();
+        let a_eq = eq_scalar(&a, 2).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![None, Some(true), Some(false)])

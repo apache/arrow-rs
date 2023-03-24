@@ -500,7 +500,6 @@ mod tests {
 
             for (a_offset, a_length) in a_slices {
                 let a = a.slice(a_offset, a_length);
-                let a = a.as_primitive::<Int32Type>();
 
                 for i in 1..65 {
                     let b_start_offset = rng.gen_range(0..i);
@@ -512,7 +511,7 @@ mod tests {
                     let b = b.slice(b_start_offset, a_length);
                     let b = b.as_boolean();
 
-                    test_nullif(a, b);
+                    test_nullif(&a, b);
                 }
             }
         }

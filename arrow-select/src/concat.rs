@@ -243,7 +243,7 @@ mod tests {
             None,
         ])
         .slice(1, 3);
-        let arr = concat(&[input_1.as_ref(), input_2.as_ref()]).unwrap();
+        let arr = concat(&[&input_1, &input_2]).unwrap();
 
         let expected_output = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
