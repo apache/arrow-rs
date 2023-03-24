@@ -31,6 +31,7 @@ use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use arrow_select::take::take;
+use half::f16;
 
 /// Helper function to perform boolean lambda function on values from two array accessors, this
 /// version does not attempt to use SIMD.
@@ -496,6 +497,11 @@ macro_rules! dyn_compare_scalar {
                 let right = try_to_type!($RIGHT, to_u64)?;
                 let left = as_primitive_array::<UInt64Type>($LEFT);
                 $OP::<UInt64Type>(left, right)
+            }
+            DataType::Float16 => {
+                let right = try_to_type!($RIGHT, to_f32)?;
+                let left = as_primitive_array::<Float16Type>($LEFT);
+                $OP::<Float16Type>(left, f16::from_f32(right))
             }
             DataType::Float32 => {
                 let right = try_to_type!($RIGHT, to_f32)?;
@@ -1524,6 +1530,9 @@ macro_rules! typed_cmp_dict_non_dict {
                 (DataType::UInt64, DataType::UInt64) => {
                     typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), UInt64Type, $OP_BOOL, $OP)
                 }
+                (DataType::Float16, DataType::Float16) => {
+                    typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Float16Type, $OP_BOOL, $OP_FLOAT)
+                }
                 (DataType::Float32, DataType::Float32) => {
                     typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Float32Type, $OP_BOOL, $OP_FLOAT)
                 }
@@ -1620,6 +1629,9 @@ macro_rules! typed_compares {
             }
             (DataType::UInt64, DataType::UInt64) => {
                 cmp_primitive_array::<UInt64Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Float16, DataType::Float16) => {
+                cmp_primitive_array::<Float16Type, _>($LEFT, $RIGHT, $OP_FLOAT)
             }
             (DataType::Float32, DataType::Float32) => {
                 cmp_primitive_array::<Float32Type, _>($LEFT, $RIGHT, $OP_FLOAT)
@@ -1771,6 +1783,9 @@ macro_rules! typed_dict_cmp {
             }
             (DataType::UInt64, DataType::UInt64) => {
                 cmp_dict::<$KT, UInt64Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Float16, DataType::Float16) => {
+                cmp_dict::<$KT, Float16Type, _>($LEFT, $RIGHT, $OP_FLOAT)
             }
             (DataType::Float32, DataType::Float32) => {
                 cmp_dict::<$KT, Float32Type, _>($LEFT, $RIGHT, $OP_FLOAT)
@@ -4988,6 +5003,30 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_neq_dyn_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float16Array = vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(eq(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(neq(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
             .map(Some)
@@ -5040,6 +5079,31 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_lt_eq_dyn_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float16Array = vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt_eq(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
             .into_iter()
             .map(Some)
@@ -5093,6 +5157,31 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_gt_eq_dyn_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float16Array = vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
+        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
+        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
             .into_iter()
             .map(Some)
@@ -5146,6 +5235,30 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_scalar_neq_dyn_scalar_float_nan() {
+        let array: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        #[cfg(feature = "simd")]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        #[cfg(not(feature = "simd"))]
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        #[cfg(feature = "simd")]
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
+        );
+        #[cfg(not(feature = "simd"))]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
         let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
             .map(Some)
@@ -5197,6 +5310,30 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_scalar_lt_eq_dyn_scalar_float_nan() {
+        let array: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        #[cfg(feature = "simd")]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        #[cfg(not(feature = "simd"))]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(lt_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+
+        #[cfg(feature = "simd")]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        #[cfg(not(feature = "simd"))]
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(lt_eq_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+
         let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
             .map(Some)
@@ -5248,6 +5385,25 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_scalar_gt_eq_dyn_scalar_float_nan() {
+        let array: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+
+        #[cfg(feature = "simd")]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        #[cfg(not(feature = "simd"))]
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_eq_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+
         let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
             .map(Some)
@@ -5502,6 +5658,25 @@ mod tests {
     #[test]
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dict_non_dict_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values =
+            Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(10.0)]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
             .map(Some)
@@ -5542,6 +5717,24 @@ mod tests {
     #[test]
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_lt_eq_dyn_dict_non_dict_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
             .into_iter()
             .map(Some)
@@ -5582,6 +5775,24 @@ mod tests {
     #[test]
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_gt_dyn_gt_eq_dyn_dict_non_dict_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
+        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
+        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
             .into_iter()
             .map(Some)

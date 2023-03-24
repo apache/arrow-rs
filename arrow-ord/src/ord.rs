@@ -173,6 +173,7 @@ pub fn build_compare(
         (Int16, Int16) => compare_primitives::<Int16Type>(left, right),
         (Int32, Int32) => compare_primitives::<Int32Type>(left, right),
         (Int64, Int64) => compare_primitives::<Int64Type>(left, right),
+        (Float16, Float16) => compare_primitives::<Float16Type>(left, right),
         (Float32, Float32) => compare_primitives::<Float32Type>(left, right),
         (Float64, Float64) => compare_primitives::<Float64Type>(left, right),
         (Decimal128(_, _), Decimal128(_, _)) => {
@@ -286,6 +287,7 @@ pub mod tests {
     use super::*;
     use arrow_array::{FixedSizeBinaryArray, Float64Array, Int32Array};
     use arrow_buffer::i256;
+    use half::f16;
     use std::cmp::Ordering;
 
     #[test]
@@ -327,6 +329,15 @@ pub mod tests {
         let cmp = build_compare(&array1, &array2).unwrap();
 
         assert_eq!(Ordering::Less, (cmp)(0, 0));
+    }
+
+    #[test]
+    fn test_f16() {
+        let array = Float16Array::from(vec![f16::from_f32(1.0), f16::from_f32(2.0)]);
+
+        let cmp = build_compare(&array, &array).unwrap();
+
+        assert_eq!(Ordering::Less, (cmp)(0, 1));
     }
 
     #[test]
