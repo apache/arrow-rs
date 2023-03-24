@@ -1218,12 +1218,9 @@ impl ArrayData {
                 let mask = BitChunks::new(mask, offset, child.len);
                 let nulls = BitChunks::new(nulls.validity(), nulls.offset(), child.len);
                 mask
-                    .iter()
-                    .zip(nulls.iter())
-                    .chain(std::iter::once((
-                        mask.remainder_bits(),
-                        nulls.remainder_bits(),
-                    ))).try_for_each(|(m, c)| {
+                    .iter_padded()
+                    .zip(nulls.iter_padded())
+                    .try_for_each(|(m, c)| {
                     if (m & !c) != 0 {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "non-nullable child of type {} contains nulls not present in parent",

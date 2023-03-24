@@ -37,7 +37,11 @@ impl StructArrayDecoder {
         let decoders = struct_fields(&data_type)
             .iter()
             .map(|f| {
-                make_decoder(f.data_type().clone(), coerce_primitive, f.is_nullable())
+                // If this struct nullable, need to permit nullability in child array
+                // StructArrayDecoder::decode verifies that if the child is not nullable
+                // it doesn't contain any nulls not masked by its parent
+                let nullable = f.is_nullable() || is_nullable;
+                make_decoder(f.data_type().clone(), coerce_primitive, nullable)
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
@@ -102,14 +106,30 @@ impl ArrayDecoder for StructArrayDecoder {
             .map(|(d, pos)| d.decode(tape, &pos))
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
-        // Sanity check
-        child_data
-            .iter()
-            .for_each(|x| assert_eq!(x.len(), pos.len()));
-
         let nulls = nulls
             .as_mut()
             .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
+
+        for (c, f) in child_data.iter().zip(fields) {
+            // Sanity check
+            assert_eq!(c.len(), pos.len());
+
+            if !f.is_nullable() && c.null_count() != 0 {
+                // Need to verify nulls
+                let valid = match nulls.as_ref() {
+                    Some(nulls) => {
+                        let lhs = nulls.inner().bit_chunks().iter_padded();
+                        let rhs = c.nulls().unwrap().inner().bit_chunks().iter_padded();
+                        lhs.zip(rhs).all(|(l, r)| (l & !r) == 0)
+                    }
+                    None => false,
+                };
+
+                if !valid {
+                    return Err(ArrowError::JsonError(format!("Encountered unmasked nulls in non-nullable StructArray child: {f}")));
+                }
+            }
+        }
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())

@@ -359,7 +359,7 @@ mod tests {
     use crate::ReaderBuilder;
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::Array;
+    use arrow_array::{Array, StructArray};
     use arrow_buffer::ArrowNativeType;
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_schema::{DataType, Field, Schema};
@@ -511,8 +511,8 @@ mod tests {
             Field::new(
                 "nested",
                 DataType::Struct(vec![
-                    Field::new("a", DataType::Int32, false),
-                    Field::new("b", DataType::Int32, false),
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
                 ]),
                 true,
             ),
@@ -591,7 +591,7 @@ mod tests {
                     "list2",
                     DataType::List(Box::new(Field::new(
                         "element",
-                        DataType::Struct(vec![Field::new("d", DataType::Int32, false)]),
+                        DataType::Struct(vec![Field::new("d", DataType::Int32, true)]),
                         false,
                     ))),
                     true,
@@ -1000,5 +1000,99 @@ mod tests {
         test_time::<Time32SecondType>();
         test_time::<Time64MicrosecondType>();
         test_time::<Time64NanosecondType>();
+    }
+
+    #[test]
+    fn test_delta_checkpoint() {
+        let json = "{\"protocol\":{\"minReaderVersion\":1,\"minWriterVersion\":2}}";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "protocol",
+                DataType::Struct(vec![
+                    Field::new("minReaderVersion", DataType::Int32, true),
+                    Field::new("minWriterVersion", DataType::Int32, true),
+                ]),
+                true,
+            ),
+            Field::new(
+                "add",
+                DataType::Struct(vec![Field::new(
+                    "partitionValues",
+                    DataType::Map(
+                        Box::new(Field::new(
+                            "key_value",
+                            DataType::Struct(vec![
+                                Field::new("key", DataType::Utf8, false),
+                                Field::new("value", DataType::Utf8, true),
+                            ]),
+                            false,
+                        )),
+                        false,
+                    ),
+                    false,
+                )]),
+                true,
+            ),
+        ]));
+
+        let batches = do_read(json, 1024, true, schema);
+        assert_eq!(batches.len(), 1);
+
+        let s: StructArray = batches.into_iter().next().unwrap().into();
+        let opts = FormatOptions::default().with_null("null");
+        let formatter = ArrayFormatter::try_new(&s, &opts).unwrap();
+        assert_eq!(
+            formatter.value(0).to_string(),
+            "{protocol: {minReaderVersion: 1, minWriterVersion: 2}, add: null}"
+        );
+    }
+
+    #[test]
+    fn struct_nullability() {
+        let do_test = |child: DataType| {
+            // Test correctly enforced nullability
+            let non_null = r#"{"foo": {}}"#;
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "foo",
+                DataType::Struct(vec![Field::new("bar", child, false)]),
+                true,
+            )]));
+            let mut reader = RawReaderBuilder::new(schema.clone())
+                .build(Cursor::new(non_null.as_bytes()))
+                .unwrap();
+            assert!(reader.next().unwrap().is_err()); // Should error as not nullable
+
+            let null = r#"{"foo": {bar: null}}"#;
+            let mut reader = RawReaderBuilder::new(schema.clone())
+                .build(Cursor::new(null.as_bytes()))
+                .unwrap();
+            assert!(reader.next().unwrap().is_err()); // Should error as not nullable
+
+            // Test nulls in nullable parent can mask nulls in non-nullable child
+            let null = r#"{"foo": null}"#;
+            let mut reader = RawReaderBuilder::new(schema)
+                .build(Cursor::new(null.as_bytes()))
+                .unwrap();
+            let batch = reader.next().unwrap().unwrap();
+            assert_eq!(batch.num_columns(), 1);
+            let foo = batch.column(0).as_struct();
+            assert_eq!(foo.len(), 1);
+            assert!(foo.is_null(0));
+            assert_eq!(foo.num_columns(), 1);
+
+            let bar = foo.column(0);
+            assert_eq!(bar.len(), 1);
+            // Non-nullable child can still contain null as masked by parent
+            assert!(bar.is_null(0));
+        };
+
+        do_test(DataType::Boolean);
+        do_test(DataType::Int32);
+        do_test(DataType::Utf8);
+        do_test(DataType::Decimal128(2, 1));
+        do_test(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some("+00:00".to_string()),
+        ));
     }
 }

@@ -29,16 +29,9 @@ pub(super) fn equal_bits(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    let lhs = BitChunks::new(lhs_values, lhs_start, len);
-    let rhs = BitChunks::new(rhs_values, rhs_start, len);
-
-    for (a, b) in lhs.iter().zip(rhs.iter()) {
-        if a != b {
-            return false;
-        }
-    }
-
-    lhs.remainder_bits() == rhs.remainder_bits()
+    let lhs = BitChunks::new(lhs_values, lhs_start, len).iter_padded();
+    let rhs = BitChunks::new(rhs_values, rhs_start, len).iter_padded();
+    lhs.zip(rhs).all(|(a, b)| a == b)
 }
 
 #[inline]
