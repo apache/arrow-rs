@@ -73,7 +73,7 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Run gen
         run: ./arrow-flight/regen.sh
-      - name: Verify workspace clean
+      - name: Verify workspace clean (if this fails, run ./arrow-flight/regen.sh and check in results)
         run: git diff --exit-code
 
   clippy:
