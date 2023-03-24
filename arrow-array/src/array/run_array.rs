@@ -67,6 +67,16 @@ pub struct RunArray<R: RunEndIndexType> {
     values: ArrayRef,
 }
 
+impl<R: RunEndIndexType> Clone for RunArray<R> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            run_ends: self.run_ends.clone(),
+            values: self.values.clone(),
+        }
+    }
+}
+
 impl<R: RunEndIndexType> RunArray<R> {
     /// Calculates the logical length of the array encoded
     /// by the given run_ends array.
