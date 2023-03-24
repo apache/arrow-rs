@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::{get_offsets, print_long_array};
-use crate::{make_array, Array, ArrayRef, StringArray, StructArray};
+use crate::{make_array, Array, ArrayRef, StringArray, StructArray, ListArray};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
@@ -248,6 +248,69 @@ impl std::fmt::Debug for MapArray {
             std::fmt::Debug::fmt(&array.value(index), f)
         })?;
         write!(f, "]")
+    }
+}
+
+impl TryFrom<&ListArray> for MapArray {
+    type Error = ArrowError;
+    fn try_from(value: &ListArray) -> Result<Self, Self::Error> {
+        let field = match value.data_type() {
+            DataType::List(field) => {
+                if let DataType::Struct(fields) = field.data_type() {
+                    if fields.len() != 2 {
+                        Err(ArrowError::InvalidArgumentError(
+                            "List item must be a struct type with two fields".to_string(),
+                        ))
+                    } else {
+                        Ok(field)
+                    }
+                } else {
+                    Err(ArrowError::InvalidArgumentError(
+                        "List item must be a struct type to convert to a list"
+                            .to_string(),
+                    ))
+                }
+            }
+            _ => unreachable!("This should be a list type."),
+        }?;
+        let old_data = value.to_data();
+        let array_data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Map(field.clone(), false),
+                old_data.len(),
+                Some(old_data.null_count()),
+                old_data.nulls().map(|nulls|nulls.buffer().clone()),
+                old_data.offset(),
+                old_data.buffers().to_vec(),
+                old_data.child_data().to_vec(),
+            )
+        };
+        Ok(MapArray::from(array_data))
+    }
+}
+
+impl From<&MapArray> for ListArray {
+    fn from(value: &MapArray) -> Self {
+        let field = match value.data_type() {
+            DataType::Map(field, _) => {
+                field
+            },
+            _ => unreachable!("This should be a map type.")
+        };
+
+        let old_data = value.to_data();
+        let array_data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::List(field.clone()),
+                old_data.len(),
+                Some(old_data.null_count()),
+                old_data.nulls().map(|nulls|nulls.buffer().clone()),
+                old_data.offset(),
+                old_data.buffers().to_vec(),
+                old_data.child_data().to_vec(),
+            )
+        };
+        ListArray::from(array_data)
     }
 }
 
