@@ -3796,14 +3796,13 @@ mod tests {
             vec![Some("hi"), None, Some("hello"), Some("world"), Some("")],
         );
         let a = a.slice(1, 4);
-        let a = a.as_string::<i32>();
-        let a_eq = eq_utf8_scalar(a, "hello").unwrap();
+        let a_eq = eq_utf8_scalar(&a, "hello").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![None, Some(true), Some(false), Some(false)])
         );
 
-        let a_eq2 = eq_utf8_scalar(a, "").unwrap();
+        let a_eq2 = eq_utf8_scalar(&a, "").unwrap();
 
         assert_eq!(
             a_eq2,

@@ -1264,13 +1264,12 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = sliced_input.as_string::<i32>();
 
-        assert_eq!(sliced_input, &input);
+        assert_eq!(&sliced_input, &input);
 
-        let actual = min_string(sliced_input);
+        let actual = min_string(&sliced_input);
         assert_eq!(actual, expected);
-        let actual = max_string(sliced_input);
+        let actual = max_string(&sliced_input);
         assert_eq!(actual, expected);
     }
 
@@ -1287,13 +1286,12 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = sliced_input.as_binary::<i32>();
 
-        assert_eq!(sliced_input, &input);
+        assert_eq!(&sliced_input, &input);
 
-        let actual = min_binary(sliced_input);
+        let actual = min_binary(&sliced_input);
         assert_eq!(actual, expected);
-        let actual = max_binary(sliced_input);
+        let actual = max_binary(&sliced_input);
         assert_eq!(actual, expected);
     }
 

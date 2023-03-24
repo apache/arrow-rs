@@ -426,8 +426,7 @@ mod tests {
         let input_1 = StringArray::from(vec!["hello", "A", "B", "C"]);
         let input_2 = StringArray::from(vec!["world", "D", "E", "Z"]);
 
-        let arr = concat(&[input_1.slice(1, 3).as_ref(), input_2.slice(1, 2).as_ref()])
-            .unwrap();
+        let arr = concat(&[&input_1.slice(1, 3), &input_2.slice(1, 2)]).unwrap();
 
         let expected_output = StringArray::from(vec!["A", "B", "C", "D", "E"]);
 
@@ -440,8 +439,7 @@ mod tests {
         let input_1 = StringArray::from(vec![Some("hello"), None, Some("A"), Some("C")]);
         let input_2 = StringArray::from(vec![None, Some("world"), Some("D"), None]);
 
-        let arr = concat(&[input_1.slice(1, 3).as_ref(), input_2.slice(1, 2).as_ref()])
-            .unwrap();
+        let arr = concat(&[&input_1.slice(1, 3), &input_2.slice(1, 2)]).unwrap();
 
         let expected_output =
             StringArray::from(vec![None, Some("A"), Some("C"), Some("world"), Some("D")]);
