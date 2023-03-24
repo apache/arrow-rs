@@ -19,12 +19,14 @@
 
 # Changelog
 
-## [36.0.0](https://github.com/apache/arrow-rs/tree/36.0.0) (2023-03-23)
+## [36.0.0](https://github.com/apache/arrow-rs/tree/36.0.0) (2023-03-24)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/35.0.0...36.0.0)
 
 **Breaking changes:**
 
+- Use dyn Array in sort kernels [\#3931](https://github.com/apache/arrow-rs/pull/3931) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Enforce struct nullability in JSON raw reader \(\#3900\) \(\#3904\) [\#3906](https://github.com/apache/arrow-rs/pull/3906) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Return ScalarBuffer from PrimitiveArray::values \(\#3879\) [\#3896](https://github.com/apache/arrow-rs/pull/3896) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Use BooleanBuffer in BooleanArray \(\#3879\) [\#3895](https://github.com/apache/arrow-rs/pull/3895) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Seal ArrowPrimitiveType [\#3882](https://github.com/apache/arrow-rs/pull/3882) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
@@ -32,26 +34,37 @@
 
 **Implemented enhancements:**
 
-- Implement `ObjectStore` for trait objects [\#3865](https://github.com/apache/arrow-rs/issues/3865)
-- Add compression options \(levels\) [\#3844](https://github.com/apache/arrow-rs/issues/3844)
+- Improve speed of parsing string to Times [\#3919](https://github.com/apache/arrow-rs/issues/3919) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- feat: add comparison/sort support for Float16 [\#3914](https://github.com/apache/arrow-rs/issues/3914)
+- Pinned version in arrow-flight's build-dependencies are causing conflicts [\#3876](https://github.com/apache/arrow-rs/issues/3876)
+- Add compression options \(levels\) [\#3844](https://github.com/apache/arrow-rs/issues/3844) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Use Unsigned Integer for Fixed Size DataType [\#3815](https://github.com/apache/arrow-rs/issues/3815)
-- Add ObjectStore::append [\#3790](https://github.com/apache/arrow-rs/issues/3790)
 - Common trait for RecordBatch and StructArray [\#3764](https://github.com/apache/arrow-rs/issues/3764) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Support for Async JSON Writer [\#3742](https://github.com/apache/arrow-rs/issues/3742)
-- Support for Async CSV Writer [\#3740](https://github.com/apache/arrow-rs/issues/3740)
-- Allow precision loss on multiplying decimal arrays [\#3689](https://github.com/apache/arrow-rs/issues/3689)
+- Allow precision loss on multiplying decimal arrays [\#3689](https://github.com/apache/arrow-rs/issues/3689) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
-- parquet\_derive doesn't support Vec\<u8\> [\#3864](https://github.com/apache/arrow-rs/issues/3864)
-- \[REGRESSION\] Parsing timestamps with lower case time separator [\#3863](https://github.com/apache/arrow-rs/issues/3863)
-- \[REGRESSION\] Parsing timestamps with leap seconds [\#3861](https://github.com/apache/arrow-rs/issues/3861)
-- \[REGRESSION\] Parsing timestamps with fractional seconds / microseconds / milliseconds / nanoseconds [\#3859](https://github.com/apache/arrow-rs/issues/3859)
+- Raw JSON Reader Allows Non-Nullable Struct Children to Contain Nulls [\#3904](https://github.com/apache/arrow-rs/issues/3904)
+- Nullable field with nested not nullable map in json [\#3900](https://github.com/apache/arrow-rs/issues/3900)
+- parquet\_derive doesn't support Vec\<u8\> [\#3864](https://github.com/apache/arrow-rs/issues/3864) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[REGRESSION\] Parsing timestamps with lower case time separator [\#3863](https://github.com/apache/arrow-rs/issues/3863) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[REGRESSION\] Parsing timestamps with leap seconds [\#3861](https://github.com/apache/arrow-rs/issues/3861) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[REGRESSION\] Parsing timestamps with fractional seconds / microseconds / milliseconds / nanoseconds [\#3859](https://github.com/apache/arrow-rs/issues/3859) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- CSV Reader Doesn't set Timezone [\#3841](https://github.com/apache/arrow-rs/issues/3841)
 - PyArrowConvert Leaks Memory [\#3683](https://github.com/apache/arrow-rs/issues/3683) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Merged pull requests:**
 
+- Derive RunArray Clone [\#3932](https://github.com/apache/arrow-rs/pull/3932) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Move protoc generation to binary crate, unpin prost/tonic build \(\#3876\) [\#3927](https://github.com/apache/arrow-rs/pull/3927) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([tustvold](https://github.com/tustvold))
+- Fix JSON Temporal Encoding of Multiple Batches [\#3924](https://github.com/apache/arrow-rs/pull/3924) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([doki23](https://github.com/doki23))
+- Cleanup uses of Array::data\_ref \(\#3880\) [\#3918](https://github.com/apache/arrow-rs/pull/3918) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Support microsecond and nanosecond in interval parsing [\#3916](https://github.com/apache/arrow-rs/pull/3916) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- feat: add comparison/sort support for Float16 [\#3915](https://github.com/apache/arrow-rs/pull/3915) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([izveigor](https://github.com/izveigor))
+- Add AsArray trait for more ergonomic downcasting [\#3912](https://github.com/apache/arrow-rs/pull/3912) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Add OffsetBuffer::new [\#3910](https://github.com/apache/arrow-rs/pull/3910) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Add PrimitiveArray::new \(\#3879\) [\#3909](https://github.com/apache/arrow-rs/pull/3909) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Support timezones in CSV reader \(\#3841\) [\#3908](https://github.com/apache/arrow-rs/pull/3908) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Improve ScalarBuffer debug output [\#3907](https://github.com/apache/arrow-rs/pull/3907) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Update proc-macro2 requirement from =1.0.52 to =1.0.53 [\#3905](https://github.com/apache/arrow-rs/pull/3905) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([dependabot[bot]](https://github.com/apps/dependabot))
 - Re-export parquet compression level structs [\#3903](https://github.com/apache/arrow-rs/pull/3903) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
