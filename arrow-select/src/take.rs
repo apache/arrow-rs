@@ -151,9 +151,10 @@ where
             )?))
         }
         DataType::Map(_, _) => {
-            let list_arr = ListArray::from(values.as_map());
+            let list_arr = ListArray::from(values.as_map().clone());
             let list_data = take_list::<_, Int32Type>(&list_arr, indices)?;
-            Ok(Arc::new(MapArray::try_from(&list_data)?))
+            let builder = list_data.into_data().into_builder().data_type(values.data_type().clone());
+            Ok(Arc::new(MapArray::from(unsafe { builder.build_unchecked() })))
         }
         DataType::Struct(fields) => {
             let struct_: &StructArray =
