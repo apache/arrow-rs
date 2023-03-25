@@ -613,7 +613,6 @@ pub fn parse_decimal<T: DecimalType>(
     precision: u8,
     scale: i8,
 ) -> Result<T::Native, ArrowError> {
-    let mut seen_dot = false;
     let mut result = T::Native::usize_as(0);
     let mut fractionals = 0;
     let mut digits = 0;
@@ -626,24 +625,15 @@ pub fn parse_decimal<T: DecimalType>(
         _ => (bs, false),
     };
 
+    let mut bs = bs.iter();
     // Overflow checks are not required if 10^(precision - 1) <= T::MAX holds.
     // Thus, if we validate the precision correctly, we can skip overflow checks.
-    let mut bs = bs.iter();
     while let Some(b) = bs.next() {
         match b {
             b'0'..=b'9' => {
-                if seen_dot {
-                    if fractionals == scale {
-                        // We have processed and validated the whole part of our decimal (including sign and dot).
-                        // All that is left is to validate the fractional part.
-                        if bs.any(|b| !b.is_ascii_digit()) {
-                            return Err(ArrowError::ParseError(format!(
-                                "can't parse the string value {s} to decimal"
-                            )));
-                        }
-                        break;
-                    }
-                    fractionals += 1;
+                if digits == 0 && *b == b'0' {
+                    // Ignore leading zeros.
+                    continue;
                 }
                 digits += 1;
                 if digits > precision {
@@ -655,12 +645,24 @@ pub fn parse_decimal<T: DecimalType>(
                 result = result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
             }
             b'.' => {
-                if seen_dot {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't parse the string value {s} to decimal"
-                    )));
+                for b in bs.by_ref() {
+                    if !b.is_ascii_digit() {
+                        return Err(ArrowError::ParseError(format!(
+                            "can't parse the string value {s} to decimal"
+                        )));
+                    }
+                    if fractionals == scale {
+                        // We have processed all the digits that we need. All that
+                        // is left is to validate that the rest of the string contains
+                        // valid digits.
+                        continue;
+                    }
+                    fractionals += 1;
+                    digits += 1;
+                    result = result.mul_wrapping(base);
+                    result =
+                        result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
                 }
-                seen_dot = true;
             }
             _ => {
                 return Err(ArrowError::ParseError(format!(
