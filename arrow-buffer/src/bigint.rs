@@ -410,12 +410,6 @@ impl i256 {
     pub const fn is_negative(self) -> bool {
         self.high.is_negative()
     }
-
-    /// Returns `true` if this [`i256`] is positive
-    #[inline]
-    pub const fn is_positive(self) -> bool {
-        self.high.is_positive()
-    }
 }
 
 /// Temporary workaround due to lack of stable const array slicing
