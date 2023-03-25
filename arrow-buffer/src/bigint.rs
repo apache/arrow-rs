@@ -407,8 +407,14 @@ impl i256 {
 
     /// Returns `true` if this [`i256`] is negative
     #[inline]
-    pub fn is_negative(self) -> bool {
+    pub const fn is_negative(self) -> bool {
         self.high.is_negative()
+    }
+
+    /// Returns `true` if this [`i256`] is positive
+    #[inline]
+    pub const fn is_positive(self) -> bool {
+        self.high.is_positive()
     }
 }
 
