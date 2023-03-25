@@ -636,11 +636,6 @@ pub fn parse_decimal<T: DecimalType>(
                     continue;
                 }
                 digits += 1;
-                if digits > precision {
-                    return Err(ArrowError::ParseError(
-                        "parse decimal overflow".to_string(),
-                    ));
-                }
                 result = result.mul_wrapping(base);
                 result = result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
             }
@@ -685,6 +680,8 @@ pub fn parse_decimal<T: DecimalType>(
         }
         let mul = base.pow_wrapping(exp as _);
         result = result.mul_wrapping(mul);
+    } else if digits > precision {
+        return Err(ArrowError::ParseError("parse decimal overflow".to_string()));
     }
 
     Ok(if negative {
