@@ -614,14 +614,21 @@ pub fn parse_decimal<T: DecimalType>(
     scale: i8,
 ) -> Result<T::Native, ArrowError> {
     let mut seen_dot = false;
-    let mut seen_sign = false;
-    let mut negative = false;
-
     let mut result = T::Native::usize_as(0);
     let mut fractionals = 0;
     let mut digits = 0;
     let base = T::Native::usize_as(10);
-    let mut bs = s.as_bytes().iter();
+
+    let bs = s.as_bytes();
+    let (bs, negative) = match bs.first() {
+        Some(b'-') => (&bs[1..], true),
+        Some(b'+') => (&bs[1..], false),
+        _ => (bs, false),
+    };
+
+    // Overflow checks are not required if 10^(precision - 1) <= T::MAX holds.
+    // Thus, if we validate the precision correctly, we can skip overflow checks.
+    let mut bs = bs.iter();
     while let Some(b) = bs.next() {
         match b {
             b'0'..=b'9' => {
@@ -644,8 +651,8 @@ pub fn parse_decimal<T: DecimalType>(
                         "parse decimal overflow".to_string(),
                     ));
                 }
-                result = result.mul_checked(base)?;
-                result = result.add_checked(T::Native::usize_as((b - b'0') as usize))?;
+                result = result.mul_wrapping(base);
+                result = result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
             }
             b'.' => {
                 if seen_dot {
@@ -654,23 +661,6 @@ pub fn parse_decimal<T: DecimalType>(
                     )));
                 }
                 seen_dot = true;
-            }
-            b'-' => {
-                if seen_sign || digits > 0 || seen_dot {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't parse the string value {s} to decimal"
-                    )));
-                }
-                seen_sign = true;
-                negative = true;
-            }
-            b'+' => {
-                if seen_sign || digits > 0 || seen_dot {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't parse the string value {s} to decimal"
-                    )));
-                }
-                seen_sign = true;
             }
             _ => {
                 return Err(ArrowError::ParseError(format!(
@@ -691,12 +681,12 @@ pub fn parse_decimal<T: DecimalType>(
         if exp as u8 + digits > precision {
             return Err(ArrowError::ParseError("parse decimal overflow".to_string()));
         }
-        let mul = base.pow_checked(exp as _)?;
-        result = result.mul_checked(mul)?;
+        let mul = base.pow_wrapping(exp as _);
+        result = result.mul_wrapping(mul);
     }
 
     Ok(if negative {
-        result.neg_checked()?
+        result.neg_wrapping()
     } else {
         result
     })
