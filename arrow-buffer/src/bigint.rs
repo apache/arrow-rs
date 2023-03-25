@@ -244,7 +244,8 @@ impl i256 {
     #[inline]
     pub fn checked_add(self, other: Self) -> Option<Self> {
         let r = self.wrapping_add(other);
-        ((other.is_neg() && r < self) || (!other.is_neg() && r >= self)).then_some(r)
+        ((other.is_negative() && r < self) || (!other.is_negative() && r >= self))
+            .then_some(r)
     }
 
     /// Performs wrapping subtraction
@@ -259,7 +260,8 @@ impl i256 {
     #[inline]
     pub fn checked_sub(self, other: Self) -> Option<Self> {
         let r = self.wrapping_sub(other);
-        ((other.is_neg() && r > self) || (!other.is_neg() && r <= self)).then_some(r)
+        ((other.is_negative() && r > self) || (!other.is_negative() && r <= self))
+            .then_some(r)
     }
 
     /// Performs wrapping multiplication
@@ -312,7 +314,8 @@ impl i256 {
         let high = (high ^ out_sa).wrapping_sub(out_sa).wrapping_sub(c as u128) as i128;
 
         // Check for overflow in final conversion
-        ((high < 0) == ((self.high < 0) ^ (other.high < 0))).then_some(Self { low, high })
+        (high.is_negative() == (self.is_negative() ^ other.is_negative()))
+            .then_some(Self { low, high })
     }
 
     /// Performs wrapping division
@@ -404,8 +407,8 @@ impl i256 {
 
     /// Returns `true` if this [`i256`] is negative
     #[inline]
-    pub fn is_neg(self) -> bool {
-        self.high < 0
+    pub fn is_negative(self) -> bool {
+        self.high.is_negative()
     }
 }
 
