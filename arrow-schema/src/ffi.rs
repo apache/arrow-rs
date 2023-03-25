@@ -162,11 +162,11 @@ impl FFI_ArrowSchema {
         metadata: Option<&HashMap<String, String>>,
     ) -> Result<Self, ArrowError> {
         let new_metadata = if let Some(metadata) = metadata {
-            if metadata.len() > 0 {
+            if !metadata.is_empty() {
                 let mut metadata_serialized: Vec<u8> = Vec::new();
                 metadata_serialized.extend((metadata.len() as i32).to_ne_bytes());
 
-                for (key, value) in metadata.into_iter() {
+                for (key, value) in metadata.iter() {
                     let key_len = key.len() as i32;
                     let value_len = value.len() as i32;
 
