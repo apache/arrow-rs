@@ -38,7 +38,6 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
-use std::hash::Hasher;
 use std::ops::Range;
 use url::Url;
 
@@ -486,18 +485,11 @@ impl TryFrom<Blob> for ObjectMeta {
     type Error = crate::Error;
 
     fn try_from(value: Blob) -> Result<Self> {
-        let last_modified = value.properties.last_modified;
-
-        let nanos = last_modified.clone().timestamp_nanos();
-        let mut hasher = ahash::AHasher::default();
-        hasher.write_i64(nanos);
-        let e_tag = hasher.finish().to_string();
-
         Ok(Self {
             location: Path::parse(value.name)?,
-            last_modified,
+            last_modified: value.properties.last_modified,
             size: value.properties.content_length as usize,
-            e_tag,
+            e_tag: value.properties.e_tag,
         })
     }
 }
@@ -519,6 +511,8 @@ struct BlobProperties {
     pub content_encoding: Option<String>,
     #[serde(rename = "Content-Language")]
     pub content_language: Option<String>,
+    #[serde(rename = "ETag")]
+    pub e_tag: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

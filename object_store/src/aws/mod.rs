@@ -40,7 +40,6 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
-use std::hash::Hasher;
 use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -233,7 +232,7 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        use reqwest::header::{CONTENT_LENGTH, LAST_MODIFIED};
+        use reqwest::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 
         // Extract meta from headers
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html#API_HeadObject_ResponseSyntax
@@ -258,10 +257,9 @@ impl ObjectStore for AmazonS3 {
             .parse()
             .context(InvalidContentLengthSnafu { content_length })?;
 
-        let nanos = last_modified.clone().timestamp_nanos();
-        let mut hasher = ahash::AHasher::default();
-        hasher.write_i64(nanos);
-        let e_tag = hasher.finish().to_string();
+        let e_tag = headers.get(ETAG).context(MissingEtagSnafu)?;
+        let e_tag = e_tag.to_str().context(BadHeaderSnafu)?;
+        let e_tag = e_tag.to_string();
 
         Ok(ObjectMeta {
             location: location.clone(),

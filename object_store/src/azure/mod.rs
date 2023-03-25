@@ -44,7 +44,6 @@ use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::fmt::{Debug, Formatter};
-use std::hash::Hasher;
 use std::io;
 use std::ops::Range;
 use std::sync::Arc;
@@ -141,6 +140,9 @@ enum Error {
 
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
+
+    #[snafu(display("ETag Header missing from response"))]
+    MissingEtag,
 }
 
 impl From<Error> for super::Error {
@@ -233,7 +235,7 @@ impl ObjectStore for MicrosoftAzure {
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        use reqwest::header::{CONTENT_LENGTH, LAST_MODIFIED};
+        use reqwest::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 
         // Extract meta from headers
         // https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
@@ -258,10 +260,12 @@ impl ObjectStore for MicrosoftAzure {
             .parse()
             .context(InvalidContentLengthSnafu { content_length })?;
 
-        let nanos = last_modified.clone().timestamp_nanos();
-        let mut hasher = ahash::AHasher::default();
-        hasher.write_i64(nanos);
-        let e_tag = hasher.finish().to_string();
+        let e_tag = headers
+            .get(ETAG)
+            .ok_or(Error::MissingEtag)?
+            .to_str()
+            .context(BadHeaderSnafu)?;
+        let e_tag = e_tag.to_string();
 
         Ok(ObjectMeta {
             location: location.clone(),

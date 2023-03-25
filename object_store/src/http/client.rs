@@ -26,7 +26,6 @@ use reqwest::header::{CONTENT_TYPE, RANGE};
 use reqwest::{Method, Response, StatusCode};
 use serde::Deserialize;
 use snafu::{OptionExt, ResultExt, Snafu};
-use std::hash::Hasher;
 use std::ops::Range;
 use url::Url;
 
@@ -338,10 +337,7 @@ impl MultiStatusResponse {
     pub fn object_meta(&self, base_url: &Url) -> Result<ObjectMeta> {
         let last_modified = self.prop_stat.prop.last_modified;
 
-        let nanos = last_modified.clone().timestamp_nanos();
-        let mut hasher = ahash::AHasher::default();
-        hasher.write_i64(nanos);
-        let e_tag = hasher.finish().to_string();
+        let e_tag = self.prop_stat.prop.e_tag.clone();
 
         Ok(ObjectMeta {
             location: self.path(base_url)?,
@@ -373,6 +369,9 @@ pub struct Prop {
 
     #[serde(rename = "resourcetype")]
     resource_type: ResourceType,
+
+    #[serde(rename = "ETag")]
+    e_tag: String,
 }
 
 #[derive(Deserialize)]
