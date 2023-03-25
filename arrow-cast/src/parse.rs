@@ -658,6 +658,13 @@ pub fn parse_decimal<T: DecimalType>(
                     result =
                         result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
                 }
+
+                // Fail on "."
+                if digits == 0 {
+                    return Err(ArrowError::ParseError(format!(
+                        "can't parse the string value {s} to decimal"
+                    )));
+                }
             }
             _ => {
                 return Err(ArrowError::ParseError(format!(
@@ -665,12 +672,6 @@ pub fn parse_decimal<T: DecimalType>(
                 )));
             }
         }
-    }
-    // Fail on "."
-    if digits == 0 {
-        return Err(ArrowError::ParseError(format!(
-            "can't parse the string value {s} to decimal"
-        )));
     }
 
     if fractionals < scale {
@@ -1633,6 +1634,7 @@ mod tests {
     #[test]
     fn test_parse_decimal_with_parameter() {
         let tests = [
+            ("0", 0i128),
             ("123.123", 123123i128),
             ("123.1234", 123123i128),
             ("123.1", 123100i128),
