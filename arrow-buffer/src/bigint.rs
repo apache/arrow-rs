@@ -16,9 +16,28 @@
 // under the License.
 
 use num::cast::AsPrimitive;
-use num::{BigInt, FromPrimitive, Num, ToPrimitive};
+use num::{BigInt, FromPrimitive, ToPrimitive};
 use std::cmp::Ordering;
-use std::ops::{BitAnd, BitOr, BitXor, Shl, Shr};
+use std::num::ParseIntError;
+use std::ops::{BitAnd, BitOr, BitXor, Neg, Shl, Shr};
+use std::str::FromStr;
+
+/// An opaque error similar to [`std::num::ParseIntError`]
+#[derive(Debug)]
+pub struct ParseI256Error {}
+
+impl From<ParseIntError> for ParseI256Error {
+    fn from(_: ParseIntError) -> Self {
+        Self {}
+    }
+}
+
+impl std::fmt::Display for ParseI256Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to parse as i256")
+    }
+}
+impl std::error::Error for ParseI256Error {}
 
 /// A signed 256-bit integer
 #[allow(non_camel_case_types)]
@@ -38,6 +57,66 @@ impl std::fmt::Display for i256 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", BigInt::from_signed_bytes_le(&self.to_le_bytes()))
     }
+}
+
+impl FromStr for i256 {
+    type Err = ParseI256Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // i128 can store up to 38 decimal digits
+        if s.len() <= 38 {
+            return Ok(Self::from_i128(i128::from_str(s)?));
+        }
+
+        let (negative, s) = match s.as_bytes()[0] {
+            b'-' => (true, &s[1..]),
+            b'+' => (false, &s[1..]),
+            _ => (false, s),
+        };
+
+        // Trim leading 0s
+        let s = s.trim_start_matches('0');
+        if s.is_empty() {
+            return Ok(i256::ZERO);
+        }
+
+        if !s.as_bytes()[0].is_ascii_digit() {
+            // Ensures no duplicate sign
+            return Err(ParseI256Error {});
+        }
+
+        parse_impl(s, negative)
+    }
+}
+
+/// Parse `s` with any sign and leading 0s removed
+fn parse_impl(s: &str, negative: bool) -> Result<i256, ParseI256Error> {
+    if s.len() <= 38 {
+        let low = i128::from_str(s)?;
+        return Ok(match negative {
+            true => i256::from_parts(low.neg() as _, -1),
+            false => i256::from_parts(low as _, 0),
+        });
+    }
+
+    let split = s.len() - 38;
+    if !s.as_bytes()[split].is_ascii_digit() {
+        // Ensures not splitting codepoint and no sign
+        return Err(ParseI256Error {});
+    }
+    let (hs, ls) = s.split_at(split);
+
+    let mut low = i128::from_str(ls)?;
+    let high = parse_impl(hs, negative)?;
+
+    if negative {
+        low = -low;
+    }
+
+    let high = high * i256::from_i128(10_i128.pow(38));
+    let low = i256::from_i128(low);
+
+    high.checked_add(low).ok_or(ParseI256Error {})
 }
 
 impl PartialOrd for i256 {
@@ -106,14 +185,7 @@ impl i256 {
     /// Create an integer value from its representation as string.
     #[inline]
     pub fn from_string(value_str: &str) -> Option<Self> {
-        let numbers = BigInt::from_str_radix(value_str, 10).ok()?;
-        let (integer, overflow) = Self::from_bigint_with_overflow(numbers);
-
-        if overflow {
-            None
-        } else {
-            Some(integer)
-        }
+        value_str.parse().ok()
     }
 
     /// Create an optional i256 from the provided `f64`. Returning `None`
@@ -890,5 +962,53 @@ mod tests {
         let a = i256::from_i128(i64::MIN as i128 - 1);
         assert!(a.to_i64().is_none());
         assert!(a.to_u64().is_none());
+    }
+
+    #[test]
+    fn test_string_roundtrip() {
+        let roundtrip_cases = [
+            i256::ZERO,
+            i256::ONE,
+            i256::MINUS_ONE,
+            i256::from_i128(123456789),
+            i256::from_i128(-123456789),
+            i256::from_i128(i128::MIN),
+            i256::from_i128(i128::MAX),
+            i256::MIN,
+            i256::MAX,
+        ];
+        for case in roundtrip_cases {
+            let formatted = case.to_string();
+            let back: i256 = formatted.parse().unwrap();
+            assert_eq!(case, back);
+        }
+    }
+
+    #[test]
+    fn test_from_string() {
+        let cases = [
+            (
+                "000000000000000000000000000000000000000011",
+                Some(i256::from_i128(11)),
+            ),
+            (
+                "-000000000000000000000000000000000000000011",
+                Some(i256::from_i128(-11)),
+            ),
+            (
+                "-0000000000000000000000000000000000000000123456789",
+                Some(i256::from_i128(-123456789)),
+            ),
+            ("-", None),
+            ("+", None),
+            ("--1", None),
+            ("-+1", None),
+            ("000000000000000000000000000000000000000", Some(i256::ZERO)),
+            ("0000000000000000000000000000000000000000-11", None),
+            ("11-1111111111111111111111111111111111111", None),
+        ];
+        for (case, expected) in cases {
+            assert_eq!(i256::from_string(case), expected)
+        }
     }
 }
