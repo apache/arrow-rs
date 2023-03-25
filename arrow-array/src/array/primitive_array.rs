@@ -996,6 +996,7 @@ def_numeric_from_vec!(UInt8Type);
 def_numeric_from_vec!(UInt16Type);
 def_numeric_from_vec!(UInt32Type);
 def_numeric_from_vec!(UInt64Type);
+def_numeric_from_vec!(Float16Type);
 def_numeric_from_vec!(Float32Type);
 def_numeric_from_vec!(Float64Type);
 def_numeric_from_vec!(Decimal128Type);

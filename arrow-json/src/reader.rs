@@ -1844,10 +1844,7 @@ impl<R: Read> Iterator for Reader<R> {
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use arrow_array::cast::{
-        as_boolean_array, as_dictionary_array, as_primitive_array, as_string_array,
-        as_struct_array,
-    };
+    use arrow_array::cast::AsArray;
     use arrow_buffer::{ArrowNativeType, ToByteSlice};
     use arrow_schema::DataType::{Dictionary, List};
     use flate2::read::GzDecoder;
@@ -1862,7 +1859,7 @@ mod tests {
             .unwrap();
         let batch = reader.next().unwrap().unwrap();
 
-        assert_eq!(6, batch.num_columns());
+        assert_eq!(7, batch.num_columns());
         assert_eq!(12, batch.num_rows());
 
         let schema = reader.schema();
@@ -2133,20 +2130,12 @@ mod tests {
         let d = schema.column_with_name("d").unwrap();
         assert_eq!(&DataType::Utf8, d.1.data_type());
 
-        let aa = batch
-            .column(a.0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let aa = batch.column(a.0).as_primitive::<Int64Type>();
         assert_eq!(1, aa.value(0));
         assert_eq!(-10, aa.value(1));
         assert_eq!(1627668684594000000, aa.value(2));
-        let bb = batch
-            .column(b.0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap();
-        let bb = as_primitive_array::<Float64Type>(bb.values());
+        let bb = batch.column(b.0).as_list::<i32>();
+        let bb = bb.values().as_primitive::<Float64Type>();
         assert_eq!(9, bb.len());
         assert_eq!(2.0, bb.value(0));
         assert_eq!(-6.1, bb.value(5));
@@ -2157,7 +2146,7 @@ mod tests {
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-        let cc = as_boolean_array(cc.values());
+        let cc = cc.values().as_boolean();
         assert_eq!(6, cc.len());
         assert!(!cc.value(0));
         assert!(!cc.value(4));
@@ -2271,7 +2260,7 @@ mod tests {
                 .as_any()
                 .downcast_ref::<ListArray>()
                 .unwrap();
-            let bb = as_primitive_array::<Float64Type>(bb.values());
+            let bb = bb.values().as_primitive::<Float64Type>();
             assert_eq!(10, bb.len());
             assert_eq!(4.0, bb.value(9));
 
@@ -2285,7 +2274,7 @@ mod tests {
                 *cc.data().buffers()[0],
                 Buffer::from_slice_ref([0i32, 2, 2, 4, 5])
             );
-            let cc = as_boolean_array(cc.values());
+            let cc = cc.values().as_boolean();
             let cc_expected = BooleanArray::from(vec![
                 Some(false),
                 Some(true),
@@ -2306,7 +2295,7 @@ mod tests {
                 Buffer::from_slice_ref([0i32, 1, 1, 2, 6])
             );
 
-            let dd = as_string_array(dd.values());
+            let dd = dd.values().as_string::<i32>();
             // values are 6 because a `d: null` is treated as a null slot
             // and a list's null slot can be omitted from the child (i.e. same offset)
             assert_eq!(6, dd.len());
@@ -2452,8 +2441,8 @@ mod tests {
         // compare list null buffers
         assert_eq!(read.nulls(), expected.nulls());
         // build struct from list
-        let struct_array = as_struct_array(read.values());
-        let expected_struct_array = as_struct_array(expected.values());
+        let struct_array = read.values().as_struct();
+        let expected_struct_array = expected.values().as_struct();
 
         assert_eq!(7, struct_array.len());
         assert_eq!(1, struct_array.null_count());
@@ -2767,14 +2756,13 @@ mod tests {
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-        let evs_list = as_dictionary_array::<UInt64Type>(evs_list.values());
+        let evs_list = evs_list.values().as_dictionary::<UInt64Type>();
         assert_eq!(6, evs_list.len());
         assert!(evs_list.is_valid(1));
         assert_eq!(DataType::Utf8, evs_list.value_type());
 
         // dict from the events list
-        let dict_el = evs_list.values();
-        let dict_el = dict_el.as_any().downcast_ref::<StringArray>().unwrap();
+        let dict_el = evs_list.values().as_string::<i32>();
         assert_eq!(3, dict_el.len());
         assert_eq!("Elect Leader", dict_el.value(0));
         assert_eq!("Do Ballot", dict_el.value(1));
@@ -2824,7 +2812,7 @@ mod tests {
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-        let evs_list = as_dictionary_array::<UInt64Type>(evs_list.values());
+        let evs_list = evs_list.values().as_dictionary::<UInt64Type>();
         assert_eq!(8, evs_list.len());
         assert!(evs_list.is_valid(1));
         assert_eq!(DataType::Utf8, evs_list.value_type());
@@ -3395,7 +3383,7 @@ mod tests {
         let mut sum_a = 0;
         for batch in reader {
             let batch = batch.unwrap();
-            assert_eq!(6, batch.num_columns());
+            assert_eq!(7, batch.num_columns());
             sum_num_rows += batch.num_rows();
             num_batches += 1;
             let batch_schema = batch.schema();

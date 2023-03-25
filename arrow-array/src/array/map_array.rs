@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::{get_offsets, print_long_array};
-use crate::{make_array, Array, ArrayRef, StringArray, StructArray};
+use crate::{make_array, Array, ArrayRef, ListArray, StringArray, StructArray};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
@@ -251,9 +251,23 @@ impl std::fmt::Debug for MapArray {
     }
 }
 
+impl From<MapArray> for ListArray {
+    fn from(value: MapArray) -> Self {
+        let field = match value.data_type() {
+            DataType::Map(field, _) => field,
+            _ => unreachable!("This should be a map type."),
+        };
+        let data_type = DataType::List(field.clone());
+        let builder = value.into_data().into_builder().data_type(data_type);
+        let array_data = unsafe { builder.build_unchecked() };
+
+        ListArray::from(array_data)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::cast::as_primitive_array;
+    use crate::cast::AsArray;
     use crate::types::UInt32Type;
     use crate::{Int32Array, UInt32Array};
     use std::sync::Arc;
@@ -522,7 +536,7 @@ mod tests {
 
         assert_eq!(
             &values_data,
-            as_primitive_array::<UInt32Type>(map_array.values())
+            map_array.values().as_primitive::<UInt32Type>()
         );
         assert_eq!(&DataType::UInt32, map_array.value_type());
         assert_eq!(3, map_array.len());

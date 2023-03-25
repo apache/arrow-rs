@@ -751,19 +751,22 @@ const NANOS_PER_HOUR: f64 = 60_f64 * NANOS_PER_MINUTE;
 #[cfg(test)]
 const NANOS_PER_DAY: f64 = 24_f64 * NANOS_PER_HOUR;
 
+#[rustfmt::skip]
 #[derive(Clone, Copy)]
 #[repr(u16)]
 enum IntervalType {
-    Century = 0b_00_0000_0001,
-    Decade = 0b_00_0000_0010,
-    Year = 0b_00_0000_0100,
-    Month = 0b_00_0000_1000,
-    Week = 0b_00_0001_0000,
-    Day = 0b_00_0010_0000,
-    Hour = 0b_00_0100_0000,
-    Minute = 0b_00_1000_0000,
-    Second = 0b_01_0000_0000,
-    Millisecond = 0b_10_0000_0000,
+    Century     = 0b_0000_0000_0001,
+    Decade      = 0b_0000_0000_0010,
+    Year        = 0b_0000_0000_0100,
+    Month       = 0b_0000_0000_1000,
+    Week        = 0b_0000_0001_0000,
+    Day         = 0b_0000_0010_0000,
+    Hour        = 0b_0000_0100_0000,
+    Minute      = 0b_0000_1000_0000,
+    Second      = 0b_0001_0000_0000,
+    Millisecond = 0b_0010_0000_0000,
+    Microsecond = 0b_0100_0000_0000,
+    Nanosecond  = 0b_1000_0000_0000,
 }
 
 impl FromStr for IntervalType {
@@ -781,6 +784,8 @@ impl FromStr for IntervalType {
             "minute" | "minutes" => Ok(Self::Minute),
             "second" | "seconds" => Ok(Self::Second),
             "millisecond" | "milliseconds" => Ok(Self::Millisecond),
+            "microsecond" | "microseconds" => Ok(Self::Microsecond),
+            "nanosecond" | "nanoseconds" => Ok(Self::Nanosecond),
             _ => Err(ArrowError::NotYetImplemented(format!(
                 "Unknown interval type: {s}"
             ))),
@@ -861,6 +866,10 @@ fn parse_interval(leading_field: &str, value: &str) -> Result<MonthDayNano, Arro
             IntervalType::Millisecond => {
                 Ok((0, 0, (interval_period.mul_checked(1_000_000f64))? as i64))
             }
+            IntervalType::Microsecond => {
+                Ok((0, 0, (interval_period.mul_checked(1_000f64)?) as i64))
+            }
+            IntervalType::Nanosecond => Ok((0, 0, interval_period as i64)),
         }
     };
 
@@ -1627,6 +1636,16 @@ mod tests {
         assert_eq!(
             (12i32, 1i32, (0.1 * NANOS_PER_MILLIS) as i64),
             parse_interval("months", "1 year 1 day 0.1 milliseconds").unwrap(),
+        );
+
+        assert_eq!(
+            (12i32, 1i32, 1000i64),
+            parse_interval("months", "1 year 1 day 1 microsecond").unwrap(),
+        );
+
+        assert_eq!(
+            (12i32, 1i32, 1i64),
+            parse_interval("months", "1 year 1 day 1 nanoseconds").unwrap(),
         );
 
         assert_eq!(

@@ -85,7 +85,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
     /// Returns a clone of the value type of this list.
     pub fn value_type(&self) -> DataType {
-        self.values.data_ref().data_type().clone()
+        self.values.data_type().clone()
     }
 
     /// Returns ith value of this list array.
@@ -842,10 +842,8 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "memory is not aligned")]
-    #[allow(deprecated)]
     fn test_primitive_array_alignment() {
-        let ptr = arrow_buffer::alloc::allocate_aligned(8);
-        let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };
+        let buf = Buffer::from_slice_ref([0_u64]);
         let buf2 = buf.slice(1);
         let array_data = ArrayData::builder(DataType::Int32)
             .add_buffer(buf2)
@@ -859,10 +857,8 @@ mod tests {
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
-    #[allow(deprecated)]
     fn test_list_array_alignment() {
-        let ptr = arrow_buffer::alloc::allocate_aligned(8);
-        let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };
+        let buf = Buffer::from_slice_ref([0_u64]);
         let buf2 = buf.slice(1);
 
         let values: [i32; 8] = [0; 8];

@@ -258,10 +258,10 @@ fn make_formatter<'a>(
         array => array_format(array, options),
         DataType::Null => array_format(as_null_array(array), options),
         DataType::Boolean => array_format(as_boolean_array(array), options),
-        DataType::Utf8 => array_format(as_string_array(array), options),
-        DataType::LargeUtf8 => array_format(as_largestring_array(array), options),
-        DataType::Binary => array_format(as_generic_binary_array::<i32>(array), options),
-        DataType::LargeBinary => array_format(as_generic_binary_array::<i64>(array), options),
+        DataType::Utf8 => array_format(array.as_string::<i32>(), options),
+        DataType::LargeUtf8 => array_format(array.as_string::<i64>(), options),
+        DataType::Binary => array_format(array.as_binary::<i32>(), options),
+        DataType::LargeBinary => array_format(array.as_binary::<i64>(), options),
         DataType::FixedSizeBinary(_) => {
             let a = array.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
             array_format(a, options)

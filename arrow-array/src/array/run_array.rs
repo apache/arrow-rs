@@ -67,6 +67,16 @@ pub struct RunArray<R: RunEndIndexType> {
     values: ArrayRef,
 }
 
+impl<R: RunEndIndexType> Clone for RunArray<R> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            run_ends: self.run_ends.clone(),
+            values: self.values.clone(),
+        }
+    }
+}
+
 impl<R: RunEndIndexType> RunArray<R> {
     /// Calculates the logical length of the array encoded
     /// by the given run_ends array.
@@ -555,7 +565,7 @@ mod tests {
 
     use super::*;
     use crate::builder::PrimitiveRunBuilder;
-    use crate::cast::as_primitive_array;
+    use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type};
     use crate::{Array, Int32Array, StringArray};
 
@@ -877,8 +887,7 @@ mod tests {
             builder.extend(input_array.clone().into_iter());
 
             let run_array = builder.finish();
-            let physical_values_array =
-                as_primitive_array::<Int32Type>(run_array.values());
+            let physical_values_array = run_array.values().as_primitive::<Int32Type>();
 
             // create an array consisting of all the indices repeated twice and shuffled.
             let mut logical_indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
@@ -913,7 +922,7 @@ mod tests {
             PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
         builder.extend(input_array.iter().copied());
         let run_array = builder.finish();
-        let physical_values_array = as_primitive_array::<Int32Type>(run_array.values());
+        let physical_values_array = run_array.values().as_primitive::<Int32Type>();
 
         // test for all slice lengths.
         for slice_len in 1..=total_len {

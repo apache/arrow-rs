@@ -856,7 +856,7 @@ fn test_struct_equal_null() {
     )]))
     .null_bit_buffer(Some(Buffer::from(vec![0b00011110])))
     .len(5)
-    .add_child_data(a.data_ref().clone())
+    .add_child_data(a.to_data())
     .build()
     .unwrap();
     let a = make_array(a);
@@ -920,7 +920,7 @@ fn test_struct_equal_null_variable_size() {
     )]))
     .null_bit_buffer(Some(Buffer::from(vec![0b00001010])))
     .len(5)
-    .add_child_data(strings1.data_ref().clone())
+    .add_child_data(strings1.to_data())
     .build()
     .unwrap();
     let a = make_array(a);
@@ -932,7 +932,7 @@ fn test_struct_equal_null_variable_size() {
     )]))
     .null_bit_buffer(Some(Buffer::from(vec![0b00001010])))
     .len(5)
-    .add_child_data(strings2.data_ref().clone())
+    .add_child_data(strings2.to_data())
     .build()
     .unwrap();
     let b = make_array(b);
