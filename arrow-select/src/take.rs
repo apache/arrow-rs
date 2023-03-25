@@ -668,7 +668,7 @@ where
     IndexType::Native: ToPrimitive,
     OffsetType: ArrowPrimitiveType,
     OffsetType::Native: ToPrimitive + OffsetSizeTrait,
-    PrimitiveArray<OffsetType>: From<Vec<Option<OffsetType::Native>>>,
+    PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
     // TODO: Some optimizations can be done here such as if it is
     // taking the whole list or a contiguous sublist
@@ -676,7 +676,7 @@ where
         take_value_indices_from_list::<IndexType, OffsetType>(values, indices)?;
 
     let taken = take_impl::<OffsetType>(values.values().as_ref(), &list_indices, None)?;
-    let value_offsets = Buffer::from_slice_ref(offsets);
+    let value_offsets = Buffer::from_vec(offsets);
     // create a new list with taken data and computed null information
     let list_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
@@ -887,7 +887,7 @@ where
     IndexType::Native: ToPrimitive,
     OffsetType: ArrowPrimitiveType,
     OffsetType::Native: OffsetSizeTrait + std::ops::Add + num::Zero + num::One,
-    PrimitiveArray<OffsetType>: From<Vec<Option<OffsetType::Native>>>,
+    PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
     // TODO: benchmark this function, there might be a faster unsafe alternative
     let offsets: &[OffsetType::Native] = list.value_offsets();
@@ -918,7 +918,7 @@ where
 
             // if start == end, this slot is empty
             while curr < end {
-                values.push(Some(curr));
+                values.push(curr);
                 curr += num::One::one();
             }
             if !list.is_valid(ix) {
