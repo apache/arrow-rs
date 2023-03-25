@@ -243,9 +243,8 @@ impl i256 {
     /// Performs checked addition
     #[inline]
     pub fn checked_add(self, other: Self) -> Option<Self> {
-        let (low, carry) = self.low.overflowing_add(other.low);
-        let high = self.high.checked_add(other.high)?.checked_add(carry as _)?;
-        Some(Self { low, high })
+        let r = self.wrapping_add(other);
+        ((other.is_neg() && r < self) || (!other.is_neg() && r >= self)).then_some(r)
     }
 
     /// Performs wrapping subtraction
@@ -259,9 +258,8 @@ impl i256 {
     /// Performs checked subtraction
     #[inline]
     pub fn checked_sub(self, other: Self) -> Option<Self> {
-        let (low, carry) = self.low.overflowing_sub(other.low);
-        let high = self.high.checked_sub(other.high)?.checked_sub(carry as _)?;
-        Some(Self { low, high })
+        let r = self.wrapping_sub(other);
+        ((other.is_neg() && r > self) || (!other.is_neg() && r <= self)).then_some(r)
     }
 
     /// Performs wrapping multiplication
@@ -282,10 +280,14 @@ impl i256 {
     /// Performs checked multiplication
     #[inline]
     pub fn checked_mul(self, other: Self) -> Option<Self> {
+        if self == i256::ZERO || other == i256::ZERO {
+            return Some(i256::ZERO);
+        }
+
         // Shift sign bit down to construct mask of all set bits if negative
         let l_sa = self.high >> 127;
         let r_sa = other.high >> 127;
-        let out_sa = l_sa ^ r_sa;
+        let out_sa = (l_sa ^ r_sa) as u128;
 
         // Compute absolute values
         let l_abs = self.wrapping_abs();
@@ -303,13 +305,14 @@ impl i256 {
         let hl = (l_abs.high as u128).checked_mul(r_abs.low)?;
         let lh = l_abs.low.checked_mul(r_abs.high as u128)?;
 
-        let high: i128 = high.checked_add(hl)?.checked_add(lh)?.try_into().ok()?;
+        let high = high.checked_add(hl)?.checked_add(lh)?;
 
         // Reverse absolute value, if necessary
-        let (low, c) = (low ^ out_sa as u128).overflowing_sub(out_sa as u128);
-        let high = (high ^ out_sa).wrapping_sub(out_sa).wrapping_sub(c as i128);
+        let (low, c) = (low ^ out_sa).overflowing_sub(out_sa);
+        let high = (high ^ out_sa).wrapping_sub(out_sa).wrapping_sub(c as u128) as i128;
 
-        Some(Self { low, high })
+        // Check for overflow in final conversion
+        ((high < 0) == ((self.high < 0) ^ (other.high < 0))).then_some(Self { low, high })
     }
 
     /// Performs wrapping division
@@ -397,6 +400,12 @@ impl i256 {
         // squaring the base afterwards is not necessary and may cause a
         // needless overflow.
         acc.wrapping_mul(base)
+    }
+
+    /// Returns `true` if this [`i256`] is negative
+    #[inline]
+    pub fn is_neg(self) -> bool {
+        self.high < 0
     }
 }
 
@@ -709,7 +718,7 @@ mod tests {
         let checked = il.checked_add(ir);
         match overflow {
             true => assert!(checked.is_none()),
-            false => assert_eq!(checked.unwrap(), actual),
+            false => assert_eq!(checked, Some(actual)),
         }
 
         // Subtraction
@@ -721,7 +730,7 @@ mod tests {
         let checked = il.checked_sub(ir);
         match overflow {
             true => assert!(checked.is_none()),
-            false => assert_eq!(checked.unwrap(), actual),
+            false => assert_eq!(checked, Some(actual), "{bl} - {br} = {expected}"),
         }
 
         // Multiplication
@@ -737,14 +746,14 @@ mod tests {
                 "{il} * {ir} = {actual} vs {bl} * {br} = {expected}"
             ),
             false => assert_eq!(
-                checked.unwrap(),
-                actual,
+                checked,
+                Some(actual),
                 "{il} * {ir} = {actual} vs {bl} * {br} = {expected}"
             ),
         }
 
         // Exponentiation
-        for exp in vec![0, 1, 3, 8, 100].into_iter() {
+        for exp in vec![0, 1, 2, 3, 8, 100].into_iter() {
             let actual = il.wrapping_pow(exp);
             let (expected, overflow) =
                 i256::from_bigint_with_overflow(bl.clone().pow(exp));
@@ -757,9 +766,9 @@ mod tests {
                     "{il} ^ {exp} = {actual} vs {bl} * {exp} = {expected}"
                 ),
                 false => assert_eq!(
-                    checked.unwrap(),
-                    actual,
-                    "{il} ^ {exp} = {actual} vs {bl} * {exp} = {expected}"
+                    checked,
+                    Some(actual),
+                    "{il} ^ {exp} = {actual} vs {bl} ^ {exp} = {expected}"
                 ),
             }
         }
@@ -791,14 +800,33 @@ mod tests {
     #[test]
     fn test_i256() {
         let candidates = [
-            i256::from_parts(0, 0),
-            i256::from_parts(0, 1),
-            i256::from_parts(0, -1),
+            i256::ZERO,
+            i256::ONE,
+            i256::MINUS_ONE,
+            i256::from_i128(2),
+            i256::from_i128(-2),
             i256::from_parts(u128::MAX, 1),
             i256::from_parts(u128::MAX, -1),
             i256::from_parts(0, 1),
             i256::from_parts(0, -1),
+            i256::from_parts(1, -1),
+            i256::from_parts(1, 1),
+            i256::from_parts(0, i128::MAX),
+            i256::from_parts(0, i128::MIN),
+            i256::from_parts(1, i128::MAX),
+            i256::from_parts(1, i128::MIN),
+            i256::from_parts(u128::MAX, i128::MIN),
             i256::from_parts(100, 32),
+            i256::MIN,
+            i256::MAX,
+            i256::MIN >> 1,
+            i256::MAX >> 1,
+            i256::ONE << 127,
+            i256::ONE << 128,
+            i256::ONE << 129,
+            i256::MINUS_ONE << 127,
+            i256::MINUS_ONE << 128,
+            i256::MINUS_ONE << 129,
         ];
 
         for il in candidates {
