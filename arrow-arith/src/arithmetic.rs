@@ -1230,7 +1230,7 @@ pub fn multiply_fixed_point(
 
         let mut mul = a.wrapping_mul(b);
         mul = divide_and_round::<Decimal256Type>(mul, divisor);
-        mul.wrapping_to_i128()
+        mul.as_i128()
     })
     .and_then(|a| a.with_precision_and_scale(precision, required_scale))
 }

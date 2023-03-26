@@ -153,7 +153,7 @@ impl i256 {
     }
 
     /// Wraps this `i256` into an `i128`
-    pub fn wrapping_to_i128(self) -> i128 {
+    pub fn as_i128(self) -> i128 {
         self.low as i128
     }
 
@@ -251,12 +251,6 @@ impl i256 {
         let r = self.wrapping_add(other);
         ((other.is_negative() && r < self) || (!other.is_negative() && r >= self))
             .then_some(r)
-    }
-
-    /// Returns `true` if this [`i256`] is negative
-    #[inline]
-    pub const fn is_negative(self) -> bool {
-        self.high.is_negative()
     }
 
     /// Performs wrapping subtraction
@@ -904,25 +898,21 @@ mod tests {
     }
 
     #[test]
-    fn test_i256_wrapping_to_i128() {
+    fn test_i256_as_i128() {
         let a = i256::from_i128(i128::MAX).wrapping_add(i256::from_i128(1));
-        let i128 = a.wrapping_to_i128();
+        let i128 = a.as_i128();
         assert_eq!(i128, i128::MIN);
 
         let a = i256::from_i128(i128::MAX).wrapping_add(i256::from_i128(2));
-        let i128 = a.wrapping_to_i128();
+        let i128 = a.as_i128();
         assert_eq!(i128, i128::MIN + 1);
 
         let a = i256::from_i128(i128::MIN).wrapping_sub(i256::from_i128(1));
-        let i128 = a.wrapping_to_i128();
+        let i128 = a.as_i128();
         assert_eq!(i128, i128::MAX);
 
         let a = i256::from_i128(i128::MIN).wrapping_sub(i256::from_i128(2));
-        let i128 = a.wrapping_to_i128();
+        let i128 = a.as_i128();
         assert_eq!(i128, i128::MAX - 1);
-
-        i256::from_parts(u128::MAX, i128::MIN)
-            .checked_add(i256::from_parts(1, -1))
-            .unwrap();
     }
 }
