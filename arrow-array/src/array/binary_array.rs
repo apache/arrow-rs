@@ -209,8 +209,8 @@ where
         let data_len = offsets.len() - 1;
         let array_data = ArrayData::builder(Self::DATA_TYPE)
             .len(data_len)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_buffer(Buffer::from_slice_ref(&values))
+            .add_buffer(Buffer::from_vec(offsets))
+            .add_buffer(Buffer::from_vec(values))
             .null_bit_buffer(Some(null_buf.into()));
         let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
