@@ -35,7 +35,7 @@ use crate::sql::{
 };
 use crate::{
     Action, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, Ticket,
+    HandshakeResponse, IpcMessage, PutResult, Ticket,
 };
 use arrow_array::RecordBatch;
 use arrow_buffer::Buffer;
@@ -223,6 +223,47 @@ impl FlightSqlServiceClient {
             .into_inner())
     }
 
+    /// Push a stream to the flight service associated with a particular flight stream.
+    pub async fn do_put(
+        &mut self,
+        request: impl tonic::IntoStreamingRequest<Message = FlightData>,
+    ) -> Result<Streaming<PutResult>, ArrowError> {
+        let req = self.set_request_headers(request.into_streaming_request())?;
+        Ok(self
+            .flight_client
+            .do_put(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner())
+    }
+
+    /// DoAction allows a flight client to do a specific action against a flight service
+    pub async fn do_action(
+        &mut self,
+        request: impl IntoRequest<Action>,
+    ) -> Result<Streaming<crate::Result>, ArrowError> {
+        let req = self.set_request_headers(request.into_request())?;
+        Ok(self
+            .flight_client
+            .do_action(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner())
+    }
+
+    async fn get_flight_info(
+        &mut self,
+        request: impl IntoRequest<FlightDescriptor>,
+    ) -> Result<FlightInfo, ArrowError> {
+        let req = self.set_request_headers(request.into_request())?;
+        Ok(self
+            .flight_client
+            .get_flight_info(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner())
+    }
+
     /// Request a list of tables.
     pub async fn get_tables(
         &mut self,
@@ -287,7 +328,7 @@ impl FlightSqlServiceClient {
     pub async fn prepare(
         &mut self,
         query: String,
-    ) -> Result<PreparedStatement<Channel>, ArrowError> {
+    ) -> Result<PreparedStatement, ArrowError> {
         let cmd = ActionCreatePreparedStatementRequest { query };
         let action = Action {
             r#type: CREATE_PREPARED_STATEMENT.to_string(),
@@ -316,7 +357,7 @@ impl FlightSqlServiceClient {
             _ => Schema::try_from(IpcMessage(prepared_result.parameter_schema))?,
         };
         Ok(PreparedStatement::new(
-            self.flight_client.clone(),
+            self.clone(),
             prepared_result.prepared_statement_handle,
             dataset_schema,
             parameter_schema,
@@ -353,23 +394,23 @@ impl FlightSqlServiceClient {
 
 /// A PreparedStatement
 #[derive(Debug, Clone)]
-pub struct PreparedStatement<T> {
-    flight_client: FlightServiceClient<T>,
+pub struct PreparedStatement {
+    flight_sql_client: FlightSqlServiceClient,
     parameter_binding: Option<RecordBatch>,
     handle: Bytes,
     dataset_schema: Schema,
     parameter_schema: Schema,
 }
 
-impl PreparedStatement<Channel> {
+impl PreparedStatement {
     pub(crate) fn new(
-        flight_client: FlightServiceClient<Channel>,
+        flight_client: FlightSqlServiceClient,
         handle: impl Into<Bytes>,
         dataset_schema: Schema,
         parameter_schema: Schema,
     ) -> Self {
         PreparedStatement {
-            flight_client,
+            flight_sql_client: flight_client,
             parameter_binding: None,
             handle: handle.into(),
             dataset_schema,
@@ -383,12 +424,7 @@ impl PreparedStatement<Channel> {
             prepared_statement_handle: self.handle.clone(),
         };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
-        let result = self
-            .flight_client
-            .get_flight_info(descriptor)
-            .await
-            .map_err(status_to_arrow_error)?
-            .into_inner();
+        let result = self.flight_sql_client.get_flight_info(descriptor).await?;
         Ok(result)
     }
 
@@ -399,14 +435,12 @@ impl PreparedStatement<Channel> {
         };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
         let mut result = self
-            .flight_client
+            .flight_sql_client
             .do_put(stream::iter(vec![FlightData {
                 flight_descriptor: Some(descriptor),
                 ..Default::default()
             }]))
-            .await
-            .map_err(status_to_arrow_error)?
-            .into_inner();
+            .await?;
         let result = result
             .message()
             .await
@@ -447,11 +481,7 @@ impl PreparedStatement<Channel> {
             r#type: CLOSE_PREPARED_STATEMENT.to_string(),
             body: cmd.as_any().encode_to_vec().into(),
         };
-        let _ = self
-            .flight_client
-            .do_action(action)
-            .await
-            .map_err(status_to_arrow_error)?;
+        let _ = self.flight_sql_client.do_action(action).await?;
         Ok(())
     }
 }
