@@ -1183,6 +1183,58 @@ pub fn multiply_fixed_point_checked(
     .and_then(|a| a.with_precision_and_scale(precision, required_scale))
 }
 
+/// Perform `left * right` operation on two decimal arrays. If either left or right value is
+/// null then the result is also null.
+///
+/// This performs decimal multiplication which allows precision loss if an exact representation
+/// is not possible for the result, according to the required scale. In the case, the result
+/// will be rounded to the required scale.
+///
+/// If the required scale is greater than the product scale, an error is returned.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `multiply_fixed_point_checked` instead.
+///
+/// It is implemented for compatibility with precision loss `multiply` function provided by
+/// other data processing engines. For multiplication with precision loss detection, use
+/// `multiply` or `multiply_checked` instead.
+pub fn multiply_fixed_point(
+    left: &PrimitiveArray<Decimal128Type>,
+    right: &PrimitiveArray<Decimal128Type>,
+    required_scale: i8,
+) -> Result<PrimitiveArray<Decimal128Type>, ArrowError> {
+    let product_scale = left.scale() + right.scale();
+    let precision = min(
+        left.precision() + right.precision() + 1,
+        DECIMAL128_MAX_PRECISION,
+    );
+
+    if required_scale == product_scale {
+        return multiply(left, right)?
+            .with_precision_and_scale(precision, required_scale);
+    }
+
+    if required_scale > product_scale {
+        return Err(ArrowError::ComputeError(format!(
+            "Required scale {} is greater than product scale {}",
+            required_scale, product_scale
+        )));
+    }
+
+    let divisor =
+        i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
+
+    binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
+        let a = i256::from_i128(a);
+        let b = i256::from_i128(b);
+
+        let mut mul = a.wrapping_mul(b);
+        mul = divide_and_round::<Decimal256Type>(mul, divisor);
+        mul.as_i128()
+    })
+    .and_then(|a| a.with_precision_and_scale(precision, required_scale))
+}
+
 /// Divide a decimal native value by given divisor and round the result.
 fn divide_and_round<I>(input: I::Native, div: I::Native) -> I::Native
 where
@@ -3362,5 +3414,66 @@ mod tests {
         assert!(result
             .to_string()
             .contains("Required scale 5 is greater than product scale 4"));
+    }
+
+    #[test]
+    fn test_decimal_multiply_allow_precision_loss_overflow() {
+        // [99999999999123456789]
+        let a = Decimal128Array::from(vec![99999999999123456789000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        // [9999999999910]
+        let b = Decimal128Array::from(vec![9999999999910000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        let err = multiply_fixed_point_checked(&a, &b, 28).unwrap_err();
+        assert!(err.to_string().contains(
+            "Overflow happened on: 99999999999123456789000000000000000000 * 9999999999910000000000000000000"
+        ));
+
+        let result = multiply_fixed_point(&a, &b, 28).unwrap();
+        let expected =
+            Decimal128Array::from(vec![62946009661555981610246871926660136960])
+                .with_precision_and_scale(38, 28)
+                .unwrap();
+
+        assert_eq!(&expected, &result);
+    }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point() {
+        // [123456789]
+        let a = Decimal128Array::from(vec![123456789000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        // [10]
+        let b = Decimal128Array::from(vec![10000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        // `multiply` overflows on this case.
+        let result = multiply(&a, &b).unwrap();
+        let expected =
+            Decimal128Array::from(vec![-16672482290199102048610367863168958464])
+                .with_precision_and_scale(38, 10)
+                .unwrap();
+        assert_eq!(&expected, &result);
+
+        // Avoid overflow by reducing the scale.
+        let result = multiply_fixed_point(&a, &b, 28).unwrap();
+        // [1234567890]
+        let expected =
+            Decimal128Array::from(vec![12345678900000000000000000000000000000])
+                .with_precision_and_scale(38, 28)
+                .unwrap();
+
+        assert_eq!(&expected, &result);
+        assert_eq!(
+            result.value_as_string(0),
+            "1234567890.0000000000000000000000000000"
+        );
     }
 }
