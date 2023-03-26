@@ -447,23 +447,28 @@ impl Default for RecordBatchOptions {
         Self::new()
     }
 }
-impl From<&StructArray> for RecordBatch {
-    /// Create a record batch from struct array, where each field of
-    /// the `StructArray` becomes a `Field` in the schema.
-    ///
-    /// This currently does not flatten and nested struct types
-    fn from(struct_array: &StructArray) -> Self {
-        if let DataType::Struct(fields) = struct_array.data_type() {
-            let schema = Schema::new(fields.clone());
-            let columns = struct_array.boxed_fields.clone();
-            RecordBatch {
-                schema: Arc::new(schema),
-                row_count: struct_array.len(),
-                columns,
-            }
-        } else {
-            unreachable!("unable to get datatype as struct")
+impl From<StructArray> for RecordBatch {
+    fn from(value: StructArray) -> Self {
+        assert_eq!(
+            value.null_count(),
+            0,
+            "Cannot convert nullable StructArray to RecordBatch"
+        );
+        let row_count = value.len();
+        let schema = Arc::new(Schema::new(value.fields().to_vec()));
+        let columns = value.boxed_fields;
+
+        RecordBatch {
+            schema,
+            row_count,
+            columns,
         }
+    }
+}
+
+impl From<&StructArray> for RecordBatch {
+    fn from(struct_array: &StructArray) -> Self {
+        struct_array.clone().into()
     }
 }
 
@@ -572,7 +577,7 @@ mod tests {
         BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray,
     };
     use arrow_buffer::{Buffer, ToByteSlice};
-    use arrow_data::ArrayDataBuilder;
+    use arrow_data::{ArrayData, ArrayDataBuilder};
 
     #[test]
     fn create_record_batch() {
@@ -1063,5 +1068,16 @@ mod tests {
             .with_row_count(Some(20));
         assert!(!options.match_field_names);
         assert_eq!(options.row_count.unwrap(), 20)
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot convert nullable StructArray to RecordBatch")]
+    fn test_from_struct() {
+        let s = StructArray::from(ArrayData::new_null(
+            // Note child is not nullable
+            &DataType::Struct(vec![Field::new("foo", DataType::Int32, false)]),
+            2,
+        ));
+        let _ = RecordBatch::from(s);
     }
 }

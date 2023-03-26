@@ -89,6 +89,14 @@ impl StructArray {
         }
     }
 
+    /// Returns the [`Field`] of this [`StructArray`]
+    pub fn fields(&self) -> &[Field] {
+        match self.data_type() {
+            DataType::Struct(f) => f,
+            _ => unreachable!(),
+        }
+    }
+
     /// Return child array whose field name equals to column_name
     ///
     /// Note: A schema can currently have duplicate field names, in which case

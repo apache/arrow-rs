@@ -373,7 +373,7 @@ impl Iterator for ArrowArrayStreamReader {
             .to_data()
             .ok()?;
 
-            let record_batch = RecordBatch::from(&StructArray::from(data));
+            let record_batch = RecordBatch::from(StructArray::from(data));
 
             Some(Ok(record_batch))
         } else {
@@ -492,7 +492,7 @@ mod tests {
             .to_data()
             .unwrap();
 
-            let record_batch = RecordBatch::from(&StructArray::from(array));
+            let record_batch = RecordBatch::from(StructArray::from(array));
             produced_batches.push(record_batch);
         }
 

@@ -20,7 +20,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow_array::{Array, StructArray};
+use arrow_array::cast::AsArray;
+use arrow_array::Array;
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
@@ -559,12 +560,11 @@ impl Iterator for ParquetRecordBatchReader {
         match self.array_reader.consume_batch() {
             Err(error) => Some(Err(error.into())),
             Ok(array) => {
-                let struct_array =
-                    array.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-                        ArrowError::ParquetError(
-                            "Struct array reader should return struct array".to_string(),
-                        )
-                    });
+                let struct_array = array.as_struct_opt().ok_or_else(|| {
+                    ArrowError::ParquetError(
+                        "Struct array reader should return struct array".to_string(),
+                    )
+                });
 
                 match struct_array {
                     Err(err) => Some(Err(err)),

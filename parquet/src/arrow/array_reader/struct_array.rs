@@ -217,6 +217,7 @@ mod tests {
     use crate::arrow::array_reader::ListArrayReader;
     use arrow::buffer::Buffer;
     use arrow::datatypes::Field;
+    use arrow_array::cast::AsArray;
     use arrow_array::{Array, Int32Array, ListArray};
 
     #[test]
@@ -251,7 +252,7 @@ mod tests {
         );
 
         let struct_array = struct_array_reader.next_batch(5).unwrap();
-        let struct_array = struct_array.as_any().downcast_ref::<StructArray>().unwrap();
+        let struct_array = struct_array.as_struct();
 
         assert_eq!(5, struct_array.len());
         assert_eq!(
@@ -327,7 +328,7 @@ mod tests {
         );
 
         let actual = struct_reader.next_batch(1024).unwrap();
-        let actual = actual.as_any().downcast_ref::<StructArray>().unwrap();
+        let actual = actual.as_struct();
         assert_eq!(actual, &expected)
     }
 }
