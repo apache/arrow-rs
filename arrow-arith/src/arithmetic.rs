@@ -3441,4 +3441,39 @@ mod tests {
 
         assert_eq!(&expected, &result);
     }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point() {
+        // [123456789]
+        let a = Decimal128Array::from(vec![123456789000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        // [10]
+        let b = Decimal128Array::from(vec![10000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        // `multiply` overflows on this case.
+        let result = multiply(&a, &b).unwrap();
+        let expected =
+            Decimal128Array::from(vec![-16672482290199102048610367863168958464])
+                .with_precision_and_scale(38, 10)
+                .unwrap();
+        assert_eq!(&expected, &result);
+
+        // Avoid overflow by reducing the scale.
+        let result = multiply_fixed_point(&a, &b, 28).unwrap();
+        // [1234567890]
+        let expected =
+            Decimal128Array::from(vec![12345678900000000000000000000000000000])
+                .with_precision_and_scale(38, 28)
+                .unwrap();
+
+        assert_eq!(&expected, &result);
+        assert_eq!(
+            result.value_as_string(0),
+            "1234567890.0000000000000000000000000000"
+        );
+    }
 }

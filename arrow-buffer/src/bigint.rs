@@ -253,6 +253,12 @@ impl i256 {
             .then_some(r)
     }
 
+    /// Returns `true` if this [`i256`] is negative
+    #[inline]
+    pub const fn is_negative(self) -> bool {
+        self.high.is_negative()
+    }
+
     /// Performs wrapping subtraction
     #[inline]
     pub fn wrapping_sub(self, other: Self) -> Self {
@@ -914,5 +920,9 @@ mod tests {
         let a = i256::from_i128(i128::MIN).wrapping_sub(i256::from_i128(2));
         let i128 = a.wrapping_to_i128();
         assert_eq!(i128, i128::MAX - 1);
+
+        i256::from_parts(u128::MAX, i128::MIN)
+            .checked_add(i256::from_parts(1, -1))
+            .unwrap();
     }
 }
