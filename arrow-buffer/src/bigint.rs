@@ -113,10 +113,11 @@ fn parse_impl(s: &str, negative: bool) -> Result<i256, ParseI256Error> {
         low = -low;
     }
 
-    let high = high * i256::from_i128(10_i128.pow(38));
     let low = i256::from_i128(low);
 
-    high.checked_add(low).ok_or(ParseI256Error {})
+    high.checked_mul(i256::from_i128(10_i128.pow(38)))
+        .and_then(|high| high.checked_add(low))
+        .ok_or(ParseI256Error {})
 }
 
 impl PartialOrd for i256 {
@@ -1006,6 +1007,7 @@ mod tests {
             ("000000000000000000000000000000000000000", Some(i256::ZERO)),
             ("0000000000000000000000000000000000000000-11", None),
             ("11-1111111111111111111111111111111111111", None),
+            ("115792089237316195423570985008687907853269984665640564039457584007913129639936", None)
         ];
         for (case, expected) in cases {
             assert_eq!(i256::from_string(case), expected)
