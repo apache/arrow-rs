@@ -739,7 +739,7 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
             .zip(fields)
             .map(|(a, f)| {
                 let format = make_formatter(a.as_ref(), options)?;
-                Ok((f.name().as_str(), format))
+                Ok((f.name(), format))
             })
             .collect()
     }
@@ -810,7 +810,7 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
         let mut out: Vec<Option<FieldDisplay>> = (0..max_id + 1).map(|_| None).collect();
         for (i, field) in type_ids.iter().zip(fields) {
             let formatter = make_formatter(self.child(*i).as_ref(), options)?;
-            out[*i as usize] = Some((field.name().as_str(), formatter))
+            out[*i as usize] = Some((field.name(), formatter))
         }
         Ok((out, *mode))
     }

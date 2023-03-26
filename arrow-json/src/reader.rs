@@ -163,7 +163,7 @@ fn generate_fields(
     spec: &HashMap<String, InferredType>,
 ) -> Result<Vec<Field>, ArrowError> {
     spec.iter()
-        .map(|(k, types)| Ok(Field::new(k, generate_datatype(types)?, true)))
+        .map(|(k, types)| Ok(Field::new(k.as_str(), generate_datatype(types)?, true)))
         .collect()
 }
 
@@ -659,11 +659,10 @@ impl Decoder {
                 let projected_fields: Vec<Field> = fields
                     .iter()
                     .filter_map(|field| {
-                        if projection.contains(field.name()) {
-                            Some(field.clone())
-                        } else {
-                            None
-                        }
+                        projection
+                            .iter()
+                            .any(|x| x.as_str() == field.name())
+                            .then(|| field.clone())
                     })
                     .collect();
 
@@ -1266,7 +1265,7 @@ impl Decoder {
             .filter(|field| {
                 projection
                     .as_ref()
-                    .map(|p| p.contains(field.name()))
+                    .map(|p| p.iter().any(|x| x.as_str() == field.name()))
                     .unwrap_or(true)
             })
             .map(|field| {

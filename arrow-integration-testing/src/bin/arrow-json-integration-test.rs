@@ -137,7 +137,7 @@ fn canonicalize_schema(schema: &Schema) -> Schema {
                         Field::new("entries", struct_type, child_field.is_nullable());
 
                     Field::new(
-                        field.name().as_str(),
+                        field.name(),
                         DataType::Map(Box::new(child_field), *sorted),
                         field.is_nullable(),
                     )

@@ -247,7 +247,7 @@ pub fn decimal_length_from_precision(precision: u8) -> usize {
 
 /// Convert an arrow field to a parquet `Type`
 fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
-    let name = field.name().as_str();
+    let name = field.name();
     let repetition = if field.is_nullable() {
         Repetition::OPTIONAL
     } else {
@@ -507,7 +507,9 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             let dict_field = Field::new(name, *value.clone(), field.is_nullable());
             arrow_to_parquet_type(&dict_field)
         }
-        DataType::RunEndEncoded(_, _) => Err(arrow_err!("Converting RunEndEncodedType to parquet not supported",))
+        DataType::RunEndEncoded(_, _) => Err(arrow_err!(
+            "Converting RunEndEncodedType to parquet not supported",
+        )),
     }
 }
 
@@ -641,7 +643,7 @@ mod tests {
             ProjectionMask::all(),
             None,
         )
-            .unwrap();
+        .unwrap();
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
     }
 
@@ -1343,20 +1345,9 @@ mod tests {
                 ))),
                 false,
             ),
-            Field::new(
-                "decimal_int32",
-                DataType::Decimal128(8, 2),
-                false,
-            ),
-            Field::new(
-                "decimal_int64",
-                DataType::Decimal128(16, 2),
-                false,
-            ),
-            Field::new(
-                "decimal_fix_length",
-                DataType::Decimal128(30, 2),
-                false, ),
+            Field::new("decimal_int32", DataType::Decimal128(8, 2), false),
+            Field::new("decimal_int64", DataType::Decimal128(16, 2), false),
+            Field::new("decimal_fix_length", DataType::Decimal128(30, 2), false),
         ];
 
         assert_eq!(arrow_fields, converted_arrow_fields);
@@ -1492,18 +1483,9 @@ mod tests {
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                 false,
             ),
-            Field::new(
-                "decimal_int32",
-                DataType::Decimal128(8, 2),
-                false),
-            Field::new("decimal_int64",
-                       DataType::Decimal128(16, 2),
-                       false),
-            Field::new(
-                "decimal_fix_length",
-                DataType::Decimal128(30, 2),
-                false,
-            ),
+            Field::new("decimal_int32", DataType::Decimal128(8, 2), false),
+            Field::new("decimal_int64", DataType::Decimal128(16, 2), false),
+            Field::new("decimal_fix_length", DataType::Decimal128(30, 2), false),
         ];
         let arrow_schema = Schema::new(arrow_fields);
         let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema).unwrap();

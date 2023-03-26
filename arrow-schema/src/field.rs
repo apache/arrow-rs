@@ -19,6 +19,7 @@ use crate::error::ArrowError;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use crate::datatype::DataType;
 
@@ -29,7 +30,7 @@ use crate::datatype::DataType;
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Field {
-    name: String,
+    name: Arc<str>,
     data_type: DataType,
     nullable: bool,
     dict_id: i64,
@@ -63,6 +64,7 @@ impl PartialOrd for Field {
 impl Ord for Field {
     fn cmp(&self, other: &Self) -> Ordering {
         self.name
+            .as_ref()
             .cmp(other.name())
             .then_with(|| self.data_type.cmp(other.data_type()))
             .then_with(|| self.nullable.cmp(&other.nullable))
@@ -112,7 +114,7 @@ impl Hash for Field {
 
 impl Field {
     /// Creates a new field
-    pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
+    pub fn new(name: impl Into<Arc<str>>, data_type: DataType, nullable: bool) -> Self {
         Field {
             name: name.into(),
             data_type,
@@ -125,7 +127,7 @@ impl Field {
 
     /// Creates a new field that has additional dictionary information
     pub fn new_dict(
-        name: impl Into<String>,
+        name: impl Into<Arc<str>>,
         data_type: DataType,
         nullable: bool,
         dict_id: i64,
@@ -161,8 +163,8 @@ impl Field {
 
     /// Returns an immutable reference to the `Field`'s name.
     #[inline]
-    pub const fn name(&self) -> &String {
-        &self.name
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
     }
 
     /// Set the name of the [`Field`] and returns self.
@@ -174,7 +176,7 @@ impl Field {
     ///
     /// assert_eq!(field.name(), "c2");
     /// ```
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn with_name(mut self, name: impl Into<Arc<str>>) -> Self {
         self.name = name.into();
         self
     }
@@ -459,7 +461,7 @@ impl Field {
     pub fn size(&self) -> usize {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.data_type)
             + self.data_type.size()
-            + self.name.capacity()
+            + self.name.len()
             + (std::mem::size_of::<(String, String)>() * self.metadata.capacity())
             + self
                 .metadata

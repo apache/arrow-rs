@@ -209,7 +209,7 @@ impl Schema {
             .find(|idx| self.fields[*idx].name() == name)
             .ok_or_else(|| {
                 let valid_fields: Vec<String> =
-                    self.fields.iter().map(|f| f.name().clone()).collect();
+                    self.fields.iter().map(|f| f.name().to_string()).collect();
                 ArrowError::SchemaError(format!(
                     "Unable to get field named \"{name}\". Valid fields: {valid_fields:?}"
                 ))

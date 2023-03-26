@@ -1003,7 +1003,7 @@ impl ArrowJsonBatch {
                     }
 
                     ArrowJsonColumn {
-                        name: field.name().clone(),
+                        name: field.name().to_string(),
                         count: col.len(),
                         validity: Some(validity),
                         data: Some(data),
@@ -1013,7 +1013,7 @@ impl ArrowJsonBatch {
                     }
                 }
                 _ => ArrowJsonColumn {
-                    name: field.name().clone(),
+                    name: field.name().to_string(),
                     count: col.len(),
                     validity: None,
                     data: None,

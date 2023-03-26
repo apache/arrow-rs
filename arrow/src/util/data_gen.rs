@@ -134,7 +134,7 @@ pub fn create_random_array(
                 .iter()
                 .map(|struct_field| {
                     create_random_array(struct_field, size, null_density, true_density)
-                        .map(|array_ref| (struct_field.name().as_str(), array_ref))
+                        .map(|array_ref| (struct_field.name(), array_ref))
                 })
                 .collect::<Result<Vec<(&str, ArrayRef)>>>()?,
         )?),

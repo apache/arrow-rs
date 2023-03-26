@@ -81,10 +81,7 @@ impl StructArray {
     /// Return field names in this struct array
     pub fn column_names(&self) -> Vec<&str> {
         match self.data.data_type() {
-            DataType::Struct(fields) => fields
-                .iter()
-                .map(|f| f.name().as_str())
-                .collect::<Vec<&str>>(),
+            DataType::Struct(fields) => fields.iter().map(|f| f.name()).collect(),
             _ => unreachable!("Struct array's data type is not struct!"),
         }
     }

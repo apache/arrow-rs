@@ -278,7 +278,9 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     let fields = column_types
         .iter()
         .zip(&headers)
-        .map(|(inferred, field_name)| Field::new(field_name, inferred.get(), true))
+        .map(|(inferred, field_name)| {
+            Field::new(field_name.as_ref(), inferred.get(), true)
+        })
         .collect();
 
     Ok((Schema::new(fields), records_count))
@@ -1581,8 +1583,7 @@ mod tests {
             schema.field(5).data_type()
         );
 
-        let names: Vec<&str> =
-            schema.fields().iter().map(|x| x.name().as_str()).collect();
+        let names: Vec<_> = schema.fields().iter().map(|x| x.name()).collect();
         assert_eq!(
             names,
             vec![

@@ -454,7 +454,7 @@ pub(crate) fn build_field<'a>(
         fb_metadata = Some(fbb.create_vector(&kv_vec));
     };
 
-    let fb_field_name = fbb.create_string(field.name().as_str());
+    let fb_field_name = fbb.create_string(field.name());
     let field_type = get_fb_field_type(field.data_type(), fbb);
 
     let fb_dictionary = if let Dictionary(index_type, _) = field.data_type() {
