@@ -414,7 +414,7 @@ pub struct AmazonS3Builder {
 /// let typed_options = vec![
 ///     (AmazonS3ConfigKey::DefaultRegion, "my-default-region"),
 /// ];
-/// let azure = AmazonS3Builder::new()
+/// let aws = AmazonS3Builder::new()
 ///     .try_with_options(options)
 ///     .unwrap()
 ///     .try_with_options(typed_options)
@@ -738,13 +738,9 @@ impl AmazonS3Builder {
     fn parse_url(&mut self, url: &str) -> Result<()> {
         let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
         let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
-        let validate = |s: &str| match s.contains('.') {
-            true => Err(UrlNotRecognisedSnafu { url }.build()),
-            false => Ok(s.to_string()),
-        };
 
         match parsed.scheme() {
-            "s3" | "s3a" => self.bucket_name = Some(validate(host)?),
+            "s3" | "s3a" => self.bucket_name = Some(host.to_string()),
             "https" => match host.splitn(4, '.').collect_tuple() {
                 Some(("s3", bucket, "amazonaws", "com")) => {
                     self.bucket_name = Some(bucket.to_string());
@@ -1391,6 +1387,15 @@ mod tests {
 
         let mut builder = AmazonS3Builder::new();
         builder
+            .parse_url("s3://buckets.can.have.dots/path")
+            .unwrap();
+        assert_eq!(
+            builder.bucket_name,
+            Some("buckets.can.have.dots".to_string())
+        );
+
+        let mut builder = AmazonS3Builder::new();
+        builder
             .parse_url("https://s3.bucket.amazonaws.com")
             .unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
@@ -1405,7 +1410,6 @@ mod tests {
 
         let err_cases = [
             "mailto://bucket/path",
-            "s3://bucket.mydomain/path",
             "https://s3.bucket.mydomain.com",
             "https://s3.bucket.foo.amazonaws.com",
             "https://bucket.mydomain.region.amazonaws.com",
