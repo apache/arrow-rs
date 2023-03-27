@@ -201,7 +201,7 @@ mod tests {
         // This test file is large enough to generate multiple row groups.
         let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
         let original_data = Bytes::from(std::fs::read(path).unwrap());
-        ParquetRecordBatchReaderBuilder::try_new(original_data.clone())
+        ParquetRecordBatchReaderBuilder::try_new(original_data)
             .unwrap()
             .build()
             .unwrap()
@@ -219,7 +219,7 @@ mod tests {
         writer.close().await.unwrap();
 
         let buffer = Bytes::from(buffer);
-        let mut reader = ParquetRecordBatchReaderBuilder::try_new(buffer.clone())
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(buffer)
             .unwrap()
             .build()
             .unwrap();
@@ -243,13 +243,14 @@ mod tests {
             &mut async_buffer,
             reader.schema(),
             1024,
-            Some(write_props),
+            Some(write_props.clone()),
         )
         .unwrap();
 
         let mut sync_buffer = Vec::new();
         let mut sync_writer =
-            ArrowWriter::try_new(&mut sync_buffer, reader.schema(), None).unwrap();
+            ArrowWriter::try_new(&mut sync_buffer, reader.schema(), Some(write_props))
+                .unwrap();
         for record_batch in reader {
             let record_batch = record_batch.unwrap();
             async_writer.write(&record_batch).await.unwrap();
