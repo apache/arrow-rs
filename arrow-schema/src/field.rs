@@ -21,6 +21,10 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::datatype::DataType;
+use crate::schema::SchemaBuilder;
+
+/// A reference counted [`Field`]
+pub type FieldRef = std::sync::Arc<Field>;
 
 /// Describes a single column in a [`Schema`](super::Schema).
 ///
@@ -230,7 +234,8 @@ impl Field {
 
     fn _fields(dt: &DataType) -> Vec<&Field> {
         match dt {
-            DataType::Struct(fields) | DataType::Union(fields, _, _) => {
+            DataType::Struct(fields) => fields.iter().flat_map(|f| f.fields()).collect(),
+            DataType::Union(fields, _, _) => {
                 fields.iter().flat_map(|f| f.fields()).collect()
             }
             DataType::List(field)
@@ -326,15 +331,9 @@ impl Field {
         match &mut self.data_type {
             DataType::Struct(nested_fields) => match &from.data_type {
                 DataType::Struct(from_nested_fields) => {
-                    for from_field in from_nested_fields {
-                        match nested_fields
-                            .iter_mut()
-                            .find(|self_field| self_field.name == from_field.name)
-                        {
-                            Some(self_field) => self_field.try_merge(from_field)?,
-                            None => nested_fields.push(from_field.clone()),
-                        }
-                    }
+                    let mut builder = SchemaBuilder::new();
+                    nested_fields.iter().chain(from_nested_fields).try_for_each(|f| builder.try_merge(f))?;
+                    *nested_fields = builder.finish().fields;
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(
@@ -479,6 +478,7 @@ impl std::fmt::Display for Field {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::Fields;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -525,29 +525,29 @@ mod test {
 
         let field = Field::new(
             "struct<dict1, list[struct<dict2, list[struct<dict1]>]>",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 dict1.clone(),
                 Field::new(
                     "list[struct<dict1, list[struct<dict2>]>]",
                     DataType::List(Box::new(Field::new(
                         "struct<dict1, list[struct<dict2>]>",
-                        DataType::Struct(vec![
+                        DataType::Struct(Fields::from(vec![
                             dict1.clone(),
                             Field::new(
                                 "list[struct<dict2>]",
                                 DataType::List(Box::new(Field::new(
                                     "struct<dict2>",
-                                    DataType::Struct(vec![dict2.clone()]),
+                                    DataType::Struct(vec![dict2.clone()].into()),
                                     false,
                                 ))),
                                 false,
                             ),
-                        ]),
+                        ])),
                         false,
                     ))),
                     false,
                 ),
-            ]),
+            ])),
             false,
         );
 
@@ -632,14 +632,18 @@ mod test {
     fn test_contains_transitivity() {
         let child_field = Field::new("child1", DataType::Float16, false);
 
-        let mut field1 = Field::new("field1", DataType::Struct(vec![child_field]), false);
+        let mut field1 = Field::new(
+            "field1",
+            DataType::Struct(Fields::from(vec![child_field])),
+            false,
+        );
         field1.set_metadata(HashMap::from([(String::from("k1"), String::from("v1"))]));
 
-        let mut field2 = Field::new("field1", DataType::Struct(vec![]), true);
+        let mut field2 = Field::new("field1", DataType::Struct(Fields::default()), true);
         field2.set_metadata(HashMap::from([(String::from("k2"), String::from("v2"))]));
         field2.try_merge(&field1).unwrap();
 
-        let mut field3 = Field::new("field1", DataType::Struct(vec![]), false);
+        let mut field3 = Field::new("field1", DataType::Struct(Fields::default()), false);
         field3.set_metadata(HashMap::from([(String::from("k3"), String::from("v3"))]));
         field3.try_merge(&field2).unwrap();
 
@@ -665,11 +669,14 @@ mod test {
         let child_field1 = Field::new("child1", DataType::Float16, false);
         let child_field2 = Field::new("child2", DataType::Float16, false);
 
-        let field1 =
-            Field::new("field1", DataType::Struct(vec![child_field1.clone()]), true);
+        let field1 = Field::new(
+            "field1",
+            DataType::Struct(vec![child_field1.clone()].into()),
+            true,
+        );
         let field2 = Field::new(
             "field1",
-            DataType::Struct(vec![child_field1, child_field2]),
+            DataType::Struct(vec![child_field1, child_field2].into()),
             true,
         );
 

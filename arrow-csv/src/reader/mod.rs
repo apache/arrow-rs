@@ -275,7 +275,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     }
 
     // build schema from inference results
-    let fields = column_types
+    let fields: Fields = column_types
         .iter()
         .zip(&headers)
         .map(|(inferred, field_name)| Field::new(field_name, inferred.get(), true))
@@ -392,10 +392,8 @@ impl<R: Read> Reader<R> {
         match &self.decoder.projection {
             Some(projection) => {
                 let fields = self.decoder.schema.fields();
-                let projected_fields: Vec<Field> =
-                    projection.iter().map(|i| fields[*i].clone()).collect();
-
-                Arc::new(Schema::new(projected_fields))
+                let projected = projection.iter().map(|i| fields[*i].clone());
+                Arc::new(Schema::new(projected.collect::<Fields>()))
             }
             None => self.decoder.schema.clone(),
         }
@@ -586,7 +584,7 @@ impl Decoder {
 /// Parses a slice of [`StringRecords`] into a [RecordBatch]
 fn parse(
     rows: &StringRecords<'_>,
-    fields: &[Field],
+    fields: &Fields,
     metadata: Option<std::collections::HashMap<String, String>>,
     projection: Option<&Vec<usize>>,
     line_number: usize,
@@ -772,7 +770,7 @@ fn parse(
         })
         .collect();
 
-    let projected_fields: Vec<Field> =
+    let projected_fields: Fields =
         projection.iter().map(|i| fields[*i].clone()).collect();
 
     let projected_schema = Arc::new(match metadata {

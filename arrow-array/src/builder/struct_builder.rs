@@ -20,7 +20,7 @@ use crate::builder::*;
 use crate::{Array, ArrayRef, StructArray};
 use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
+use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ use std::sync::Arc;
 /// Note that callers should make sure that methods of all the child field builders are
 /// properly called to maintain the consistency of the data structure.
 pub struct StructBuilder {
-    fields: Vec<Field>,
+    fields: Fields,
     field_builders: Vec<Box<dyn ArrayBuilder>>,
     null_buffer_builder: NullBufferBuilder,
 }
@@ -180,7 +180,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
 
 impl StructBuilder {
     /// Creates a new `StructBuilder`
-    pub fn new(fields: Vec<Field>, field_builders: Vec<Box<dyn ArrayBuilder>>) -> Self {
+    pub fn new(fields: Fields, field_builders: Vec<Box<dyn ArrayBuilder>>) -> Self {
         Self {
             fields,
             field_builders,
@@ -189,7 +189,7 @@ impl StructBuilder {
     }
 
     /// Creates a new `StructBuilder` from vector of [`Field`] with `capacity`
-    pub fn from_fields(fields: Vec<Field>, capacity: usize) -> Self {
+    pub fn from_fields(fields: Fields, capacity: usize) -> Self {
         let mut builders = Vec::with_capacity(fields.len());
         for field in &fields {
             builders.push(make_builder(field.data_type(), capacity));
@@ -284,6 +284,7 @@ impl StructBuilder {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
+    use arrow_schema::Field;
 
     use crate::array::Array;
 
@@ -292,12 +293,14 @@ mod tests {
         let string_builder = StringBuilder::new();
         let int_builder = Int32Builder::new();
 
-        let mut fields = Vec::new();
-        let mut field_builders = Vec::new();
-        fields.push(Field::new("f1", DataType::Utf8, false));
-        field_builders.push(Box::new(string_builder) as Box<dyn ArrayBuilder>);
-        fields.push(Field::new("f2", DataType::Int32, false));
-        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
+        let fields = Fields::from(vec![
+            Field::new("f1", DataType::Utf8, false),
+            Field::new("f2", DataType::Int32, false),
+        ]);
+        let field_builders = vec![
+            Box::new(string_builder) as Box<dyn ArrayBuilder>,
+            Box::new(int_builder) as Box<dyn ArrayBuilder>,
+        ];
 
         let mut builder = StructBuilder::new(fields, field_builders);
         assert_eq!(2, builder.num_fields());
@@ -354,12 +357,14 @@ mod tests {
         let int_builder = Int32Builder::new();
         let bool_builder = BooleanBuilder::new();
 
-        let mut fields = Vec::new();
-        let mut field_builders = Vec::new();
-        fields.push(Field::new("f1", DataType::Int32, false));
-        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
-        fields.push(Field::new("f2", DataType::Boolean, false));
-        field_builders.push(Box::new(bool_builder) as Box<dyn ArrayBuilder>);
+        let fields = Fields::from(vec![
+            Field::new("f1", DataType::Int32, false),
+            Field::new("f2", DataType::Boolean, false),
+        ]);
+        let field_builders = vec![
+            Box::new(int_builder) as Box<dyn ArrayBuilder>,
+            Box::new(bool_builder) as Box<dyn ArrayBuilder>,
+        ];
 
         let mut builder = StructBuilder::new(fields, field_builders);
         builder
@@ -412,12 +417,14 @@ mod tests {
         let int_builder = Int32Builder::new();
         let bool_builder = BooleanBuilder::new();
 
-        let mut fields = Vec::new();
-        let mut field_builders = Vec::new();
-        fields.push(Field::new("f1", DataType::Int32, false));
-        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
-        fields.push(Field::new("f2", DataType::Boolean, false));
-        field_builders.push(Box::new(bool_builder) as Box<dyn ArrayBuilder>);
+        let fields = Fields::from(vec![
+            Field::new("f1", DataType::Int32, false),
+            Field::new("f2", DataType::Boolean, false),
+        ]);
+        let field_builders = vec![
+            Box::new(int_builder) as Box<dyn ArrayBuilder>,
+            Box::new(bool_builder) as Box<dyn ArrayBuilder>,
+        ];
 
         let mut builder = StructBuilder::new(fields, field_builders);
         builder
@@ -475,10 +482,10 @@ mod tests {
             Field::new("g1", DataType::Int32, false),
             Field::new("g2", DataType::Boolean, false),
         ];
-        let struct_type = DataType::Struct(sub_fields);
+        let struct_type = DataType::Struct(sub_fields.into());
         fields.push(Field::new("f3", struct_type, false));
 
-        let mut builder = StructBuilder::from_fields(fields, 5);
+        let mut builder = StructBuilder::from_fields(fields.into(), 5);
         assert_eq!(3, builder.num_fields());
         assert!(builder.field_builder::<Float32Builder>(0).is_some());
         assert!(builder.field_builder::<StringBuilder>(1).is_some());
@@ -487,14 +494,14 @@ mod tests {
 
     #[test]
     fn test_datatype_properties() {
-        let fields = vec![
+        let fields = Fields::from(vec![
             Field::new("f1", DataType::Decimal128(1, 2), false),
             Field::new(
                 "f2",
                 DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".to_string())),
                 false,
             ),
-        ];
+        ]);
         let mut builder = StructBuilder::from_fields(fields.clone(), 1);
         builder
             .field_builder::<Decimal128Builder>(0)
@@ -517,10 +524,12 @@ mod tests {
         expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) is not currently supported"
     )]
     fn test_struct_array_builder_from_schema_unsupported_type() {
-        let mut fields = vec![Field::new("f1", DataType::Int16, false)];
         let list_type =
             DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
-        fields.push(Field::new("f2", list_type, false));
+        let fields = Fields::from(vec![
+            Field::new("f1", DataType::Int16, false),
+            Field::new("f2", list_type, false),
+        ]);
 
         let _ = StructBuilder::from_fields(fields, 5);
     }
@@ -529,10 +538,8 @@ mod tests {
     fn test_struct_array_builder_field_builder_type_mismatch() {
         let int_builder = Int32Builder::with_capacity(10);
 
-        let mut fields = Vec::new();
-        let mut field_builders = Vec::new();
-        fields.push(Field::new("f1", DataType::Int32, false));
-        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
+        let fields = Fields::from(vec![Field::new("f1", DataType::Int32, false)]);
+        let field_builders = vec![Box::new(int_builder) as Box<dyn ArrayBuilder>];
 
         let mut builder = StructBuilder::new(fields, field_builders);
         assert!(builder.field_builder::<BinaryBuilder>(0).is_none());
@@ -548,12 +555,14 @@ mod tests {
         int_builder.append_value(2);
         bool_builder.append_value(true);
 
-        let mut fields = Vec::new();
-        let mut field_builders = Vec::new();
-        fields.push(Field::new("f1", DataType::Int32, false));
-        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
-        fields.push(Field::new("f2", DataType::Boolean, false));
-        field_builders.push(Box::new(bool_builder) as Box<dyn ArrayBuilder>);
+        let fields = Fields::from(vec![
+            Field::new("f1", DataType::Int32, false),
+            Field::new("f2", DataType::Boolean, false),
+        ]);
+        let field_builders = vec![
+            Box::new(int_builder) as Box<dyn ArrayBuilder>,
+            Box::new(bool_builder) as Box<dyn ArrayBuilder>,
+        ];
 
         let mut builder = StructBuilder::new(fields, field_builders);
         builder.append(true);
@@ -568,11 +577,11 @@ mod tests {
     fn test_struct_array_builder_unequal_field_field_builders() {
         let int_builder = Int32Builder::with_capacity(10);
 
-        let mut fields = Vec::new();
-        let mut field_builders = Vec::new();
-        fields.push(Field::new("f1", DataType::Int32, false));
-        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
-        fields.push(Field::new("f2", DataType::Boolean, false));
+        let fields = Fields::from(vec![
+            Field::new("f1", DataType::Int32, false),
+            Field::new("f2", DataType::Boolean, false),
+        ]);
+        let field_builders = vec![Box::new(int_builder) as Box<dyn ArrayBuilder>];
 
         let mut builder = StructBuilder::new(fields, field_builders);
         builder.finish();

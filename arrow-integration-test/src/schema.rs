@@ -16,14 +16,14 @@
 // under the License.
 
 use crate::{field_from_json, field_to_json};
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Fields, Schema};
 use arrow::error::{ArrowError, Result};
 use std::collections::HashMap;
 
 /// Generate a JSON representation of the `Schema`.
 pub fn schema_to_json(schema: &Schema) -> serde_json::Value {
     serde_json::json!({
-        "fields": schema.fields().iter().map(field_to_json).collect::<Vec<_>>(),
+        "fields": schema.fields().iter().map(|f| field_to_json(f.as_ref())).collect::<Vec<_>>(),
         "metadata": serde_json::to_value(schema.metadata()).unwrap()
     })
 }
@@ -33,12 +33,15 @@ pub fn schema_from_json(json: &serde_json::Value) -> Result<Schema> {
     use serde_json::Value;
     match *json {
         Value::Object(ref schema) => {
-            let fields = if let Some(Value::Array(fields)) = schema.get("fields") {
-                fields.iter().map(field_from_json).collect::<Result<_>>()?
-            } else {
-                return Err(ArrowError::ParseError(
-                    "Schema fields should be an array".to_string(),
-                ));
+            let fields: Fields = match schema.get("fields") {
+                Some(Value::Array(fields)) => {
+                    fields.iter().map(field_from_json).collect::<Result<_>>()?
+                }
+                _ => {
+                    return Err(ArrowError::ParseError(
+                        "Schema fields should be an array".to_string(),
+                    ))
+                }
             };
 
             let metadata = if let Some(value) = schema.get("metadata") {
@@ -100,7 +103,7 @@ struct MetadataKeyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
     use serde_json::Value;
 
     #[test]
@@ -169,7 +172,7 @@ mod tests {
                         "inner_list",
                         DataType::List(Box::new(Field::new(
                             "struct",
-                            DataType::Struct(vec![]),
+                            DataType::Struct(Fields::empty()),
                             true,
                         ))),
                         false,
@@ -178,10 +181,10 @@ mod tests {
                 ),
                 Field::new(
                     "c25",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("a", DataType::Utf8, false),
                         Field::new("b", DataType::UInt16, false),
-                    ]),
+                    ])),
                     false,
                 ),
                 Field::new("c26", DataType::Interval(IntervalUnit::YearMonth), true),
@@ -209,7 +212,7 @@ mod tests {
                         "inner_large_list",
                         DataType::LargeList(Box::new(Field::new(
                             "struct",
-                            DataType::Struct(vec![]),
+                            DataType::Struct(Fields::empty()),
                             false,
                         ))),
                         true,
@@ -221,10 +224,10 @@ mod tests {
                     DataType::Map(
                         Box::new(Field::new(
                             "my_entries",
-                            DataType::Struct(vec![
+                            DataType::Struct(Fields::from(vec![
                                 Field::new("my_keys", DataType::Utf8, false),
                                 Field::new("my_values", DataType::UInt16, true),
-                            ]),
+                            ])),
                             false,
                         )),
                         true,

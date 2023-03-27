@@ -29,7 +29,8 @@ pub use arrow_array::{
 pub use arrow_buffer::{i256, ArrowNativeType, ToByteSlice};
 pub use arrow_data::decimal::*;
 pub use arrow_schema::{
-    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
+    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaBuilder, SchemaRef,
+    TimeUnit, UnionMode,
 };
 
 #[cfg(feature = "ffi")]

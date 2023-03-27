@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{make_array, Array, ArrayRef};
+use crate::{make_array, Array, ArrayRef, RecordBatch};
 use arrow_buffer::{buffer_bin_or, Buffer, NullBuffer};
 use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, Field, SchemaBuilder};
 use std::sync::Arc;
 use std::{any::Any, ops::Index};
 
@@ -151,11 +151,11 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
                 len = Some(child_datum_len)
             }
             child_data.push(child_datum.clone());
-            fields.push(Field::new(
+            fields.push(Arc::new(Field::new(
                 field_name,
                 array.data_type().clone(),
                 child_datum.nulls().is_some(),
-            ));
+            )));
 
             if let Some(child_nulls) = child_datum.nulls() {
                 null = Some(if let Some(null_buffer) = &null {
@@ -176,7 +176,7 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
         }
         let len = len.unwrap();
 
-        let builder = ArrayData::builder(DataType::Struct(fields))
+        let builder = ArrayData::builder(DataType::Struct(fields.into()))
             .len(len)
             .null_bit_buffer(null)
             .child_data(child_data);
@@ -216,29 +216,32 @@ impl Array for StructArray {
 
 impl From<Vec<(Field, ArrayRef)>> for StructArray {
     fn from(v: Vec<(Field, ArrayRef)>) -> Self {
-        let (field_types, field_values): (Vec<_>, Vec<_>) = v.into_iter().unzip();
+        let iter = v.into_iter();
+        let capacity = iter.size_hint().0;
 
-        let length = field_values.get(0).map(|a| a.len()).unwrap_or(0);
-        field_types.iter().zip(field_values.iter()).for_each(
-            |(field_type, field_value)| {
-                // Check the length of the child arrays
-                assert_eq!(
-                    length,
-                    field_value.len(),
-                    "all child arrays of a StructArray must have the same length"
-                );
-                // Check data types of child arrays
-                assert_eq!(
-                    field_type.data_type(),
-                    field_value.data().data_type(),
-                    "the field data types must match the array data in a StructArray"
-                );
-            },
-        );
-
+        let mut len = None;
+        let mut schema = SchemaBuilder::with_capacity(capacity);
+        let mut child_data = Vec::with_capacity(capacity);
+        for (field, array) in iter {
+            // Check the length of the child arrays
+            assert_eq!(
+                *len.get_or_insert(array.len()),
+                array.len(),
+                "all child arrays of a StructArray must have the same length"
+            );
+            // Check data types of child arrays
+            assert_eq!(
+                field.data_type(),
+                array.data_type(),
+                "the field data types must match the array data in a StructArray"
+            );
+            schema.push(field);
+            child_data.push(array.to_data());
+        }
+        let field_types = schema.finish().fields;
         let array_data = ArrayData::builder(DataType::Struct(field_types))
-            .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
-            .len(length);
+            .child_data(child_data)
+            .len(len.unwrap_or_default());
         let array_data = unsafe { array_data.build_unchecked() };
 
         // We must validate nullability
@@ -269,36 +272,52 @@ impl std::fmt::Debug for StructArray {
 
 impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
     fn from(pair: (Vec<(Field, ArrayRef)>, Buffer)) -> Self {
-        let (field_types, field_values): (Vec<_>, Vec<_>) = pair.0.into_iter().unzip();
-
-        let length = field_values.get(0).map(|a| a.len()).unwrap_or(0);
-        field_types.iter().zip(field_values.iter()).for_each(
-            |(field_type, field_value)| {
-                // Check the length of the child arrays
-                assert_eq!(
-                    length,
-                    field_value.len(),
-                    "all child arrays of a StructArray must have the same length"
-                );
-                // Check data types of child arrays
-                assert_eq!(
-                    field_type.data_type(),
-                    field_value.data().data_type(),
-                    "the field data types must match the array data in a StructArray"
-                );
-            },
-        );
-
+        let capacity = pair.0.len();
+        let mut len = None;
+        let mut schema = SchemaBuilder::with_capacity(capacity);
+        let mut child_data = Vec::with_capacity(capacity);
+        for (field, array) in pair.0 {
+            // Check the length of the child arrays
+            assert_eq!(
+                *len.get_or_insert(array.len()),
+                array.len(),
+                "all child arrays of a StructArray must have the same length"
+            );
+            // Check data types of child arrays
+            assert_eq!(
+                field.data_type(),
+                array.data_type(),
+                "the field data types must match the array data in a StructArray"
+            );
+            schema.push(field);
+            child_data.push(array.to_data());
+        }
+        let field_types = schema.finish().fields;
         let array_data = ArrayData::builder(DataType::Struct(field_types))
             .null_bit_buffer(Some(pair.1))
-            .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
-            .len(length);
+            .child_data(child_data)
+            .len(len.unwrap_or_default());
         let array_data = unsafe { array_data.build_unchecked() };
 
         // We must validate nullability
         array_data.validate_nulls().unwrap();
 
         Self::from(array_data)
+    }
+}
+
+impl From<RecordBatch> for StructArray {
+    fn from(value: RecordBatch) -> Self {
+        // TODO: Don't store ArrayData inside arrays (#3880)
+        let builder = ArrayData::builder(DataType::Struct(value.schema().fields.clone()))
+            .child_data(value.columns().iter().map(|x| x.to_data()).collect())
+            .len(value.num_rows());
+
+        // Safety: RecordBatch must be valid
+        Self {
+            data: unsafe { builder.build_unchecked() },
+            boxed_fields: value.columns().to_vec(),
+        }
     }
 }
 
@@ -340,7 +359,7 @@ mod tests {
             Field::new("a", DataType::Boolean, false),
             Field::new("b", DataType::Int64, false),
         ];
-        let struct_array_data = ArrayData::builder(DataType::Struct(fields))
+        let struct_array_data = ArrayData::builder(DataType::Struct(fields.into()))
             .len(4)
             .add_child_data(boolean_data.clone())
             .add_child_data(int_data.clone())
@@ -509,7 +528,7 @@ mod tests {
             Field::new("a", DataType::Boolean, true),
             Field::new("b", DataType::Int32, true),
         ];
-        let struct_array_data = ArrayData::builder(DataType::Struct(field_types))
+        let struct_array_data = ArrayData::builder(DataType::Struct(field_types.into()))
             .len(5)
             .add_child_data(boolean_data.clone())
             .add_child_data(int_data.clone())

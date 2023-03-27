@@ -731,7 +731,7 @@ mod tests {
     use crate::cast::{as_union_array, downcast_array};
     use crate::downcast_run_array;
     use arrow_buffer::{Buffer, MutableBuffer};
-    use arrow_schema::{Field, UnionMode};
+    use arrow_schema::{Field, Fields, UnionMode};
 
     #[test]
     fn test_empty_primitive() {
@@ -785,7 +785,7 @@ mod tests {
         // It is possible to create a null struct containing a non-nullable child
         // see https://github.com/apache/arrow-rs/pull/3244 for details
         let struct_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         let array = new_null_array(&struct_type, 9);
 
         let a = array.as_any().downcast_ref::<StructArray>().unwrap();
@@ -828,10 +828,10 @@ mod tests {
         let data_type = DataType::Map(
             Box::new(Field::new(
                 "entry",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("key", DataType::Utf8, false),
                     Field::new("value", DataType::Int32, true),
-                ]),
+                ])),
                 false,
             )),
             false,

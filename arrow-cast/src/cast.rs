@@ -6993,10 +6993,10 @@ mod tests {
         let data_type = DataType::Map(
             Box::new(Field::new(
                 "entry",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("key", DataType::Utf8, false),
                     Field::new("value", DataType::Int32, true),
-                ]),
+                ])),
                 false,
             )),
             false,
@@ -7025,7 +7025,7 @@ mod tests {
 
         // Cast null from and to struct
         let data_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         cast_from_null_to_other(&data_type);
     }
 

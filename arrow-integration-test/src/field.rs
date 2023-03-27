@@ -150,13 +150,10 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                         ));
                     }
                 },
-                DataType::Struct(mut fields) => match map.get("children") {
-                    Some(Value::Array(values)) => {
-                        let struct_fields: Result<Vec<Field>> =
-                            values.iter().map(field_from_json).collect();
-                        fields.append(&mut struct_fields?);
-                        DataType::Struct(fields)
-                    }
+                DataType::Struct(_) => match map.get("children") {
+                    Some(Value::Array(values)) => DataType::Struct(
+                        values.iter().map(field_from_json).collect::<Result<_>>()?,
+                    ),
                     Some(_) => {
                         return Err(ArrowError::ParseError(
                             "Field 'children' must be an array".to_string(),
@@ -265,7 +262,9 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
 /// Generate a JSON representation of the `Field`.
 pub fn field_to_json(field: &Field) -> serde_json::Value {
     let children: Vec<serde_json::Value> = match field.data_type() {
-        DataType::Struct(fields) => fields.iter().map(field_to_json).collect(),
+        DataType::Struct(fields) => {
+            fields.iter().map(|x| field_to_json(x.as_ref())).collect()
+        }
         DataType::List(field)
         | DataType::LargeList(field)
         | DataType::FixedSizeList(field, _)
@@ -297,17 +296,17 @@ pub fn field_to_json(field: &Field) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::UnionMode;
+    use arrow::datatypes::{Fields, UnionMode};
     use serde_json::Value;
 
     #[test]
     fn struct_field_to_json() {
         let f = Field::new(
             "address",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("street", DataType::Utf8, false),
                 Field::new("zip", DataType::UInt16, false),
-            ]),
+            ])),
             false,
         );
         let value: Value = serde_json::from_str(
@@ -350,10 +349,10 @@ mod tests {
             DataType::Map(
                 Box::new(Field::new(
                     "my_entries",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("my_keys", DataType::Utf8, false),
                         Field::new("my_values", DataType::UInt16, true),
-                    ]),
+                    ])),
                     false,
                 )),
                 true,
@@ -455,10 +454,10 @@ mod tests {
 
         let expected = Field::new(
             "address",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("street", DataType::Utf8, false),
                 Field::new("zip", DataType::UInt16, false),
-            ]),
+            ])),
             false,
         );
 
@@ -514,10 +513,10 @@ mod tests {
             DataType::Map(
                 Box::new(Field::new(
                     "my_entries",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("my_keys", DataType::Utf8, false),
                         Field::new("my_values", DataType::UInt16, true),
-                    ]),
+                    ])),
                     false,
                 )),
                 true,

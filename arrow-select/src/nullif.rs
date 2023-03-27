@@ -128,7 +128,7 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, StringArray, StructArray};
     use arrow_data::ArrayData;
-    use arrow_schema::{DataType, Field};
+    use arrow_schema::{DataType, Field, Fields};
     use rand::{thread_rng, Rng};
 
     #[test]
@@ -376,10 +376,10 @@ mod tests {
     /// also need the top level is_valid bits to be correct.
     fn create_foo_struct(values: Vec<Foo>) -> StructArray {
         let mut struct_array = StructBuilder::new(
-            vec![
+            Fields::from(vec![
                 Field::new("a", DataType::Int32, true),
                 Field::new("b", DataType::Boolean, true),
-            ],
+            ]),
             vec![
                 Box::new(Int32Builder::with_capacity(values.len())),
                 Box::new(BooleanBuilder::with_capacity(values.len())),

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode};
+use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionMode};
 use arrow::error::{ArrowError, Result};
 
 /// Parse a data type from a JSON representation.
@@ -206,7 +206,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             }
             Some(s) if s == "struct" => {
                 // return an empty `struct` type as its children aren't defined in the map
-                Ok(DataType::Struct(vec![]))
+                Ok(DataType::Struct(Fields::empty()))
             }
             Some(s) if s == "map" => {
                 if let Some(Value::Bool(keys_sorted)) = map.get("keysSorted") {

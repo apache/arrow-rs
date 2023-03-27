@@ -25,7 +25,7 @@ use arrow::datatypes::Int16Type;
 use arrow_buffer::Buffer;
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, Fields};
 use std::sync::Arc;
 
 fn create_decimal_array(
@@ -778,10 +778,10 @@ fn test_map_nulls_append() {
         DataType::Map(
             Box::new(Field::new(
                 "entries",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("keys", DataType::Int64, false),
                     Field::new("values", DataType::Int64, true),
-                ]),
+                ])),
                 false,
             )),
             false,

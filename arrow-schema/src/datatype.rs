@@ -18,6 +18,7 @@
 use std::fmt;
 
 use crate::field::Field;
+use crate::Fields;
 
 /// The set of datatypes that are supported by this implementation of Apache Arrow.
 ///
@@ -182,7 +183,7 @@ pub enum DataType {
     /// A single LargeList array can store up to [`i64::MAX`] elements in total
     LargeList(Box<Field>),
     /// A nested datatype that contains a number of sub-fields.
-    Struct(Vec<Field>),
+    Struct(Fields),
     /// A nested datatype that can represent slots of differing types. Components:
     ///
     /// 1. [`Field`] for each possible child type the Union can hold
@@ -482,7 +483,8 @@ impl DataType {
                 | DataType::FixedSizeList(field, _)
                 | DataType::LargeList(field)
                 | DataType::Map(field, _) => field.size(),
-                DataType::Struct(fields) | DataType::Union(fields, _, _) => {
+                DataType::Struct(fields) => fields.size(),
+                DataType::Union(fields, _, _) => {
                     fields
                         .iter()
                         .map(|field| field.size() - std::mem::size_of_val(field))
@@ -534,18 +536,18 @@ mod tests {
         let last_name = Field::new("last_name", DataType::Utf8, false)
             .with_metadata(HashMap::default());
 
-        let person = DataType::Struct(vec![
+        let person = DataType::Struct(Fields::from(vec![
             first_name,
             last_name,
             Field::new(
                 "address",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("street", DataType::Utf8, false),
                     Field::new("zip", DataType::UInt16, false),
-                ]),
+                ])),
                 false,
             ),
-        ]);
+        ]));
 
         let serialized = serde_json::to_string(&person).unwrap();
 
@@ -592,24 +594,26 @@ mod tests {
         assert!(!list_e.equals_datatype(&list_g));
         assert!(!list_f.equals_datatype(&list_g));
 
-        let list_h = DataType::Struct(vec![Field::new("f1", list_e, true)]);
-        let list_i = DataType::Struct(vec![Field::new("f1", list_f.clone(), true)]);
-        let list_j = DataType::Struct(vec![Field::new("f1", list_f.clone(), false)]);
-        let list_k = DataType::Struct(vec![
+        let list_h = DataType::Struct(Fields::from(vec![Field::new("f1", list_e, true)]));
+        let list_i =
+            DataType::Struct(Fields::from(vec![Field::new("f1", list_f.clone(), true)]));
+        let list_j =
+            DataType::Struct(Fields::from(vec![Field::new("f1", list_f.clone(), false)]));
+        let list_k = DataType::Struct(Fields::from(vec![
             Field::new("f1", list_f.clone(), false),
             Field::new("f2", list_g.clone(), false),
             Field::new("f3", DataType::Utf8, true),
-        ]);
-        let list_l = DataType::Struct(vec![
+        ]));
+        let list_l = DataType::Struct(Fields::from(vec![
             Field::new("ff1", list_f.clone(), false),
             Field::new("ff2", list_g.clone(), false),
             Field::new("ff3", DataType::LargeUtf8, true),
-        ]);
-        let list_m = DataType::Struct(vec![
+        ]));
+        let list_m = DataType::Struct(Fields::from(vec![
             Field::new("ff1", list_f, false),
             Field::new("ff2", list_g, false),
             Field::new("ff3", DataType::Utf8, true),
-        ]);
+        ]));
         assert!(list_h.equals_datatype(&list_i));
         assert!(!list_h.equals_datatype(&list_j));
         assert!(!list_k.equals_datatype(&list_l));
@@ -618,18 +622,18 @@ mod tests {
 
     #[test]
     fn create_struct_type() {
-        let _person = DataType::Struct(vec![
+        let _person = DataType::Struct(Fields::from(vec![
             Field::new("first_name", DataType::Utf8, false),
             Field::new("last_name", DataType::Utf8, false),
             Field::new(
                 "address",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("street", DataType::Utf8, false),
                     Field::new("zip", DataType::UInt16, false),
-                ]),
+                ])),
                 false,
             ),
-        ]);
+        ]));
     }
 
     #[test]

@@ -18,12 +18,65 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
+use std::sync::Arc;
 
 use crate::error::ArrowError;
 use crate::field::Field;
+use crate::{FieldRef, Fields};
+
+/// A builder to facilitate building a [`Schema`] from iteratively from [`FieldRef`]
+#[derive(Debug, Default)]
+pub struct SchemaBuilder {
+    fields: Vec<FieldRef>,
+}
+
+impl SchemaBuilder {
+    /// Creates a new empty [`SchemaBuilder`]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a new empty [`SchemaBuilder`] with space for `capacity` fields
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            fields: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Appends a [`FieldRef`] to this [`SchemaBuilder`] without checking for collision
+    pub fn push(&mut self, field: impl Into<FieldRef>) {
+        self.fields.push(field.into())
+    }
+
+    /// Appends a [`FieldRef`] to this [`SchemaBuilder`] checking for collision
+    ///
+    /// If an existing field exists with the same name, calls [`Field::try_merge`]
+    pub fn try_merge(&mut self, field: &FieldRef) -> Result<(), ArrowError> {
+        // This could potentially be sped up with a HashMap or similar
+        let existing = self.fields.iter_mut().find(|f| f.name() == field.name());
+        match existing {
+            Some(e) if Arc::ptr_eq(e, field) => {} // Nothing to do
+            Some(e) => match Arc::get_mut(e) {
+                Some(e) => e.try_merge(field.as_ref())?,
+                None => {
+                    let mut t = e.as_ref().clone();
+                    t.try_merge(field)?;
+                    *e = Arc::new(t)
+                }
+            },
+            None => self.fields.push(field.clone()),
+        }
+        Ok(())
+    }
+
+    /// Consume this [`SchemaBuilder`] yielding the final [`Schema`]
+    pub fn finish(self) -> Schema {
+        Schema::new(self.fields)
+    }
+}
 
 /// A reference-counted reference to a [`Schema`].
-pub type SchemaRef = std::sync::Arc<Schema>;
+pub type SchemaRef = Arc<Schema>;
 
 /// Describes the meta-data of an ordered sequence of relative types.
 ///
@@ -32,7 +85,7 @@ pub type SchemaRef = std::sync::Arc<Schema>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Schema {
-    pub fields: Vec<Field>,
+    pub fields: Fields,
     /// A map of key-value pairs containing additional meta data.
     pub metadata: HashMap<String, String>,
 }
@@ -41,7 +94,7 @@ impl Schema {
     /// Creates an empty `Schema`
     pub fn empty() -> Self {
         Self {
-            fields: vec![],
+            fields: Default::default(),
             metadata: HashMap::new(),
         }
     }
@@ -57,7 +110,7 @@ impl Schema {
     ///
     /// let schema = Schema::new(vec![field_a, field_b]);
     /// ```
-    pub fn new(fields: Vec<Field>) -> Self {
+    pub fn new(fields: impl Into<Fields>) -> Self {
         Self::new_with_metadata(fields, HashMap::new())
     }
 
@@ -79,11 +132,14 @@ impl Schema {
     /// let schema = Schema::new_with_metadata(vec![field_a, field_b], metadata);
     /// ```
     #[inline]
-    pub const fn new_with_metadata(
-        fields: Vec<Field>,
+    pub fn new_with_metadata(
+        fields: impl Into<Fields>,
         metadata: HashMap<String, String>,
     ) -> Self {
-        Self { fields, metadata }
+        Self {
+            fields: fields.into(),
+            metadata,
+        }
     }
 
     /// Sets the metadata of this `Schema` to be `metadata` and returns self
@@ -141,39 +197,34 @@ impl Schema {
     pub fn try_merge(
         schemas: impl IntoIterator<Item = Self>,
     ) -> Result<Self, ArrowError> {
-        schemas
-            .into_iter()
-            .try_fold(Self::empty(), |mut merged, schema| {
-                let Schema { metadata, fields } = schema;
-                for (key, value) in metadata.into_iter() {
-                    // merge metadata
-                    if let Some(old_val) = merged.metadata.get(&key) {
-                        if old_val != &value {
-                            return Err(ArrowError::SchemaError(format!(
-                                "Fail to merge schema due to conflicting metadata. \
+        let mut out_meta = HashMap::new();
+        let mut out_fields = SchemaBuilder::new();
+        for schema in schemas {
+            let Schema { metadata, fields } = schema;
+
+            // merge metadata
+            for (key, value) in metadata.into_iter() {
+                if let Some(old_val) = out_meta.get(&key) {
+                    if old_val != &value {
+                        return Err(ArrowError::SchemaError(format!(
+                            "Fail to merge schema due to conflicting metadata. \
                                          Key '{key}' has different values '{old_val}' and '{value}'"
-                            )));
-                        }
-                    }
-                    merged.metadata.insert(key, value);
-                }
-                // merge fields
-                for field in fields.into_iter() {
-                    let merged_field =
-                        merged.fields.iter_mut().find(|f| f.name() == field.name());
-                    match merged_field {
-                        Some(merged_field) => merged_field.try_merge(&field)?,
-                        // found a new field, add to field list
-                        None => merged.fields.push(field),
+                        )));
                     }
                 }
-                Ok(merged)
-            })
+                out_meta.insert(key, value);
+            }
+
+            // merge fields
+            fields.iter().try_for_each(|x| out_fields.try_merge(x))?
+        }
+
+        Ok(out_fields.finish().with_metadata(out_meta))
     }
 
     /// Returns an immutable reference of the vector of `Field` instances.
     #[inline]
-    pub const fn fields(&self) -> &Vec<Field> {
+    pub const fn fields(&self) -> &Fields {
         &self.fields
     }
 
@@ -205,15 +256,13 @@ impl Schema {
 
     /// Find the index of the column with the given name.
     pub fn index_of(&self, name: &str) -> Result<usize, ArrowError> {
-        (0..self.fields.len())
-            .find(|idx| self.fields[*idx].name() == name)
-            .ok_or_else(|| {
-                let valid_fields: Vec<String> =
-                    self.fields.iter().map(|f| f.name().clone()).collect();
-                ArrowError::SchemaError(format!(
-                    "Unable to get field named \"{name}\". Valid fields: {valid_fields:?}"
-                ))
-            })
+        let (idx, _) = self.fields().find(name).ok_or_else(|| {
+            let valid_fields: Vec<_> = self.fields.iter().map(|f| f.name()).collect();
+            ArrowError::SchemaError(format!(
+                "Unable to get field named \"{name}\". Valid fields: {valid_fields:?}"
+            ))
+        })?;
+        Ok(idx)
     }
 
     /// Returns an immutable reference to the Map of custom metadata key-value pairs.
@@ -225,10 +274,8 @@ impl Schema {
     /// Look up a column by name and return a immutable reference to the column along with
     /// its index.
     pub fn column_with_name(&self, name: &str) -> Option<(usize, &Field)> {
-        self.fields
-            .iter()
-            .enumerate()
-            .find(|&(_, c)| c.name() == name)
+        let (idx, field) = self.fields.find(name)?;
+        Some((idx, field.as_ref()))
     }
 
     /// Check to see if `self` is a superset of `other` schema. Here are the comparison rules:
@@ -281,9 +328,10 @@ impl Hash for Schema {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::datatype::DataType;
     use crate::{TimeUnit, UnionMode};
+
+    use super::*;
 
     #[test]
     #[cfg(feature = "serde")]
@@ -525,10 +573,10 @@ mod tests {
             Field::new("last_name", DataType::Utf8, false),
             Field::new(
                 "address",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("street", DataType::Utf8, false),
                     Field::new("zip", DataType::UInt16, false),
-                ]),
+                ])),
                 false,
             ),
             Field::new_dict(
@@ -634,7 +682,9 @@ mod tests {
                 Field::new("last_name", DataType::Utf8, false),
                 Field::new(
                     "address",
-                    DataType::Struct(vec![Field::new("zip", DataType::UInt16, false)]),
+                    DataType::Struct(
+                        vec![Field::new("zip", DataType::UInt16, false)].into(),
+                    ),
                     false,
                 ),
             ]),
@@ -644,12 +694,12 @@ mod tests {
                     Field::new("last_name", DataType::Utf8, true),
                     Field::new(
                         "address",
-                        DataType::Struct(vec![
+                        DataType::Struct(Fields::from(vec![
                             // add new nested field
                             Field::new("street", DataType::Utf8, false),
                             // nullable merge on nested field
                             Field::new("zip", DataType::UInt16, true),
-                        ]),
+                        ])),
                         false,
                     ),
                     // new field
@@ -671,10 +721,10 @@ mod tests {
                     Field::new("last_name", DataType::Utf8, true),
                     Field::new(
                         "address",
-                        DataType::Struct(vec![
+                        DataType::Struct(Fields::from(vec![
                             Field::new("zip", DataType::UInt16, true),
                             Field::new("street", DataType::Utf8, false),
-                        ]),
+                        ])),
                         false,
                     ),
                     Field::new("number", DataType::Utf8, true),

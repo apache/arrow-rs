@@ -486,7 +486,7 @@ mod tests {
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_cast::display::array_value_to_string;
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::Schema;
+    use arrow_schema::{Fields, Schema};
 
     #[test]
     fn test_calculate_array_levels_twitter_example() {
@@ -947,7 +947,7 @@ mod tests {
         );
         let struct_field_e = Field::new(
             "e",
-            DataType::Struct(vec![struct_field_f.clone(), struct_field_g.clone()]),
+            DataType::Struct(vec![struct_field_f.clone(), struct_field_g.clone()].into()),
             true,
         );
         let schema = Schema::new(vec![
@@ -955,7 +955,9 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new(
                 "c",
-                DataType::Struct(vec![struct_field_d.clone(), struct_field_e.clone()]),
+                DataType::Struct(
+                    vec![struct_field_d.clone(), struct_field_e.clone()].into(),
+                ),
                 true, // https://github.com/apache/arrow-rs/issues/245
             ),
         ]);
@@ -1067,7 +1069,7 @@ mod tests {
         let offset_field = Field::new("offset", DataType::Int32, true);
         let schema = Schema::new(vec![Field::new(
             "some_nested_object",
-            DataType::Struct(vec![offset_field.clone()]),
+            DataType::Struct(vec![offset_field.clone()].into()),
             false,
         )]);
 
@@ -1090,7 +1092,7 @@ mod tests {
         let offset_field = Field::new("offset", DataType::Int32, true);
         let schema = Schema::new(vec![Field::new(
             "some_nested_object",
-            DataType::Struct(vec![offset_field.clone()]),
+            DataType::Struct(vec![offset_field.clone()].into()),
             true,
         )]);
 
@@ -1122,10 +1124,10 @@ mod tests {
         {"stocks":{"long": "$CCC", "short": null}}
         {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
         "#;
-        let entries_struct_type = DataType::Struct(vec![
+        let entries_struct_type = DataType::Struct(Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", DataType::Utf8, true),
-        ]);
+        ]));
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
@@ -1182,13 +1184,12 @@ mod tests {
     fn test_list_of_struct() {
         // define schema
         let int_field = Field::new("a", DataType::Int32, true);
-        let item_field =
-            Field::new("item", DataType::Struct(vec![int_field.clone()]), true);
+        let fields = Fields::from([Arc::new(int_field)]);
+        let item_field = Field::new("item", DataType::Struct(fields.clone()), true);
         let list_field = Field::new("list", DataType::List(Box::new(item_field)), true);
 
         let int_builder = Int32Builder::with_capacity(10);
-        let struct_builder =
-            StructBuilder::new(vec![int_field], vec![Box::new(int_builder)]);
+        let struct_builder = StructBuilder::new(fields, vec![Box::new(int_builder)]);
         let mut list_builder = ListBuilder::new(struct_builder);
 
         // [{a: 1}], [], null, [null, null], [{a: null}], [{a: 2}]

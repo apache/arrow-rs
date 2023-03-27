@@ -27,7 +27,7 @@ use arrow_flight::{
     encode::FlightDataEncoderBuilder,
     error::FlightError,
 };
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 
@@ -484,7 +484,7 @@ async fn roundtrip_with_encoder(
 
 /// Workaround for https://github.com/apache/arrow-rs/issues/1206
 fn prepare_schema_for_flight(schema: &Schema) -> Schema {
-    let fields = schema
+    let fields: Fields = schema
         .fields()
         .iter()
         .map(|field| match field.data_type() {
@@ -494,7 +494,7 @@ fn prepare_schema_for_flight(schema: &Schema) -> Schema {
                 field.is_nullable(),
             )
             .with_metadata(field.metadata().clone()),
-            _ => field.clone(),
+            _ => field.as_ref().clone(),
         })
         .collect();
 

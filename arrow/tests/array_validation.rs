@@ -23,7 +23,7 @@ use arrow::array::{
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, UnionMode};
+use arrow_schema::{DataType, Field, Fields, UnionMode};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -387,7 +387,7 @@ fn test_validate_struct_child_type() {
 
     // validate the the type of struct fields matches child fields
     ArrayData::try_new(
-        DataType::Struct(vec![Field::new("field1", DataType::Int64, true)]),
+        DataType::Struct(vec![Field::new("field1", DataType::Int64, true)].into()),
         3,
         None,
         0,
@@ -408,7 +408,7 @@ fn test_validate_struct_child_length() {
         .collect::<Int32Array>();
 
     ArrayData::try_new(
-        DataType::Struct(vec![Field::new("field1", DataType::Int32, true)]),
+        DataType::Struct(vec![Field::new("field1", DataType::Int32, true)].into()),
         6,
         None,
         0,
@@ -874,10 +874,10 @@ fn test_validate_union_dense_with_bad_len() {
 #[test]
 fn test_try_new_sliced_struct() {
     let mut builder = StructBuilder::new(
-        vec![
+        Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Boolean, true),
-        ],
+        ]),
         vec![
             Box::new(Int32Builder::with_capacity(5)),
             Box::new(BooleanBuilder::with_capacity(5)),

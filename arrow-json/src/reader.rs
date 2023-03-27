@@ -159,9 +159,7 @@ fn generate_datatype(t: &InferredType) -> Result<DataType, ArrowError> {
     })
 }
 
-fn generate_fields(
-    spec: &HashMap<String, InferredType>,
-) -> Result<Vec<Field>, ArrowError> {
+fn generate_fields(spec: &HashMap<String, InferredType>) -> Result<Fields, ArrowError> {
     spec.iter()
         .map(|(k, types)| Ok(Field::new(k, generate_datatype(types)?, true)))
         .collect()
@@ -656,7 +654,7 @@ impl Decoder {
         match &self.options.projection {
             Some(projection) => {
                 let fields = self.schema.fields();
-                let projected_fields: Vec<Field> = fields
+                let projected_fields: Fields = fields
                     .iter()
                     .filter_map(|field| {
                         if projection.contains(field.name()) {
@@ -708,17 +706,13 @@ impl Decoder {
         let arrays =
             self.build_struct_array(rows, self.schema.fields(), &self.options.projection);
 
-        let projected_fields = if let Some(projection) = self.options.projection.as_ref()
-        {
-            projection
+        let projected_fields: Fields = match self.options.projection.as_ref() {
+            Some(projection) => projection
                 .iter()
-                .filter_map(|name| self.schema.column_with_name(name))
-                .map(|(_, field)| field.clone())
-                .collect()
-        } else {
-            self.schema.fields().to_vec()
+                .filter_map(|name| Some(self.schema.fields.find(name)?.1.clone()))
+                .collect(),
+            None => self.schema.fields.clone(),
         };
-
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
         arrays.and_then(|arr| {
@@ -1219,8 +1213,7 @@ impl Decoder {
                         }
                     })
                     .collect();
-                let arrays =
-                    self.build_struct_array(rows.as_slice(), fields.as_slice(), &None)?;
+                let arrays = self.build_struct_array(rows.as_slice(), fields, &None)?;
                 let data_type = DataType::Struct(fields.clone());
                 let buf = null_buffer.into();
                 unsafe {
@@ -1258,7 +1251,7 @@ impl Decoder {
     fn build_struct_array(
         &self,
         rows: &[Value],
-        struct_fields: &[Field],
+        struct_fields: &Fields,
         projection: &Option<Vec<String>>,
     ) -> Result<Vec<ArrayRef>, ArrowError> {
         let arrays: Result<Vec<ArrayRef>, ArrowError> = struct_fields
@@ -1529,7 +1522,7 @@ impl Decoder {
 
         let struct_children = self.build_struct_array(
             struct_rows.as_slice(),
-            &[key_field.clone(), value_field.clone()],
+            &Fields::from([key_field.clone(), value_field.clone()]),
             &None,
         )?;
 
@@ -2167,7 +2160,7 @@ mod tests {
     fn test_invalid_json_read_record() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "a",
-            DataType::Struct(vec![Field::new("a", DataType::Utf8, true)]),
+            DataType::Struct(vec![Field::new("a", DataType::Utf8, true)].into()),
             true,
         )]));
         let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
@@ -2311,15 +2304,15 @@ mod tests {
     fn test_nested_struct_json_arrays() {
         let c_field = Field::new(
             "c",
-            DataType::Struct(vec![Field::new("d", DataType::Utf8, true)]),
+            DataType::Struct(vec![Field::new("d", DataType::Utf8, true)].into()),
             true,
         );
         let a_field = Field::new(
             "a",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("b", DataType::Boolean, true),
                 c_field.clone(),
-            ]),
+            ])),
             true,
         );
         let schema = Arc::new(Schema::new(vec![a_field.clone()]));
@@ -2361,15 +2354,15 @@ mod tests {
     fn test_nested_list_json_arrays() {
         let c_field = Field::new(
             "c",
-            DataType::Struct(vec![Field::new("d", DataType::Utf8, true)]),
+            DataType::Struct(vec![Field::new("d", DataType::Utf8, true)].into()),
             true,
         );
         let a_struct_field = Field::new(
             "a",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("b", DataType::Boolean, true),
                 c_field.clone(),
-            ]),
+            ])),
             true,
         );
         let a_field =
@@ -2467,10 +2460,10 @@ mod tests {
         let account_field = Field::new("account", DataType::UInt16, false);
         let value_list_type =
             DataType::List(Box::new(Field::new("item", DataType::Utf8, false)));
-        let entries_struct_type = DataType::Struct(vec![
+        let entries_struct_type = DataType::Struct(Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", value_list_type.clone(), true),
-        ]);
+        ]));
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
@@ -2970,14 +2963,16 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new(
                 "c1",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("a", DataType::Boolean, true),
                     Field::new(
                         "b",
-                        DataType::Struct(vec![Field::new("c", DataType::Utf8, true)]),
+                        DataType::Struct(
+                            vec![Field::new("c", DataType::Utf8, true)].into(),
+                        ),
                         true,
                     ),
-                ]),
+                ])),
                 true,
             ),
             Field::new("c2", DataType::Int64, true),
@@ -3004,11 +2999,11 @@ mod tests {
                 "c1",
                 DataType::List(Box::new(Field::new(
                     "item",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("a", DataType::Utf8, true),
                         Field::new("b", DataType::Int64, true),
                         Field::new("c", DataType::Boolean, true),
-                    ]),
+                    ])),
                     true,
                 ))),
                 true,
@@ -3305,7 +3300,7 @@ mod tests {
             "c1",
             DataType::List(Box::new(Field::new(
                 "item",
-                DataType::Struct(vec![Field::new("a", DataType::Int64, true)]),
+                DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into()),
                 true,
             ))),
             true,
