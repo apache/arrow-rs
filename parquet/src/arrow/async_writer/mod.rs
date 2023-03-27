@@ -161,6 +161,10 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
             .write(&buffer)
             .await
             .map_err(|e| ParquetError::External(Box::new(e)))?;
+        async_writer
+            .flush()
+            .await
+            .map_err(|e| ParquetError::External(Box::new(e)))?;
 
         // reuse the buffer.
         buffer.clear();
