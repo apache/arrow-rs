@@ -3440,12 +3440,16 @@ fn cast_fixed_size_binary_to_binary<O: OffsetSizeTrait>(
         .downcast_ref::<FixedSizeBinaryArray>()
         .unwrap();
 
-    let offsets: i64 = byte_width as i64 * array.len() as i64;
+    let offsets: i128 = byte_width as i128 * array.len() as i128;
 
     let is_binary = matches!(to_type, DataType::Binary);
-    if is_binary && offsets > i32::MAX as i64 {
+    if is_binary && offsets > i32::MAX as i128 {
         return Err(ArrowError::ComputeError(
             "Cast from FixedSizeBinary to Binary would overflow".to_string(),
+        ));
+    } else if !is_binary && offsets > i64::MAX as i128 {
+        return Err(ArrowError::ComputeError(
+            "Cast from FixedSizeBinary to LargeBinary would overflow".to_string(),
         ));
     }
 
