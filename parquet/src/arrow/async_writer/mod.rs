@@ -23,6 +23,14 @@
 //!
 //! Here is an example for using [`AsyncArrowWriter`]:
 //! ```
+//! # #[tokio::main(flavor="current_thread")]
+//! # async fn main() {
+//! #
+//! use std::sync::Arc;
+//! use arrow_array::{ArrayRef, Int64Array, RecordBatch, RecordBatchReader};
+//! use bytes::Bytes;
+//! use parquet::arrow::{AsyncArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
+//!
 //! let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
 //! let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
 //!
@@ -40,6 +48,7 @@
 //! let read = reader.next().unwrap().unwrap();
 //!
 //! assert_eq!(to_write, read);
+//! # }
 //! ```
 
 use std::{
@@ -112,7 +121,7 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         .await
     }
 
-    /// Append [`KeyValue`] metadata in addition to those in [`WriteProperties`]
+    /// Append [`KeyValue`] metadata in addition to those in [`WriterProperties`]
     ///
     /// This method allows to append metadata after [`RecordBatch`]es are written.
     pub fn append_key_value_metadata(&mut self, kv_metadata: KeyValue) {
