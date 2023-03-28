@@ -499,7 +499,6 @@ where
 mod tests {
     use super::*;
     use arrow_array::builder::*;
-    use arrow_array::cast::*;
     use arrow_array::types::*;
 
     #[test]
@@ -507,14 +506,13 @@ mod tests {
         let input =
             Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
         let input_slice = input.slice(1, 4);
-        let input_slice: &Float64Array = input_slice.as_primitive();
-        let result = unary(input_slice, |n| n.round());
+        let result = unary(&input_slice, |n| n.round());
         assert_eq!(
             result,
             Float64Array::from(vec![None, Some(7.0), None, Some(7.0)])
         );
 
-        let result = unary_dyn::<_, Float64Type>(input_slice, |n| n + 1.0).unwrap();
+        let result = unary_dyn::<_, Float64Type>(&input_slice, |n| n + 1.0).unwrap();
 
         assert_eq!(
             result.as_any().downcast_ref::<Float64Array>().unwrap(),

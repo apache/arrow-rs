@@ -764,13 +764,12 @@ mod tests {
 
     #[test]
     fn test_filter_array_slice() {
-        let a_slice = Int32Array::from(vec![5, 6, 7, 8, 9]).slice(1, 4);
-        let a = a_slice.as_ref();
+        let a = Int32Array::from(vec![5, 6, 7, 8, 9]).slice(1, 4);
         let b = BooleanArray::from(vec![true, false, false, true]);
         // filtering with sliced filter array is not currently supported
         // let b_slice = BooleanArray::from(vec![true, false, false, true, false]).slice(1, 4);
         // let b = b_slice.as_any().downcast_ref().unwrap();
-        let c = filter(a, &b).unwrap();
+        let c = filter(&a, &b).unwrap();
         let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(2, d.len());
         assert_eq!(6, d.value(0));
@@ -868,14 +867,13 @@ mod tests {
 
     #[test]
     fn test_filter_array_slice_with_null() {
-        let a_slice =
+        let a =
             Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]).slice(1, 4);
-        let a = a_slice.as_ref();
         let b = BooleanArray::from(vec![true, false, false, true]);
         // filtering with sliced filter array is not currently supported
         // let b_slice = BooleanArray::from(vec![true, false, false, true, false]).slice(1, 4);
         // let b = b_slice.as_any().downcast_ref().unwrap();
-        let c = filter(a, &b).unwrap();
+        let c = filter(&a, &b).unwrap();
         let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(2, d.len());
         assert!(d.is_null(0));
@@ -996,7 +994,7 @@ mod tests {
 
         let mask1 = BooleanArray::from(vec![Some(true), Some(true), None]);
         let out = filter(&a, &mask1).unwrap();
-        assert_eq!(&out, &a.slice(0, 2));
+        assert_eq!(out.as_ref(), &a.slice(0, 2));
     }
 
     #[test]

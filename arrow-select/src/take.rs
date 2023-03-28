@@ -1567,14 +1567,8 @@ mod tests {
             StringArray::from(vec![Some("hello"), None, Some("world"), None, Some("hi")]);
         let indices = Int32Array::from(vec![Some(0), Some(1), None, Some(0), Some(2)]);
         let indices_slice = indices.slice(1, 4);
-        let indices_slice = indices_slice
-            .as_ref()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-
         let expected = StringArray::from(vec![None, None, Some("hello"), Some("world")]);
-        let result = take(&strings, indices_slice, None).unwrap();
+        let result = take(&strings, &indices_slice, None).unwrap();
         assert_eq!(result.as_ref(), &expected);
     }
 

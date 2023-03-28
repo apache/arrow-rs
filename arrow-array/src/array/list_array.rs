@@ -132,6 +132,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         }
     }
 
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        // TODO: Slice buffers directly (#3880)
+        self.data.slice(offset, length).into()
+    }
+
     /// Creates a [`GenericListArray`] from an iterator of primitive values
     /// # Example
     /// ```
@@ -253,8 +259,7 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        // TODO: Slice buffers directly (#3880)
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
