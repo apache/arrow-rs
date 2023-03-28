@@ -125,9 +125,97 @@ where
     /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
-        self.offsets_builder
-            .append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
+        self.offsets_builder.append(self.next_offset());
         self.null_buffer_builder.append(is_valid);
+    }
+
+    /// Returns the next offset
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
+    #[inline]
+    fn next_offset(&self) -> OffsetSize {
+        OffsetSize::from_usize(self.values_builder.len()).unwrap()
+    }
+
+    /// Append a value to this [`GenericListBuilder`]
+    ///
+    /// ```
+    /// # use arrow_array::builder::{Int32Builder, ListBuilder};
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_array::{Array, Int32Array};
+    /// # use arrow_array::types::Int32Type;
+    /// let mut builder = ListBuilder::new(Int32Builder::new());
+    ///
+    /// builder.append_value([Some(1), Some(2), Some(3)]);
+    /// builder.append_value([]);
+    /// builder.append_value([None]);
+    ///
+    /// let array = builder.finish();
+    /// assert_eq!(array.len(), 3);
+    ///
+    /// assert_eq!(array.value_offsets(), &[0, 3, 3, 4]);
+    /// let values = array.values().as_primitive::<Int32Type>();
+    /// assert_eq!(values, &Int32Array::from(vec![Some(1), Some(2), Some(3), None]));
+    /// ```
+    ///
+    /// This is an alternative API to appending directly to [`Self::values`] and
+    /// delimiting the result with [`Self::append`]
+    ///
+    /// ```
+    /// # use arrow_array::builder::{Int32Builder, ListBuilder};
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_array::{Array, Int32Array};
+    /// # use arrow_array::types::Int32Type;
+    /// let mut builder = ListBuilder::new(Int32Builder::new());
+    ///
+    /// builder.values().append_value(1);
+    /// builder.values().append_value(2);
+    /// builder.values().append_value(3);
+    /// builder.append(true);
+    /// builder.append(true);
+    /// builder.values().append_null();
+    /// builder.append(true);
+    ///
+    /// let array = builder.finish();
+    /// assert_eq!(array.len(), 3);
+    ///
+    /// assert_eq!(array.value_offsets(), &[0, 3, 3, 4]);
+    /// let values = array.values().as_primitive::<Int32Type>();
+    /// assert_eq!(values, &Int32Array::from(vec![Some(1), Some(2), Some(3), None]));
+    /// ```
+    #[inline]
+    pub fn append_value<I, V>(&mut self, i: I)
+    where
+        T: Extend<Option<V>>,
+        I: IntoIterator<Item = Option<V>>,
+    {
+        self.extend(std::iter::once(Some(i)))
+    }
+
+    /// Append a null to this [`GenericListBuilder`]
+    ///
+    /// See [`Self::append_value`] for an example use.
+    #[inline]
+    pub fn append_null(&mut self) {
+        self.offsets_builder.append(self.next_offset());
+        self.null_buffer_builder.append_null();
+    }
+
+    /// Appends an optional value into this [`GenericListBuilder`]
+    ///
+    /// If `Some` calls [`Self::append_value`] otherwise calls [`Self::append_null`]
+    #[inline]
+    pub fn append_option<I, V>(&mut self, i: Option<I>)
+    where
+        T: Extend<Option<V>>,
+        I: IntoIterator<Item = Option<V>>,
+    {
+        match i {
+            Some(i) => self.append_value(i),
+            None => self.append_null(),
+        }
     }
 
     /// Builds the [`GenericListArray`] and reset this builder.
