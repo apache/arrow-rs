@@ -161,6 +161,7 @@ impl FFI_ArrowSchema {
         mut self,
         metadata: Option<&HashMap<String, String>>,
     ) -> Result<Self, ArrowError> {
+        // https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.metadata
         let new_metadata = if let Some(metadata) = metadata {
             if !metadata.is_empty() {
                 let mut metadata_serialized: Vec<u8> = Vec::new();
