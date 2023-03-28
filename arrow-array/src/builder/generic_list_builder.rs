@@ -40,6 +40,12 @@ pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
     values_builder: T,
 }
 
+impl<O: OffsetSizeTrait, T: ArrayBuilder + Default> Default for GenericListBuilder<O, T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize, T> {
     /// Creates a new [`GenericListBuilder`] from a given values array builder
     pub fn new(values_builder: T) -> Self {
