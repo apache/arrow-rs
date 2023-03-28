@@ -402,13 +402,15 @@ impl From<FixedSizeBinaryArray> for ArrayData {
 /// Creates a `FixedSizeBinaryArray` from `FixedSizeList<u8>` array
 impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     fn from(v: FixedSizeListArray) -> Self {
+        let value_len = v.value_length();
+        let v = v.into_data();
         assert_eq!(
-            v.data_ref().child_data().len(),
+            v.child_data().len(),
             1,
             "FixedSizeBinaryArray can only be created from list array of u8 values \
              (i.e. FixedSizeList<PrimitiveArray<u8>>)."
         );
-        let child_data = &v.data_ref().child_data()[0];
+        let child_data = &v.child_data()[0];
 
         assert_eq!(
             child_data.child_data().len(),
@@ -427,7 +429,7 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
             "The child array cannot contain null values."
         );
 
-        let builder = ArrayData::builder(DataType::FixedSizeBinary(v.value_length()))
+        let builder = ArrayData::builder(DataType::FixedSizeBinary(value_len))
             .len(v.len())
             .offset(v.offset())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))

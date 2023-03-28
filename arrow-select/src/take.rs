@@ -741,13 +741,13 @@ where
     IndexType: ArrowPrimitiveType,
     IndexType::Native: ToPrimitive,
 {
-    let data_ref = values.data_ref();
+    let nulls = values.nulls();
     let array_iter = indices
         .values()
         .iter()
         .map(|idx| {
             let idx = maybe_usize::<IndexType::Native>(*idx)?;
-            if data_ref.is_valid(idx) {
+            if nulls.map(|n| n.is_valid(idx)).unwrap_or(true) {
                 Ok(Some(values.value(idx)))
             } else {
                 Ok(None)
@@ -774,20 +774,14 @@ where
     I::Native: ToPrimitive,
 {
     let new_keys = take_primitive::<T, I>(values.keys(), indices)?;
-    let new_keys_data = new_keys.data_ref();
+    let builder = new_keys
+        .into_data()
+        .into_builder()
+        .data_type(values.data_type().clone())
+        .child_data(vec![values.values().to_data()]);
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            values.data_type().clone(),
-            new_keys.len(),
-            Some(new_keys_data.null_count()),
-            new_keys_data.nulls().map(|b| b.inner().sliced()),
-            0,
-            new_keys_data.buffers().to_vec(),
-            values.data().child_data().to_vec(),
-        )
-    };
-
+    // Safety: Indices were valid before
+    let data = unsafe { builder.build_unchecked() };
     Ok(DictionaryArray::<T>::from(data))
 }
 

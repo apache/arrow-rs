@@ -47,13 +47,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     }
 
     fn from_list(v: GenericListArray<OffsetSize>) -> Self {
+        let v = v.into_data();
         assert_eq!(
-            v.data_ref().child_data().len(),
+            v.child_data().len(),
             1,
             "BinaryArray can only be created from list array of u8 values \
              (i.e. List<PrimitiveArray<u8>>)."
         );
-        let child_data = &v.data_ref().child_data()[0];
+        let child_data = &v.child_data()[0];
 
         assert_eq!(
             child_data.child_data().len(),
@@ -75,7 +76,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         let builder = ArrayData::builder(Self::DATA_TYPE)
             .len(v.len())
             .offset(v.offset())
-            .add_buffer(v.data_ref().buffers()[0].clone())
+            .add_buffer(v.buffers()[0].clone())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
             .nulls(v.nulls().cloned());
 
