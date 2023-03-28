@@ -196,7 +196,7 @@ struct Object {
     name: String,
     size: String,
     updated: DateTime<Utc>,
-    #[serde(rename = "ETag")]
+    #[serde(rename = "etag")]
     e_tag: String,
 }
 
@@ -211,7 +211,6 @@ struct InitiateMultipartUploadResult {
 struct MultipartPart {
     #[serde(rename = "PartNumber")]
     part_number: usize,
-    #[serde(rename = "ETag")]
     e_tag: String,
 }
 

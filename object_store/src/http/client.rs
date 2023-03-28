@@ -370,7 +370,7 @@ pub struct Prop {
     #[serde(rename = "resourcetype")]
     resource_type: ResourceType,
 
-    #[serde(rename = "ETag")]
+    #[serde(rename = "getetag")]
     e_tag: String,
 }
 
