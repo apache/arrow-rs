@@ -157,32 +157,29 @@ impl FFI_ArrowSchema {
         Ok(self)
     }
 
-    pub fn with_metadata(
-        mut self,
-        metadata: Option<&HashMap<String, String>>,
-    ) -> Result<Self, ArrowError> {
+    pub fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
+    where
+        I: IntoIterator<Item = (S, S)>,
+        S: AsRef<str>,
+    {
+        let metadata: Vec<(S, S)> = metadata.into_iter().collect();
         // https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.metadata
-        let new_metadata = if let Some(metadata) = metadata {
-            if !metadata.is_empty() {
-                let mut metadata_serialized: Vec<u8> = Vec::new();
-                metadata_serialized.extend((metadata.len() as i32).to_ne_bytes());
+        let new_metadata = if !metadata.is_empty() {
+            let mut metadata_serialized: Vec<u8> = Vec::new();
+            metadata_serialized.extend((metadata.len() as i32).to_ne_bytes());
 
-                for (key, value) in metadata.iter() {
-                    let key_len = key.len() as i32;
-                    let value_len = value.len() as i32;
+            for (key, value) in metadata.into_iter() {
+                let key_len = key.as_ref().len() as i32;
+                let value_len = value.as_ref().len() as i32;
 
-                    metadata_serialized.extend(key_len.to_ne_bytes());
-                    metadata_serialized.extend_from_slice(key.as_bytes());
-                    metadata_serialized.extend(value_len.to_ne_bytes());
-                    metadata_serialized.extend_from_slice(value.as_bytes());
-                }
-
-                self.metadata = metadata_serialized.as_ptr() as *const c_char;
-                Some(metadata_serialized)
-            } else {
-                self.metadata = std::ptr::null_mut();
-                None
+                metadata_serialized.extend(key_len.to_ne_bytes());
+                metadata_serialized.extend_from_slice(key.as_ref().as_bytes());
+                metadata_serialized.extend(value_len.to_ne_bytes());
+                metadata_serialized.extend_from_slice(value.as_ref().as_bytes());
             }
+
+            self.metadata = metadata_serialized.as_ptr() as *const c_char;
+            Some(metadata_serialized)
         } else {
             self.metadata = std::ptr::null_mut();
             None
@@ -671,7 +668,7 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
         FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
             .with_flags(flags)?
-            .with_metadata(Some(field.metadata()))
+            .with_metadata(field.metadata())
     }
 }
 
@@ -681,7 +678,7 @@ impl TryFrom<&Schema> for FFI_ArrowSchema {
     fn try_from(schema: &Schema) -> Result<Self, ArrowError> {
         let dtype = DataType::Struct(schema.fields().clone());
         let c_schema =
-            FFI_ArrowSchema::try_from(&dtype)?.with_metadata(Some(&schema.metadata))?;
+            FFI_ArrowSchema::try_from(&dtype)?.with_metadata(&schema.metadata)?;
         Ok(c_schema)
     }
 }
@@ -819,18 +816,15 @@ mod tests {
 
     #[test]
     fn test_set_field_metadata() {
-        let metadata_cases: Vec<Option<HashMap<String, String>>> = vec![
-            Some([].into()),
-            Some([("key".to_string(), "value".to_string())].into()),
-            Some(
-                [
-                    ("key".to_string(), "".to_string()),
-                    ("ascii123".to_string(), "你好".to_string()),
-                    ("".to_string(), "value".to_string()),
-                ]
-                .into(),
-            ),
-            None,
+        let metadata_cases: Vec<HashMap<String, String>> = vec![
+            [].into(),
+            [("key".to_string(), "value".to_string())].into(),
+            [
+                ("key".to_string(), "".to_string()),
+                ("ascii123".to_string(), "你好".to_string()),
+                ("".to_string(), "value".to_string()),
+            ]
+            .into(),
         ];
 
         let mut schema = FFI_ArrowSchema::try_new("b", vec![], None)
@@ -839,13 +833,9 @@ mod tests {
             .unwrap();
 
         for metadata in metadata_cases {
-            schema = schema.with_metadata(metadata.as_ref()).unwrap();
+            schema = schema.with_metadata(&metadata).unwrap();
             let field = Field::try_from(&schema).unwrap();
-            if let Some(metadata) = metadata {
-                assert_eq!(field.metadata(), &metadata);
-            } else {
-                assert!(field.metadata().is_empty());
-            }
+            assert_eq!(field.metadata(), &metadata);
         }
     }
 }
