@@ -112,6 +112,8 @@ mod decoder;
 
 #[cfg(feature = "async")]
 pub mod async_reader;
+#[cfg(feature = "async")]
+pub mod async_writer;
 
 mod record_reader;
 experimental!(mod schema);
@@ -121,6 +123,8 @@ pub use self::arrow_reader::{ArrowReader, ParquetFileArrowReader};
 pub use self::arrow_writer::ArrowWriter;
 #[cfg(feature = "async")]
 pub use self::async_reader::ParquetRecordBatchStreamBuilder;
+#[cfg(feature = "async")]
+pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::SchemaDescriptor;
 
 pub use self::schema::{
