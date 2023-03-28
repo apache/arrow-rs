@@ -273,8 +273,10 @@ where
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
-        let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+        let data_type = DataType::Dictionary(
+            Box::new(K::DATA_TYPE),
+            Box::new(values.data_type().clone()),
+        );
 
         let builder = keys
             .into_data()
@@ -398,5 +400,12 @@ mod tests {
             );
         let dict_array = builder.finish();
         assert_eq!(dict_array.value_type(), DataType::Decimal128(1, 2));
+        assert_eq!(
+            dict_array.data_type(),
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Decimal128(1, 2)),
+            )
+        );
     }
 }
