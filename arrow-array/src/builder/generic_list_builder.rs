@@ -195,6 +195,8 @@ where
     }
 
     /// Append a null to this [`GenericListBuilder`]
+    ///
+    /// See [`Self::append_value`] for an example use.
     #[inline]
     pub fn append_null(&mut self) {
         self.offsets_builder.append(self.next_offset());
