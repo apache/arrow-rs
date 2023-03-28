@@ -188,7 +188,7 @@ impl StructBuilder {
         }
     }
 
-    /// Creates a new `StructBuilder` from vector of [`Field`] with `capacity`
+    /// Creates a new `StructBuilder` from [`Fields`] and `capacity`
     pub fn from_fields(fields: Fields, capacity: usize) -> Self {
         let mut builders = Vec::with_capacity(fields.len());
         for field in &fields {
