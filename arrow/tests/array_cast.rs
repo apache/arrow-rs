@@ -40,7 +40,9 @@ use arrow_buffer::{i256, Buffer};
 use arrow_cast::pretty::pretty_format_columns;
 use arrow_cast::{can_cast_types, cast};
 use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, Field, IntervalUnit, TimeUnit, UnionMode};
+use arrow_schema::{
+    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, UnionMode,
+};
 use half::f16;
 use std::sync::Arc;
 
@@ -398,10 +400,10 @@ fn get_all_types() -> Vec<DataType> {
         FixedSizeList(Box::new(Field::new("item", DataType::Utf8, false)), 10),
         LargeList(Box::new(Field::new("item", DataType::Int8, true))),
         LargeList(Box::new(Field::new("item", DataType::Utf8, false))),
-        Struct(vec![
+        Struct(Fields::from(vec![
             Field::new("f1", DataType::Int32, true),
             Field::new("f2", DataType::Utf8, true),
-        ]),
+        ])),
         Union(
             vec![
                 Field::new("f1", DataType::Int32, false),
