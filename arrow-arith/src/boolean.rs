@@ -775,7 +775,7 @@ mod tests {
         let a = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
         let a = a.slice(8, 4);
 
-        let res = is_null(a.as_ref()).unwrap();
+        let res = is_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![false, false, false, false]);
 
@@ -800,7 +800,7 @@ mod tests {
         let a = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
         let a = a.slice(8, 4);
 
-        let res = is_not_null(a.as_ref()).unwrap();
+        let res = is_not_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![true, true, true, true]);
 
@@ -843,7 +843,7 @@ mod tests {
         ]);
         let a = a.slice(8, 4);
 
-        let res = is_null(a.as_ref()).unwrap();
+        let res = is_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![false, true, false, true]);
 
@@ -886,7 +886,7 @@ mod tests {
         ]);
         let a = a.slice(8, 4);
 
-        let res = is_not_null(a.as_ref()).unwrap();
+        let res = is_not_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![true, false, true, false]);
 

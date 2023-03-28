@@ -426,7 +426,7 @@ mod tests {
     fn length_offsets_string() {
         let a = StringArray::from(vec![Some("hello"), Some(" "), Some("world"), None]);
         let b = a.slice(1, 3);
-        let result = length(b.as_ref()).unwrap();
+        let result = length(&b).unwrap();
         let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(1), Some(5), None]);
@@ -439,7 +439,7 @@ mod tests {
             vec![Some(b"hello"), Some(b" "), Some(&[0xff, 0xf8]), None];
         let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
-        let result = length(b.as_ref()).unwrap();
+        let result = length(&b).unwrap();
         let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(1), Some(2), None]);
@@ -581,7 +581,7 @@ mod tests {
     fn bit_length_offsets_string() {
         let a = StringArray::from(vec![Some("hello"), Some(" "), Some("world"), None]);
         let b = a.slice(1, 3);
-        let result = bit_length(b.as_ref()).unwrap();
+        let result = bit_length(&b).unwrap();
         let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(8), Some(40), None]);
@@ -594,7 +594,7 @@ mod tests {
             vec![Some(b"hello"), Some(&[]), Some(b"world"), None];
         let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
-        let result = bit_length(b.as_ref()).unwrap();
+        let result = bit_length(&b).unwrap();
         let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(0), Some(40), None]);

@@ -70,6 +70,10 @@ impl FlightSqlServiceImpl {
         let cols = vec![Arc::new(builder.finish()) as ArrayRef];
         RecordBatch::try_new(Arc::new(schema), cols)
     }
+
+    fn fake_update_result() -> i64 {
+        1
+    }
 }
 
 #[tonic::async_trait]
@@ -391,9 +395,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _ticket: CommandStatementUpdate,
         _request: Request<Streaming<FlightData>>,
     ) -> Result<i64, Status> {
-        Err(Status::unimplemented(
-            "do_put_statement_update not implemented",
-        ))
+        Ok(FlightSqlServiceImpl::fake_update_result())
     }
 
     async fn do_put_prepared_statement_query(
@@ -630,6 +632,38 @@ mod tests {
                 .trim()
                 .to_string();
             assert_eq!(res.to_string(), expected);
+        };
+
+        tokio::select! {
+            _ = serve_future => panic!("server returned first"),
+            _ = request_future => println!("Client finished!"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_update() {
+        let file = NamedTempFile::new().unwrap();
+        let path = file.into_temp_path().to_str().unwrap().to_string();
+        let _ = fs::remove_file(path.clone());
+
+        let uds = UnixListener::bind(path.clone()).unwrap();
+        let stream = UnixListenerStream::new(uds);
+
+        // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
+        let service = FlightSqlServiceImpl {};
+        let serve_future = Server::builder()
+            .add_service(FlightServiceServer::new(service))
+            .serve_with_incoming(stream);
+
+        let request_future = async {
+            let mut client = client_with_uds(path).await;
+            let token = client.handshake("admin", "password").await.unwrap();
+            println!("Auth succeeded with token: {:?}", token);
+            let res = client
+                .execute_update("creat table test(a int);".to_string())
+                .await
+                .unwrap();
+            assert_eq!(res, FlightSqlServiceImpl::fake_update_result());
         };
 
         tokio::select! {

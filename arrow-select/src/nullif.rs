@@ -210,7 +210,7 @@ mod tests {
         let s = s.slice(2, 3);
         let select = select.slice(1, 3);
         let select = select.as_boolean();
-        let a = nullif(s.as_ref(), select).unwrap();
+        let a = nullif(&s, select).unwrap();
         let r: Vec<_> = a.as_string::<i32>().iter().collect();
         assert_eq!(r, vec![None, Some("a"), None]);
     }
@@ -500,7 +500,6 @@ mod tests {
 
             for (a_offset, a_length) in a_slices {
                 let a = a.slice(a_offset, a_length);
-                let a = a.as_primitive::<Int32Type>();
 
                 for i in 1..65 {
                     let b_start_offset = rng.gen_range(0..i);
@@ -512,7 +511,7 @@ mod tests {
                     let b = b.slice(b_start_offset, a_length);
                     let b = b.as_boolean();
 
-                    test_nullif(a, b);
+                    test_nullif(&a, b);
                 }
             }
         }

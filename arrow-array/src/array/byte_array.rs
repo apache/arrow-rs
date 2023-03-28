@@ -134,6 +134,12 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         ArrayIter::new(self)
     }
 
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        // TODO: Slice buffers directly (#3880)
+        self.data.slice(offset, length).into()
+    }
+
     /// Returns `GenericByteBuilder` of this byte array for mutating its values if the underlying
     /// offset and data buffers are not shared by others.
     pub fn into_builder(self) -> Result<GenericByteBuilder<T>, Self> {
@@ -247,8 +253,7 @@ impl<T: ByteArrayType> Array for GenericByteArray<T> {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        // TODO: Slice buffers directly (#3880)
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
