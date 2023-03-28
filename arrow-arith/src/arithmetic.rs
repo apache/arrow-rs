@@ -923,6 +923,54 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a.sub_wrapping(b), math_op_dict)
         }
+        DataType::Date32 => {
+            let l = left.as_primitive::<Date32Type>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_op(l, r, Date32Type::add_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_op(l, r, Date32Type::add_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_op(l, r, Date32Type::add_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Date64 => {
+            let l = left.as_primitive::<Date64Type>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_op(l, r, Date64Type::add_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_op(l, r, Date64Type::add_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_op(l, r, Date64Type::add_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
@@ -954,6 +1002,54 @@ pub fn subtract_dyn_checked(
                 |a, b| a.sub_checked(b),
                 math_checked_op_dict
             )
+        }
+        DataType::Date32 => {
+            let l = left.as_primitive::<Date32Type>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_op(l, r, Date32Type::add_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_op(l, r, Date32Type::add_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_op(l, r, Date32Type::add_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Date64 => {
+            let l = left.as_primitive::<Date64Type>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_op(l, r, Date64Type::add_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_op(l, r, Date64Type::add_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_op(l, r, Date64Type::add_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
         }
         _ => {
             downcast_primitive_array!(
