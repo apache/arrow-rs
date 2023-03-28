@@ -288,16 +288,32 @@ impl FFI_ArrowSchema {
             }
 
             let num_entries = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
+            if num_entries < 0 {
+                return Err(ArrowError::CDataInterface(
+                    "Negative number of metadata entries".to_string(),
+                ));
+            }
+
             let mut metadata = HashMap::with_capacity(
                 num_entries.try_into().expect("Too many metadata entries"),
             );
 
             for _ in 0..num_entries {
                 let key_length = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
+                if key_length < 0 {
+                    return Err(ArrowError::CDataInterface(
+                        "Negative key length in metadata".to_string(),
+                    ));
+                }
                 let key = String::from_utf8(
                     next_n_bytes(buffer, &mut pos, key_length).to_vec(),
                 )?;
                 let value_length = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
+                if value_length < 0 {
+                    return Err(ArrowError::CDataInterface(
+                        "Negative value length in metadata".to_string(),
+                    ));
+                }
                 let value = String::from_utf8(
                     next_n_bytes(buffer, &mut pos, value_length).to_vec(),
                 )?;
