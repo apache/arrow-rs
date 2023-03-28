@@ -77,18 +77,17 @@ pub struct AsyncArrowWriter<W> {
 
     /// The inner buffer shared by the `sync_writer` and the `async_writer`
     shared_buffer: SharedBuffer,
-
-    /// The threshold triggering buffer flush
-    buffer_flush_threshold: usize,
 }
 
 impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     /// Try to create a new Async Arrow Writer.
     ///
-    /// `buffer_size` determines the size of the intermediate buffer
+    /// `buffer_size` determines the initial size of the intermediate buffer.
     ///
-    /// Flush will automatically be called by [`Self::write`] if
-    /// the buffer is at least half full
+    /// The intermediate buffer will automatically be resized if necessary
+    ///
+    /// [`Self::write`] will flush this intermediate buffer if it is at least
+    /// half full
     pub fn try_new(
         writer: W,
         arrow_schema: SchemaRef,
@@ -103,22 +102,16 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
             sync_writer,
             async_writer: writer,
             shared_buffer,
-            buffer_flush_threshold: buffer_size / 2,
         })
     }
 
     /// Enqueues the provided `RecordBatch` to be written
     ///
     /// After every sync write by the inner [ArrowWriter], the inner buffer will be
-    /// checked and flush if threshold is reached.
+    /// checked and flush if at least half full
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         self.sync_writer.write(batch)?;
-        Self::try_flush(
-            &mut self.shared_buffer,
-            &mut self.async_writer,
-            self.buffer_flush_threshold,
-        )
-        .await
+        Self::try_flush(&mut self.shared_buffer, &mut self.async_writer, false).await
     }
 
     /// Append [`KeyValue`] metadata in addition to those in [`WriterProperties`]
@@ -135,7 +128,7 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         let metadata = self.sync_writer.close()?;
 
         // Force to flush the remaining data.
-        Self::try_flush(&mut self.shared_buffer, &mut self.async_writer, 0).await?;
+        Self::try_flush(&mut self.shared_buffer, &mut self.async_writer, true).await?;
 
         Ok(metadata)
     }
@@ -145,10 +138,10 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     async fn try_flush(
         shared_buffer: &mut SharedBuffer,
         async_writer: &mut W,
-        threshold: usize,
+        force: bool,
     ) -> Result<()> {
         let mut buffer = shared_buffer.buffer.try_lock().unwrap();
-        if buffer.is_empty() || buffer.len() < threshold {
+        if !force && buffer.len() < buffer.capacity() / 2 {
             // no need to flush
             return Ok(());
         }
