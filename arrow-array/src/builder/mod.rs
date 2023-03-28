@@ -78,19 +78,19 @@
 //! ))
 //! ```
 //!
-//! # Row Conversion
+//! # Custom Builders
 //!
-//! It is common to have a statically defined row representation, and to want to convert
-//! this to an arrow representation. An example of this can be seen below
+//! It is common to have a collection of statically defined Rust types that
+//! you want to convert to Arrow arrays. An example of doing so is below
 //!
 //! ```
-//! use std::any::Any;
-//! use arrow_array::builder::{ArrayBuilder, Int32Builder, ListBuilder, StringBuilder};
-//! use arrow_array::{ArrayRef, RecordBatch, StructArray};
-//! use arrow_schema::{DataType, Field};
-//! use std::sync::Arc;
-//! /// A representation of a row
-//! struct Row {
+//! # use std::any::Any;
+//! # use arrow_array::builder::{ArrayBuilder, Int32Builder, ListBuilder, StringBuilder};
+//! # use arrow_array::{ArrayRef, RecordBatch, StructArray};
+//! # use arrow_schema::{DataType, Field};
+//! # use std::sync::Arc;
+//! /// A custom row representation
+//! struct MyRow {
 //!     i32: i32,
 //!     optional_i32: Option<i32>,
 //!     string: Option<String>,
@@ -99,29 +99,19 @@
 //!
 //! /// Converts `Vec<Row>` into `StructArray`
 //! #[derive(Debug, Default)]
-//! struct RowBuilder {
+//! struct MyRowBuilder {
 //!     i32: Int32Builder,
 //!     string: StringBuilder,
 //!     i32_list: ListBuilder<Int32Builder>,
 //! }
 //!
-//! impl<'a> Extend<&'a Row> for RowBuilder {
-//!     fn extend<T: IntoIterator<Item = &'a Row>>(&mut self, iter: T) {
-//!         for row in iter {
-//!             self.i32.append_value(row.i32);
-//!             self.string.append_option(row.string.as_ref());
-//!             match &row.i32_list {
-//!                 Some(list) => {
-//!                     list.iter().for_each(|v| self.i32_list.values().append_option(*v));
-//!                     self.i32_list.append(true);
-//!                 }
-//!                 None => self.i32_list.append(false),
-//!             }
-//!         }
+//! impl MyRowBuilder {
+//!     fn append(&mut self, row: &MyRow) {
+//!         self.i32.append_value(row.i32);
+//!         self.string.append_option(row.string.as_ref());
+//!         self.i32_list.append_option(row.i32_list.as_ref().map(|x| x.iter().copied()));
 //!     }
-//! }
 //!
-//! impl RowBuilder {
 //!     /// Note: returns StructArray to allow nesting within another array if desired
 //!     fn finish(&mut self) -> StructArray {
 //!         let i32 = Arc::new(self.i32.finish()) as ArrayRef;
@@ -142,9 +132,15 @@
 //!     }
 //! }
 //!
-//! /// Converts a slice of [`Row`] to a [`RecordBatch`]
-//! fn rows_to_batch(rows: &[Row]) -> RecordBatch {
-//!     let mut builder = RowBuilder::default();
+//! impl<'a> Extend<&'a MyRow> for MyRowBuilder {
+//!     fn extend<T: IntoIterator<Item = &'a MyRow>>(&mut self, iter: T) {
+//!         iter.into_iter().for_each(|row| self.append(row));
+//!     }
+//! }
+//!
+//! /// Converts a slice of [`MyRow`] to a [`RecordBatch`]
+//! fn rows_to_batch(rows: &[MyRow]) -> RecordBatch {
+//!     let mut builder = MyRowBuilder::default();
 //!     builder.extend(rows);
 //!     RecordBatch::from(&builder.finish())
 //! }
