@@ -948,6 +948,65 @@ mod tests {
 
         let files = flatten_list_stream(storage, None).await.unwrap();
         assert!(files.is_empty(), "{files:?}");
+
+        // Test list order
+        let files = vec![
+            Path::from("a a/b.file"),
+            Path::parse("a%2Fa.file").unwrap(),
+            Path::from("a/😀.file"),
+            Path::from("a/a file"),
+            Path::parse("a/a%2F.file").unwrap(),
+            Path::from("a/a.file"),
+            Path::from("a/a/b.file"),
+            Path::from("a/b.file"),
+            Path::from("aa/a.file"),
+            Path::from("ab/a.file"),
+        ];
+
+        for file in &files {
+            storage.put(file, "foo".into()).await.unwrap();
+        }
+
+        let cases = [
+            (None, Path::from("a")),
+            (None, Path::from("a/a file")),
+            (None, Path::from("a/a/b.file")),
+            (None, Path::from("ab/a.file")),
+            (None, Path::from("a%2Fa.file")),
+            (None, Path::from("a/😀.file")),
+            (Some(Path::from("a")), Path::from("")),
+            (Some(Path::from("a")), Path::from("a")),
+            (Some(Path::from("a")), Path::from("a/😀")),
+            (Some(Path::from("a")), Path::from("a/😀.file")),
+            (Some(Path::from("a")), Path::from("a/b")),
+            (Some(Path::from("a")), Path::from("a/a/b.file")),
+        ];
+
+        for (prefix, offset) in cases {
+            let s = storage
+                .list_with_offset(prefix.as_ref(), &offset)
+                .await
+                .unwrap();
+
+            let mut actual: Vec<_> =
+                s.map_ok(|x| x.location).try_collect().await.unwrap();
+
+            actual.sort_unstable();
+
+            let expected: Vec<_> = files
+                .iter()
+                .cloned()
+                .filter(|x| {
+                    let prefix_match =
+                        prefix.as_ref().map(|p| x.prefix_matches(p)).unwrap_or(true);
+                    prefix_match && x > &offset
+                })
+                .collect();
+
+            assert_eq!(actual, expected, "{prefix:?} - {offset:?}");
+        }
+
+        delete_fixtures(storage).await;
     }
 
     fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
