@@ -923,6 +923,54 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a.sub_wrapping(b), math_op_dict)
         }
+        DataType::Date32 => {
+            let l = left.as_primitive::<Date32Type>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_op(l, r, Date32Type::subtract_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_op(l, r, Date32Type::subtract_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_op(l, r, Date32Type::subtract_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Date64 => {
+            let l = left.as_primitive::<Date64Type>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_op(l, r, Date64Type::subtract_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_op(l, r, Date64Type::subtract_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_op(l, r, Date64Type::subtract_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
@@ -954,6 +1002,54 @@ pub fn subtract_dyn_checked(
                 |a, b| a.sub_checked(b),
                 math_checked_op_dict
             )
+        }
+        DataType::Date32 => {
+            let l = left.as_primitive::<Date32Type>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_op(l, r, Date32Type::subtract_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_op(l, r, Date32Type::subtract_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_op(l, r, Date32Type::subtract_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Date64 => {
+            let l = left.as_primitive::<Date64Type>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_op(l, r, Date64Type::subtract_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_op(l, r, Date64Type::subtract_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_op(l, r, Date64Type::subtract_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
         }
         _ => {
             downcast_primitive_array!(
@@ -1862,6 +1958,100 @@ mod tests {
         assert_eq!(7, c.value(2));
         assert!(c.is_null(3));
         assert_eq!(1, c.value(4));
+    }
+
+    #[test]
+    fn test_date32_month_subtract() {
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(
+            NaiveDate::from_ymd_opt(2000, 7, 1).unwrap(),
+        )]);
+        let b =
+            IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(6, 3)]);
+        let c = subtract_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(1994, 4, 1).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_date32_day_time_subtract() {
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(
+            NaiveDate::from_ymd_opt(2023, 3, 29).unwrap(),
+        )]);
+        let b =
+            IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 86500)]);
+        let c = subtract_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2023, 3, 27).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_date32_month_day_nano_subtract() {
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(
+            NaiveDate::from_ymd_opt(2023, 3, 15).unwrap(),
+        )]);
+        let b =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+                1, 2, 0,
+            )]);
+        let c = subtract_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2023, 2, 13).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_date64_month_subtract() {
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(
+            NaiveDate::from_ymd_opt(2000, 7, 1).unwrap(),
+        )]);
+        let b =
+            IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(6, 3)]);
+        let c = subtract_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(1994, 4, 1).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_date64_day_time_subtract() {
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(
+            NaiveDate::from_ymd_opt(2023, 3, 29).unwrap(),
+        )]);
+        let b =
+            IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 86500)]);
+        let c = subtract_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2023, 3, 27).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_date64_month_day_nano_subtract() {
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(
+            NaiveDate::from_ymd_opt(2023, 3, 15).unwrap(),
+        )]);
+        let b =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+                1, 2, 0,
+            )]);
+        let c = subtract_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2023, 2, 13).unwrap())
+        );
     }
 
     #[test]
