@@ -297,6 +297,12 @@ impl UnionArray {
             _ => unreachable!("Union array's data type is not a union!"),
         }
     }
+
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        // TODO: Slice buffers directly (#3880)
+        self.data.slice(offset, length).into()
+    }
 }
 
 impl From<ArrayData> for UnionArray {
@@ -358,7 +364,7 @@ impl Array for UnionArray {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {

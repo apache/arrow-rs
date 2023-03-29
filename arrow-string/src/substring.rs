@@ -296,7 +296,7 @@ fn binary_substring<OffsetSize: OffsetSizeTrait>(
             None,
             array.nulls().map(|b| b.inner().sliced()),
             0,
-            vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
+            vec![Buffer::from_vec(new_offsets), new_values.into()],
             vec![],
         )
     };
@@ -420,7 +420,7 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
             None,
             array.nulls().map(|b| b.inner().sliced()),
             0,
-            vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
+            vec![Buffer::from_vec(new_offsets), new_values.into()],
             vec![],
         )
     };

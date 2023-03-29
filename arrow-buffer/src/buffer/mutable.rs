@@ -15,17 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::Buffer;
+use std::alloc::{handle_alloc_error, Layout};
+use std::mem;
+use std::ptr::NonNull;
+
 use crate::alloc::{Deallocation, ALIGNMENT};
 use crate::{
-    alloc,
     bytes::Bytes,
     native::{ArrowNativeType, ToByteSlice},
     util::bit_util,
 };
-use std::alloc::Layout;
-use std::mem;
-use std::ptr::NonNull;
+
+use super::Buffer;
 
 /// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
 ///
@@ -55,7 +56,7 @@ pub struct MutableBuffer {
     data: NonNull<u8>,
     // invariant: len <= capacity
     len: usize,
-    capacity: usize,
+    layout: Layout,
 }
 
 impl MutableBuffer {
@@ -67,14 +68,21 @@ impl MutableBuffer {
 
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
     #[inline]
-    #[allow(deprecated)]
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = bit_util::round_upto_multiple_of_64(capacity);
-        let ptr = alloc::allocate_aligned(capacity);
+        let layout = Layout::from_size_align(capacity, ALIGNMENT).unwrap();
+        let data = match layout.size() {
+            0 => dangling_ptr(),
+            _ => {
+                // Safety: Verified size != 0
+                let raw_ptr = unsafe { std::alloc::alloc(layout) };
+                NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
+            }
+        };
         Self {
-            data: ptr,
+            data,
             len: 0,
-            capacity,
+            layout,
         }
     }
 
@@ -89,35 +97,46 @@ impl MutableBuffer {
     /// let data = buffer.as_slice_mut();
     /// assert_eq!(data[126], 0u8);
     /// ```
-    #[allow(deprecated)]
     pub fn from_len_zeroed(len: usize) -> Self {
-        let new_capacity = bit_util::round_upto_multiple_of_64(len);
-        let ptr = alloc::allocate_aligned_zeroed(new_capacity);
-        Self {
-            data: ptr,
-            len,
-            capacity: new_capacity,
-        }
+        let layout = Layout::from_size_align(len, ALIGNMENT).unwrap();
+        let data = match layout.size() {
+            0 => dangling_ptr(),
+            _ => {
+                // Safety: Verified size != 0
+                let raw_ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+                NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
+            }
+        };
+        Self { data, len, layout }
+    }
+
+    /// Create a [`MutableBuffer`] from the provided [`Vec`] without copying
+    #[inline]
+    pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
+        // Safety
+        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
+        let data = unsafe { NonNull::new_unchecked(vec.as_ptr() as _) };
+        let len = vec.len() * mem::size_of::<T>();
+        // Safety
+        // Vec guaranteed to have a valid layout matching that of `Layout::array`
+        // This is based on `RawVec::current_memory`
+        let layout = unsafe { Layout::array::<T>(vec.capacity()).unwrap_unchecked() };
+        mem::forget(vec);
+        Self { data, len, layout }
     }
 
     /// Allocates a new [MutableBuffer] from given `Bytes`.
     pub(crate) fn from_bytes(bytes: Bytes) -> Result<Self, Bytes> {
-        let capacity = match bytes.deallocation() {
-            Deallocation::Standard(layout) if layout.align() == ALIGNMENT => {
-                layout.size()
-            }
+        let layout = match bytes.deallocation() {
+            Deallocation::Standard(layout) => *layout,
             _ => return Err(bytes),
         };
 
         let len = bytes.len();
-        let ptr = bytes.ptr();
+        let data = bytes.ptr();
         mem::forget(bytes);
 
-        Ok(Self {
-            data: ptr,
-            len,
-            capacity,
-        })
+        Ok(Self { data, len, layout })
     }
 
     /// creates a new [MutableBuffer] with capacity and length capable of holding `len` bits.
@@ -134,7 +153,7 @@ impl MutableBuffer {
     /// the buffer directly (e.g., modifying the buffer by holding a mutable reference
     /// from `data_mut()`).
     pub fn with_bitset(mut self, end: usize, val: bool) -> Self {
-        assert!(end <= self.capacity);
+        assert!(end <= self.layout.size());
         let v = if val { 255 } else { 0 };
         unsafe {
             std::ptr::write_bytes(self.data.as_ptr(), v, end);
@@ -149,7 +168,7 @@ impl MutableBuffer {
     /// `len` of the buffer and so can be used to initialize the memory region from
     /// `len` to `capacity`.
     pub fn set_null_bits(&mut self, start: usize, count: usize) {
-        assert!(start + count <= self.capacity);
+        assert!(start + count <= self.layout.size());
         unsafe {
             std::ptr::write_bytes(self.data.as_ptr().add(start), 0, count);
         }
@@ -171,17 +190,33 @@ impl MutableBuffer {
     #[inline(always)]
     pub fn reserve(&mut self, additional: usize) {
         let required_cap = self.len + additional;
-        if required_cap > self.capacity {
-            // JUSTIFICATION
-            //  Benefit
-            //      necessity
-            //  Soundness
-            //      `self.data` is valid for `self.capacity`.
-            let (ptr, new_capacity) =
-                unsafe { reallocate(self.data, self.capacity, required_cap) };
-            self.data = ptr;
-            self.capacity = new_capacity;
+        if required_cap > self.layout.size() {
+            let new_capacity = bit_util::round_upto_multiple_of_64(required_cap);
+            let new_capacity = std::cmp::max(new_capacity, self.layout.size() * 2);
+            self.reallocate(new_capacity)
         }
+    }
+
+    #[cold]
+    fn reallocate(&mut self, capacity: usize) {
+        let new_layout = Layout::from_size_align(capacity, self.layout.align()).unwrap();
+        if new_layout.size() == 0 {
+            if self.layout.size() != 0 {
+                // Safety: data was allocated with layout
+                unsafe { std::alloc::dealloc(self.as_mut_ptr(), self.layout) };
+                self.layout = new_layout
+            }
+            return;
+        }
+
+        let data = match self.layout.size() {
+            // Safety: new_layout is not empty
+            0 => unsafe { std::alloc::alloc(new_layout) },
+            // Safety: verified new layout is valid and not empty
+            _ => unsafe { std::alloc::realloc(self.as_mut_ptr(), self.layout, capacity) },
+        };
+        self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
+        self.layout = new_layout;
     }
 
     /// Truncates this buffer to `len` bytes
@@ -233,20 +268,10 @@ impl MutableBuffer {
     /// buffer.shrink_to_fit();
     /// assert!(buffer.capacity() >= 64 && buffer.capacity() < 128);
     /// ```
-    #[allow(deprecated)]
     pub fn shrink_to_fit(&mut self) {
         let new_capacity = bit_util::round_upto_multiple_of_64(self.len);
-        if new_capacity < self.capacity {
-            // JUSTIFICATION
-            //  Benefit
-            //      necessity
-            //  Soundness
-            //      `self.data` is valid for `self.capacity`.
-            let ptr =
-                unsafe { alloc::reallocate(self.data, self.capacity, new_capacity) };
-
-            self.data = ptr;
-            self.capacity = new_capacity;
+        if new_capacity < self.layout.size() {
+            self.reallocate(new_capacity)
         }
     }
 
@@ -267,7 +292,7 @@ impl MutableBuffer {
     /// The invariant `buffer.len() <= buffer.capacity()` is always upheld.
     #[inline]
     pub const fn capacity(&self) -> usize {
-        self.capacity
+        self.layout.size()
     }
 
     /// Clear all existing data from this buffer.
@@ -310,9 +335,9 @@ impl MutableBuffer {
 
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
-        let layout = Layout::from_size_align(self.capacity, ALIGNMENT).unwrap();
-        let bytes =
-            unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(layout)) };
+        let bytes = unsafe {
+            Bytes::new(self.data, self.len, Deallocation::Standard(self.layout))
+        };
         std::mem::forget(self);
         Buffer::from_bytes(bytes)
     }
@@ -455,19 +480,12 @@ impl MutableBuffer {
     }
 }
 
-/// # Safety
-/// `ptr` must be allocated for `old_capacity`.
-#[cold]
-#[allow(deprecated)]
-unsafe fn reallocate(
-    ptr: NonNull<u8>,
-    old_capacity: usize,
-    new_capacity: usize,
-) -> (NonNull<u8>, usize) {
-    let new_capacity = bit_util::round_upto_multiple_of_64(new_capacity);
-    let new_capacity = std::cmp::max(new_capacity, old_capacity * 2);
-    let ptr = alloc::reallocate(ptr, old_capacity, new_capacity);
-    (ptr, new_capacity)
+#[inline]
+fn dangling_ptr() -> NonNull<u8> {
+    // SAFETY: ALIGNMENT is a non-zero usize which is then casted
+    // to a *mut T. Therefore, `ptr` is not null and the conditions for
+    // calling new_unchecked() are respected.
+    unsafe { NonNull::new_unchecked(ALIGNMENT as *mut u8) }
 }
 
 impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
@@ -492,7 +510,7 @@ impl MutableBuffer {
         // this is necessary because of https://github.com/rust-lang/rust/issues/32155
         let mut len = SetLenOnDrop::new(&mut self.len);
         let mut dst = unsafe { self.data.as_ptr().add(len.local_len) };
-        let capacity = self.capacity;
+        let capacity = self.layout.size();
 
         while len.local_len + item_size <= capacity {
             if let Some(item) = iterator.next() {
@@ -641,9 +659,11 @@ impl std::ops::DerefMut for MutableBuffer {
 }
 
 impl Drop for MutableBuffer {
-    #[allow(deprecated)]
     fn drop(&mut self) {
-        unsafe { alloc::free_aligned(self.data, self.capacity) };
+        if self.layout.size() != 0 {
+            // Safety: data was allocated with standard allocator with given layout
+            unsafe { std::alloc::dealloc(self.data.as_ptr() as _, self.layout) };
+        }
     }
 }
 
@@ -652,7 +672,7 @@ impl PartialEq for MutableBuffer {
         if self.len != other.len {
             return false;
         }
-        if self.capacity != other.capacity {
+        if self.layout != other.layout {
             return false;
         }
         self.as_slice() == other.as_slice()

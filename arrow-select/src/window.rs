@@ -55,7 +55,7 @@ use num::abs;
 pub fn shift(array: &dyn Array, offset: i64) -> Result<ArrayRef, ArrowError> {
     let value_len = array.len() as i64;
     if offset == 0 {
-        Ok(make_array(array.data_ref().clone()))
+        Ok(make_array(array.to_data()))
     } else if offset == i64::MIN || abs(offset) >= value_len {
         Ok(new_null_array(array.data_type(), array.len()))
     } else {

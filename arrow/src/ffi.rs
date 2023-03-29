@@ -498,7 +498,8 @@ mod tests {
     use arrow_array::builder::UnionBuilder;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Float64Type, Int32Type};
-    use arrow_array::UnionArray;
+    use arrow_array::{StructArray, UnionArray};
+    use std::collections::HashMap;
     use std::convert::TryFrom;
     use std::mem::ManuallyDrop;
     use std::ptr::addr_of_mut;
@@ -1089,6 +1090,30 @@ mod tests {
         // perform some operation
         let array = array.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(array, &map_array);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_array() -> Result<()> {
+        let metadata: HashMap<String, String> =
+            [("Hello".to_string(), "World! 😊".to_string())].into();
+        let struct_array = StructArray::from(vec![(
+            Field::new("a", DataType::Int32, false).with_metadata(metadata),
+            Arc::new(Int32Array::from(vec![2, 4, 6])) as Arc<dyn Array>,
+        )]);
+
+        // export it
+        let array = ArrowArray::try_from(struct_array.data().clone())?;
+
+        // (simulate consumer) import it
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
+
+        // perform some operation
+        let array = array.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(array.data_type(), struct_array.data_type());
+        assert_eq!(array, &struct_array);
 
         Ok(())
     }

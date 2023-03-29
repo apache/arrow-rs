@@ -30,8 +30,8 @@ use crate::alloc::Deallocation;
 /// This structs' API is inspired by the `bytes::Bytes`, but it is not limited to using rust's
 /// global allocator nor u8 alignment.
 ///
-/// In the most common case, this buffer is allocated using [`allocate_aligned`](crate::alloc::allocate_aligned)
-/// and deallocated accordingly [`free_aligned`](crate::alloc::free_aligned).
+/// In the most common case, this buffer is allocated using [`alloc`](std::alloc::alloc)
+/// with an alignment of [`ALIGNMENT`](crate::alloc::ALIGNMENT)
 ///
 /// When the region is allocated by a different allocator, [Deallocation::Custom], this calls the
 /// custom deallocator to deallocate the region when it is no longer needed.

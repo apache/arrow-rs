@@ -16,36 +16,22 @@
 # under the License.
 
 [package]
-name = "arrow-ipc"
-version = "36.0.0"
-description = "Support for the Arrow IPC format"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = ["arrow"]
-include = [
-    "benches/*.rs",
-    "src/**/*.rs",
-    "Cargo.toml",
-]
+name = "gen"
+description = "Code generation for arrow-flight"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.62"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+homepage = "https://github.com/apache/arrow-rs"
+repository = "https://github.com/apache/arrow-rs"
+license = "Apache-2.0"
+publish = false
 
-[lib]
-name = "arrow_ipc"
-path = "src/lib.rs"
-bench = false
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrow-array = { version = "36.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "36.0.0", path = "../arrow-buffer" }
-arrow-cast = { version = "36.0.0", path = "../arrow-cast" }
-arrow-data = { version = "36.0.0", path = "../arrow-data" }
-arrow-schema = { version = "36.0.0", path = "../arrow-schema" }
-flatbuffers = { version = "23.1.21", default-features = false }
-lz4 = { version = "1.23", default-features = false, optional = true }
-zstd = { version = "0.12.0", default-features = false, optional = true }
-
-[dev-dependencies]
-tempfile = "3.3"
+# Pin specific version of the tonic-build dependencies to avoid auto-generated
+# (and checked in) arrow.flight.protocol.rs from changing
+proc-macro2 = { version = "=1.0.54", default-features = false }
+prost-build = { version = "=0.11.8", default-features = false }
+tonic-build = { version = "=0.8.4", default-features = false, features = ["transport", "prost"] }

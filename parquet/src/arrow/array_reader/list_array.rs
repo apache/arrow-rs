@@ -401,10 +401,10 @@ mod tests {
         let expected_2 = expected.slice(2, 2);
 
         let actual = l1.next_batch(2).unwrap();
-        assert_eq!(expected_1.as_ref(), actual.as_ref());
+        assert_eq!(actual.as_ref(), &expected_1);
 
         let actual = l1.next_batch(1024).unwrap();
-        assert_eq!(expected_2.as_ref(), actual.as_ref());
+        assert_eq!(actual.as_ref(), &expected_2);
     }
 
     fn test_required_list<OffsetSize: OffsetSizeTrait>() {

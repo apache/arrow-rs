@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,20 +17,5 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "parquet_derive_test"
-version = "36.0.0"
-license = "Apache-2.0"
-description = "Integration test package for parquet-derive"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-keywords = [ "parquet" ]
-edition = "2021"
-publish = false
-rust-version = "1.62"
-
-[dependencies]
-parquet = { path = "../parquet", version = "36.0.0", default-features = false }
-parquet_derive = { path = "../parquet_derive", version = "36.0.0", default-features = false }
-chrono = { version="0.4.23", default-features = false, features = [ "clock" ] }
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR && cargo run --manifest-path gen/Cargo.toml
