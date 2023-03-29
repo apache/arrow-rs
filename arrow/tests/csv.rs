@@ -25,10 +25,7 @@ fn test_export_csv_timestamps() {
     let schema = Schema::new(vec![
         Field::new(
             "c1",
-            DataType::Timestamp(
-                TimeUnit::Millisecond,
-                Some("Australia/Sydney".into()),
-            ),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("Australia/Sydney".into())),
             true,
         ),
         Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),
