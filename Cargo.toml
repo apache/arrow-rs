@@ -25,6 +25,7 @@ members = [
     "arrow-csv",
     "arrow-data",
     "arrow-flight",
+    "arrow-flight/gen",
     "arrow-integration-test",
     "arrow-integration-testing",
     "arrow-ipc",

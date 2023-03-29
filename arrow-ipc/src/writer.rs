@@ -2024,15 +2024,11 @@ mod tests {
         );
 
         let sliced = array.slice(1, 2);
-        let read_sliced: &UInt32Array = as_primitive_array(&sliced);
-        assert_eq!(
-            vec![Some(2), Some(3)],
-            read_sliced.iter().collect::<Vec<_>>()
-        );
+        assert_eq!(vec![Some(2), Some(3)], sliced.iter().collect::<Vec<_>>());
 
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, true)])),
-            vec![sliced],
+            vec![Arc::new(sliced)],
         )
         .expect("new batch");
 
@@ -2044,7 +2040,7 @@ mod tests {
         let mut reader = StreamReader::try_new(&outbuf[..], None).expect("new reader");
         let read_batch = reader.next().unwrap().expect("read batch");
 
-        let read_array: &UInt32Array = as_primitive_array(read_batch.column(0));
+        let read_array: &UInt32Array = read_batch.column(0).as_primitive();
         assert_eq!(
             vec![Some(2), Some(3)],
             read_array.iter().collect::<Vec<_>>()

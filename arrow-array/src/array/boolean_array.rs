@@ -19,8 +19,8 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef};
-use arrow_buffer::{bit_util, Buffer, MutableBuffer, NullBuffer};
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use std::any::Any;
 use std::sync::Arc;
@@ -67,7 +67,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct BooleanArray {
     data: ArrayData,
-    raw_values: Buffer,
+    values: BooleanBuffer,
 }
 
 impl std::fmt::Debug for BooleanArray {
@@ -81,6 +81,28 @@ impl std::fmt::Debug for BooleanArray {
 }
 
 impl BooleanArray {
+    /// Create a new [`BooleanArray`] from the provided values and nulls
+    ///
+    /// # Panics
+    ///
+    /// Panics if `values.len() != nulls.len()`
+    pub fn new(values: BooleanBuffer, nulls: Option<NullBuffer>) -> Self {
+        if let Some(n) = nulls.as_ref() {
+            assert_eq!(values.len(), n.len());
+        }
+
+        // TODO: Don't store ArrayData inside arrays (#3880)
+        let data = unsafe {
+            ArrayData::builder(DataType::Boolean)
+                .len(values.len())
+                .offset(values.offset())
+                .nulls(nulls)
+                .buffers(vec![values.inner().clone()])
+                .build_unchecked()
+        };
+        Self { data, values }
+    }
+
     /// Returns the length of this array.
     pub fn len(&self) -> usize {
         self.data.len()
@@ -96,32 +118,23 @@ impl BooleanArray {
         BooleanBuilder::with_capacity(capacity)
     }
 
-    /// Returns a `Buffer` holding all the values of this array.
-    ///
-    /// Note this doesn't take the offset of this array into account.
-    pub fn values(&self) -> &Buffer {
-        &self.raw_values
+    /// Returns the underlying [`BooleanBuffer`] holding all the values of this array
+    pub fn values(&self) -> &BooleanBuffer {
+        &self.values
     }
 
     /// Returns the number of non null, true values within this array
     pub fn true_count(&self) -> usize {
         match self.data.nulls() {
             Some(nulls) => {
-                let null_chunks = nulls.inner().bit_chunks();
-                let value_chunks = self.values().bit_chunks(self.offset(), self.len());
+                let null_chunks = nulls.inner().bit_chunks().iter_padded();
+                let value_chunks = self.values().bit_chunks().iter_padded();
                 null_chunks
-                    .iter()
-                    .zip(value_chunks.iter())
-                    .chain(std::iter::once((
-                        null_chunks.remainder_bits(),
-                        value_chunks.remainder_bits(),
-                    )))
+                    .zip(value_chunks)
                     .map(|(a, b)| (a & b).count_ones() as usize)
                     .sum()
             }
-            None => self
-                .values()
-                .count_set_bits_offset(self.offset(), self.len()),
+            None => self.values().count_set_bits(),
         }
     }
 
@@ -135,8 +148,7 @@ impl BooleanArray {
     /// # Safety
     /// This doesn't check bounds, the caller must ensure that index < self.len()
     pub unsafe fn value_unchecked(&self, i: usize) -> bool {
-        let offset = i + self.offset();
-        bit_util::get_bit_raw(self.raw_values.as_ptr(), offset)
+        self.values.value_unchecked(i)
     }
 
     /// Returns the boolean value at index `i`.
@@ -187,24 +199,12 @@ impl BooleanArray {
     where
         F: FnMut(T::Item) -> bool,
     {
-        let null_bit_buffer = left.nulls().map(|x| x.inner().sliced());
-        let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
+        let nulls = left.nulls().cloned();
+        let values = BooleanBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
             op(left.value_unchecked(i))
         });
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                left.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![Buffer::from(buffer)],
-                vec![],
-            )
-        };
-        Self::from(data)
+        Self::new(values, nulls)
     }
 
     /// Create a [`BooleanArray`] by evaluating the binary operation for
@@ -234,19 +234,11 @@ impl BooleanArray {
         assert_eq!(left.len(), right.len());
 
         let nulls = NullBuffer::union(left.nulls(), right.nulls());
-        let buffer = MutableBuffer::collect_bool(left.len(), |i| unsafe {
+        let values = BooleanBuffer::collect_bool(left.len(), |i| unsafe {
             // SAFETY: i in range 0..len
             op(left.value_unchecked(i), right.value_unchecked(i))
         });
-
-        let data = unsafe {
-            ArrayDataBuilder::new(DataType::Boolean)
-                .len(left.len())
-                .nulls(nulls)
-                .buffers(vec![buffer.into()])
-                .build_unchecked()
-        };
-        Self::from(data)
+        Self::new(values, nulls)
     }
 }
 
@@ -329,8 +321,10 @@ impl From<ArrayData> for BooleanArray {
             1,
             "BooleanArray data should contain a single buffer only (values buffer)"
         );
-        let raw_values = data.buffers()[0].clone();
-        Self { data, raw_values }
+        let values =
+            BooleanBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
+
+        Self { data, values }
     }
 }
 
@@ -396,6 +390,7 @@ impl<Ptr: std::borrow::Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::Buffer;
     use rand::{thread_rng, Rng};
 
     #[test]
@@ -424,7 +419,7 @@ mod tests {
     fn test_boolean_array_from_vec() {
         let buf = Buffer::from([10_u8]);
         let arr = BooleanArray::from(vec![false, true, false, true]);
-        assert_eq!(&buf, arr.values());
+        assert_eq!(&buf, arr.values().inner());
         assert_eq!(4, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -439,7 +434,7 @@ mod tests {
     fn test_boolean_array_from_vec_option() {
         let buf = Buffer::from([10_u8]);
         let arr = BooleanArray::from(vec![Some(false), Some(true), None, Some(true)]);
-        assert_eq!(&buf, arr.values());
+        assert_eq!(&buf, arr.values().inner());
         assert_eq!(4, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(1, arr.null_count());
@@ -501,7 +496,7 @@ mod tests {
             .build()
             .unwrap();
         let arr = BooleanArray::from(data);
-        assert_eq!(&buf2, arr.values());
+        assert_eq!(&buf2, arr.values().inner());
         assert_eq!(5, arr.len());
         assert_eq!(2, arr.offset());
         assert_eq!(0, arr.null_count());

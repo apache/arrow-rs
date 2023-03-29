@@ -840,7 +840,7 @@ mod tests {
     use crate::file::page_index::index_reader;
     use crate::file::properties::WriterProperties;
     use arrow::error::Result as ArrowResult;
-    use arrow_array::cast::as_primitive_array;
+    use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
     use futures::TryStreamExt;
@@ -1355,14 +1355,14 @@ mod tests {
         // First batch should contain all rows
         assert_eq!(batch.num_rows(), 3);
         assert_eq!(batch.num_columns(), 3);
-        let col2 = as_primitive_array::<Int32Type>(batch.column(2));
+        let col2 = batch.column(2).as_primitive::<Int32Type>();
         assert_eq!(col2.values(), &[0, 1, 2]);
 
         let batch = &batches[1];
         // Second batch should trigger the limit and only have one row
         assert_eq!(batch.num_rows(), 1);
         assert_eq!(batch.num_columns(), 3);
-        let col2 = as_primitive_array::<Int32Type>(batch.column(2));
+        let col2 = batch.column(2).as_primitive::<Int32Type>();
         assert_eq!(col2.values(), &[3]);
 
         let stream = ParquetRecordBatchStreamBuilder::new(test.clone())
@@ -1381,14 +1381,14 @@ mod tests {
         // First batch should contain one row
         assert_eq!(batch.num_rows(), 1);
         assert_eq!(batch.num_columns(), 3);
-        let col2 = as_primitive_array::<Int32Type>(batch.column(2));
+        let col2 = batch.column(2).as_primitive::<Int32Type>();
         assert_eq!(col2.values(), &[2]);
 
         let batch = &batches[1];
         // Second batch should contain two rows
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.num_columns(), 3);
-        let col2 = as_primitive_array::<Int32Type>(batch.column(2));
+        let col2 = batch.column(2).as_primitive::<Int32Type>();
         assert_eq!(col2.values(), &[3, 4]);
 
         let stream = ParquetRecordBatchStreamBuilder::new(test.clone())
@@ -1407,7 +1407,7 @@ mod tests {
         // First batch should contain two rows
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.num_columns(), 3);
-        let col2 = as_primitive_array::<Int32Type>(batch.column(2));
+        let col2 = batch.column(2).as_primitive::<Int32Type>();
         assert_eq!(col2.values(), &[4, 5]);
     }
 

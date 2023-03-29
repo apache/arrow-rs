@@ -20,13 +20,13 @@
 use std::sync::Arc;
 
 use arrow_array::builder::BufferBuilder;
+use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
-use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array};
 use num::{ToPrimitive, Zero};
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
@@ -128,24 +128,16 @@ where
             Ok(Arc::new(take_boolean(values, indices)?))
         }
         DataType::Utf8 => {
-            Ok(Arc::new(take_bytes(as_string_array(values), indices)?))
+            Ok(Arc::new(take_bytes(values.as_string::<i32>(), indices)?))
         }
         DataType::LargeUtf8 => {
-            Ok(Arc::new(take_bytes(as_largestring_array(values), indices)?))
+            Ok(Arc::new(take_bytes(values.as_string::<i64>(), indices)?))
         }
         DataType::List(_) => {
-            let values = values
-                .as_any()
-                .downcast_ref::<GenericListArray<i32>>()
-                .unwrap();
-            Ok(Arc::new(take_list::<_, Int32Type>(values, indices)?))
+            Ok(Arc::new(take_list::<_, Int32Type>(values.as_list(), indices)?))
         }
         DataType::LargeList(_) => {
-            let values = values
-                .as_any()
-                .downcast_ref::<GenericListArray<i64>>()
-                .unwrap();
-            Ok(Arc::new(take_list::<_, Int64Type>(values, indices)?))
+            Ok(Arc::new(take_list::<_, Int64Type>(values.as_list(), indices)?))
         }
         DataType::FixedSizeList(_, length) => {
             let values = values
@@ -157,6 +149,12 @@ where
                 indices,
                 *length as u32,
             )?))
+        }
+        DataType::Map(_, _) => {
+            let list_arr = ListArray::from(values.as_map().clone());
+            let list_data = take_list::<_, Int32Type>(&list_arr, indices)?;
+            let builder = list_data.into_data().into_builder().data_type(values.data_type().clone());
+            Ok(Arc::new(MapArray::from(unsafe { builder.build_unchecked() })))
         }
         DataType::Struct(fields) => {
             let struct_: &StructArray =
@@ -193,10 +191,10 @@ where
             t => unimplemented!("Take not supported for run type {:?}", t)
         }
         DataType::Binary => {
-            Ok(Arc::new(take_bytes(as_generic_binary_array::<i32>(values), indices)?))
+            Ok(Arc::new(take_bytes(values.as_binary::<i32>(), indices)?))
         }
         DataType::LargeBinary => {
-            Ok(Arc::new(take_bytes(as_generic_binary_array::<i64>(values), indices)?))
+            Ok(Arc::new(take_bytes(values.as_binary::<i64>(), indices)?))
         }
         DataType::FixedSizeBinary(size) => {
             let values = values
@@ -524,7 +522,7 @@ where
     IndexType: ArrowPrimitiveType,
     IndexType::Native: ToPrimitive,
 {
-    let val_buf = take_bits(values.values(), values.offset(), indices)?;
+    let val_buf = take_bits(values.values().inner(), values.offset(), indices)?;
     let null_buf = match values.nulls() {
         Some(nulls) if nulls.null_count() > 0 => {
             Some(take_bits(nulls.buffer(), nulls.offset(), indices)?)
@@ -670,7 +668,7 @@ where
     IndexType::Native: ToPrimitive,
     OffsetType: ArrowPrimitiveType,
     OffsetType::Native: ToPrimitive + OffsetSizeTrait,
-    PrimitiveArray<OffsetType>: From<Vec<Option<OffsetType::Native>>>,
+    PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
     // TODO: Some optimizations can be done here such as if it is
     // taking the whole list or a contiguous sublist
@@ -678,7 +676,7 @@ where
         take_value_indices_from_list::<IndexType, OffsetType>(values, indices)?;
 
     let taken = take_impl::<OffsetType>(values.values().as_ref(), &list_indices, None)?;
-    let value_offsets = Buffer::from_slice_ref(offsets);
+    let value_offsets = Buffer::from_vec(offsets);
     // create a new list with taken data and computed null information
     let list_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
@@ -743,13 +741,13 @@ where
     IndexType: ArrowPrimitiveType,
     IndexType::Native: ToPrimitive,
 {
-    let data_ref = values.data_ref();
+    let nulls = values.nulls();
     let array_iter = indices
         .values()
         .iter()
         .map(|idx| {
             let idx = maybe_usize::<IndexType::Native>(*idx)?;
-            if data_ref.is_valid(idx) {
+            if nulls.map(|n| n.is_valid(idx)).unwrap_or(true) {
                 Ok(Some(values.value(idx)))
             } else {
                 Ok(None)
@@ -776,20 +774,14 @@ where
     I::Native: ToPrimitive,
 {
     let new_keys = take_primitive::<T, I>(values.keys(), indices)?;
-    let new_keys_data = new_keys.data_ref();
+    let builder = new_keys
+        .into_data()
+        .into_builder()
+        .data_type(values.data_type().clone())
+        .child_data(vec![values.values().to_data()]);
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            values.data_type().clone(),
-            new_keys.len(),
-            Some(new_keys_data.null_count()),
-            new_keys_data.nulls().map(|b| b.inner().sliced()),
-            0,
-            new_keys_data.buffers().to_vec(),
-            values.data().child_data().to_vec(),
-        )
-    };
-
+    // Safety: Indices were valid before
+    let data = unsafe { builder.build_unchecked() };
     Ok(DictionaryArray::<T>::from(data))
 }
 
@@ -889,7 +881,7 @@ where
     IndexType::Native: ToPrimitive,
     OffsetType: ArrowPrimitiveType,
     OffsetType::Native: OffsetSizeTrait + std::ops::Add + num::Zero + num::One,
-    PrimitiveArray<OffsetType>: From<Vec<Option<OffsetType::Native>>>,
+    PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
     // TODO: benchmark this function, there might be a faster unsafe alternative
     let offsets: &[OffsetType::Native] = list.value_offsets();
@@ -920,7 +912,7 @@ where
 
             // if start == end, this slot is empty
             while curr < end {
-                values.push(Some(curr));
+                values.push(curr);
                 curr += num::One::one();
             }
             if !list.is_valid(ix) {
@@ -969,7 +961,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{builder::*, cast::as_primitive_array};
+    use arrow_array::builder::*;
     use arrow_schema::TimeUnit;
 
     fn test_take_decimal_arrays(
@@ -1569,14 +1561,8 @@ mod tests {
             StringArray::from(vec![Some("hello"), None, Some("world"), None, Some("hi")]);
         let indices = Int32Array::from(vec![Some(0), Some(1), None, Some(0), Some(2)]);
         let indices_slice = indices.slice(1, 4);
-        let indices_slice = indices_slice
-            .as_ref()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-
         let expected = StringArray::from(vec![None, None, Some("hello"), Some("world")]);
-        let result = take(&strings, indices_slice, None).unwrap();
+        let result = take(&strings, &indices_slice, None).unwrap();
         assert_eq!(result.as_ref(), &expected);
     }
 
@@ -1928,6 +1914,30 @@ mod tests {
     }
 
     #[test]
+    fn test_take_map() {
+        let values = Int32Array::from(vec![1, 2, 3, 4]);
+        let array = MapArray::new_from_strings(
+            vec!["a", "b", "c", "a"].into_iter(),
+            &values,
+            &[0, 3, 4],
+        )
+        .unwrap();
+
+        let index = UInt32Array::from(vec![0]);
+
+        let result = take(&array, &index, None).unwrap();
+        let expected: ArrayRef = Arc::new(
+            MapArray::new_from_strings(
+                vec!["a", "b", "c"].into_iter(),
+                &values.slice(0, 3),
+                &[0, 3],
+            )
+            .unwrap(),
+        );
+        assert_eq!(&expected, &result);
+    }
+
+    #[test]
     fn test_take_struct() {
         let array = create_test_struct(vec![
             Some((Some(true), Some(42))),
@@ -2160,7 +2170,7 @@ mod tests {
         assert_eq!(take_out.run_ends().len(), 7);
         assert_eq!(take_out.run_ends().values(), &[1_i32, 3, 4, 5, 7]);
 
-        let take_out_values = as_primitive_array::<Int32Type>(take_out.values());
+        let take_out_values = take_out.values().as_primitive::<Int32Type>();
         assert_eq!(take_out_values.values(), &[2, 2, 2, 2, 1]);
     }
 

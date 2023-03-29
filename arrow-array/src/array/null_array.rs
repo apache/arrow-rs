@@ -54,6 +54,12 @@ impl NullArray {
         let array_data = unsafe { array_data.build_unchecked() };
         NullArray::from(array_data)
     }
+
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        // TODO: Slice buffers directly (#3880)
+        self.data.slice(offset, length).into()
+    }
 }
 
 impl Array for NullArray {
@@ -74,8 +80,7 @@ impl Array for NullArray {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        // TODO: Slice buffers directly (#3880)
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
@@ -97,7 +102,7 @@ impl Array for NullArray {
     /// Returns the total number of null values in this array.
     /// The null count of a `NullArray` always equals its length.
     fn null_count(&self) -> usize {
-        self.data_ref().len()
+        self.len()
     }
 }
 

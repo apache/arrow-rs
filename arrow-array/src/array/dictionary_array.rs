@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder};
-use crate::cast::as_primitive_array;
+use crate::cast::AsArray;
 use crate::iterator::ArrayIter;
 use crate::types::*;
 use crate::{
@@ -294,7 +294,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
 
     /// Returns a clone of the value type of this list.
     pub fn value_type(&self) -> DataType {
-        self.values.data_ref().data_type().clone()
+        self.values.data_type().clone()
     }
 
     /// The length of the dictionary is the length of the keys array.
@@ -321,6 +321,12 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// cast to `usize`, `None` if the value at `i` is `NULL`.
     pub fn key(&self, i: usize) -> Option<usize> {
         self.keys.is_valid(i).then(|| self.keys.value(i).as_usize())
+    }
+
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        // TODO: Slice buffers directly (#3880)
+        self.data.slice(offset, length).into()
     }
 
     /// Downcast this dictionary to a [`TypedDictionaryArray`]
@@ -410,8 +416,8 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
             return Err(self);
         }
 
-        let key_array = as_primitive_array::<K>(self.keys()).clone();
-        let value_array = as_primitive_array::<V>(self.values()).clone();
+        let key_array = self.keys().clone();
+        let value_array = self.values().as_primitive::<V>().clone();
 
         drop(self.data);
         drop(self.keys);
@@ -601,8 +607,7 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        // TODO: Slice buffers directly (#3880)
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
@@ -693,7 +698,7 @@ impl<'a, K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'a, 
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        self.dictionary.slice(offset, length)
+        Arc::new(self.dictionary.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {

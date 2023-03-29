@@ -100,6 +100,12 @@ impl StructArray {
             .position(|c| c == &column_name)
             .map(|pos| self.column(pos))
     }
+
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        // TODO: Slice buffers directly (#3880)
+        self.data.slice(offset, length).into()
+    }
 }
 
 impl From<ArrayData> for StructArray {
@@ -205,8 +211,7 @@ impl Array for StructArray {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        // TODO: Slice buffers directly (#3880)
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {

@@ -16,8 +16,11 @@
 // under the License.
 
 use crate::bit_chunk_iterator::BitChunks;
-use crate::{bit_util, buffer_bin_and, buffer_bin_or, Buffer};
-use std::ops::{BitAnd, BitOr};
+use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
+use crate::{
+    bit_util, buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer, MutableBuffer,
+};
+use std::ops::{BitAnd, BitOr, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
 #[derive(Debug, Clone, Eq)]
@@ -33,13 +36,9 @@ impl PartialEq for BooleanBuffer {
             return false;
         }
 
-        let lhs = self.bit_chunks();
-        let rhs = other.bit_chunks();
-
-        if lhs.iter().zip(rhs.iter()).any(|(a, b)| a != b) {
-            return false;
-        }
-        lhs.remainder_bits() == rhs.remainder_bits()
+        let lhs = self.bit_chunks().iter_padded();
+        let rhs = other.bit_chunks().iter_padded();
+        lhs.zip(rhs).all(|(a, b)| a == b)
     }
 }
 
@@ -60,6 +59,12 @@ impl BooleanBuffer {
         }
     }
 
+    /// Invokes `f` with indexes `0..len` collecting the boolean results into a new `BooleanBuffer`
+    pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, f: F) -> Self {
+        let buffer = MutableBuffer::collect_bool(len, f);
+        Self::new(buffer.into(), 0, len)
+    }
+
     /// Returns the number of set bits in this buffer
     pub fn count_set_bits(&self) -> usize {
         self.buffer.count_set_bits_offset(self.offset, self.len)
@@ -77,9 +82,9 @@ impl BooleanBuffer {
     ///
     /// Panics if `i >= self.len()`
     #[inline]
+    #[deprecated(note = "use BooleanBuffer::value")]
     pub fn is_set(&self, i: usize) -> bool {
-        assert!(i < self.len);
-        unsafe { bit_util::get_bit_raw(self.buffer.as_ptr(), i + self.offset) }
+        self.value(i)
     }
 
     /// Returns the offset of this [`BooleanBuffer`] in bits
@@ -98,6 +103,25 @@ impl BooleanBuffer {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Returns the boolean value at index `i`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
+    pub fn value(&self, idx: usize) -> bool {
+        assert!(idx < self.len);
+        unsafe { self.value_unchecked(idx) }
+    }
+
+    /// Returns the boolean value at index `i`.
+    ///
+    /// # Safety
+    /// This doesn't check bounds, the caller must ensure that index < self.len()
+    #[inline]
+    pub unsafe fn value_unchecked(&self, i: usize) -> bool {
+        unsafe { bit_util::get_bit_raw(self.buffer.as_ptr(), i + self.offset) }
     }
 
     /// Returns the packed values of this [`BooleanBuffer`] not including any offset
@@ -145,6 +169,33 @@ impl BooleanBuffer {
     pub fn into_inner(self) -> Buffer {
         self.buffer
     }
+
+    /// Returns an iterator over the bits in this [`BooleanBuffer`]
+    pub fn iter(&self) -> BitIterator<'_> {
+        self.into_iter()
+    }
+
+    /// Returns an iterator over the set bit positions in this [`BooleanBuffer`]
+    pub fn set_indices(&self) -> BitIndexIterator<'_> {
+        BitIndexIterator::new(self.values(), self.offset, self.len)
+    }
+
+    /// Returns a [`BitSliceIterator`] yielding contiguous ranges of set bits
+    pub fn set_slices(&self) -> BitSliceIterator<'_> {
+        BitSliceIterator::new(self.values(), self.offset, self.len)
+    }
+}
+
+impl Not for &BooleanBuffer {
+    type Output = BooleanBuffer;
+
+    fn not(self) -> Self::Output {
+        BooleanBuffer {
+            buffer: buffer_unary_not(&self.buffer, self.offset, self.len),
+            offset: 0,
+            len: self.len,
+        }
+    }
 }
 
 impl BitAnd<&BooleanBuffer> for &BooleanBuffer {
@@ -182,5 +233,14 @@ impl BitOr<&BooleanBuffer> for &BooleanBuffer {
             offset: 0,
             len: self.len,
         }
+    }
+}
+
+impl<'a> IntoIterator for &'a BooleanBuffer {
+    type Item = bool;
+    type IntoIter = BitIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        BitIterator::new(self.values(), self.offset, self.len)
     }
 }

@@ -124,7 +124,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
 mod tests {
     use super::*;
     use arrow_array::builder::{BooleanBuilder, Int32Builder, StructBuilder};
-    use arrow_array::cast::{as_boolean_array, as_primitive_array, as_string_array};
+    use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, StringArray, StructArray};
     use arrow_data::ArrayData;
@@ -148,7 +148,7 @@ mod tests {
             Some(9),
         ]);
 
-        let res = as_primitive_array::<Int32Type>(&res);
+        let res = res.as_primitive::<Int32Type>();
         assert_eq!(&expected, res);
     }
 
@@ -175,7 +175,7 @@ mod tests {
             Some(8),  // None => keep it
             None,     // true => None
         ]);
-        let res = as_primitive_array::<Int32Type>(&res);
+        let res = res.as_primitive::<Int32Type>();
         assert_eq!(&expected, res)
     }
 
@@ -201,7 +201,7 @@ mod tests {
         ]);
 
         let a = nullif(&s, &select).unwrap();
-        let r: Vec<_> = as_string_array(&a).iter().collect();
+        let r: Vec<_> = a.as_string::<i32>().iter().collect();
         assert_eq!(
             r,
             vec![None, None, Some("world"), None, Some("b"), None, None]
@@ -209,9 +209,9 @@ mod tests {
 
         let s = s.slice(2, 3);
         let select = select.slice(1, 3);
-        let select = as_boolean_array(select.as_ref());
-        let a = nullif(s.as_ref(), select).unwrap();
-        let r: Vec<_> = as_string_array(&a).iter().collect();
+        let select = select.as_boolean();
+        let a = nullif(&s, select).unwrap();
+        let r: Vec<_> = a.as_string::<i32>().iter().collect();
         assert_eq!(r, vec![None, Some("a"), None]);
     }
 
@@ -456,7 +456,7 @@ mod tests {
         let comp =
             BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
         let res = nullif(&a, &comp).unwrap();
-        let res = as_primitive_array::<Int32Type>(res.as_ref());
+        let res = res.as_primitive::<Int32Type>();
 
         let expected = Int32Array::from(vec![Some(15), Some(7), None, Some(1), Some(9)]);
         assert_eq!(res, &expected);
@@ -500,7 +500,6 @@ mod tests {
 
             for (a_offset, a_length) in a_slices {
                 let a = a.slice(a_offset, a_length);
-                let a = as_primitive_array::<Int32Type>(a.as_ref());
 
                 for i in 1..65 {
                     let b_start_offset = rng.gen_range(0..i);
@@ -510,9 +509,9 @@ mod tests {
                         .map(|_| rng.gen_bool(0.5).then(|| rng.gen_bool(0.5)))
                         .collect();
                     let b = b.slice(b_start_offset, a_length);
-                    let b = as_boolean_array(b.as_ref());
+                    let b = b.as_boolean();
 
-                    test_nullif(a, b);
+                    test_nullif(&a, b);
                 }
             }
         }

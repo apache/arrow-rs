@@ -296,6 +296,12 @@ impl<'a> BitChunks<'a> {
             index: 0,
         }
     }
+
+    /// Returns an iterator over chunks of 64 bits, with the remaining bits zero padded to 64-bits
+    #[inline]
+    pub fn iter_padded(&self) -> impl Iterator<Item = u64> + 'a {
+        self.iter().chain(std::iter::once(self.remainder_bits()))
+    }
 }
 
 impl<'a> IntoIterator for BitChunks<'a> {

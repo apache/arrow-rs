@@ -20,7 +20,7 @@
 
 use std::{fmt, str};
 
-use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
+pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
 use crate::format as parquet;
 
 use crate::errors::{ParquetError, Result};

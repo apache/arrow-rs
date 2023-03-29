@@ -20,11 +20,11 @@
 use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array};
+use arrow_array::cast::AsArray;
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::*;
 use arrow_buffer::bit_util;
-use arrow_buffer::{buffer::buffer_bin_and, Buffer, MutableBuffer};
+use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -53,11 +53,7 @@ pub struct SlicesIterator<'a>(BitSliceIterator<'a>);
 
 impl<'a> SlicesIterator<'a> {
     pub fn new(filter: &'a BooleanArray) -> Self {
-        let values = &filter.data_ref().buffers()[0];
-        let len = filter.len();
-        let offset = filter.offset();
-
-        Self(BitSliceIterator::new(values, offset, len))
+        Self(filter.values().set_slices())
     }
 }
 
@@ -81,8 +77,7 @@ struct IndexIterator<'a> {
 impl<'a> IndexIterator<'a> {
     fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
-        let data = filter.data();
-        let iter = BitIndexIterator::new(data.buffers()[0], data.offset(), data.len());
+        let iter = filter.values().set_indices();
         Self { remaining, iter }
     }
 }
@@ -109,9 +104,7 @@ impl<'a> Iterator for IndexIterator<'a> {
 
 /// Counts the number of set bits in `filter`
 fn filter_count(filter: &BooleanArray) -> usize {
-    filter
-        .values()
-        .count_set_bits_offset(filter.offset(), filter.len())
+    filter.values().count_set_bits()
 }
 
 /// Function that can filter arbitrary arrays
@@ -152,21 +145,9 @@ pub fn build_filter(filter: &BooleanArray) -> Result<Filter, ArrowError> {
 
 /// Remove null values by do a bitmask AND operation with null bits and the boolean bits.
 pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
-    let array_data = filter.data_ref();
-    let nulls = array_data.nulls().unwrap();
-    let mask = filter.values();
-    let offset = filter.offset();
-
-    let new_mask =
-        buffer_bin_and(mask, offset, nulls.buffer(), nulls.offset(), filter.len());
-
-    let array_data = ArrayData::builder(DataType::Boolean)
-        .len(filter.len())
-        .add_buffer(new_mask);
-
-    let array_data = unsafe { array_data.build_unchecked() };
-
-    BooleanArray::from(array_data)
+    let nulls = filter.nulls().unwrap();
+    let mask = filter.values() & nulls.inner();
+    BooleanArray::new(mask, None)
 }
 
 /// Filters an [Array], returning elements matching the filter (i.e. where the values are true).
@@ -355,25 +336,26 @@ fn filter_array(
                 Ok(Arc::new(filter_boolean(values, predicate)))
             }
             DataType::Utf8 => {
-                Ok(Arc::new(filter_bytes(as_string_array(values), predicate)))
+                Ok(Arc::new(filter_bytes(values.as_string::<i32>(), predicate)))
             }
             DataType::LargeUtf8 => {
-                Ok(Arc::new(filter_bytes(as_largestring_array(values), predicate)))
+                Ok(Arc::new(filter_bytes(values.as_string::<i64>(), predicate)))
             }
             DataType::Binary => {
-                Ok(Arc::new(filter_bytes(as_generic_binary_array::<i32>(values), predicate)))
+                Ok(Arc::new(filter_bytes(values.as_binary::<i32>(), predicate)))
             }
             DataType::LargeBinary => {
-                Ok(Arc::new(filter_bytes(as_generic_binary_array::<i64>(values), predicate)))
+                Ok(Arc::new(filter_bytes(values.as_binary::<i64>(), predicate)))
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 values => Ok(Arc::new(filter_dict(values, predicate))),
                 t => unimplemented!("Filter not supported for dictionary type {:?}", t)
             }
             _ => {
+                let data = values.to_data();
                 // fallback to using MutableArrayData
                 let mut mutable = MutableArrayData::new(
-                    vec![values.data_ref()],
+                    vec![&data],
                     false,
                     predicate.count,
                 );
@@ -782,13 +764,12 @@ mod tests {
 
     #[test]
     fn test_filter_array_slice() {
-        let a_slice = Int32Array::from(vec![5, 6, 7, 8, 9]).slice(1, 4);
-        let a = a_slice.as_ref();
+        let a = Int32Array::from(vec![5, 6, 7, 8, 9]).slice(1, 4);
         let b = BooleanArray::from(vec![true, false, false, true]);
         // filtering with sliced filter array is not currently supported
         // let b_slice = BooleanArray::from(vec![true, false, false, true, false]).slice(1, 4);
         // let b = b_slice.as_any().downcast_ref().unwrap();
-        let c = filter(a, &b).unwrap();
+        let c = filter(&a, &b).unwrap();
         let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(2, d.len());
         assert_eq!(6, d.value(0));
@@ -886,14 +867,13 @@ mod tests {
 
     #[test]
     fn test_filter_array_slice_with_null() {
-        let a_slice =
+        let a =
             Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]).slice(1, 4);
-        let a = a_slice.as_ref();
         let b = BooleanArray::from(vec![true, false, false, true]);
         // filtering with sliced filter array is not currently supported
         // let b_slice = BooleanArray::from(vec![true, false, false, true, false]).slice(1, 4);
         // let b = b_slice.as_any().downcast_ref().unwrap();
-        let c = filter(a, &b).unwrap();
+        let c = filter(&a, &b).unwrap();
         let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(2, d.len());
         assert!(d.is_null(0));
@@ -1014,7 +994,7 @@ mod tests {
 
         let mask1 = BooleanArray::from(vec![Some(true), Some(true), None]);
         let out = filter(&a, &mask1).unwrap();
-        assert_eq!(&out, &a.slice(0, 2));
+        assert_eq!(out.as_ref(), &a.slice(0, 2));
     }
 
     #[test]

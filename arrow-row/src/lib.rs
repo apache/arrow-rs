@@ -52,7 +52,7 @@
 //! # use std::sync::Arc;
 //! # use arrow_row::{RowConverter, SortField};
 //! # use arrow_array::{ArrayRef, Int32Array, StringArray};
-//! # use arrow_array::cast::{as_primitive_array, as_string_array};
+//! # use arrow_array::cast::{AsArray, as_string_array};
 //! # use arrow_array::types::Int32Type;
 //! # use arrow_schema::DataType;
 //!
@@ -89,10 +89,10 @@
 //! // Convert selection of rows back to arrays
 //! let selection = [rows.row(0), rows2.row(1), rows.row(2), rows2.row(0)];
 //! let converted = converter.convert_rows(selection).unwrap();
-//! let c1 = as_primitive_array::<Int32Type>(converted[0].as_ref());
+//! let c1 = converted[0].as_primitive::<Int32Type>();
 //! assert_eq!(c1.values(), &[-1, 4, 0, 3]);
 //!
-//! let c2 = as_string_array(converted[1].as_ref());
+//! let c2 = converted[1].as_string::<i32>();
 //! let c2_values: Vec<_> = c2.iter().flatten().collect();
 //! assert_eq!(&c2_values, &["a", "f", "c", "e"]);
 //! ```
@@ -1078,13 +1078,13 @@ fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) ->
                         .iter()
                         .zip(lengths.iter_mut())
                         .for_each(|(slice, length)| *length += variable::encoded_len(slice)),
-                    DataType::Utf8 => as_string_array(array)
+                    DataType::Utf8 => array.as_string::<i32>()
                         .iter()
                         .zip(lengths.iter_mut())
                         .for_each(|(slice, length)| {
                             *length += variable::encoded_len(slice.map(|x| x.as_bytes()))
                         }),
-                    DataType::LargeUtf8 => as_largestring_array(array)
+                    DataType::LargeUtf8 => array.as_string::<i64>()
                         .iter()
                         .zip(lengths.iter_mut())
                         .for_each(|(slice, length)| {
@@ -1189,7 +1189,7 @@ fn encode_column(
             downcast_primitive_array! {
                 column => fixed::encode(out, column, opts),
                 DataType::Null => {}
-                DataType::Boolean => fixed::encode(out, as_boolean_array(column), opts),
+                DataType::Boolean => fixed::encode(out, column.as_boolean(), opts),
                 DataType::Binary => {
                     variable::encode(out, as_generic_binary_array::<i32>(column).iter(), opts)
                 }
@@ -1198,12 +1198,12 @@ fn encode_column(
                 }
                 DataType::Utf8 => variable::encode(
                     out,
-                    as_string_array(column).iter().map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i32>().iter().map(|x| x.map(|x| x.as_bytes())),
                     opts,
                 ),
                 DataType::LargeUtf8 => variable::encode(
                     out,
-                    as_largestring_array(column)
+                    column.as_string::<i64>()
                         .iter()
                         .map(|x| x.map(|x| x.as_bytes())),
                     opts,

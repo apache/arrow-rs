@@ -24,12 +24,26 @@ use arrow_schema::Field;
 use std::any::Any;
 use std::sync::Arc;
 
-///  Array builder for [`GenericListArray`]
+/// Array builder for [`GenericListArray`]s.
+///
+/// Use [`ListBuilder`] to build [`ListArray`]s and [`LargeListBuilder`] to build [`LargeListArray`]s.
+///
+///
+/// [`ListBuilder`]: crate::builder::ListBuilder
+/// [`ListArray`]: crate::array::ListArray
+/// [`LargeListBuilder`]: crate::builder::LargeListBuilder
+/// [`LargeListArray`]: crate::array::LargeListArray
 #[derive(Debug)]
 pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
     offsets_builder: BufferBuilder<OffsetSize>,
     null_buffer_builder: NullBufferBuilder,
     values_builder: T,
+}
+
+impl<O: OffsetSizeTrait, T: ArrayBuilder + Default> Default for GenericListBuilder<O, T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize, T> {
@@ -117,9 +131,97 @@ where
     /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
-        self.offsets_builder
-            .append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
+        self.offsets_builder.append(self.next_offset());
         self.null_buffer_builder.append(is_valid);
+    }
+
+    /// Returns the next offset
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
+    #[inline]
+    fn next_offset(&self) -> OffsetSize {
+        OffsetSize::from_usize(self.values_builder.len()).unwrap()
+    }
+
+    /// Append a value to this [`GenericListBuilder`]
+    ///
+    /// ```
+    /// # use arrow_array::builder::{Int32Builder, ListBuilder};
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_array::{Array, Int32Array};
+    /// # use arrow_array::types::Int32Type;
+    /// let mut builder = ListBuilder::new(Int32Builder::new());
+    ///
+    /// builder.append_value([Some(1), Some(2), Some(3)]);
+    /// builder.append_value([]);
+    /// builder.append_value([None]);
+    ///
+    /// let array = builder.finish();
+    /// assert_eq!(array.len(), 3);
+    ///
+    /// assert_eq!(array.value_offsets(), &[0, 3, 3, 4]);
+    /// let values = array.values().as_primitive::<Int32Type>();
+    /// assert_eq!(values, &Int32Array::from(vec![Some(1), Some(2), Some(3), None]));
+    /// ```
+    ///
+    /// This is an alternative API to appending directly to [`Self::values`] and
+    /// delimiting the result with [`Self::append`]
+    ///
+    /// ```
+    /// # use arrow_array::builder::{Int32Builder, ListBuilder};
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_array::{Array, Int32Array};
+    /// # use arrow_array::types::Int32Type;
+    /// let mut builder = ListBuilder::new(Int32Builder::new());
+    ///
+    /// builder.values().append_value(1);
+    /// builder.values().append_value(2);
+    /// builder.values().append_value(3);
+    /// builder.append(true);
+    /// builder.append(true);
+    /// builder.values().append_null();
+    /// builder.append(true);
+    ///
+    /// let array = builder.finish();
+    /// assert_eq!(array.len(), 3);
+    ///
+    /// assert_eq!(array.value_offsets(), &[0, 3, 3, 4]);
+    /// let values = array.values().as_primitive::<Int32Type>();
+    /// assert_eq!(values, &Int32Array::from(vec![Some(1), Some(2), Some(3), None]));
+    /// ```
+    #[inline]
+    pub fn append_value<I, V>(&mut self, i: I)
+    where
+        T: Extend<Option<V>>,
+        I: IntoIterator<Item = Option<V>>,
+    {
+        self.extend(std::iter::once(Some(i)))
+    }
+
+    /// Append a null to this [`GenericListBuilder`]
+    ///
+    /// See [`Self::append_value`] for an example use.
+    #[inline]
+    pub fn append_null(&mut self) {
+        self.offsets_builder.append(self.next_offset());
+        self.null_buffer_builder.append_null();
+    }
+
+    /// Appends an optional value into this [`GenericListBuilder`]
+    ///
+    /// If `Some` calls [`Self::append_value`] otherwise calls [`Self::append_null`]
+    #[inline]
+    pub fn append_option<I, V>(&mut self, i: Option<I>)
+    where
+        T: Extend<Option<V>>,
+        I: IntoIterator<Item = Option<V>>,
+    {
+        match i {
+            Some(i) => self.append_value(i),
+            None => self.append_null(),
+        }
     }
 
     /// Builds the [`GenericListArray`] and reset this builder.
@@ -206,7 +308,7 @@ where
 mod tests {
     use super::*;
     use crate::builder::{Int32Builder, ListBuilder};
-    use crate::cast::as_primitive_array;
+    use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Array, Int32Array};
     use arrow_buffer::Buffer;
@@ -405,8 +507,7 @@ mod tests {
         assert_eq!(array.value_offsets(), [0, 4, 4, 6, 6]);
         assert_eq!(array.null_count(), 1);
         assert!(array.is_null(3));
-        let a_values = array.values();
-        let elements = as_primitive_array::<Int32Type>(a_values.as_ref());
+        let elements = array.values().as_primitive::<Int32Type>();
         assert_eq!(elements.values(), &[1, 2, 7, 0, 4, 5]);
         assert_eq!(elements.null_count(), 1);
         assert!(elements.is_null(3));

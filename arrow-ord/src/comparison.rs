@@ -26,12 +26,11 @@
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::buffer::buffer_unary_not;
-use arrow_buffer::{bit_util, Buffer, MutableBuffer};
-use arrow_data::bit_mask::combine_option_bitmap;
+use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use arrow_select::take::take;
+use half::f16;
 
 /// Helper function to perform boolean lambda function on values from two array accessors, this
 /// version does not attempt to use SIMD.
@@ -196,23 +195,19 @@ pub fn eq_bool_scalar(
     left: &BooleanArray,
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
-    let len = left.len();
-    let left_offset = left.offset();
-
-    let values = if right {
-        left.values().bit_slice(left_offset, len)
-    } else {
-        buffer_unary_not(left.values(), left.offset(), left.len())
+    let values = match right {
+        true => left.values().clone(),
+        false => !left.values(),
     };
 
     let data = unsafe {
         ArrayData::new_unchecked(
             DataType::Boolean,
-            len,
+            values.len(),
             None,
             left.nulls().map(|b| b.inner().sliced()),
-            0,
-            vec![values],
+            values.offset(),
+            vec![values.into_inner()],
             vec![],
         )
     };
@@ -501,6 +496,11 @@ macro_rules! dyn_compare_scalar {
                 let right = try_to_type!($RIGHT, to_u64)?;
                 let left = as_primitive_array::<UInt64Type>($LEFT);
                 $OP::<UInt64Type>(left, right)
+            }
+            DataType::Float16 => {
+                let right = try_to_type!($RIGHT, to_f32)?;
+                let left = as_primitive_array::<Float16Type>($LEFT);
+                $OP::<Float16Type>(left, f16::from_f32(right))
             }
             DataType::Float32 => {
                 let right = try_to_type!($RIGHT, to_f32)?;
@@ -834,14 +834,8 @@ pub fn eq_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            eq_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            eq_binary_scalar(left, right)
-        }
+        DataType::Binary => eq_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => eq_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "eq_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
         )),
@@ -855,14 +849,8 @@ pub fn neq_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            neq_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            neq_binary_scalar(left, right)
-        }
+        DataType::Binary => neq_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => neq_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "neq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
                 .to_string(),
@@ -877,14 +865,8 @@ pub fn lt_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            lt_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            lt_binary_scalar(left, right)
-        }
+        DataType::Binary => lt_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => lt_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "lt_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
         )),
@@ -898,14 +880,8 @@ pub fn lt_eq_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            lt_eq_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            lt_eq_binary_scalar(left, right)
-        }
+        DataType::Binary => lt_eq_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => lt_eq_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "lt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
                 .to_string(),
@@ -920,14 +896,8 @@ pub fn gt_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            gt_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            gt_binary_scalar(left, right)
-        }
+        DataType::Binary => gt_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => gt_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "gt_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
         )),
@@ -941,14 +911,8 @@ pub fn gt_eq_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => {
-            let left = as_generic_binary_array::<i32>(left);
-            gt_eq_binary_scalar(left, right)
-        }
-        DataType::LargeBinary => {
-            let left = as_generic_binary_array::<i64>(left);
-            gt_eq_binary_scalar(left, right)
-        }
+        DataType::Binary => gt_eq_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => gt_eq_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "gt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
                 .to_string(),
@@ -972,12 +936,10 @@ pub fn eq_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            eq_utf8_scalar(left, right)
+            eq_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            eq_utf8_scalar(left, right)
+            eq_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1002,12 +964,10 @@ pub fn lt_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            lt_utf8_scalar(left, right)
+            lt_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            lt_utf8_scalar(left, right)
+            lt_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "lt_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1032,12 +992,10 @@ pub fn gt_eq_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            gt_eq_utf8_scalar(left, right)
+            gt_eq_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            gt_eq_utf8_scalar(left, right)
+            gt_eq_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "gt_eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1062,12 +1020,10 @@ pub fn lt_eq_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            lt_eq_utf8_scalar(left, right)
+            lt_eq_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            lt_eq_utf8_scalar(left, right)
+            lt_eq_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "lt_eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1092,12 +1048,10 @@ pub fn gt_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            gt_utf8_scalar(left, right)
+            gt_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            gt_utf8_scalar(left, right)
+            gt_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "gt_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1122,12 +1076,10 @@ pub fn neq_dyn_utf8_scalar(
             )),
         },
         DataType::Utf8 => {
-            let left = as_string_array(left);
-            neq_utf8_scalar(left, right)
+            neq_utf8_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
-            neq_utf8_scalar(left, right)
+            neq_utf8_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "neq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -1143,10 +1095,7 @@ pub fn eq_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            eq_bool_scalar(left, right)
-        }
+        DataType::Boolean => eq_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "eq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1161,10 +1110,7 @@ pub fn lt_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            lt_bool_scalar(left, right)
-        }
+        DataType::Boolean => lt_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "lt_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1179,10 +1125,7 @@ pub fn gt_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            gt_bool_scalar(left, right)
-        }
+        DataType::Boolean => gt_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "gt_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1197,10 +1140,7 @@ pub fn lt_eq_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            lt_eq_bool_scalar(left, right)
-        }
+        DataType::Boolean => lt_eq_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "lt_eq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1215,10 +1155,7 @@ pub fn gt_eq_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            gt_eq_bool_scalar(left, right)
-        }
+        DataType::Boolean => gt_eq_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "gt_eq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1233,10 +1170,7 @@ pub fn neq_dyn_bool_scalar(
     right: bool,
 ) -> Result<BooleanArray, ArrowError> {
     let result = match left.data_type() {
-        DataType::Boolean => {
-            let left = as_boolean_array(left);
-            neq_bool_scalar(left, right)
-        }
+        DataType::Boolean => neq_bool_scalar(left.as_boolean(), right),
         _ => Err(ArrowError::ComputeError(
             "neq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
@@ -1285,8 +1219,7 @@ where
         ));
     }
 
-    let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], len);
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
     // we process the data in chunks so that each iteration results in one u64 of comparison result bits
     const CHUNK_SIZE: usize = 64;
@@ -1347,18 +1280,8 @@ where
         result_remainder.copy_from_slice(remainder_mask_as_bytes);
     }
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            len,
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    let values = BooleanBuffer::new(result.into(), 0, len);
+    Ok(BooleanArray::new(values, nulls))
 }
 
 /// Helper function to perform boolean lambda function on values from an array and a scalar value using
@@ -1460,8 +1383,8 @@ fn cmp_primitive_array<T: ArrowPrimitiveType, F>(
 where
     F: Fn(T::Native, T::Native) -> bool,
 {
-    let left_array = as_primitive_array::<T>(left);
-    let right_array = as_primitive_array::<T>(right);
+    let left_array = left.as_primitive::<T>();
+    let right_array = right.as_primitive::<T>();
     compare_op(left_array, right_array, op)
 }
 
@@ -1595,6 +1518,9 @@ macro_rules! typed_cmp_dict_non_dict {
                 (DataType::UInt64, DataType::UInt64) => {
                     typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), UInt64Type, $OP_BOOL, $OP)
                 }
+                (DataType::Float16, DataType::Float16) => {
+                    typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Float16Type, $OP_BOOL, $OP_FLOAT)
+                }
                 (DataType::Float32, DataType::Float32) => {
                     typed_dict_non_dict_cmp!($LEFT, $RIGHT, left_key_type.as_ref(), Float32Type, $OP_BOOL, $OP_FLOAT)
                 }
@@ -1691,6 +1617,9 @@ macro_rules! typed_compares {
             }
             (DataType::UInt64, DataType::UInt64) => {
                 cmp_primitive_array::<UInt64Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Float16, DataType::Float16) => {
+                cmp_primitive_array::<Float16Type, _>($LEFT, $RIGHT, $OP_FLOAT)
             }
             (DataType::Float32, DataType::Float32) => {
                 cmp_primitive_array::<Float32Type, _>($LEFT, $RIGHT, $OP_FLOAT)
@@ -1842,6 +1771,9 @@ macro_rules! typed_dict_cmp {
             }
             (DataType::UInt64, DataType::UInt64) => {
                 cmp_dict::<$KT, UInt64Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Float16, DataType::Float16) => {
+                cmp_dict::<$KT, Float16Type, _>($LEFT, $RIGHT, $OP_FLOAT)
             }
             (DataType::Float32, DataType::Float32) => {
                 cmp_dict::<$KT, Float32Type, _>($LEFT, $RIGHT, $OP_FLOAT)
@@ -2041,7 +1973,7 @@ where
 {
     compare_op(
         left.downcast_dict::<PrimitiveArray<T>>().unwrap(),
-        as_primitive_array::<T>(right),
+        right.as_primitive::<T>(),
         op,
     )
 }
@@ -2780,19 +2712,13 @@ where
 
     let num_bytes = bit_util::ceil(left_len, 8);
 
-    let not_both_null_bit_buffer =
-        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len) {
-            Some(buff) => buff,
-            None => new_all_set_buffer(num_bytes),
-        };
-    let not_both_null_bitmap = not_both_null_bit_buffer.as_slice();
-
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
     let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
     let bool_slice = bool_buf.as_slice_mut();
 
     // if both array slots are valid, check if list contains primitive
     for i in 0..left_len {
-        if bit_util::get_bit(not_both_null_bitmap, i) {
+        if nulls.as_ref().map(|n| n.is_valid(i)).unwrap_or(true) {
             let list = right.value(i);
             let list = list.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
 
@@ -2805,18 +2731,8 @@ where
         }
     }
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            None,
-            0,
-            vec![bool_buf.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    let values = BooleanBuffer::new(bool_buf.into(), 0, left_len);
+    Ok(BooleanArray::new(values, None))
 }
 
 /// Checks if a [`GenericListArray`] contains a value in the [`GenericStringArray`]
@@ -2837,24 +2753,15 @@ where
 
     let num_bytes = bit_util::ceil(left_len, 8);
 
-    let not_both_null_bit_buffer =
-        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len) {
-            Some(buff) => buff,
-            None => new_all_set_buffer(num_bytes),
-        };
-    let not_both_null_bitmap = not_both_null_bit_buffer.as_slice();
-
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
     let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
     let bool_slice = &mut bool_buf;
 
     for i in 0..left_len {
         // contains(null, null) = false
-        if bit_util::get_bit(not_both_null_bitmap, i) {
+        if nulls.as_ref().map(|n| n.is_valid(i)).unwrap_or(true) {
             let list = right.value(i);
-            let list = list
-                .as_any()
-                .downcast_ref::<GenericStringArray<OffsetSize>>()
-                .unwrap();
+            let list = list.as_string::<OffsetSize>();
 
             for j in 0..list.len() {
                 if list.is_valid(j) && (left.value(i) == list.value(j)) {
@@ -2864,28 +2771,8 @@ where
             }
         }
     }
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            None,
-            0,
-            vec![bool_buf.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
-}
-
-// create a buffer and fill it with valid bits
-#[inline]
-fn new_all_set_buffer(len: usize) -> Buffer {
-    let buffer = MutableBuffer::new(len);
-    let buffer = buffer.with_bitset(len, true);
-
-    buffer.into()
+    let values = BooleanBuffer::new(bool_buf.into(), 0, left_len);
+    Ok(BooleanArray::new(values, None))
 }
 
 // disable wrapping inside literal vectors used for test data and assertions
@@ -2914,7 +2801,7 @@ mod tests {
             // slice and test if the dynamic array works
             let a = a.slice(0, a.len());
             let b = b.slice(0, b.len());
-            let c = $DYN_KERNEL(a.as_ref(), b.as_ref()).unwrap();
+            let c = $DYN_KERNEL(&a, &b).unwrap();
             assert_eq!(BooleanArray::from($EXPECTED), c);
 
             // test with a larger version of the same data to ensure we cover the chunked part of the comparison
@@ -3051,8 +2938,7 @@ mod tests {
     fn test_primitive_array_eq_scalar_with_slice() {
         let a = Int32Array::from(vec![Some(1), None, Some(2), Some(3)]);
         let a = a.slice(1, 3);
-        let a: &Int32Array = as_primitive_array(&a);
-        let a_eq = eq_scalar(a, 2).unwrap();
+        let a_eq = eq_scalar(&a, 2).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![None, Some(true), Some(false)])
@@ -3853,14 +3739,13 @@ mod tests {
             vec![Some("hi"), None, Some("hello"), Some("world"), Some("")],
         );
         let a = a.slice(1, 4);
-        let a = as_string_array(&a);
-        let a_eq = eq_utf8_scalar(a, "hello").unwrap();
+        let a_eq = eq_utf8_scalar(&a, "hello").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![None, Some(true), Some(false), Some(false)])
         );
 
-        let a_eq2 = eq_utf8_scalar(a, "").unwrap();
+        let a_eq2 = eq_utf8_scalar(&a, "").unwrap();
 
         assert_eq!(
             a_eq2,
@@ -5059,6 +4944,30 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_neq_dyn_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float16Array = vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(eq(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(neq(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
             .map(Some)
@@ -5111,6 +5020,31 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_lt_eq_dyn_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float16Array = vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(lt_eq(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
             .into_iter()
             .map(Some)
@@ -5164,6 +5098,31 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_gt_eq_dyn_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let array2: Float16Array = vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
+        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
+        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+
+        #[cfg(not(feature = "simd"))]
+        assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
             .into_iter()
             .map(Some)
@@ -5217,6 +5176,30 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_scalar_neq_dyn_scalar_float_nan() {
+        let array: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        #[cfg(feature = "simd")]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        #[cfg(not(feature = "simd"))]
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        #[cfg(feature = "simd")]
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
+        );
+        #[cfg(not(feature = "simd"))]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
         let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
             .map(Some)
@@ -5268,6 +5251,30 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_scalar_lt_eq_dyn_scalar_float_nan() {
+        let array: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        #[cfg(feature = "simd")]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        #[cfg(not(feature = "simd"))]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(lt_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+
+        #[cfg(feature = "simd")]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        #[cfg(not(feature = "simd"))]
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(lt_eq_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+
         let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
             .map(Some)
@@ -5319,6 +5326,25 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_scalar_gt_eq_dyn_scalar_float_nan() {
+        let array: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+
+        #[cfg(feature = "simd")]
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
+        );
+        #[cfg(not(feature = "simd"))]
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(gt_eq_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+
         let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
             .map(Some)
@@ -5573,6 +5599,25 @@ mod tests {
     #[test]
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dict_non_dict_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values =
+            Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(10.0)]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
             .map(Some)
@@ -5613,6 +5658,24 @@ mod tests {
     #[test]
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_lt_eq_dyn_dict_non_dict_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
+        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
             .into_iter()
             .map(Some)
@@ -5653,6 +5716,24 @@ mod tests {
     #[test]
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_gt_dyn_gt_eq_dyn_dict_non_dict_float_nan() {
+        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
+        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
+        );
+        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
             .into_iter()
             .map(Some)

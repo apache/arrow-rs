@@ -67,6 +67,16 @@ pub struct RunArray<R: RunEndIndexType> {
     values: ArrayRef,
 }
 
+impl<R: RunEndIndexType> Clone for RunArray<R> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            run_ends: self.run_ends.clone(),
+            values: self.values.clone(),
+        }
+    }
+}
+
 impl<R: RunEndIndexType> RunArray<R> {
     /// Calculates the logical length of the array encoded
     /// by the given run_ends array.
@@ -243,6 +253,12 @@ impl<R: RunEndIndexType> RunArray<R> {
         }
         Ok(physical_indices)
     }
+
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        // TODO: Slice buffers directly (#3880)
+        self.data.slice(offset, length).into()
+    }
 }
 
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
@@ -297,8 +313,7 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        // TODO: Slice buffers directly (#3880)
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
@@ -495,7 +510,7 @@ impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        self.run_array.slice(offset, length)
+        Arc::new(self.run_array.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
@@ -555,7 +570,7 @@ mod tests {
 
     use super::*;
     use crate::builder::PrimitiveRunBuilder;
-    use crate::cast::as_primitive_array;
+    use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type, Int8Type, UInt32Type};
     use crate::{Array, Int32Array, StringArray};
 
@@ -877,8 +892,7 @@ mod tests {
             builder.extend(input_array.clone().into_iter());
 
             let run_array = builder.finish();
-            let physical_values_array =
-                as_primitive_array::<Int32Type>(run_array.values());
+            let physical_values_array = run_array.values().as_primitive::<Int32Type>();
 
             // create an array consisting of all the indices repeated twice and shuffled.
             let mut logical_indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
@@ -913,7 +927,7 @@ mod tests {
             PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
         builder.extend(input_array.iter().copied());
         let run_array = builder.finish();
-        let physical_values_array = as_primitive_array::<Int32Type>(run_array.values());
+        let physical_values_array = run_array.values().as_primitive::<Int32Type>();
 
         // test for all slice lengths.
         for slice_len in 1..=total_len {

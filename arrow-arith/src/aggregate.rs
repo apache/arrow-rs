@@ -22,7 +22,6 @@ use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_data::bit_iterator::BitIndexIterator;
 use arrow_schema::ArrowError;
 use arrow_schema::*;
 
@@ -118,9 +117,8 @@ where
             .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
     } else {
         let nulls = array.nulls().unwrap();
-        let iter = BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len());
         unsafe {
-            let idx = iter.reduce(|acc_idx, idx| {
+            let idx = nulls.valid_indices().reduce(|acc_idx, idx| {
                 let acc = array.value_unchecked(acc_idx);
                 let item = array.value_unchecked(idx);
                 if cmp(&acc, &item) {
@@ -1221,13 +1219,12 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_primitive_array::<Float64Type>(&sliced_input);
 
-        assert_eq!(sliced_input, &input);
+        assert_eq!(&sliced_input, &input);
 
-        let actual = min(sliced_input);
+        let actual = min(&sliced_input);
         assert_eq!(actual, expected);
-        let actual = max(sliced_input);
+        let actual = max(&sliced_input);
         assert_eq!(actual, expected);
     }
 
@@ -1244,7 +1241,7 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_boolean_array(&sliced_input);
+        let sliced_input = sliced_input.as_boolean();
 
         assert_eq!(sliced_input, &input);
 
@@ -1267,13 +1264,12 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_string_array(&sliced_input);
 
-        assert_eq!(sliced_input, &input);
+        assert_eq!(&sliced_input, &input);
 
-        let actual = min_string(sliced_input);
+        let actual = min_string(&sliced_input);
         assert_eq!(actual, expected);
-        let actual = max_string(sliced_input);
+        let actual = max_string(&sliced_input);
         assert_eq!(actual, expected);
     }
 
@@ -1290,13 +1286,12 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_generic_binary_array::<i32>(&sliced_input);
 
-        assert_eq!(sliced_input, &input);
+        assert_eq!(&sliced_input, &input);
 
-        let actual = min_binary(sliced_input);
+        let actual = min_binary(&sliced_input);
         assert_eq!(actual, expected);
-        let actual = max_binary(sliced_input);
+        let actual = max_binary(&sliced_input);
         assert_eq!(actual, expected);
     }
 

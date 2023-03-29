@@ -33,16 +33,6 @@ impl<'a> Buffers<'a> {
         }
     }
 
-    #[inline]
-    pub(crate) fn one(b: &'a Buffer) -> Self {
-        Self([Some(b), None])
-    }
-
-    #[inline]
-    pub(crate) fn two(a: &'a Buffer, b: &'a Buffer) -> Self {
-        Self([Some(a), Some(b)])
-    }
-
     /// Returns the number of [`Buffer`] in this collection
     #[inline]
     pub fn len(&self) -> usize {
