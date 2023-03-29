@@ -165,7 +165,7 @@ pub struct ListContents {
     pub size: usize,
     pub last_modified: DateTime<Utc>,
     #[serde(rename = "ETag")]
-    pub e_tag: String,
+    pub e_tag: Option<String>,
 }
 
 impl TryFrom<ListContents> for ObjectMeta {

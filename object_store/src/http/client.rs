@@ -336,14 +336,11 @@ impl MultiStatusResponse {
     /// Returns this objects metadata as [`ObjectMeta`]
     pub fn object_meta(&self, base_url: &Url) -> Result<ObjectMeta> {
         let last_modified = self.prop_stat.prop.last_modified;
-
-        let e_tag = self.prop_stat.prop.e_tag.clone();
-
         Ok(ObjectMeta {
             location: self.path(base_url)?,
             last_modified,
             size: self.size()?,
-            e_tag,
+            e_tag: self.prop_stat.prop.e_tag.clone(),
         })
     }
 
@@ -371,7 +368,7 @@ pub struct Prop {
     resource_type: ResourceType,
 
     #[serde(rename = "getetag")]
-    e_tag: String,
+    e_tag: Option<String>,
 }
 
 #[derive(Deserialize)]

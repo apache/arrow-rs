@@ -519,7 +519,7 @@ pub struct ObjectMeta {
     /// The size in bytes of the object
     pub size: usize,
     /// The unique identifier for the object
-    pub e_tag: String,
+    pub e_tag: Option<String>,
 }
 
 /// Result for a get request

@@ -265,13 +265,12 @@ impl ObjectStore for MicrosoftAzure {
             .ok_or(Error::MissingEtag)?
             .to_str()
             .context(BadHeaderSnafu)?;
-        let e_tag = e_tag.to_string();
 
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified,
             size: content_length,
-            e_tag,
+            e_tag: Some(e_tag.to_string()),
         })
     }
 

@@ -511,7 +511,7 @@ struct BlobProperties {
     #[serde(rename = "Content-Language")]
     pub content_language: Option<String>,
     #[serde(rename = "Etag")]
-    pub e_tag: String,
+    pub e_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -197,7 +197,7 @@ struct Object {
     size: String,
     updated: DateTime<Utc>,
     #[serde(rename = "etag")]
-    e_tag: String,
+    e_tag: Option<String>,
 }
 
 #[derive(serde::Deserialize, Debug)]
