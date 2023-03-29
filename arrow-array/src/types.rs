@@ -511,6 +511,57 @@ impl Date32Type {
         let res = res.add(Duration::nanoseconds(nanos));
         Date32Type::from_naive_date(res)
     }
+
+    /// Subtract the given IntervalYearMonthType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to substract
+    pub fn subtract_year_months(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        let prior = Date32Type::to_naive_date(date);
+        let months = IntervalYearMonthType::to_months(-delta);
+        let posterior = shift_months(prior, months);
+        Date32Type::from_naive_date(posterior)
+    }
+
+    /// Subtract the given IntervalDayTimeType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    pub fn subtract_day_time(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        let (days, ms) = IntervalDayTimeType::to_parts(-delta);
+        let res = Date32Type::to_naive_date(date);
+        let res = res.add(Duration::days(days as i64));
+        let res = res.add(Duration::milliseconds(ms as i64));
+        Date32Type::from_naive_date(res)
+    }
+
+    /// Subtract the given IntervalMonthDayNanoType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    pub fn subtract_month_day_nano(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+        let res = Date32Type::to_naive_date(date);
+        let res = shift_months(res, -months);
+        let res = res.add(Duration::days(-days as i64));
+        let res = res.add(Duration::nanoseconds(-nanos));
+        Date32Type::from_naive_date(res)
+    }
 }
 
 impl Date64Type {
@@ -582,6 +633,57 @@ impl Date64Type {
         let res = shift_months(res, months);
         let res = res.add(Duration::days(days as i64));
         let res = res.add(Duration::nanoseconds(nanos));
+        Date64Type::from_naive_date(res)
+    }
+
+    /// Subtract the given IntervalYearMonthType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to substract
+    pub fn subtract_year_months(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let prior = Date64Type::to_naive_date(date);
+        let months = IntervalYearMonthType::to_months(-delta);
+        let posterior = shift_months(prior, months);
+        Date64Type::from_naive_date(posterior)
+    }
+
+    /// Subtract the given IntervalDayTimeType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    pub fn subtract_day_time(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let (days, ms) = IntervalDayTimeType::to_parts(-delta);
+        let res = Date64Type::to_naive_date(date);
+        let res = res.add(Duration::days(days as i64));
+        let res = res.add(Duration::milliseconds(ms as i64));
+        Date64Type::from_naive_date(res)
+    }
+
+    /// Subtract the given IntervalMonthDayNanoType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    pub fn subtract_month_day_nano(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+        let res = Date64Type::to_naive_date(date);
+        let res = shift_months(res, -months);
+        let res = res.add(Duration::days(-days as i64));
+        let res = res.add(Duration::nanoseconds(-nanos));
         Date64Type::from_naive_date(res)
     }
 }
