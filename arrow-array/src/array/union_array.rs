@@ -246,7 +246,7 @@ impl UnionArray {
         self.type_ids[index]
     }
 
-    /// Returns the `type_ids` for this array
+    /// Returns the `type_ids` buffer for this array
     pub fn type_ids(&self) -> &ScalarBuffer<i8> {
         &self.type_ids
     }
