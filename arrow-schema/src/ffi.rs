@@ -166,11 +166,30 @@ impl FFI_ArrowSchema {
         // https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.metadata
         let new_metadata = if !metadata.is_empty() {
             let mut metadata_serialized: Vec<u8> = Vec::new();
-            metadata_serialized.extend((metadata.len() as i32).to_ne_bytes());
+            let num_entries: i32 = metadata.len().try_into().map_err(|_| {
+                ArrowError::CDataInterface(format!(
+                    "metadata can only have {} entries, but {} were provided",
+                    i32::MAX,
+                    metadata.len()
+                ))
+            })?;
+            metadata_serialized.extend(num_entries.to_ne_bytes());
 
             for (key, value) in metadata.into_iter() {
-                let key_len = key.as_ref().len() as i32;
-                let value_len = value.as_ref().len() as i32;
+                let key_len: i32 = key.as_ref().len().try_into().map_err(|_| {
+                    ArrowError::CDataInterface(format!(
+                        "metadata key can only have {} bytes, but {} were provided",
+                        i32::MAX,
+                        key.as_ref().len()
+                    ))
+                })?;
+                let value_len: i32 = value.as_ref().len().try_into().map_err(|_| {
+                    ArrowError::CDataInterface(format!(
+                        "metadata value can only have {} bytes, but {} were provided",
+                        i32::MAX,
+                        value.as_ref().len()
+                    ))
+                })?;
 
                 metadata_serialized.extend(key_len.to_ne_bytes());
                 metadata_serialized.extend_from_slice(key.as_ref().as_bytes());
