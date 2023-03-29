@@ -510,7 +510,7 @@ mod tests {
     use tokio::net::{UnixListener, UnixStream};
     use tokio::time::sleep;
     use tokio_stream::wrappers::UnixListenerStream;
-    use tonic::transport::ClientTlsConfig;
+    use tonic::transport::{Channel, ClientTlsConfig};
 
     use arrow_cast::pretty::pretty_format_batches;
     use arrow_flight::sql::client::FlightSqlServiceClient;
@@ -518,7 +518,7 @@ mod tests {
     use tonic::transport::{Certificate, Endpoint};
     use tower::service_fn;
 
-    async fn client_with_uds(path: String) -> FlightSqlServiceClient {
+    async fn client_with_uds(path: String) -> FlightSqlServiceClient<Channel> {
         let connector = service_fn(move |_| UnixStream::connect(path.clone()));
         let channel = Endpoint::try_from("http://example.com")
             .unwrap()

@@ -51,16 +51,16 @@ use tonic::{IntoRequest, Streaming};
 /// A FlightSQLServiceClient is an endpoint for retrieving or storing Arrow data
 /// by FlightSQL protocol.
 #[derive(Debug, Clone)]
-pub struct FlightSqlServiceClient {
+pub struct FlightSqlServiceClient<T> {
     token: Option<String>,
     headers: HashMap<String, String>,
-    flight_client: FlightServiceClient<Channel>,
+    flight_client: FlightServiceClient<T>,
 }
 
 /// A FlightSql protocol client that can run queries against FlightSql servers
 /// This client is in the "experimental" stage. It is not guaranteed to follow the spec in all instances.
 /// Github issues are welcomed.
-impl FlightSqlServiceClient {
+impl FlightSqlServiceClient<Channel> {
     /// Creates a new FlightSql client that connects to a server over an arbitrary tonic `Channel`
     pub fn new(channel: Channel) -> Self {
         let flight_client = FlightServiceClient::new(channel);
@@ -328,7 +328,7 @@ impl FlightSqlServiceClient {
     pub async fn prepare(
         &mut self,
         query: String,
-    ) -> Result<PreparedStatement, ArrowError> {
+    ) -> Result<PreparedStatement<Channel>, ArrowError> {
         let cmd = ActionCreatePreparedStatementRequest { query };
         let action = Action {
             r#type: CREATE_PREPARED_STATEMENT.to_string(),
@@ -394,17 +394,17 @@ impl FlightSqlServiceClient {
 
 /// A PreparedStatement
 #[derive(Debug, Clone)]
-pub struct PreparedStatement {
-    flight_sql_client: FlightSqlServiceClient,
+pub struct PreparedStatement<T> {
+    flight_sql_client: FlightSqlServiceClient<T>,
     parameter_binding: Option<RecordBatch>,
     handle: Bytes,
     dataset_schema: Schema,
     parameter_schema: Schema,
 }
 
-impl PreparedStatement {
+impl PreparedStatement<Channel> {
     pub(crate) fn new(
-        flight_client: FlightSqlServiceClient,
+        flight_client: FlightSqlServiceClient<Channel>,
         handle: impl Into<Bytes>,
         dataset_schema: Schema,
         parameter_schema: Schema,
