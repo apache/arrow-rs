@@ -1980,7 +1980,8 @@ mod tests {
         let a = Date32Array::from(vec![Date32Type::from_naive_date(
             NaiveDate::from_ymd_opt(2023, 3, 29).unwrap(),
         )]);
-        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 86500)]);
+        let b =
+            IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 86500)]);
         let c = subtract_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
@@ -1988,7 +1989,6 @@ mod tests {
             Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2023, 3, 27).unwrap())
         );
     }
-
 
     #[test]
     fn test_date32_month_day_nano_subtract() {
@@ -2027,7 +2027,8 @@ mod tests {
         let a = Date64Array::from(vec![Date64Type::from_naive_date(
             NaiveDate::from_ymd_opt(2023, 3, 29).unwrap(),
         )]);
-        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 86500)]);
+        let b =
+            IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 86500)]);
         let c = subtract_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
@@ -2035,7 +2036,6 @@ mod tests {
             Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2023, 3, 27).unwrap())
         );
     }
-
 
     #[test]
     fn test_date64_month_day_nano_subtract() {
