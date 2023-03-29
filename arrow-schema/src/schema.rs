@@ -75,6 +75,42 @@ impl SchemaBuilder {
     }
 }
 
+impl From<&Fields> for SchemaBuilder {
+    fn from(value: &Fields) -> Self {
+        Self {
+            fields: value.to_vec(),
+        }
+    }
+}
+
+impl From<Fields> for SchemaBuilder {
+    fn from(value: Fields) -> Self {
+        Self {
+            fields: value.to_vec(),
+        }
+    }
+}
+
+impl Extend<FieldRef> for SchemaBuilder {
+    fn extend<T: IntoIterator<Item = FieldRef>>(&mut self, iter: T) {
+        let iter = iter.into_iter();
+        self.fields.reserve(iter.size_hint().0);
+        for f in iter {
+            self.push(f)
+        }
+    }
+}
+
+impl Extend<Field> for SchemaBuilder {
+    fn extend<T: IntoIterator<Item = Field>>(&mut self, iter: T) {
+        let iter = iter.into_iter();
+        self.fields.reserve(iter.size_hint().0);
+        for f in iter {
+            self.push(f)
+        }
+    }
+}
+
 /// A reference-counted reference to a [`Schema`].
 pub type SchemaRef = Arc<Schema>;
 
