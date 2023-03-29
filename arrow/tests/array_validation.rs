@@ -23,7 +23,7 @@ use arrow::array::{
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, Fields, UnionMode};
+use arrow_schema::{DataType, Field, UnionMode};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -874,10 +874,10 @@ fn test_validate_union_dense_with_bad_len() {
 #[test]
 fn test_try_new_sliced_struct() {
     let mut builder = StructBuilder::new(
-        Fields::from(vec![
+        vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Boolean, true),
-        ]),
+        ],
         vec![
             Box::new(Int32Builder::with_capacity(5)),
             Box::new(BooleanBuilder::with_capacity(5)),

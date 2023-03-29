@@ -1226,10 +1226,10 @@ fn make_struct(
     elements: Vec<Option<(Option<&'static str>, Option<i32>)>>,
 ) -> StructArray {
     let mut builder = StructBuilder::new(
-        Fields::from(vec![
+        vec![
             Field::new("f1", DataType::Utf8, true),
             Field::new("f2", DataType::Int32, true),
-        ]),
+        ],
         vec![
             Box::new(StringBuilder::new()),
             Box::new(Int32Builder::new()),

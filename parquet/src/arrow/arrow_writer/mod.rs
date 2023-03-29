@@ -2094,7 +2094,7 @@ mod tests {
         let int_builder2 = Int32Builder::with_capacity(10);
 
         let struct_builder = StructBuilder::new(
-            vec![int_field, int_field2].into(),
+            vec![int_field, int_field2],
             vec![Box::new(int_builder), Box::new(int_builder2)],
         );
         let mut list_builder = ListBuilder::new(struct_builder);
