@@ -350,7 +350,7 @@ fn create_decimal_array(
 // Get a selection of datatypes to try and cast to
 fn get_all_types() -> Vec<DataType> {
     use DataType::*;
-    let tz_name = String::from("+08:00");
+    let tz_name: Arc<str> = Arc::from("+08:00");
 
     let mut types = vec![
         Null,
