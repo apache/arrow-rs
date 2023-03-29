@@ -59,20 +59,41 @@ macro_rules! status {
     };
 }
 
+const FAKE_TOKEN: &str = "uuid_token";
+const FAKE_HANDLE: &str = "uuid_handle";
+const FAKE_UPDATE_RESULT: i64 = 1;
+
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {}
 
 impl FlightSqlServiceImpl {
+    fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
+        let metadata = req.metadata();
+        let auth = metadata.get("authorization").ok_or_else(|| {
+            Status::internal(format!("No authorization header! metadata = {metadata:?}"))
+        })?;
+        let str = auth
+            .to_str()
+            .map_err(|e| Status::internal(format!("Error parsing header: {e}")))?;
+        let authorization = str.to_string();
+        let bearer = "Bearer ";
+        if !authorization.starts_with(bearer) {
+            Err(Status::internal("Invalid auth header!"))?;
+        }
+        let token = authorization[bearer.len()..].to_string();
+        if token == FAKE_TOKEN {
+            Ok(())
+        } else {
+            Err(Status::unauthenticated(""))
+        }
+    }
+
     fn fake_result() -> Result<RecordBatch, ArrowError> {
         let schema = Schema::new(vec![Field::new("salutation", DataType::Utf8, false)]);
         let mut builder = StringBuilder::new();
         builder.append_value("Hello, FlightSQL!");
         let cols = vec![Arc::new(builder.finish()) as ArrayRef];
         RecordBatch::try_new(Arc::new(schema), cols)
-    }
-
-    fn fake_update_result() -> i64 {
-        1
     }
 }
 
@@ -118,7 +139,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let result = HandshakeResponse {
             protocol_version: 0,
-            payload: "random_uuid_token".into(),
+            payload: FAKE_TOKEN.into(),
         };
         let result = Ok(result);
         let output = futures::stream::iter(vec![result]);
@@ -127,9 +148,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_get_fallback(
         &self,
-        _request: Request<Ticket>,
+        request: Request<Ticket>,
         _message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        self.check_token(&request)?;
         let batch =
             Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
         let schema = (*batch.schema()).clone();
@@ -158,8 +180,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn get_flight_info_prepared_statement(
         &self,
         cmd: CommandPreparedStatementQuery,
-        _request: Request<FlightDescriptor>,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
+        self.check_token(&request)?;
         let handle = std::str::from_utf8(&cmd.prepared_statement_handle)
             .map_err(|e| status!("Unable to parse handle", e))?;
         let batch =
@@ -395,7 +418,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _ticket: CommandStatementUpdate,
         _request: Request<Streaming<FlightData>>,
     ) -> Result<i64, Status> {
-        Ok(FlightSqlServiceImpl::fake_update_result())
+        Ok(FAKE_UPDATE_RESULT)
     }
 
     async fn do_put_prepared_statement_query(
@@ -421,9 +444,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_action_create_prepared_statement(
         &self,
         _query: ActionCreatePreparedStatementRequest,
-        _request: Request<Action>,
+        request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        let handle = "some_uuid";
+        self.check_token(&request)?;
         let schema = Self::fake_result()
             .map_err(|e| status!("Error getting result schema", e))?
             .schema();
@@ -432,7 +455,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| status!("Unable to serialize schema", e))?;
         let IpcMessage(schema_bytes) = message;
         let res = ActionCreatePreparedStatementResult {
-            prepared_statement_handle: handle.into(),
+            prepared_statement_handle: FAKE_HANDLE.into(),
             dataset_schema: schema_bytes,
             parameter_schema: Default::default(), // TODO: parameters
         };
@@ -573,6 +596,7 @@ mod tests {
             let channel = endpoint.connect().await.unwrap();
             let mut client = FlightSqlServiceClient::new(channel);
             let token = client.handshake("admin", "password").await.unwrap();
+            client.set_token(String::from_utf8(token.to_vec()).unwrap());
             println!("Auth succeeded with token: {:?}", token);
             let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
             let flight_info = stmt.execute().await.unwrap();
@@ -615,6 +639,7 @@ mod tests {
         let request_future = async {
             let mut client = client_with_uds(path).await;
             let token = client.handshake("admin", "password").await.unwrap();
+            client.set_token(String::from_utf8(token.to_vec()).unwrap());
             println!("Auth succeeded with token: {:?}", token);
             let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
             let flight_info = stmt.execute().await.unwrap();
@@ -658,12 +683,13 @@ mod tests {
         let request_future = async {
             let mut client = client_with_uds(path).await;
             let token = client.handshake("admin", "password").await.unwrap();
+            client.set_token(String::from_utf8(token.to_vec()).unwrap());
             println!("Auth succeeded with token: {:?}", token);
             let res = client
                 .execute_update("creat table test(a int);".to_string())
                 .await
                 .unwrap();
-            assert_eq!(res, FlightSqlServiceImpl::fake_update_result());
+            assert_eq!(res, FAKE_UPDATE_RESULT);
         };
 
         tokio::select! {
