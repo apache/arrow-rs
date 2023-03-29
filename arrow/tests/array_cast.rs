@@ -388,7 +388,7 @@ fn get_all_types() -> Vec<DataType> {
         Interval(IntervalUnit::DayTime),
         Interval(IntervalUnit::MonthDayNano),
         Binary,
-        FixedSizeBinary(10),
+        FixedSizeBinary(3),
         LargeBinary,
         Utf8,
         LargeUtf8,

@@ -157,8 +157,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (_, Boolean) => DataType::is_numeric(from_type) || from_type == &Utf8 || from_type == &LargeUtf8,
         (Boolean, _) => DataType::is_numeric(to_type) || to_type == &Utf8 || to_type == &LargeUtf8,
 
-        (Binary, LargeBinary | Utf8 | LargeUtf8) => true,
-        (LargeBinary, Binary | Utf8 | LargeUtf8) => true,
+        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_)) => true,
+        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_)) => true,
+        (FixedSizeBinary(_), Binary | LargeBinary) => true,
         (Utf8,
             Binary
             | LargeBinary
@@ -1242,6 +1243,9 @@ pub fn cast_with_options(
             LargeBinary => {
                 cast_byte_container::<BinaryType, LargeBinaryType>(array)
             }
+            FixedSizeBinary(size) => {
+                cast_binary_to_fixed_size_binary::<i32>(array,*size, cast_options)
+            }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -1253,6 +1257,17 @@ pub fn cast_with_options(
             }
             LargeUtf8 => cast_binary_to_string::<i64>(array, cast_options),
             Binary => cast_byte_container::<LargeBinaryType, BinaryType>(array),
+            FixedSizeBinary(size) => {
+                cast_binary_to_fixed_size_binary::<i64>(array, *size, cast_options)
+            }
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {from_type:?} to {to_type:?} not supported",
+            ))),
+        },
+        (FixedSizeBinary(size), _) => match to_type {
+            Binary => cast_fixed_size_binary_to_binary::<i32>(array, *size),
+            LargeBinary =>
+                cast_fixed_size_binary_to_binary::<i64>(array, *size),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -3390,6 +3405,69 @@ fn cast_binary_to_string<O: OffsetSizeTrait>(
     }
 }
 
+/// Helper function to cast from one `BinaryArray` or 'LargeBinaryArray' to 'FixedSizeBinaryArray'.
+fn cast_binary_to_fixed_size_binary<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    byte_width: i32,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_binary::<O>();
+    let mut builder = FixedSizeBinaryBuilder::with_capacity(array.len(), byte_width);
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            builder.append_null();
+        } else {
+            match builder.append_value(array.value(i)) {
+                Ok(_) => {}
+                Err(e) => match cast_options.safe {
+                    true => builder.append_null(),
+                    false => return Err(e),
+                },
+            }
+        }
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+/// Helper function to cast from 'FixedSizeBinaryArray' to one `BinaryArray` or 'LargeBinaryArray'.
+/// If the target one is too large for the source array it will return an Error.
+fn cast_fixed_size_binary_to_binary<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    byte_width: i32,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .unwrap();
+
+    let offsets: i128 = byte_width as i128 * array.len() as i128;
+
+    let is_binary = matches!(GenericBinaryType::<O>::DATA_TYPE, DataType::Binary);
+    if is_binary && offsets > i32::MAX as i128 {
+        return Err(ArrowError::ComputeError(
+            "FixedSizeBinary array too large to cast to Binary array".to_string(),
+        ));
+    } else if !is_binary && offsets > i64::MAX as i128 {
+        return Err(ArrowError::ComputeError(
+            "FixedSizeBinary array too large to cast to LargeBinary array".to_string(),
+        ));
+    }
+
+    let mut builder = GenericBinaryBuilder::<O>::with_capacity(array.len(), array.len());
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            builder.append_null();
+        } else {
+            builder.append_value(array.value(i));
+        }
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
 /// Helper function to cast from one `ByteArrayType` to another and vice versa.
 /// If the target one (e.g., `LargeUtf8`) is too large for the source array it will return an Error.
 fn cast_byte_container<FROM, TO>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
@@ -5288,28 +5366,71 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_string_to_binary() {
-        let string_1 = "Hi";
-        let string_2 = "Hello";
+    fn test_cast_binary_to_fixed_size_binary() {
+        let bytes_1 = "Hiiii".as_bytes();
+        let bytes_2 = "Hello".as_bytes();
 
-        let bytes_1 = string_1.as_bytes();
-        let bytes_2 = string_2.as_bytes();
+        let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
+        let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
+        let a2 = Arc::new(LargeBinaryArray::from(binary_data)) as ArrayRef;
 
-        let string_data = vec![Some(string_1), Some(string_2), None];
-        let a1 = Arc::new(StringArray::from(string_data.clone())) as ArrayRef;
-        let a2 = Arc::new(LargeStringArray::from(string_data)) as ArrayRef;
-
-        let mut array_ref = cast(&a1, &DataType::Binary).unwrap();
-        let down_cast = array_ref.as_any().downcast_ref::<BinaryArray>().unwrap();
+        let array_ref = cast(&a1, &DataType::FixedSizeBinary(5)).unwrap();
+        let down_cast = array_ref
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
         assert_eq!(bytes_1, down_cast.value(0));
         assert_eq!(bytes_2, down_cast.value(1));
         assert!(down_cast.is_null(2));
 
-        array_ref = cast(&a2, &DataType::LargeBinary).unwrap();
+        let array_ref = cast(&a2, &DataType::FixedSizeBinary(5)).unwrap();
         let down_cast = array_ref
             .as_any()
-            .downcast_ref::<LargeBinaryArray>()
+            .downcast_ref::<FixedSizeBinaryArray>()
             .unwrap();
+        assert_eq!(bytes_1, down_cast.value(0));
+        assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        // test error cases when the length of binary are not same
+        let bytes_1 = "Hi".as_bytes();
+        let bytes_2 = "Hello".as_bytes();
+
+        let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
+        let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
+        let a2 = Arc::new(LargeBinaryArray::from(binary_data)) as ArrayRef;
+
+        let array_ref = cast_with_options(
+            &a1,
+            &DataType::FixedSizeBinary(5),
+            &CastOptions { safe: false },
+        );
+        assert!(array_ref.is_err());
+
+        let array_ref = cast_with_options(
+            &a2,
+            &DataType::FixedSizeBinary(5),
+            &CastOptions { safe: false },
+        );
+        assert!(array_ref.is_err());
+    }
+
+    #[test]
+    fn test_fixed_size_binary_to_binary() {
+        let bytes_1 = "Hiiii".as_bytes();
+        let bytes_2 = "Hello".as_bytes();
+
+        let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
+        let a1 = Arc::new(FixedSizeBinaryArray::from(binary_data.clone())) as ArrayRef;
+
+        let array_ref = cast(&a1, &DataType::Binary).unwrap();
+        let down_cast = array_ref.as_binary::<i32>();
+        assert_eq!(bytes_1, down_cast.value(0));
+        assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        let array_ref = cast(&a1, &DataType::LargeBinary).unwrap();
+        let down_cast = array_ref.as_binary::<i64>();
         assert_eq!(bytes_1, down_cast.value(0));
         assert_eq!(bytes_2, down_cast.value(1));
         assert!(down_cast.is_null(2));
