@@ -575,8 +575,7 @@ mod tests {
         assert_eq!(array.precision(), 1);
         assert_eq!(array.scale(), 2);
 
-        let data_type =
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_string()));
+        let data_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into()));
         let mut builder =
             TimestampNanosecondBuilder::new().with_data_type(data_type.clone());
         builder.append_value(1);

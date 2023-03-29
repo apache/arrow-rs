@@ -36,6 +36,7 @@
 
 use crate::{ArrowError, DataType, Field, Schema, TimeUnit, UnionMode};
 use bitflags::bitflags;
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     ffi::{c_char, c_void, CStr, CString},
@@ -514,16 +515,16 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                     ["tsu", ""] => DataType::Timestamp(TimeUnit::Microsecond, None),
                     ["tsn", ""] => DataType::Timestamp(TimeUnit::Nanosecond, None),
                     ["tss", tz] => {
-                        DataType::Timestamp(TimeUnit::Second, Some(tz.to_string()))
+                        DataType::Timestamp(TimeUnit::Second, Some(Arc::from(*tz)))
                     }
                     ["tsm", tz] => {
-                        DataType::Timestamp(TimeUnit::Millisecond, Some(tz.to_string()))
+                        DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from(*tz)))
                     }
                     ["tsu", tz] => {
-                        DataType::Timestamp(TimeUnit::Microsecond, Some(tz.to_string()))
+                        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from(*tz)))
                     }
                     ["tsn", tz] => {
-                        DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.to_string()))
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from(*tz)))
                     }
                     _ => {
                         return Err(ArrowError::CDataInterface(format!(

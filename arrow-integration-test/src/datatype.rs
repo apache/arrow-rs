@@ -89,7 +89,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                 };
                 let tz = match map.get("timezone") {
                     None => Ok(None),
-                    Some(serde_json::Value::String(tz)) => Ok(Some(tz.clone())),
+                    Some(Value::String(tz)) => Ok(Some(tz.as_str().into())),
                     _ => Err(ArrowError::ParseError(
                         "timezone must be a string".to_string(),
                     )),

@@ -1739,7 +1739,7 @@ mod tests {
     }
 
     fn test_parse_timestamp_impl<T: ArrowTimestampType>(
-        timezone: Option<String>,
+        timezone: Option<Arc<str>>,
         expected: &[i64],
     ) {
         let csv = [
@@ -1775,23 +1775,23 @@ mod tests {
             &[0, 0, -7_200_000_000_000],
         );
         test_parse_timestamp_impl::<TimestampNanosecondType>(
-            Some("+00:00".to_string()),
+            Some("+00:00".into()),
             &[0, 0, -7_200_000_000_000],
         );
         test_parse_timestamp_impl::<TimestampNanosecondType>(
-            Some("-05:00".to_string()),
+            Some("-05:00".into()),
             &[18_000_000_000_000, 0, -7_200_000_000_000],
         );
         test_parse_timestamp_impl::<TimestampMicrosecondType>(
-            Some("-03".to_string()),
+            Some("-03".into()),
             &[10_800_000_000, 0, -7_200_000_000],
         );
         test_parse_timestamp_impl::<TimestampMillisecondType>(
-            Some("-03".to_string()),
+            Some("-03".into()),
             &[10_800_000, 0, -7_200_000],
         );
         test_parse_timestamp_impl::<TimestampSecondType>(
-            Some("-03".to_string()),
+            Some("-03".into()),
             &[10_800, 0, -7_200],
         );
     }

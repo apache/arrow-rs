@@ -491,7 +491,7 @@ mod tests {
             Field::new("f1", DataType::Decimal128(1, 2), false),
             Field::new(
                 "f2",
-                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".to_string())),
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
                 false,
             ),
         ];

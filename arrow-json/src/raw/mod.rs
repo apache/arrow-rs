@@ -843,7 +843,7 @@ mod tests {
         {"c": "1997-01-31T14:26:56.123-05:00", "d": "1997-01-31"}
         "#;
 
-        let with_timezone = DataType::Timestamp(T::UNIT, Some("+08:00".to_string()));
+        let with_timezone = DataType::Timestamp(T::UNIT, Some("+08:00".into()));
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", T::DATA_TYPE, true),
             Field::new("b", T::DATA_TYPE, true),
@@ -1092,7 +1092,7 @@ mod tests {
         do_test(DataType::Decimal128(2, 1));
         do_test(DataType::Timestamp(
             TimeUnit::Microsecond,
-            Some("+00:00".to_string()),
+            Some("+00:00".into()),
         ));
     }
 }
