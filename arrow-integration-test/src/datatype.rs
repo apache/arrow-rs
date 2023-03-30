@@ -231,7 +231,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                         )));
                     };
                     if let Some(values) = map.get("typeIds") {
-                        let field = Arc::new(default_field.clone());
+                        let field = Arc::new(default_field);
                         let values = values.as_array().unwrap();
                         let fields = values
                             .iter()
