@@ -625,6 +625,12 @@ pub fn parse_decimal<T: DecimalType>(
         _ => (bs, false),
     };
 
+    if bs.is_empty() {
+        return Err(ArrowError::ParseError(format!(
+            "can't parse the string value {s} to decimal"
+        )));
+    }
+
     let mut bs = bs.iter();
     // Overflow checks are not required if 10^(precision - 1) <= T::MAX holds.
     // Thus, if we validate the precision correctly, we can skip overflow checks.
