@@ -174,15 +174,15 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
             )))
         }
         // type ids. UnionArray doesn't have null bitmap so buffer index begins with 0.
-        (DataType::Union(_, _, _), 0) => i8::BITS as _,
+        (DataType::Union(_, _), 0) => i8::BITS as _,
         // Only DenseUnion has 2nd buffer
-        (DataType::Union(_, _, UnionMode::Dense), 1) => i32::BITS as _,
-        (DataType::Union(_, _, UnionMode::Sparse), _) => {
+        (DataType::Union(_, UnionMode::Dense), 1) => i32::BITS as _,
+        (DataType::Union(_, UnionMode::Sparse), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type:?}\" expects 1 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
-        (DataType::Union(_, _, UnionMode::Dense), _) => {
+        (DataType::Union(_, UnionMode::Dense), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type:?}\" expects 2 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))

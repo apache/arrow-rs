@@ -19,7 +19,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::field::Field;
-use crate::Fields;
+use crate::{Fields, UnionFields};
 
 /// The set of datatypes that are supported by this implementation of Apache Arrow.
 ///
@@ -194,10 +194,9 @@ pub enum DataType {
     Struct(Fields),
     /// A nested datatype that can represent slots of differing types. Components:
     ///
-    /// 1. [`Field`] for each possible child type the Union can hold
-    /// 2. The corresponding `type_id` used to identify which Field
-    /// 3. The type of union (Sparse or Dense)
-    Union(Vec<Field>, Vec<i8>, UnionMode),
+    /// 1. [`UnionFields`]
+    /// 2. The type of union (Sparse or Dense)
+    Union(UnionFields, UnionMode),
     /// A dictionary encoded array (`key_type`, `value_type`), where
     /// each array element is an index of `key_type` into an
     /// associated dictionary of `value_type`.
@@ -384,7 +383,7 @@ impl DataType {
             | FixedSizeList(_, _)
             | LargeList(_)
             | Struct(_)
-            | Union(_, _, _)
+            | Union(_, _)
             | Map(_, _) => true,
             _ => false,
         }
@@ -446,7 +445,7 @@ impl DataType {
             DataType::List(_) | DataType::LargeList(_) | DataType::Map(_, _) => None,
             DataType::FixedSizeList(_, _) => None,
             DataType::Struct(_) => None,
-            DataType::Union(_, _, _) => None,
+            DataType::Union(_, _) => None,
             DataType::Dictionary(_, _) => None,
             DataType::RunEndEncoded(_, _) => None,
         }
@@ -492,13 +491,7 @@ impl DataType {
                 | DataType::LargeList(field)
                 | DataType::Map(field, _) => field.size(),
                 DataType::Struct(fields) => fields.size(),
-                DataType::Union(fields, _, _) => {
-                    fields
-                        .iter()
-                        .map(|field| field.size() - std::mem::size_of_val(field))
-                        .sum::<usize>()
-                        + (std::mem::size_of::<Field>() * fields.capacity())
-                }
+                DataType::Union(fields, _) => fields.size(),
                 DataType::Dictionary(dt1, dt2) => dt1.size() + dt2.size(),
                 DataType::RunEndEncoded(run_ends, values) => {
                     run_ends.size() - std::mem::size_of_val(run_ends) + values.size()
@@ -669,5 +662,10 @@ mod tests {
             Box::new(DataType::Int32),
             Box::new(list)
         )));
+    }
+
+    #[test]
+    fn size_should_not_regress() {
+        assert_eq!(std::mem::size_of::<DataType>(), 24);
     }
 }

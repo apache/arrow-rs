@@ -858,7 +858,7 @@ pub fn array_from_json(
             let array = MapArray::from(array_data);
             Ok(Arc::new(array))
         }
-        DataType::Union(fields, field_type_ids, _) => {
+        DataType::Union(fields, _) => {
             let type_ids = if let Some(type_id) = json_col.type_id {
                 type_id
             } else {
@@ -874,13 +874,14 @@ pub fn array_from_json(
             });
 
             let mut children: Vec<(Field, Arc<dyn Array>)> = vec![];
-            for (field, col) in fields.iter().zip(json_col.children.unwrap()) {
+            for ((_, field), col) in fields.iter().zip(json_col.children.unwrap()) {
                 let array = array_from_json(field, col, dictionaries)?;
-                children.push((field.clone(), array));
+                children.push((field.as_ref().clone(), array));
             }
 
+            let field_type_ids = fields.iter().map(|(id, _)| id).collect::<Vec<_>>();
             let array = UnionArray::try_new(
-                field_type_ids,
+                &field_type_ids,
                 Buffer::from(&type_ids.to_byte_slice()),
                 offset,
                 children,

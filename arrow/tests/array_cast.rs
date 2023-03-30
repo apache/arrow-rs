@@ -41,7 +41,7 @@ use arrow_cast::pretty::pretty_format_columns;
 use arrow_cast::{can_cast_types, cast};
 use arrow_data::ArrayData;
 use arrow_schema::{
-    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, UnionMode,
+    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode,
 };
 use half::f16;
 use std::sync::Arc;
@@ -405,11 +405,13 @@ fn get_all_types() -> Vec<DataType> {
             Field::new("f2", DataType::Utf8, true),
         ])),
         Union(
-            vec![
-                Field::new("f1", DataType::Int32, false),
-                Field::new("f2", DataType::Utf8, true),
-            ],
-            vec![0, 1],
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("f1", DataType::Int32, false),
+                    Field::new("f2", DataType::Utf8, true),
+                ],
+            ),
             UnionMode::Dense,
         ),
         Decimal128(38, 0),

@@ -410,16 +410,16 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             let mut fields = vec![];
             if let Some(children) = field.children() {
                 for i in 0..children.len() {
-                    fields.push(children.get(i).into());
+                    fields.push(Field::from(children.get(i)));
                 }
             };
 
-            let type_ids: Vec<i8> = match union.typeIds() {
-                None => (0_i8..fields.len() as i8).collect(),
-                Some(ids) => ids.iter().map(|i| i as i8).collect(),
+            let fields = match union.typeIds() {
+                None => UnionFields::new(0_i8..fields.len() as i8, fields),
+                Some(ids) => UnionFields::new(ids.iter().map(|i| i as i8), fields),
             };
 
-            DataType::Union(fields, type_ids, union_mode)
+            DataType::Union(fields, union_mode)
         }
         t => unimplemented!("Type {:?} not supported", t),
     }
@@ -769,9 +769,9 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
-        Union(fields, type_ids, mode) => {
+        Union(fields, mode) => {
             let mut children = vec![];
-            for field in fields {
+            for (_, field) in fields.iter() {
                 children.push(build_field(fbb, field));
             }
 
@@ -781,7 +781,7 @@ pub(crate) fn get_fb_field_type<'a>(
             };
 
             let fbb_type_ids = fbb
-                .create_vector(&type_ids.iter().map(|t| *t as i32).collect::<Vec<_>>());
+                .create_vector(&fields.iter().map(|(t, _)| t as i32).collect::<Vec<_>>());
             let mut builder = crate::UnionBuilder::new(fbb);
             builder.add_mode(union_mode);
             builder.add_typeIds(fbb_type_ids);
@@ -962,38 +962,47 @@ mod tests {
                 Field::new(
                     "union<int64, list[union<date32, list[union<>]>]>",
                     DataType::Union(
-                        vec![
-                            Field::new("int64", DataType::Int64, true),
-                            Field::new(
-                                "list[union<date32, list[union<>]>]",
-                                DataType::List(Box::new(Field::new(
-                                    "union<date32, list[union<>]>",
-                                    DataType::Union(
-                                        vec![
-                                            Field::new("date32", DataType::Date32, true),
-                                            Field::new(
-                                                "list[union<>]",
-                                                DataType::List(Box::new(Field::new(
-                                                    "union",
-                                                    DataType::Union(
-                                                        vec![],
-                                                        vec![],
-                                                        UnionMode::Sparse,
+                        UnionFields::new(
+                            vec![0, 1],
+                            vec![
+                                Field::new("int64", DataType::Int64, true),
+                                Field::new(
+                                    "list[union<date32, list[union<>]>]",
+                                    DataType::List(Box::new(Field::new(
+                                        "union<date32, list[union<>]>",
+                                        DataType::Union(
+                                            UnionFields::new(
+                                                vec![0, 1],
+                                                vec![
+                                                    Field::new(
+                                                        "date32",
+                                                        DataType::Date32,
+                                                        true,
                                                     ),
-                                                    false,
-                                                ))),
-                                                false,
+                                                    Field::new(
+                                                        "list[union<>]",
+                                                        DataType::List(Box::new(
+                                                            Field::new(
+                                                                "union",
+                                                                DataType::Union(
+                                                                    UnionFields::empty(),
+                                                                    UnionMode::Sparse,
+                                                                ),
+                                                                false,
+                                                            ),
+                                                        )),
+                                                        false,
+                                                    ),
+                                                ],
                                             ),
-                                        ],
-                                        vec![0, 1],
-                                        UnionMode::Dense,
-                                    ),
+                                            UnionMode::Dense,
+                                        ),
+                                        false,
+                                    ))),
                                     false,
-                                ))),
-                                false,
-                            ),
-                        ],
-                        vec![0, 1],
+                                ),
+                            ],
+                        ),
                         UnionMode::Sparse,
                     ),
                     false,
@@ -1001,22 +1010,24 @@ mod tests {
                 Field::new("struct<>", DataType::Struct(Fields::empty()), true),
                 Field::new(
                     "union<>",
-                    DataType::Union(vec![], vec![], UnionMode::Dense),
+                    DataType::Union(UnionFields::empty(), UnionMode::Dense),
                     true,
                 ),
                 Field::new(
                     "union<>",
-                    DataType::Union(vec![], vec![], UnionMode::Sparse),
+                    DataType::Union(UnionFields::empty(), UnionMode::Sparse),
                     true,
                 ),
                 Field::new(
                     "union<int32, utf8>",
                     DataType::Union(
-                        vec![
-                            Field::new("int32", DataType::Int32, true),
-                            Field::new("utf8", DataType::Utf8, true),
-                        ],
-                        vec![2, 3], // non-default type ids
+                        UnionFields::new(
+                            vec![2, 3], // non-default type ids
+                            vec![
+                                Field::new("int32", DataType::Int32, true),
+                                Field::new("utf8", DataType::Utf8, true),
+                            ],
+                        ),
                         UnionMode::Dense,
                     ),
                     true,
