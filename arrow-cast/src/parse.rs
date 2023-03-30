@@ -268,6 +268,7 @@ pub fn string_to_datetime<T: TimeZone>(
 ///
 /// ```
 /// # use arrow_cast::parse::string_to_timestamp_nanos;
+/// // Note all three of these timestamps are parsed as the same value
 /// let a = string_to_timestamp_nanos("1997-01-31 09:26:56.123Z").unwrap();
 /// let b = string_to_timestamp_nanos("1997-01-31T09:26:56.123").unwrap();
 /// let c = string_to_timestamp_nanos("1997-01-31T14:26:56.123+05:00").unwrap();
