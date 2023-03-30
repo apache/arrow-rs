@@ -212,7 +212,7 @@ impl FlightSqlServiceClient<Channel> {
     /// Given a flight ticket, request to be sent the stream. Returns record batch stream reader
     pub async fn do_get(
         &mut self,
-        ticket: Ticket,
+        ticket: impl IntoRequest<Ticket>,
     ) -> Result<Streaming<FlightData>, ArrowError> {
         let req = self.set_request_headers(ticket.into_request())?;
         Ok(self
