@@ -39,6 +39,8 @@ use std::sync::Arc;
 /// ```
 ///
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Fields(Arc<[FieldRef]>);
 
 impl std::fmt::Debug for Fields {
@@ -120,31 +122,5 @@ impl<'a> IntoIterator for &'a Fields {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
-    }
-}
-
-// Manually implement to avoid needing serde rc feature
-#[cfg(feature = "serde")]
-impl serde::Serialize for Fields {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeSeq;
-        let mut seq = serializer.serialize_seq(Some(self.len()))?;
-        for e in self.iter() {
-            seq.serialize_element(e.as_ref())?;
-        }
-        seq.end()
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for Fields {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Ok(Vec::<Field>::deserialize(deserializer)?.into())
     }
 }
