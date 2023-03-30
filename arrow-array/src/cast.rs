@@ -99,6 +99,7 @@ macro_rules! downcast_integer {
 /// `m` with the corresponding integer [`RunEndIndexType`], followed by any additional arguments
 ///
 /// ```
+/// # use std::sync::Arc;
 /// # use arrow_array::{downcast_primitive, ArrowPrimitiveType, downcast_run_end_index};
 /// # use arrow_schema::{DataType, Field};
 ///
@@ -118,9 +119,9 @@ macro_rules! downcast_integer {
 ///     }
 /// }
 ///
-/// assert_eq!(run_end_index_size(&DataType::RunEndEncoded(Box::new(Field::new("a", DataType::Int32, false)), Box::new(Field::new("b", DataType::Utf8, true)))), 4);
-/// assert_eq!(run_end_index_size(&DataType::RunEndEncoded(Box::new(Field::new("a", DataType::Int64, false)), Box::new(Field::new("b", DataType::Utf8, true)))), 8);
-/// assert_eq!(run_end_index_size(&DataType::RunEndEncoded(Box::new(Field::new("a", DataType::Int16, false)), Box::new(Field::new("b", DataType::Utf8, true)))), 2);
+/// assert_eq!(run_end_index_size(&DataType::RunEndEncoded(Arc::new(Field::new("a", DataType::Int32, false)), Arc::new(Field::new("b", DataType::Utf8, true)))), 4);
+/// assert_eq!(run_end_index_size(&DataType::RunEndEncoded(Arc::new(Field::new("a", DataType::Int64, false)), Arc::new(Field::new("b", DataType::Utf8, true)))), 8);
+/// assert_eq!(run_end_index_size(&DataType::RunEndEncoded(Arc::new(Field::new("a", DataType::Int16, false)), Arc::new(Field::new("b", DataType::Utf8, true)))), 2);
 /// ```
 ///
 /// [`DataType`]: arrow_schema::DataType

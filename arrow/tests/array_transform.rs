@@ -25,7 +25,7 @@ use arrow::datatypes::Int16Type;
 use arrow_buffer::Buffer;
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, Fields};
 use std::sync::Arc;
 
 fn create_decimal_array(
@@ -560,7 +560,7 @@ fn test_list_append() {
     ]);
     let list_value_offsets = Buffer::from_slice_ref([0i32, 3, 5, 11, 13, 13, 15, 15, 17]);
     let expected_list_data = ArrayData::try_new(
-        DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
+        DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
         8,
         None,
         0,
@@ -639,7 +639,7 @@ fn test_list_nulls_append() {
     let list_value_offsets =
         Buffer::from_slice_ref([0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
     let expected_list_data = ArrayData::try_new(
-        DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
+        DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
         12,
         Some(Buffer::from(&[0b11011011, 0b1110])),
         0,
@@ -776,12 +776,12 @@ fn test_map_nulls_append() {
 
     let expected_list_data = ArrayData::try_new(
         DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entries",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("keys", DataType::Int64, false),
                     Field::new("values", DataType::Int64, true),
-                ]),
+                ])),
                 false,
             )),
             false,
@@ -854,7 +854,7 @@ fn test_list_of_strings_append() {
     ]);
     let list_value_offsets = Buffer::from_slice_ref([0, 3, 5, 6, 9, 10, 13]);
     let expected_list_data = ArrayData::try_new(
-        DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
+        DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
         6,
         None,
         0,
@@ -986,7 +986,7 @@ fn test_fixed_size_list_append() -> Result<()> {
     ]);
     let expected_list_data = ArrayData::new(
         DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::UInt16, true)),
+            Arc::new(Field::new("item", DataType::UInt16, true)),
             2,
         ),
         12,

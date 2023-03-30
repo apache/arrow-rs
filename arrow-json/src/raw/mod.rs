@@ -362,7 +362,7 @@ mod tests {
     use arrow_array::{Array, StructArray};
     use arrow_buffer::ArrowNativeType;
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field, Fields, Schema};
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
     use std::sync::Arc;
@@ -505,28 +505,30 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "list",
-                DataType::List(Box::new(Field::new("element", DataType::Int32, false))),
+                DataType::List(Arc::new(Field::new("element", DataType::Int32, false))),
                 true,
             ),
             Field::new(
                 "nested",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("a", DataType::Int32, true),
                     Field::new("b", DataType::Int32, true),
-                ]),
+                ])),
                 true,
             ),
             Field::new(
                 "nested_list",
-                DataType::Struct(vec![Field::new(
+                DataType::Struct(Fields::from(vec![Field::new(
                     "list2",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "element",
-                        DataType::Struct(vec![Field::new("c", DataType::Int32, false)]),
+                        DataType::Struct(
+                            vec![Field::new("c", DataType::Int32, false)].into(),
+                        ),
                         false,
                     ))),
                     true,
-                )]),
+                )])),
                 true,
             ),
         ]));
@@ -582,20 +584,22 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "nested",
-                DataType::Struct(vec![Field::new("a", DataType::Int32, false)]),
+                DataType::Struct(vec![Field::new("a", DataType::Int32, false)].into()),
                 true,
             ),
             Field::new(
                 "nested_list",
-                DataType::Struct(vec![Field::new(
+                DataType::Struct(Fields::from(vec![Field::new(
                     "list2",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "element",
-                        DataType::Struct(vec![Field::new("d", DataType::Int32, true)]),
+                        DataType::Struct(
+                            vec![Field::new("d", DataType::Int32, true)].into(),
+                        ),
                         false,
                     ))),
                     true,
-                )]),
+                )])),
                 true,
             ),
         ]));
@@ -635,13 +639,13 @@ mod tests {
            {"map": {"a": [null], "b": []}}
            {"map": {"c": null, "a": ["baz"]}}
         "#;
-        let list = DataType::List(Box::new(Field::new("element", DataType::Utf8, true)));
-        let entries = DataType::Struct(vec![
+        let list = DataType::List(Arc::new(Field::new("element", DataType::Utf8, true)));
+        let entries = DataType::Struct(Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", list, true),
-        ]);
+        ]));
 
-        let map = DataType::Map(Box::new(Field::new("entries", entries, true)), false);
+        let map = DataType::Map(Arc::new(Field::new("entries", entries, true)), false);
         let schema = Arc::new(Schema::new(vec![Field::new("map", map, true)]));
 
         let batches = do_read(buf, 1024, false, schema);
@@ -843,7 +847,7 @@ mod tests {
         {"c": "1997-01-31T14:26:56.123-05:00", "d": "1997-01-31"}
         "#;
 
-        let with_timezone = DataType::Timestamp(T::UNIT, Some("+08:00".to_string()));
+        let with_timezone = DataType::Timestamp(T::UNIT, Some("+08:00".into()));
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", T::DATA_TYPE, true),
             Field::new("b", T::DATA_TYPE, true),
@@ -1008,29 +1012,29 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "protocol",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("minReaderVersion", DataType::Int32, true),
                     Field::new("minWriterVersion", DataType::Int32, true),
-                ]),
+                ])),
                 true,
             ),
             Field::new(
                 "add",
-                DataType::Struct(vec![Field::new(
+                DataType::Struct(Fields::from(vec![Field::new(
                     "partitionValues",
                     DataType::Map(
-                        Box::new(Field::new(
+                        Arc::new(Field::new(
                             "key_value",
-                            DataType::Struct(vec![
+                            DataType::Struct(Fields::from(vec![
                                 Field::new("key", DataType::Utf8, false),
                                 Field::new("value", DataType::Utf8, true),
-                            ]),
+                            ])),
                             false,
                         )),
                         false,
                     ),
                     false,
-                )]),
+                )])),
                 true,
             ),
         ]));
@@ -1054,7 +1058,7 @@ mod tests {
             let non_null = r#"{"foo": {}}"#;
             let schema = Arc::new(Schema::new(vec![Field::new(
                 "foo",
-                DataType::Struct(vec![Field::new("bar", child, false)]),
+                DataType::Struct(vec![Field::new("bar", child, false)].into()),
                 true,
             )]));
             let mut reader = RawReaderBuilder::new(schema.clone())
@@ -1092,7 +1096,7 @@ mod tests {
         do_test(DataType::Decimal128(2, 1));
         do_test(DataType::Timestamp(
             TimeUnit::Microsecond,
-            Some("+00:00".to_string()),
+            Some("+00:00".into()),
         ));
     }
 }

@@ -18,12 +18,12 @@
 [package]
 name = "object_store"
 version = "0.5.5"
-edition = "2021"
+edition = { workspace = true }
 license = "MIT/Apache-2.0"
 readme = "README.md"
 description = "A generic object store interface for uniformly interacting with AWS S3, Google Cloud Storage, Azure Blob Storage and local files."
 keywords = ["object", "storage", "cloud"]
-repository = "https://github.com/apache/arrow-rs"
+repository = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

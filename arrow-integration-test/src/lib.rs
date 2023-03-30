@@ -81,6 +81,12 @@ pub struct ArrowJsonField {
     pub metadata: Option<Value>,
 }
 
+impl From<&FieldRef> for ArrowJsonField {
+    fn from(value: &FieldRef) -> Self {
+        Self::from(value.as_ref())
+    }
+}
+
 impl From<&Field> for ArrowJsonField {
     fn from(field: &Field) -> Self {
         let metadata_value = match field.metadata().is_empty() {
@@ -852,7 +858,7 @@ pub fn array_from_json(
             let array = MapArray::from(array_data);
             Ok(Arc::new(array))
         }
-        DataType::Union(fields, field_type_ids, _) => {
+        DataType::Union(fields, _) => {
             let type_ids = if let Some(type_id) = json_col.type_id {
                 type_id
             } else {
@@ -868,13 +874,14 @@ pub fn array_from_json(
             });
 
             let mut children: Vec<(Field, Arc<dyn Array>)> = vec![];
-            for (field, col) in fields.iter().zip(json_col.children.unwrap()) {
+            for ((_, field), col) in fields.iter().zip(json_col.children.unwrap()) {
                 let array = array_from_json(field, col, dictionaries)?;
-                children.push((field.clone(), array));
+                children.push((field.as_ref().clone(), array));
             }
 
+            let field_type_ids = fields.iter().map(|(id, _)| id).collect::<Vec<_>>();
             let array = UnionArray::try_new(
-                field_type_ids,
+                &field_type_ids,
                 Buffer::from(&type_ids.to_byte_slice()),
                 offset,
                 children,
@@ -1091,7 +1098,7 @@ mod tests {
             Field::new("c3", DataType::Utf8, true),
             Field::new(
                 "c4",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "custom_item",
                     DataType::Int32,
                     false,
@@ -1104,10 +1111,10 @@ mod tests {
 
     #[test]
     fn test_arrow_data_equality() {
-        let secs_tz = Some("Europe/Budapest".to_string());
-        let millis_tz = Some("America/New_York".to_string());
-        let micros_tz = Some("UTC".to_string());
-        let nanos_tz = Some("Africa/Johannesburg".to_string());
+        let secs_tz = Some("Europe/Budapest".into());
+        let millis_tz = Some("America/New_York".into());
+        let micros_tz = Some("UTC".into());
+        let nanos_tz = Some("Africa/Johannesburg".into());
 
         let schema = Schema::new(vec![
             Field::new("bools-with-metadata-map", DataType::Boolean, true).with_metadata(
@@ -1178,15 +1185,15 @@ mod tests {
             Field::new("utf8s", DataType::Utf8, true),
             Field::new(
                 "lists",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
                 true,
             ),
             Field::new(
                 "structs",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("int32s", DataType::Int32, true),
                     Field::new("utf8s", DataType::Utf8, true),
-                ]),
+                ])),
                 true,
             ),
         ]);
@@ -1253,7 +1260,7 @@ mod tests {
         let value_data = Int32Array::from(vec![None, Some(2), None, None]);
         let value_offsets = Buffer::from_slice_ref([0, 3, 4, 4]);
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -1265,10 +1272,10 @@ mod tests {
 
         let structs_int32s = Int32Array::from(vec![None, Some(-2), None]);
         let structs_utf8s = StringArray::from(vec![None, None, Some("aaaaaa")]);
-        let struct_data_type = DataType::Struct(vec![
+        let struct_data_type = DataType::Struct(Fields::from(vec![
             Field::new("int32s", DataType::Int32, true),
             Field::new("utf8s", DataType::Utf8, true),
-        ]);
+        ]));
         let struct_data = ArrayData::builder(struct_data_type)
             .len(3)
             .add_child_data(structs_int32s.into_data())

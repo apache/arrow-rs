@@ -128,7 +128,7 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, StringArray, StructArray};
     use arrow_data::ArrayData;
-    use arrow_schema::{DataType, Field};
+    use arrow_schema::{DataType, Field, Fields};
     use rand::{thread_rng, Rng};
 
     #[test]
@@ -210,7 +210,7 @@ mod tests {
         let s = s.slice(2, 3);
         let select = select.slice(1, 3);
         let select = select.as_boolean();
-        let a = nullif(s.as_ref(), select).unwrap();
+        let a = nullif(&s, select).unwrap();
         let r: Vec<_> = a.as_string::<i32>().iter().collect();
         assert_eq!(r, vec![None, Some("a"), None]);
     }
@@ -376,10 +376,10 @@ mod tests {
     /// also need the top level is_valid bits to be correct.
     fn create_foo_struct(values: Vec<Foo>) -> StructArray {
         let mut struct_array = StructBuilder::new(
-            vec![
+            Fields::from(vec![
                 Field::new("a", DataType::Int32, true),
                 Field::new("b", DataType::Boolean, true),
-            ],
+            ]),
             vec![
                 Box::new(Int32Builder::with_capacity(values.len())),
                 Box::new(BooleanBuilder::with_capacity(values.len())),
@@ -500,7 +500,6 @@ mod tests {
 
             for (a_offset, a_length) in a_slices {
                 let a = a.slice(a_offset, a_length);
-                let a = a.as_primitive::<Int32Type>();
 
                 for i in 1..65 {
                     let b_start_offset = rng.gen_range(0..i);
@@ -512,7 +511,7 @@ mod tests {
                     let b = b.slice(b_start_offset, a_length);
                     let b = b.as_boolean();
 
-                    test_nullif(a, b);
+                    test_nullif(&a, b);
                 }
             }
         }

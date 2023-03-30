@@ -110,6 +110,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// Returns a reference-counted pointer to the underlying data of this array.
     ///
     /// This will be deprecated in a future release [(#3880)](https://github.com/apache/arrow-rs/issues/3880)
+    #[deprecated(note = "Use Array::to_data or Array::into_data")]
     fn data_ref(&self) -> &ArrayData {
         self.data()
     }
@@ -126,6 +127,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(*array.data_type(), DataType::Int32);
     /// ```
+    #[allow(deprecated)] // (#3880)
     fn data_type(&self) -> &DataType {
         self.data_ref().data_type()
     }
@@ -141,7 +143,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// // Make slice over the values [2, 3, 4]
     /// let array_slice = array.slice(1, 3);
     ///
-    /// assert_eq!(array_slice.as_ref(), &Int32Array::from(vec![2, 3, 4]));
+    /// assert_eq!(&array_slice, &Int32Array::from(vec![2, 3, 4]));
     /// ```
     fn slice(&self, offset: usize, length: usize) -> ArrayRef;
 
@@ -156,6 +158,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(array.len(), 5);
     /// ```
+    #[allow(deprecated)] // (#3880)
     fn len(&self) -> usize {
         self.data_ref().len()
     }
@@ -171,6 +174,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(array.is_empty(), false);
     /// ```
+    #[allow(deprecated)] // (#3880)
     fn is_empty(&self) -> bool {
         self.data_ref().is_empty()
     }
@@ -191,6 +195,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.offset(), 0);
     /// assert_eq!(array_slice.offset(), 1);
     /// ```
+    #[allow(deprecated)] // (#3880)
     fn offset(&self) -> usize {
         self.data_ref().offset()
     }
@@ -250,6 +255,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
 
     /// Returns the total number of bytes of memory pointed to by this array.
     /// The buffers store bytes in the Arrow memory format, and include the data as well as the validity map.
+    #[allow(deprecated)] // (#3880)
     fn get_buffer_memory_size(&self) -> usize {
         self.data_ref().get_buffer_memory_size()
     }
@@ -257,6 +263,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the total number of bytes of memory occupied physically by this array.
     /// This value will always be greater than returned by `get_buffer_memory_size()` and
     /// includes the overhead of the data structures that contain the pointers to the various buffers.
+    #[allow(deprecated)] // (#3880)
     fn get_array_memory_size(&self) -> usize {
         // both data.get_array_memory_size and size_of_val(self) include ArrayData fields,
         // to only count additional fields of this array substract size_of(ArrayData)
@@ -286,6 +293,7 @@ impl Array for ArrayRef {
         self.data().clone()
     }
 
+    #[allow(deprecated)]
     fn data_ref(&self) -> &ArrayData {
         self.as_ref().data_ref()
     }
@@ -352,6 +360,7 @@ impl<'a, T: Array> Array for &'a T {
         self.data().clone()
     }
 
+    #[allow(deprecated)]
     fn data_ref(&self) -> &ArrayData {
         T::data_ref(self)
     }
@@ -577,7 +586,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
-        DataType::Union(_, _, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
+        DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
         DataType::FixedSizeList(_, _) => {
             Arc::new(FixedSizeListArray::from(data)) as ArrayRef
         }
@@ -731,7 +740,7 @@ mod tests {
     use crate::cast::{as_union_array, downcast_array};
     use crate::downcast_run_array;
     use arrow_buffer::{Buffer, MutableBuffer};
-    use arrow_schema::{Field, UnionMode};
+    use arrow_schema::{Field, Fields, UnionFields, UnionMode};
 
     #[test]
     fn test_empty_primitive() {
@@ -753,7 +762,7 @@ mod tests {
     #[test]
     fn test_empty_list_primitive() {
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let array = new_empty_array(&data_type);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 0);
@@ -785,7 +794,7 @@ mod tests {
         // It is possible to create a null struct containing a non-nullable child
         // see https://github.com/apache/arrow-rs/pull/3244 for details
         let struct_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         let array = new_null_array(&struct_type, 9);
 
         let a = array.as_any().downcast_ref::<StructArray>().unwrap();
@@ -813,7 +822,7 @@ mod tests {
     #[test]
     fn test_null_list_primitive() {
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let array = new_null_array(&data_type, 9);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 9);
@@ -826,12 +835,12 @@ mod tests {
     #[test]
     fn test_null_map() {
         let data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entry",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("key", DataType::Utf8, false),
                     Field::new("value", DataType::Int32, true),
-                ]),
+                ])),
                 false,
             )),
             false,
@@ -865,11 +874,13 @@ mod tests {
     fn test_null_union() {
         for mode in [UnionMode::Sparse, UnionMode::Dense] {
             let data_type = DataType::Union(
-                vec![
-                    Field::new("foo", DataType::Int32, true),
-                    Field::new("bar", DataType::Int64, true),
-                ],
-                vec![2, 1],
+                UnionFields::new(
+                    vec![2, 1],
+                    vec![
+                        Field::new("foo", DataType::Int32, true),
+                        Field::new("bar", DataType::Int64, true),
+                    ],
+                ),
                 mode,
             );
             let array = new_null_array(&data_type, 4);
@@ -892,8 +903,8 @@ mod tests {
     fn test_null_runs() {
         for r in [DataType::Int16, DataType::Int32, DataType::Int64] {
             let data_type = DataType::RunEndEncoded(
-                Box::new(Field::new("run_ends", r, false)),
-                Box::new(Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new("run_ends", r, false)),
+                Arc::new(Field::new("values", DataType::Utf8, true)),
             );
 
             let array = new_null_array(&data_type, 4);
@@ -997,19 +1008,17 @@ mod tests {
             (0..256).map(|i| (i % values.len()) as i16),
         );
 
-        let dict_data = ArrayData::builder(DataType::Dictionary(
+        let dict_data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
             Box::new(values.data_type().clone()),
-        ))
-        .len(keys.len())
-        .buffers(keys.data_ref().buffers().to_vec())
-        .child_data(vec![ArrayData::builder(DataType::Int64)
-            .len(values.len())
-            .buffers(values.data_ref().buffers().to_vec())
+        );
+        let dict_data = keys
+            .into_data()
+            .into_builder()
+            .data_type(dict_data_type)
+            .child_data(vec![values.into_data()])
             .build()
-            .unwrap()])
-        .build()
-        .unwrap();
+            .unwrap();
 
         let empty_data = ArrayData::new_empty(&DataType::Dictionary(
             Box::new(DataType::Int16),

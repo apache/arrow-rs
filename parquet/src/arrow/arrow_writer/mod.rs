@@ -360,7 +360,7 @@ fn write_leaves<W: Write>(
         ArrowDataType::Float16 => Err(ParquetError::ArrowError(
             "Float16 arrays not supported".to_string(),
         )),
-        ArrowDataType::FixedSizeList(_, _) | ArrowDataType::Union(_, _, _) | ArrowDataType::RunEndEncoded(_, _) => {
+        ArrowDataType::FixedSizeList(_, _) | ArrowDataType::Union(_, _) | ArrowDataType::RunEndEncoded(_, _) => {
             Err(ParquetError::NYI(
                 format!(
                     "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
@@ -639,6 +639,7 @@ mod tests {
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
     use arrow_array::RecordBatch;
+    use arrow_schema::Fields;
 
     use crate::basic::Encoding;
     use crate::file::metadata::ParquetMetaData;
@@ -749,7 +750,7 @@ mod tests {
         // define schema
         let schema = Schema::new(vec![Field::new(
             "a",
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
             true,
         )]);
 
@@ -762,7 +763,7 @@ mod tests {
             arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
             false,
@@ -790,7 +791,7 @@ mod tests {
         // define schema
         let schema = Schema::new(vec![Field::new(
             "a",
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
             false,
         )]);
 
@@ -803,7 +804,7 @@ mod tests {
             arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
             false,
@@ -889,32 +890,34 @@ mod tests {
         let struct_field_f = Field::new("f", DataType::Float32, true);
         let struct_field_g = Field::new(
             "g",
-            DataType::List(Box::new(Field::new("item", DataType::Int16, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int16, true))),
             false,
         );
         let struct_field_h = Field::new(
             "h",
-            DataType::List(Box::new(Field::new("item", DataType::Int16, false))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int16, false))),
             true,
         );
         let struct_field_e = Field::new(
             "e",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 struct_field_f.clone(),
                 struct_field_g.clone(),
                 struct_field_h.clone(),
-            ]),
+            ])),
             false,
         );
-        let schema = Schema::new(vec![
+        let schema = Schema::new(Fields::from(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, true),
             Field::new(
                 "c",
-                DataType::Struct(vec![struct_field_d.clone(), struct_field_e.clone()]),
+                DataType::Struct(
+                    vec![struct_field_d.clone(), struct_field_e.clone()].into(),
+                ),
                 false,
             ),
-        ]);
+        ]));
 
         // create some data
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
@@ -980,11 +983,11 @@ mod tests {
         let topic_field = Field::new("topic", DataType::Utf8, true);
         let schema = Schema::new(vec![Field::new(
             "some_nested_object",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 offset_field.clone(),
                 partition_field.clone(),
                 topic_field.clone(),
-            ]),
+            ])),
             false,
         )]);
 
@@ -1015,14 +1018,14 @@ mod tests {
         {"stocks":{"long": null, "long": "$CCC", "short": null}}
         {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
         "#;
-        let entries_struct_type = DataType::Struct(vec![
+        let entries_struct_type = DataType::Struct(Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", DataType::Utf8, true),
-        ]);
+        ]));
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Box::new(Field::new("entries", entries_struct_type, false)),
+                Arc::new(Field::new("entries", entries_struct_type, false)),
                 false,
             ),
             true,
@@ -1039,8 +1042,9 @@ mod tests {
     fn arrow_writer_2_level_struct() {
         // tests writing <struct<struct<primitive>>
         let field_c = Field::new("c", DataType::Int32, true);
-        let field_b = Field::new("b", DataType::Struct(vec![field_c]), true);
-        let field_a = Field::new("a", DataType::Struct(vec![field_b.clone()]), true);
+        let field_b = Field::new("b", DataType::Struct(vec![field_c].into()), true);
+        let type_a = DataType::Struct(vec![field_b.clone()].into());
+        let field_a = Field::new("a", type_a, true);
         let schema = Schema::new(vec![field_a.clone()]);
 
         // create data
@@ -1073,19 +1077,21 @@ mod tests {
     fn arrow_writer_2_level_struct_non_null() {
         // tests writing <struct<struct<primitive>>
         let field_c = Field::new("c", DataType::Int32, false);
-        let field_b = Field::new("b", DataType::Struct(vec![field_c]), false);
-        let field_a = Field::new("a", DataType::Struct(vec![field_b.clone()]), false);
-        let schema = Schema::new(vec![field_a.clone()]);
+        let type_b = DataType::Struct(vec![field_c].into());
+        let field_b = Field::new("b", type_b.clone(), false);
+        let type_a = DataType::Struct(vec![field_b].into());
+        let field_a = Field::new("a", type_a.clone(), false);
+        let schema = Schema::new(vec![field_a]);
 
         // create data
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
-        let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
+        let b_data = ArrayDataBuilder::new(type_b)
             .len(6)
             .add_child_data(c.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
-        let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
+        let a_data = ArrayDataBuilder::new(type_a)
             .len(6)
             .add_child_data(b.into_data())
             .build()
@@ -1105,13 +1111,15 @@ mod tests {
     fn arrow_writer_2_level_struct_mixed_null() {
         // tests writing <struct<struct<primitive>>
         let field_c = Field::new("c", DataType::Int32, false);
-        let field_b = Field::new("b", DataType::Struct(vec![field_c]), true);
-        let field_a = Field::new("a", DataType::Struct(vec![field_b.clone()]), false);
-        let schema = Schema::new(vec![field_a.clone()]);
+        let type_b = DataType::Struct(vec![field_c].into());
+        let field_b = Field::new("b", type_b.clone(), true);
+        let type_a = DataType::Struct(vec![field_b].into());
+        let field_a = Field::new("a", type_a.clone(), false);
+        let schema = Schema::new(vec![field_a]);
 
         // create data
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
-        let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
+        let b_data = ArrayDataBuilder::new(type_b)
             .len(6)
             .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
             .add_child_data(c.into_data())
@@ -1119,7 +1127,7 @@ mod tests {
             .unwrap();
         let b = StructArray::from(b_data);
         // a intentionally has no null buffer, to test that this is handled correctly
-        let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
+        let a_data = ArrayDataBuilder::new(type_a)
             .len(6)
             .add_child_data(b.into_data())
             .build()
@@ -1758,14 +1766,14 @@ mod tests {
     fn null_list_single_column() {
         let null_field = Field::new("item", DataType::Null, true);
         let list_field =
-            Field::new("emptylist", DataType::List(Box::new(null_field)), true);
+            Field::new("emptylist", DataType::List(Arc::new(null_field)), true);
 
         let schema = Schema::new(vec![list_field]);
 
         // Build [[], null, [null, null]]
         let a_values = NullArray::new(2);
         let a_value_offsets = arrow::buffer::Buffer::from(&[0, 0, 0, 2].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Null,
             true,
@@ -1796,7 +1804,7 @@ mod tests {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets =
             arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
             false,
@@ -1821,7 +1829,7 @@ mod tests {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets =
             arrow::buffer::Buffer::from(&[0i64, 1, 3, 3, 6, 10].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::LargeList(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::LargeList(Arc::new(Field::new(
             "large_item",
             DataType::Int32,
             true,
@@ -2244,13 +2252,16 @@ mod tests {
         let field_b = Field::new("leaf_b", DataType::Int32, true);
         let struct_a = Field::new(
             "struct_a",
-            DataType::Struct(vec![field_a.clone(), field_b.clone()]),
+            DataType::Struct(vec![field_a.clone(), field_b.clone()].into()),
             true,
         );
 
-        let list_a = Field::new("list", DataType::List(Box::new(struct_a)), true);
-        let struct_b =
-            Field::new("struct_b", DataType::Struct(vec![list_a.clone()]), false);
+        let list_a = Field::new("list", DataType::List(Arc::new(struct_a)), true);
+        let struct_b = Field::new(
+            "struct_b",
+            DataType::Struct(vec![list_a.clone()].into()),
+            false,
+        );
 
         let schema = Arc::new(Schema::new(vec![struct_b]));
 

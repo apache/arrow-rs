@@ -265,7 +265,7 @@ pub fn string_to_datetime<T: TimeZone>(
 /// relative to UTC, see [`string_to_datetime`] for alternative semantics
 ///
 /// For example, both `1997-01-31 09:26:56.123Z`, `1997-01-31T09:26:56.123`,
-/// and `1997-01-31T14:26:56.123-05:00` will be parsed as the same value
+/// and `1997-01-31T14:26:56.123+05:00` will be parsed as the same value
 ///
 #[inline]
 pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {

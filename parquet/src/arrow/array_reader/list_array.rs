@@ -261,13 +261,14 @@ mod tests {
     use arrow::datatypes::{Field, Int32Type as ArrowInt32, Int32Type};
     use arrow_array::{Array, PrimitiveArray};
     use arrow_data::ArrayDataBuilder;
+    use arrow_schema::Fields;
     use std::sync::Arc;
 
     fn list_type<OffsetSize: OffsetSizeTrait>(
         data_type: ArrowType,
         item_nullable: bool,
     ) -> ArrowType {
-        let field = Box::new(Field::new("item", data_type, item_nullable));
+        let field = Arc::new(Field::new("item", data_type, item_nullable));
         GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field)
     }
 
@@ -401,10 +402,10 @@ mod tests {
         let expected_2 = expected.slice(2, 2);
 
         let actual = l1.next_batch(2).unwrap();
-        assert_eq!(expected_1.as_ref(), actual.as_ref());
+        assert_eq!(actual.as_ref(), &expected_1);
 
         let actual = l1.next_batch(1024).unwrap();
-        assert_eq!(expected_2.as_ref(), actual.as_ref());
+        assert_eq!(actual.as_ref(), &expected_2);
     }
 
     fn test_required_list<OffsetSize: OffsetSizeTrait>() {
@@ -581,15 +582,17 @@ mod tests {
         assert_eq!(batch.data_type(), array_reader.get_data_type());
         assert_eq!(
             batch.data_type(),
-            &ArrowType::Struct(vec![Field::new(
+            &ArrowType::Struct(Fields::from(vec![Field::new(
                 "table_info",
-                ArrowType::List(Box::new(Field::new(
+                ArrowType::List(Arc::new(Field::new(
                     "table_info",
-                    ArrowType::Struct(vec![Field::new("name", ArrowType::Binary, false)]),
+                    ArrowType::Struct(
+                        vec![Field::new("name", ArrowType::Binary, false)].into()
+                    ),
                     false
                 ))),
                 false
-            )])
+            )]))
         );
         assert_eq!(batch.len(), 0);
     }

@@ -113,13 +113,13 @@ impl FieldData {
 /// builder.append::<Int32Type>("a", 4).unwrap();
 /// let union = builder.build().unwrap();
 ///
-/// assert_eq!(union.type_id(0), 0_i8);
-/// assert_eq!(union.type_id(1), 1_i8);
-/// assert_eq!(union.type_id(2), 0_i8);
+/// assert_eq!(union.type_id(0), 0);
+/// assert_eq!(union.type_id(1), 1);
+/// assert_eq!(union.type_id(2), 0);
 ///
-/// assert_eq!(union.value_offset(0), 0_i32);
-/// assert_eq!(union.value_offset(1), 0_i32);
-/// assert_eq!(union.value_offset(2), 1_i32);
+/// assert_eq!(union.value_offset(0), 0);
+/// assert_eq!(union.value_offset(1), 0);
+/// assert_eq!(union.value_offset(2), 1);
 /// ```
 ///
 /// Example: **Sparse Memory Layout**
@@ -133,13 +133,13 @@ impl FieldData {
 /// builder.append::<Int32Type>("a", 4).unwrap();
 /// let union = builder.build().unwrap();
 ///
-/// assert_eq!(union.type_id(0), 0_i8);
-/// assert_eq!(union.type_id(1), 1_i8);
-/// assert_eq!(union.type_id(2), 0_i8);
+/// assert_eq!(union.type_id(0), 0);
+/// assert_eq!(union.type_id(1), 1);
+/// assert_eq!(union.type_id(2), 0);
 ///
-/// assert_eq!(union.value_offset(0), 0_i32);
-/// assert_eq!(union.value_offset(1), 1_i32);
-/// assert_eq!(union.value_offset(2), 2_i32);
+/// assert_eq!(union.value_offset(0), 0);
+/// assert_eq!(union.value_offset(1), 1);
+/// assert_eq!(union.value_offset(2), 2);
 /// ```
 #[derive(Debug)]
 pub struct UnionBuilder {

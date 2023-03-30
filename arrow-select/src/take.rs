@@ -150,24 +150,28 @@ where
                 *length as u32,
             )?))
         }
+        DataType::Map(_, _) => {
+            let list_arr = ListArray::from(values.as_map().clone());
+            let list_data = take_list::<_, Int32Type>(&list_arr, indices)?;
+            let builder = list_data.into_data().into_builder().data_type(values.data_type().clone());
+            Ok(Arc::new(MapArray::from(unsafe { builder.build_unchecked() })))
+        }
         DataType::Struct(fields) => {
-            let struct_: &StructArray =
-                values.as_any().downcast_ref::<StructArray>().unwrap();
-            let arrays: Result<Vec<ArrayRef>, _> = struct_
+            let array: &StructArray = values.as_struct();
+            let arrays  = array
                 .columns()
                 .iter()
                 .map(|a| take_impl(a.as_ref(), indices, Some(options.clone())))
-                .collect();
-            let arrays = arrays?;
+                .collect::<Result<Vec<ArrayRef>, _>>()?;
             let fields: Vec<(Field, ArrayRef)> =
-                fields.clone().into_iter().zip(arrays).collect();
+                fields.iter().map(|f| f.as_ref().clone()).zip(arrays).collect();
 
             // Create the null bit buffer.
             let is_valid: Buffer = indices
                 .iter()
                 .map(|index| {
                     if let Some(index) = index {
-                        struct_.is_valid(index.to_usize().unwrap())
+                        array.is_valid(index.to_usize().unwrap())
                     } else {
                         false
                     }
@@ -662,7 +666,7 @@ where
     IndexType::Native: ToPrimitive,
     OffsetType: ArrowPrimitiveType,
     OffsetType::Native: ToPrimitive + OffsetSizeTrait,
-    PrimitiveArray<OffsetType>: From<Vec<Option<OffsetType::Native>>>,
+    PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
     // TODO: Some optimizations can be done here such as if it is
     // taking the whole list or a contiguous sublist
@@ -670,7 +674,7 @@ where
         take_value_indices_from_list::<IndexType, OffsetType>(values, indices)?;
 
     let taken = take_impl::<OffsetType>(values.values().as_ref(), &list_indices, None)?;
-    let value_offsets = Buffer::from_slice_ref(offsets);
+    let value_offsets = Buffer::from_vec(offsets);
     // create a new list with taken data and computed null information
     let list_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
@@ -735,13 +739,13 @@ where
     IndexType: ArrowPrimitiveType,
     IndexType::Native: ToPrimitive,
 {
-    let data_ref = values.data_ref();
+    let nulls = values.nulls();
     let array_iter = indices
         .values()
         .iter()
         .map(|idx| {
             let idx = maybe_usize::<IndexType::Native>(*idx)?;
-            if data_ref.is_valid(idx) {
+            if nulls.map(|n| n.is_valid(idx)).unwrap_or(true) {
                 Ok(Some(values.value(idx)))
             } else {
                 Ok(None)
@@ -768,20 +772,14 @@ where
     I::Native: ToPrimitive,
 {
     let new_keys = take_primitive::<T, I>(values.keys(), indices)?;
-    let new_keys_data = new_keys.data_ref();
+    let builder = new_keys
+        .into_data()
+        .into_builder()
+        .data_type(values.data_type().clone())
+        .child_data(vec![values.values().to_data()]);
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            values.data_type().clone(),
-            new_keys.len(),
-            Some(new_keys_data.null_count()),
-            new_keys_data.nulls().map(|b| b.inner().sliced()),
-            0,
-            new_keys_data.buffers().to_vec(),
-            values.data().child_data().to_vec(),
-        )
-    };
-
+    // Safety: Indices were valid before
+    let data = unsafe { builder.build_unchecked() };
     Ok(DictionaryArray::<T>::from(data))
 }
 
@@ -881,7 +879,7 @@ where
     IndexType::Native: ToPrimitive,
     OffsetType: ArrowPrimitiveType,
     OffsetType::Native: OffsetSizeTrait + std::ops::Add + num::Zero + num::One,
-    PrimitiveArray<OffsetType>: From<Vec<Option<OffsetType::Native>>>,
+    PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
     // TODO: benchmark this function, there might be a faster unsafe alternative
     let offsets: &[OffsetType::Native] = list.value_offsets();
@@ -912,7 +910,7 @@ where
 
             // if start == end, this slot is empty
             while curr < end {
-                values.push(Some(curr));
+                values.push(curr);
                 curr += num::One::one();
             }
             if !list.is_valid(ix) {
@@ -962,7 +960,7 @@ where
 mod tests {
     use super::*;
     use arrow_array::builder::*;
-    use arrow_schema::TimeUnit;
+    use arrow_schema::{Fields, TimeUnit};
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,
@@ -1060,10 +1058,10 @@ mod tests {
         values: Vec<Option<(Option<bool>, Option<i32>)>>,
     ) -> StructArray {
         let mut struct_builder = StructBuilder::new(
-            vec![
+            Fields::from(vec![
                 Field::new("a", DataType::Boolean, true),
                 Field::new("b", DataType::Int32, true),
-            ],
+            ]),
             vec![
                 Box::new(BooleanBuilder::with_capacity(values.len())),
                 Box::new(Int32Builder::with_capacity(values.len())),
@@ -1364,7 +1362,7 @@ mod tests {
         let result = take_impl(&input, &index, None).unwrap();
         match result.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-                assert_eq!(tz.clone(), Some("UTC".to_owned()))
+                assert_eq!(tz.clone(), Some("UTC".into()))
             }
             _ => panic!(),
         }
@@ -1561,14 +1559,8 @@ mod tests {
             StringArray::from(vec![Some("hello"), None, Some("world"), None, Some("hi")]);
         let indices = Int32Array::from(vec![Some(0), Some(1), None, Some(0), Some(2)]);
         let indices_slice = indices.slice(1, 4);
-        let indices_slice = indices_slice
-            .as_ref()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-
         let expected = StringArray::from(vec![None, None, Some("hello"), Some("world")]);
-        let result = take(&strings, indices_slice, None).unwrap();
+        let result = take(&strings, &indices_slice, None).unwrap();
         assert_eq!(result.as_ref(), &expected);
     }
 
@@ -1582,7 +1574,7 @@ mod tests {
             let value_offsets: [$offset_type; 5] = [0, 3, 6, 6, 8];
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
-            let list_data_type = DataType::$list_data_type(Box::new(Field::new(
+            let list_data_type = DataType::$list_data_type(Arc::new(Field::new(
                 "item",
                 DataType::Int32,
                 false,
@@ -1654,7 +1646,7 @@ mod tests {
             let value_offsets: [$offset_type; 5] = [0, 3, 6, 7, 9];
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
-            let list_data_type = DataType::$list_data_type(Box::new(Field::new(
+            let list_data_type = DataType::$list_data_type(Arc::new(Field::new(
                 "item",
                 DataType::Int32,
                 true,
@@ -1727,7 +1719,7 @@ mod tests {
             let value_offsets: [$offset_type; 5] = [0, 3, 6, 6, 8];
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
-            let list_data_type = DataType::$list_data_type(Box::new(Field::new(
+            let list_data_type = DataType::$list_data_type(Arc::new(Field::new(
                 "item",
                 DataType::Int32,
                 true,
@@ -1903,7 +1895,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -1917,6 +1909,30 @@ mod tests {
         // A panic is expected here since we have not supplied the check_bounds
         // option.
         take(&list_array, &index, None).unwrap();
+    }
+
+    #[test]
+    fn test_take_map() {
+        let values = Int32Array::from(vec![1, 2, 3, 4]);
+        let array = MapArray::new_from_strings(
+            vec!["a", "b", "c", "a"].into_iter(),
+            &values,
+            &[0, 3, 4],
+        )
+        .unwrap();
+
+        let index = UInt32Array::from(vec![0]);
+
+        let result = take(&array, &index, None).unwrap();
+        let expected: ArrayRef = Arc::new(
+            MapArray::new_from_strings(
+                vec!["a", "b", "c"].into_iter(),
+                &values.slice(0, 3),
+                &[0, 3],
+            )
+            .unwrap(),
+        );
+        assert_eq!(&expected, &result);
     }
 
     #[test]

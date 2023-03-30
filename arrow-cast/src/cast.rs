@@ -157,8 +157,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (_, Boolean) => DataType::is_numeric(from_type) || from_type == &Utf8 || from_type == &LargeUtf8,
         (Boolean, _) => DataType::is_numeric(to_type) || to_type == &Utf8 || to_type == &LargeUtf8,
 
-        (Binary, LargeBinary | Utf8 | LargeUtf8) => true,
-        (LargeBinary, Binary | Utf8 | LargeUtf8) => true,
+        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_)) => true,
+        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_)) => true,
+        (FixedSizeBinary(_), Binary | LargeBinary) => true,
         (Utf8,
             Binary
             | LargeBinary
@@ -540,7 +541,7 @@ macro_rules! cast_list_to_string {
 fn make_timestamp_array(
     array: &PrimitiveArray<Int64Type>,
     unit: TimeUnit,
-    tz: Option<String>,
+    tz: Option<Arc<str>>,
 ) -> ArrayRef {
     match unit {
         TimeUnit::Second => Arc::new(
@@ -1242,6 +1243,9 @@ pub fn cast_with_options(
             LargeBinary => {
                 cast_byte_container::<BinaryType, LargeBinaryType>(array)
             }
+            FixedSizeBinary(size) => {
+                cast_binary_to_fixed_size_binary::<i32>(array,*size, cast_options)
+            }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -1253,6 +1257,17 @@ pub fn cast_with_options(
             }
             LargeUtf8 => cast_binary_to_string::<i64>(array, cast_options),
             Binary => cast_byte_container::<LargeBinaryType, BinaryType>(array),
+            FixedSizeBinary(size) => {
+                cast_binary_to_fixed_size_binary::<i64>(array, *size, cast_options)
+            }
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {from_type:?} to {to_type:?} not supported",
+            ))),
+        },
+        (FixedSizeBinary(size), _) => match to_type {
+            Binary => cast_fixed_size_binary_to_binary::<i32>(array, *size),
+            LargeBinary =>
+                cast_fixed_size_binary_to_binary::<i64>(array, *size),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -2620,7 +2635,7 @@ fn cast_string_to_timestamp<
     TimestampType: ArrowTimestampType<Native = i64>,
 >(
     array: &dyn Array,
-    to_tz: &Option<String>,
+    to_tz: &Option<Arc<str>>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let string_array = array
@@ -3390,6 +3405,69 @@ fn cast_binary_to_string<O: OffsetSizeTrait>(
     }
 }
 
+/// Helper function to cast from one `BinaryArray` or 'LargeBinaryArray' to 'FixedSizeBinaryArray'.
+fn cast_binary_to_fixed_size_binary<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    byte_width: i32,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_binary::<O>();
+    let mut builder = FixedSizeBinaryBuilder::with_capacity(array.len(), byte_width);
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            builder.append_null();
+        } else {
+            match builder.append_value(array.value(i)) {
+                Ok(_) => {}
+                Err(e) => match cast_options.safe {
+                    true => builder.append_null(),
+                    false => return Err(e),
+                },
+            }
+        }
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+/// Helper function to cast from 'FixedSizeBinaryArray' to one `BinaryArray` or 'LargeBinaryArray'.
+/// If the target one is too large for the source array it will return an Error.
+fn cast_fixed_size_binary_to_binary<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    byte_width: i32,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .unwrap();
+
+    let offsets: i128 = byte_width as i128 * array.len() as i128;
+
+    let is_binary = matches!(GenericBinaryType::<O>::DATA_TYPE, DataType::Binary);
+    if is_binary && offsets > i32::MAX as i128 {
+        return Err(ArrowError::ComputeError(
+            "FixedSizeBinary array too large to cast to Binary array".to_string(),
+        ));
+    } else if !is_binary && offsets > i64::MAX as i128 {
+        return Err(ArrowError::ComputeError(
+            "FixedSizeBinary array too large to cast to LargeBinary array".to_string(),
+        ));
+    }
+
+    let mut builder = GenericBinaryBuilder::<O>::with_capacity(array.len(), array.len());
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            builder.append_null();
+        } else {
+            builder.append_value(array.value(i));
+        }
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
 /// Helper function to cast from one `ByteArrayType` to another and vice versa.
 /// If the target one (e.g., `LargeUtf8`) is too large for the source array it will return an Error.
 fn cast_byte_container<FROM, TO>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
@@ -3448,9 +3526,9 @@ where
     OffsetSizeFrom: OffsetSizeTrait + ToPrimitive,
     OffsetSizeTo: OffsetSizeTrait + NumCast,
 {
-    let data = array.data_ref();
+    let list = array.as_list::<OffsetSizeFrom>();
     // the value data stored by the list
-    let value_data = data.child_data()[0].clone();
+    let values = list.values();
 
     let out_dtype = match array.data_type() {
         DataType::List(value_type) => {
@@ -3473,7 +3551,7 @@ where
                 std::mem::size_of::<OffsetSizeTo>(),
                 std::mem::size_of::<i32>()
             );
-            if value_data.len() > i32::MAX as usize {
+            if values.len() > i32::MAX as usize {
                 return Err(ArrowError::ComputeError(
                     "LargeList too large to cast to List".into(),
                 ));
@@ -3484,14 +3562,7 @@ where
         _ => unreachable!(),
     };
 
-    // Safety:
-    //      The first buffer is the offsets and they are aligned to OffSetSizeFrom: (i64 or i32)
-    // Justification:
-    //      The safe variant data.buffer::<OffsetSizeFrom> take the offset into account and we
-    //      cannot create a list array with offsets starting at non zero.
-    let offsets = unsafe { data.buffers()[0].as_slice().align_to::<OffsetSizeFrom>() }.1;
-
-    let iter = offsets.iter().map(|idx| {
+    let iter = list.value_offsets().iter().map(|idx| {
         let idx: OffsetSizeTo = NumCast::from(*idx).unwrap();
         idx
     });
@@ -3502,14 +3573,13 @@ where
 
     // wrap up
     let builder = ArrayData::builder(out_dtype)
-        .offset(array.offset())
-        .len(array.len())
+        .len(list.len())
         .add_buffer(offset_buffer)
-        .add_child_data(value_data)
-        .nulls(data.nulls().cloned());
+        .add_child_data(values.to_data())
+        .nulls(list.nulls().cloned());
 
     let array_data = unsafe { builder.build_unchecked() };
-    Ok(make_array(array_data))
+    Ok(Arc::new(GenericListArray::<OffsetSizeTo>::from(array_data)))
 }
 
 #[cfg(test)]
@@ -4597,7 +4667,7 @@ mod tests {
         let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
         let b = cast(
             &array,
-            &DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         )
         .unwrap();
         assert_eq!(5, b.len());
@@ -4621,7 +4691,7 @@ mod tests {
         let array = Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]);
         let b = cast(
             &array,
-            &DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         )
         .unwrap();
         assert_eq!(5, b.len());
@@ -4650,7 +4720,7 @@ mod tests {
         let array = array.slice(2, 4);
         let b = cast(
             &array,
-            &DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
         )
         .unwrap();
         assert_eq!(4, b.len());
@@ -4763,7 +4833,7 @@ mod tests {
         // Construct a list array from the above two
         // [[0,0,0], [-1, -2, -1], [2, 100000000]]
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -4774,7 +4844,7 @@ mod tests {
 
         let cast_array = cast(
             &list_array,
-            &DataType::List(Box::new(Field::new("item", DataType::UInt16, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::UInt16, true))),
         )
         .unwrap();
 
@@ -4826,7 +4896,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -4837,7 +4907,7 @@ mod tests {
 
         cast(
             &list_array,
-            &DataType::List(Box::new(Field::new(
+            &DataType::List(Arc::new(Field::new(
                 "item",
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 true,
@@ -5296,28 +5366,71 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_string_to_binary() {
-        let string_1 = "Hi";
-        let string_2 = "Hello";
+    fn test_cast_binary_to_fixed_size_binary() {
+        let bytes_1 = "Hiiii".as_bytes();
+        let bytes_2 = "Hello".as_bytes();
 
-        let bytes_1 = string_1.as_bytes();
-        let bytes_2 = string_2.as_bytes();
+        let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
+        let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
+        let a2 = Arc::new(LargeBinaryArray::from(binary_data)) as ArrayRef;
 
-        let string_data = vec![Some(string_1), Some(string_2), None];
-        let a1 = Arc::new(StringArray::from(string_data.clone())) as ArrayRef;
-        let a2 = Arc::new(LargeStringArray::from(string_data)) as ArrayRef;
-
-        let mut array_ref = cast(&a1, &DataType::Binary).unwrap();
-        let down_cast = array_ref.as_any().downcast_ref::<BinaryArray>().unwrap();
+        let array_ref = cast(&a1, &DataType::FixedSizeBinary(5)).unwrap();
+        let down_cast = array_ref
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
         assert_eq!(bytes_1, down_cast.value(0));
         assert_eq!(bytes_2, down_cast.value(1));
         assert!(down_cast.is_null(2));
 
-        array_ref = cast(&a2, &DataType::LargeBinary).unwrap();
+        let array_ref = cast(&a2, &DataType::FixedSizeBinary(5)).unwrap();
         let down_cast = array_ref
             .as_any()
-            .downcast_ref::<LargeBinaryArray>()
+            .downcast_ref::<FixedSizeBinaryArray>()
             .unwrap();
+        assert_eq!(bytes_1, down_cast.value(0));
+        assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        // test error cases when the length of binary are not same
+        let bytes_1 = "Hi".as_bytes();
+        let bytes_2 = "Hello".as_bytes();
+
+        let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
+        let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
+        let a2 = Arc::new(LargeBinaryArray::from(binary_data)) as ArrayRef;
+
+        let array_ref = cast_with_options(
+            &a1,
+            &DataType::FixedSizeBinary(5),
+            &CastOptions { safe: false },
+        );
+        assert!(array_ref.is_err());
+
+        let array_ref = cast_with_options(
+            &a2,
+            &DataType::FixedSizeBinary(5),
+            &CastOptions { safe: false },
+        );
+        assert!(array_ref.is_err());
+    }
+
+    #[test]
+    fn test_fixed_size_binary_to_binary() {
+        let bytes_1 = "Hiiii".as_bytes();
+        let bytes_2 = "Hello".as_bytes();
+
+        let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
+        let a1 = Arc::new(FixedSizeBinaryArray::from(binary_data.clone())) as ArrayRef;
+
+        let array_ref = cast(&a1, &DataType::Binary).unwrap();
+        let down_cast = array_ref.as_binary::<i32>();
+        assert_eq!(bytes_1, down_cast.value(0));
+        assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        let array_ref = cast(&a1, &DataType::LargeBinary).unwrap();
+        let down_cast = array_ref.as_binary::<i64>();
         assert_eq!(bytes_1, down_cast.value(0));
         assert_eq!(bytes_2, down_cast.value(1));
         assert!(down_cast.is_null(2));
@@ -6991,12 +7104,12 @@ mod tests {
     fn test_cast_null_from_and_to_nested_type() {
         // Cast null from and to map
         let data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entry",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("key", DataType::Utf8, false),
                     Field::new("value", DataType::Int32, true),
-                ]),
+                ])),
                 false,
             )),
             false,
@@ -7005,13 +7118,13 @@ mod tests {
 
         // Cast null from and to list
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         cast_from_null_to_other(&data_type);
         let data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         cast_from_null_to_other(&data_type);
         let data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, true)),
+            Arc::new(Field::new("item", DataType::Int32, true)),
             4,
         );
         cast_from_null_to_other(&data_type);
@@ -7025,7 +7138,7 @@ mod tests {
 
         // Cast null from and to struct
         let data_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         cast_from_null_to_other(&data_type);
     }
 
@@ -7116,7 +7229,7 @@ mod tests {
         let array = Arc::new(make_large_list_array()) as ArrayRef;
         let list_array = cast(
             &array,
-            &DataType::List(Box::new(Field::new("", DataType::Int32, false))),
+            &DataType::List(Arc::new(Field::new("", DataType::Int32, false))),
         )
         .unwrap();
         let actual = list_array.as_any().downcast_ref::<ListArray>().unwrap();
@@ -7130,7 +7243,7 @@ mod tests {
         let array = Arc::new(make_list_array()) as ArrayRef;
         let large_list_array = cast(
             &array,
-            &DataType::LargeList(Box::new(Field::new("", DataType::Int32, false))),
+            &DataType::LargeList(Arc::new(Field::new("", DataType::Int32, false))),
         )
         .unwrap();
         let actual = large_list_array
@@ -7158,7 +7271,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -7182,7 +7295,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -7211,7 +7324,7 @@ mod tests {
         let array1 = make_list_array().slice(1, 2);
         let array2 = Arc::new(make_list_array()) as ArrayRef;
 
-        let dt = DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+        let dt = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         let out1 = cast(&array1, &dt).unwrap();
         let out2 = cast(&array2, &dt).unwrap();
 
@@ -7229,7 +7342,7 @@ mod tests {
             .unwrap();
 
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -7921,7 +8034,7 @@ mod tests {
 
         let b = cast(
             &b,
-            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_string())),
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
         )
         .unwrap();
         let v = b.as_primitive::<TimestampNanosecondType>();
@@ -7931,7 +8044,7 @@ mod tests {
 
         let b = cast(
             &b,
-            &DataType::Timestamp(TimeUnit::Millisecond, Some("+02:00".to_string())),
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("+02:00".into())),
         )
         .unwrap();
         let v = b.as_primitive::<TimestampMillisecondType>();
@@ -7942,7 +8055,7 @@ mod tests {
 
     #[test]
     fn test_cast_utf8_to_timestamp() {
-        fn test_tz(tz: String) {
+        fn test_tz(tz: Arc<str>) {
             let valid = StringArray::from(vec![
                 "2023-01-01 04:05:06.789000-08:00",
                 "2023-01-01 04:05:06.789000-07:00",
@@ -7978,8 +8091,8 @@ mod tests {
             assert_eq!(1672531200000000000, c.value(8));
         }
 
-        test_tz("+00:00".to_owned());
-        test_tz("+02:00".to_owned());
+        test_tz("+00:00".into());
+        test_tz("+02:00".into());
     }
 
     #[test]
@@ -8006,11 +8119,11 @@ mod tests {
         let array = Arc::new(valid) as ArrayRef;
         let b = cast(
             &array,
-            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_owned())),
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
         )
         .unwrap();
 
-        let expect = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_owned()));
+        let expect = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into()));
 
         assert_eq!(b.data_type(), &expect);
         let c = b

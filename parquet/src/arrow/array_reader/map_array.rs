@@ -129,6 +129,7 @@ mod tests {
     use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
     use arrow_array::cast::*;
     use arrow_array::RecordBatch;
+    use arrow_schema::Fields;
     use bytes::Bytes;
 
     #[test]
@@ -148,12 +149,12 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "map",
             ArrowType::Map(
-                Box::new(Field::new(
+                Arc::new(Field::new(
                     "entries",
-                    ArrowType::Struct(vec![
+                    ArrowType::Struct(Fields::from(vec![
                         Field::new("keys", ArrowType::Utf8, false),
                         Field::new("values", ArrowType::Int32, true),
-                    ]),
+                    ])),
                     false,
                 )),
                 false, // Map field not sorted
