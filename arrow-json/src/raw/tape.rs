@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::raw::serializer::TapeSerializer;
 use arrow_schema::ArrowError;
+use serde::Serialize;
 use std::fmt::{Display, Formatter};
 
 /// We decode JSON to a flattened tape representation,
@@ -450,6 +452,26 @@ impl TapeDecoder {
         }
 
         Ok(buf.len() - iter.len())
+    }
+
+    pub fn serialize<S: Serialize>(&mut self, rows: &[S]) -> Result<(), ArrowError> {
+        if let Some(b) = self.stack.last() {
+            return Err(ArrowError::JsonError(format!(
+                "Cannot serialize to tape containing partial decode state {}",
+                b.as_str()
+            )));
+        }
+
+        let mut serializer =
+            TapeSerializer::new(&mut self.elements, &mut self.bytes, &mut self.offsets);
+
+        rows.iter()
+            .try_for_each(|row| row.serialize(&mut serializer))
+            .map_err(|e| ArrowError::JsonError(e.to_string()))?;
+
+        self.num_rows += rows.len();
+
+        Ok(())
     }
 
     /// Finishes the current [`Tape`]

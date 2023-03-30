@@ -34,6 +34,7 @@ use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, SchemaRef, TimeUnit};
 use chrono::Utc;
+use serde::Serialize;
 use std::io::BufRead;
 
 mod boolean_array;
@@ -41,6 +42,7 @@ mod decimal_array;
 mod list_array;
 mod map_array;
 mod primitive_array;
+mod serializer;
 mod string_array;
 mod struct_array;
 mod tape;
@@ -231,6 +233,38 @@ impl RawDecoder {
     /// integration with arbitrary byte streams, such as that yielded by [`BufRead`]
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         self.tape_decoder.decode(buf)
+    }
+
+    /// Serialize `rows` to this [`RawDecoder`]
+    ///
+    /// Whilst this provides a simple way to convert [`serde`]-compatible datastructures into arrow
+    /// [`RecordBatch`], performance-critical applications, especially where the schema is known at
+    /// compile-time, may benefit from instead implementing custom conversion logic as described
+    /// in [arrow_array::builder]
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use serde_json::{Value, json};
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_array::types::Float32Type;
+    /// # use arrow_json::RawReaderBuilder;
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// let json = vec![json!({"float": 2.3}), json!({"float": 5.7})];
+    ///
+    /// let schema = Schema::new(vec![Field::new("float", DataType::Float32, true)]);
+    /// let mut decoder = RawReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
+    ///
+    /// decoder.serialize(&json).unwrap();
+    /// let batch = decoder.flush().unwrap().unwrap();
+    /// assert_eq!(batch.num_rows(), 2);
+    /// assert_eq!(batch.num_columns(), 1);
+    /// let values = batch.column(0).as_primitive::<Float32Type>().values();
+    /// assert_eq!(values, &[2.3, 5.7])
+    /// ```
+    ///
+    /// Note: this ignores any batch size setting, and always decodes all rows
+    pub fn serialize<S: Serialize>(&mut self, rows: &[S]) -> Result<(), ArrowError> {
+        self.tape_decoder.serialize(rows)
     }
 
     /// Flushes the currently buffered data to a [`RecordBatch`]
