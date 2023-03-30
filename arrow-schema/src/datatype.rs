@@ -132,6 +132,13 @@ pub enum DataType {
     /// empty to "Europe/Paris" would require converting the timestamp values
     /// from "Europe/Paris" to "UTC", which seems counter-intuitive but is
     /// nevertheless correct).
+    ///
+    /// ```
+    /// # use arrow_schema::{DataType, TimeUnit};
+    /// DataType::Timestamp(TimeUnit::Second, None);
+    /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
+    /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
+    /// ```
     Timestamp(TimeUnit, Option<Arc<str>>),
     /// A 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days (32 bits).
