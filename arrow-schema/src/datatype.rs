@@ -663,4 +663,9 @@ mod tests {
             Box::new(list)
         )));
     }
+
+    #[test]
+    fn size_should_not_regress() {
+        assert_eq!(std::mem::size_of::<DataType>(), 24);
+    }
 }

@@ -170,6 +170,22 @@ impl UnionFields {
     }
 
     /// Create a new [`UnionFields`] from a [`Fields`] and array of type_ids
+    ///
+    /// See <https://arrow.apache.org/docs/format/Columnar.html#union-layout>
+    ///
+    /// ```
+    /// use arrow_schema::{DataType, Field, UnionFields};
+    /// // Create a new UnionFields with type id mapping
+    /// // 1 -> DataType::UInt8
+    /// // 3 -> DataType::Utf8
+    /// UnionFields::new(
+    ///     vec![1, 3],
+    ///     vec![
+    ///         Field::new("field1", DataType::UInt8, false),
+    ///         Field::new("field3", DataType::Utf8, false),
+    ///     ],
+    /// );
+    /// ```
     pub fn new<F, T>(type_ids: T, fields: F) -> Self
     where
         F: IntoIterator,
@@ -204,7 +220,11 @@ impl UnionFields {
         self.0.iter().map(|(id, f)| (*id, f))
     }
 
+    /// Merge this field into self if it is compatible.
+    ///
+    /// See [`Field::try_merge`]
     pub(crate) fn try_merge(&mut self, other: &Self) -> Result<(), ArrowError> {
+        // TODO: This currently may produce duplicate type IDs (#3982)
         let mut output: Vec<_> = self.iter().map(|(id, f)| (id, f.clone())).collect();
         for (field_type_id, from_field) in other.iter() {
             let mut is_new_field = true;
@@ -235,6 +255,7 @@ impl UnionFields {
 
 impl FromIterator<(i8, FieldRef)> for UnionFields {
     fn from_iter<T: IntoIterator<Item = (i8, FieldRef)>>(iter: T) -> Self {
+        // TODO: Should this validate type IDs are unique (#3982)
         Self(iter.into_iter().collect())
     }
 }
