@@ -251,19 +251,6 @@ impl FlightSqlServiceClient<Channel> {
             .into_inner())
     }
 
-    async fn get_flight_info(
-        &mut self,
-        request: impl IntoRequest<FlightDescriptor>,
-    ) -> Result<FlightInfo, ArrowError> {
-        let req = self.set_request_headers(request.into_request())?;
-        Ok(self
-            .flight_client
-            .get_flight_info(req)
-            .await
-            .map_err(status_to_arrow_error)?
-            .into_inner())
-    }
-
     /// Request a list of tables.
     pub async fn get_tables(
         &mut self,
@@ -423,8 +410,10 @@ impl PreparedStatement<Channel> {
         let cmd = CommandPreparedStatementQuery {
             prepared_statement_handle: self.handle.clone(),
         };
-        let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
-        let result = self.flight_sql_client.get_flight_info(descriptor).await?;
+        let result = self
+            .flight_sql_client
+            .get_flight_info_for_command(cmd)
+            .await?;
         Ok(result)
     }
 
