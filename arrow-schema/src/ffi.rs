@@ -34,7 +34,9 @@
 //! assert_eq!(schema, back);
 //! ```
 
-use crate::{ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionMode};
+use crate::{
+    ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionFields, UnionMode,
+};
 use bitflags::bitflags;
 use std::sync::Arc;
 use std::{
@@ -386,11 +388,11 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "tDn" => DataType::Duration(TimeUnit::Nanosecond),
             "+l" => {
                 let c_child = c_schema.child(0);
-                DataType::List(Box::new(Field::try_from(c_child)?))
+                DataType::List(Arc::new(Field::try_from(c_child)?))
             }
             "+L" => {
                 let c_child = c_schema.child(0);
-                DataType::LargeList(Box::new(Field::try_from(c_child)?))
+                DataType::LargeList(Arc::new(Field::try_from(c_child)?))
             }
             "+s" => {
                 let fields = c_schema.children().map(Field::try_from);
@@ -399,7 +401,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "+m" => {
                 let c_child = c_schema.child(0);
                 let map_keys_sorted = c_schema.map_keys_sorted();
-                DataType::Map(Box::new(Field::try_from(c_child)?), map_keys_sorted)
+                DataType::Map(Arc::new(Field::try_from(c_child)?), map_keys_sorted)
             }
             // Parametrized types, requiring string parse
             other => {
@@ -419,7 +421,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             ArrowError::CDataInterface(
                                 "The FixedSizeList type requires an integer parameter representing number of elements per list".to_string())
                         })?;
-                        DataType::FixedSizeList(Box::new(Field::try_from(c_child)?), parsed_num_elems)
+                        DataType::FixedSizeList(Arc::new(Field::try_from(c_child)?), parsed_num_elems)
                     },
                     // Decimal types in format "d:precision,scale" or "d:precision,scale,bitWidth"
                     ["d", extra] => {
@@ -484,7 +486,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             ));
                         }
 
-                        DataType::Union(fields, type_ids, UnionMode::Dense)
+                        DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
                     }
                     // SparseUnion
                     ["+us", extra] => {
@@ -506,7 +508,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             ));
                         }
 
-                        DataType::Union(fields, type_ids, UnionMode::Sparse)
+                        DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Sparse)
                     }
 
                     // Timestamps in format "tts:" and "tts:America/New_York" for no timezones and timezones resp.
@@ -585,9 +587,9 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
             | DataType::Map(child, _) => {
                 vec![FFI_ArrowSchema::try_from(child.as_ref())?]
             }
-            DataType::Union(fields, _, _) => fields
+            DataType::Union(fields, _) => fields
                 .iter()
-                .map(FFI_ArrowSchema::try_from)
+                .map(|(_, f)| f.as_ref().try_into())
                 .collect::<Result<Vec<_>, ArrowError>>()?,
             DataType::Struct(fields) => fields
                 .iter()
@@ -658,8 +660,11 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
         DataType::Struct(_) => Ok("+s".to_string()),
         DataType::Map(_, _) => Ok("+m".to_string()),
         DataType::Dictionary(key_data_type, _) => get_format_string(key_data_type),
-        DataType::Union(_, type_ids, mode) => {
-            let formats = type_ids.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        DataType::Union(fields, mode) => {
+            let formats = fields
+                .iter()
+                .map(|(t, _)| t.to_string())
+                .collect::<Vec<_>>();
             match mode {
                 UnionMode::Dense => Ok(format!("{}:{}", "+ud", formats.join(","))),
                 UnionMode::Sparse => Ok(format!("{}:{}", "+us", formats.join(","))),
@@ -767,11 +772,11 @@ mod tests {
         round_trip_type(DataType::Time64(TimeUnit::Nanosecond));
         round_trip_type(DataType::FixedSizeBinary(12));
         round_trip_type(DataType::FixedSizeList(
-            Box::new(Field::new("a", DataType::Int64, false)),
+            Arc::new(Field::new("a", DataType::Int64, false)),
             5,
         ));
         round_trip_type(DataType::Utf8);
-        round_trip_type(DataType::List(Box::new(Field::new(
+        round_trip_type(DataType::List(Arc::new(Field::new(
             "a",
             DataType::Int16,
             false,
@@ -823,7 +828,7 @@ mod tests {
 
         // Construct a map array from the above two
         let map_data_type =
-            DataType::Map(Box::new(Field::new("entries", entry_struct, true)), true);
+            DataType::Map(Arc::new(Field::new("entries", entry_struct, true)), true);
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());

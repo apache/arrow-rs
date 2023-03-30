@@ -140,7 +140,7 @@ fn canonicalize_schema(schema: &Schema) -> Schema {
 
                     Arc::new(Field::new(
                         field.name().as_str(),
-                        DataType::Map(Box::new(child_field), *sorted),
+                        DataType::Map(Arc::new(child_field), *sorted),
                         field.is_nullable(),
                     ))
                 }

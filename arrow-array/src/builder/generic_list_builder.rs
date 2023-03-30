@@ -233,7 +233,7 @@ where
         let offset_buffer = self.offsets_builder.finish();
         let null_bit_buffer = self.null_buffer_builder.finish();
         self.offsets_builder.append(OffsetSize::zero());
-        let field = Box::new(Field::new(
+        let field = Arc::new(Field::new(
             "item",
             values_data.data_type().clone(),
             true, // TODO: find a consistent way of getting this
@@ -261,7 +261,7 @@ where
             .null_buffer_builder
             .as_slice()
             .map(Buffer::from_slice_ref);
-        let field = Box::new(Field::new(
+        let field = Arc::new(Field::new(
             "item",
             values_data.data_type().clone(),
             true, // TODO: find a consistent way of getting this

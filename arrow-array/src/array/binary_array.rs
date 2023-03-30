@@ -303,6 +303,7 @@ mod tests {
     use super::*;
     use crate::{ListArray, StringArray};
     use arrow_schema::Field;
+    use std::sync::Arc;
 
     #[test]
     fn test_binary_array() {
@@ -453,7 +454,7 @@ mod tests {
             .unwrap();
         let binary_array1 = GenericBinaryArray::<O>::from(array_data1);
 
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, false),
         ));
 
@@ -503,7 +504,7 @@ mod tests {
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
         let null_buffer = Buffer::from_slice_ref([0b101]);
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, false),
         ));
 
@@ -548,7 +549,7 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, true),
         ));
 
@@ -641,7 +642,7 @@ mod tests {
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::UInt32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::UInt32, false)));
         let array_data = ArrayData::builder(data_type)
             .len(3)
             .add_buffer(Buffer::from_slice_ref(offsets))

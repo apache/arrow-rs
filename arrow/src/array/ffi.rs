@@ -207,7 +207,7 @@ mod tests {
             .add_buffer(Buffer::from_slice_ref(v))
             .build()?;
         let list_data_type =
-            DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int64, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new("f", DataType::Int64, false)), 3);
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_child_data(value_data)
@@ -232,7 +232,7 @@ mod tests {
             .add_buffer(Buffer::from_slice_ref(v))
             .build()?;
         let list_data_type =
-            DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int16, false)), 2);
+            DataType::FixedSizeList(Arc::new(Field::new("f", DataType::Int16, false)), 2);
         let list_data = ArrayData::builder(list_data_type)
             .len(8)
             .null_bit_buffer(Some(Buffer::from(validity_bits)))
@@ -255,7 +255,7 @@ mod tests {
         let offsets: Vec<i32> = vec![0, 2, 4, 6, 8, 10, 12, 14, 16];
         let value_offsets = Buffer::from_slice_ref(offsets);
         let inner_list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let inner_list_data = ArrayData::builder(inner_list_data_type.clone())
             .len(8)
             .add_buffer(value_offsets)
@@ -267,7 +267,7 @@ mod tests {
         bit_util::set_bit(&mut validity_bits, 2);
 
         let list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new("f", inner_list_data_type, false)),
+            Arc::new(Field::new("f", inner_list_data_type, false)),
             2,
         );
         let list_data = ArrayData::builder(list_data_type)

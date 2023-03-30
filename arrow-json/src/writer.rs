@@ -124,21 +124,15 @@ where
 
 fn struct_array_to_jsonmap_array(
     array: &StructArray,
-    row_count: usize,
 ) -> Result<Vec<JsonMap<String, Value>>, ArrowError> {
     let inner_col_names = array.column_names();
 
     let mut inner_objs = iter::repeat(JsonMap::new())
-        .take(row_count)
+        .take(array.len())
         .collect::<Vec<JsonMap<String, Value>>>();
 
     for (j, struct_col) in array.columns().iter().enumerate() {
-        set_column_for_json_rows(
-            &mut inner_objs,
-            row_count,
-            struct_col,
-            inner_col_names[j],
-        )?
+        set_column_for_json_rows(&mut inner_objs, struct_col, inner_col_names[j])?
     }
     Ok(inner_objs)
 }
@@ -197,8 +191,7 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
             })
             .collect(),
         DataType::Struct(_) => {
-            let jsonmaps =
-                struct_array_to_jsonmap_array(as_struct_array(array), array.len())?;
+            let jsonmaps = struct_array_to_jsonmap_array(array.as_struct())?;
             Ok(jsonmaps.into_iter().map(Value::Object).collect())
         }
         t => Err(ArrowError::JsonError(format!(
@@ -208,21 +201,21 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
 }
 
 macro_rules! set_column_by_array_type {
-    ($cast_fn:ident, $col_name:ident, $rows:ident, $array:ident, $row_count:ident) => {
+    ($cast_fn:ident, $col_name:ident, $rows:ident, $array:ident) => {
         let arr = $cast_fn($array);
-        $rows.iter_mut().zip(arr.iter()).take($row_count).for_each(
-            |(row, maybe_value)| {
+        $rows
+            .iter_mut()
+            .zip(arr.iter())
+            .for_each(|(row, maybe_value)| {
                 if let Some(v) = maybe_value {
                     row.insert($col_name.to_string(), v.into());
                 }
-            },
-        );
+            });
     };
 }
 
 fn set_column_by_primitive_type<T>(
     rows: &mut [JsonMap<String, Value>],
-    row_count: usize,
     array: &ArrayRef,
     col_name: &str,
 ) where
@@ -233,7 +226,6 @@ fn set_column_by_primitive_type<T>(
 
     rows.iter_mut()
         .zip(primitive_arr.iter())
-        .take(row_count)
         .for_each(|(row, maybe_value)| {
             // when value is null, we simply skip setting the key
             if let Some(j) = maybe_value.and_then(|v| v.into_json_value()) {
@@ -244,58 +236,51 @@ fn set_column_by_primitive_type<T>(
 
 fn set_column_for_json_rows(
     rows: &mut [JsonMap<String, Value>],
-    row_count: usize,
     array: &ArrayRef,
     col_name: &str,
 ) -> Result<(), ArrowError> {
     match array.data_type() {
         DataType::Int8 => {
-            set_column_by_primitive_type::<Int8Type>(rows, row_count, array, col_name);
+            set_column_by_primitive_type::<Int8Type>(rows, array, col_name);
         }
         DataType::Int16 => {
-            set_column_by_primitive_type::<Int16Type>(rows, row_count, array, col_name);
+            set_column_by_primitive_type::<Int16Type>(rows, array, col_name);
         }
         DataType::Int32 => {
-            set_column_by_primitive_type::<Int32Type>(rows, row_count, array, col_name);
+            set_column_by_primitive_type::<Int32Type>(rows, array, col_name);
         }
         DataType::Int64 => {
-            set_column_by_primitive_type::<Int64Type>(rows, row_count, array, col_name);
+            set_column_by_primitive_type::<Int64Type>(rows, array, col_name);
         }
         DataType::UInt8 => {
-            set_column_by_primitive_type::<UInt8Type>(rows, row_count, array, col_name);
+            set_column_by_primitive_type::<UInt8Type>(rows, array, col_name);
         }
         DataType::UInt16 => {
-            set_column_by_primitive_type::<UInt16Type>(rows, row_count, array, col_name);
+            set_column_by_primitive_type::<UInt16Type>(rows, array, col_name);
         }
         DataType::UInt32 => {
-            set_column_by_primitive_type::<UInt32Type>(rows, row_count, array, col_name);
+            set_column_by_primitive_type::<UInt32Type>(rows, array, col_name);
         }
         DataType::UInt64 => {
-            set_column_by_primitive_type::<UInt64Type>(rows, row_count, array, col_name);
+            set_column_by_primitive_type::<UInt64Type>(rows, array, col_name);
         }
         DataType::Float32 => {
-            set_column_by_primitive_type::<Float32Type>(rows, row_count, array, col_name);
+            set_column_by_primitive_type::<Float32Type>(rows, array, col_name);
         }
         DataType::Float64 => {
-            set_column_by_primitive_type::<Float64Type>(rows, row_count, array, col_name);
+            set_column_by_primitive_type::<Float64Type>(rows, array, col_name);
         }
         DataType::Null => {
             // when value is null, we simply skip setting the key
         }
         DataType::Boolean => {
-            set_column_by_array_type!(as_boolean_array, col_name, rows, array, row_count);
+            set_column_by_array_type!(as_boolean_array, col_name, rows, array);
         }
         DataType::Utf8 => {
-            set_column_by_array_type!(as_string_array, col_name, rows, array, row_count);
+            set_column_by_array_type!(as_string_array, col_name, rows, array);
         }
         DataType::LargeUtf8 => {
-            set_column_by_array_type!(
-                as_largestring_array,
-                col_name,
-                rows,
-                array,
-                row_count
-            );
+            set_column_by_array_type!(as_largestring_array, col_name, rows, array);
         }
         DataType::Date32
         | DataType::Date64
@@ -306,23 +291,18 @@ fn set_column_for_json_rows(
             let options = FormatOptions::default();
             let formatter = ArrayFormatter::try_new(array.as_ref(), &options)?;
             let data = array.data();
-            rows.iter_mut()
-                .take(row_count)
-                .enumerate()
-                .for_each(|(idx, row)| {
-                    if data.is_valid(idx) {
-                        row.insert(
-                            col_name.to_string(),
-                            formatter.value(idx).to_string().into(),
-                        );
-                    }
-                });
+            rows.iter_mut().enumerate().for_each(|(idx, row)| {
+                if data.is_valid(idx) {
+                    row.insert(
+                        col_name.to_string(),
+                        formatter.value(idx).to_string().into(),
+                    );
+                }
+            });
         }
         DataType::Struct(_) => {
-            let inner_objs =
-                struct_array_to_jsonmap_array(as_struct_array(array), row_count)?;
+            let inner_objs = struct_array_to_jsonmap_array(array.as_struct())?;
             rows.iter_mut()
-                .take(row_count)
                 .zip(inner_objs.into_iter())
                 .for_each(|(row, obj)| {
                     row.insert(col_name.to_string(), Value::Object(obj));
@@ -330,10 +310,8 @@ fn set_column_for_json_rows(
         }
         DataType::List(_) => {
             let listarr = as_list_array(array);
-            rows.iter_mut()
-                .zip(listarr.iter())
-                .take(row_count)
-                .try_for_each(|(row, maybe_value)| -> Result<(), ArrowError> {
+            rows.iter_mut().zip(listarr.iter()).try_for_each(
+                |(row, maybe_value)| -> Result<(), ArrowError> {
                     if let Some(v) = maybe_value {
                         row.insert(
                             col_name.to_string(),
@@ -341,26 +319,25 @@ fn set_column_for_json_rows(
                         );
                     }
                     Ok(())
-                })?;
+                },
+            )?;
         }
         DataType::LargeList(_) => {
             let listarr = as_large_list_array(array);
-            rows.iter_mut()
-                .zip(listarr.iter())
-                .take(row_count)
-                .try_for_each(|(row, maybe_value)| -> Result<(), ArrowError> {
+            rows.iter_mut().zip(listarr.iter()).try_for_each(
+                |(row, maybe_value)| -> Result<(), ArrowError> {
                     if let Some(v) = maybe_value {
                         let val = array_to_json_array(&v)?;
                         row.insert(col_name.to_string(), Value::Array(val));
                     }
                     Ok(())
-                })?;
+                },
+            )?;
         }
         DataType::Dictionary(_, value_type) => {
-            let slice = array.slice(0, row_count);
-            let hydrated = arrow_cast::cast::cast(&slice, value_type)
+            let hydrated = arrow_cast::cast::cast(&array, value_type)
                 .expect("cannot cast dictionary to underlying values");
-            set_column_for_json_rows(rows, row_count, &hydrated, col_name)?;
+            set_column_for_json_rows(rows, &hydrated, col_name)?;
         }
         DataType::Map(_, _) => {
             let maparr = as_map_array(array);
@@ -381,7 +358,7 @@ fn set_column_for_json_rows(
 
             let mut kv = keys.iter().zip(values.into_iter());
 
-            for (i, row) in rows.iter_mut().take(row_count).enumerate() {
+            for (i, row) in rows.iter_mut().enumerate() {
                 if maparr.is_null(i) {
                     row.insert(col_name.to_string(), serde_json::Value::Null);
                     continue;
@@ -424,9 +401,10 @@ pub fn record_batches_to_json_rows(
         let mut base = 0;
         for batch in batches {
             let row_count = batch.num_rows();
+            let row_slice = &mut rows[base..base + batch.num_rows()];
             for (j, col) in batch.columns().iter().enumerate() {
                 let col_name = schema.field(j).name();
-                set_column_for_json_rows(&mut rows[base..], row_count, col, col_name)?
+                set_column_for_json_rows(row_slice, col, col_name)?
             }
             base += row_count;
         }
@@ -1057,7 +1035,7 @@ mod tests {
     fn write_struct_with_list_field() {
         let field_c1 = Field::new(
             "c1",
-            DataType::List(Box::new(Field::new("c_list", DataType::Utf8, false))),
+            DataType::List(Arc::new(Field::new("c_list", DataType::Utf8, false))),
             false,
         );
         let field_c2 = Field::new("c2", DataType::Int32, false);
@@ -1102,12 +1080,12 @@ mod tests {
     fn write_nested_list() {
         let list_inner_type = Field::new(
             "a",
-            DataType::List(Box::new(Field::new("b", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new("b", DataType::Int32, false))),
             false,
         );
         let field_c1 = Field::new(
             "c1",
-            DataType::List(Box::new(list_inner_type.clone())),
+            DataType::List(Arc::new(list_inner_type.clone())),
             false,
         );
         let field_c2 = Field::new("c2", DataType::Utf8, true);
@@ -1160,7 +1138,7 @@ mod tests {
     fn write_list_of_struct() {
         let field_c1 = Field::new(
             "c1",
-            DataType::List(Box::new(Field::new(
+            DataType::List(Arc::new(Field::new(
                 "s",
                 DataType::Struct(Fields::from(vec![
                     Field::new("c11", DataType::Int32, true),
@@ -1325,7 +1303,7 @@ mod tests {
         "#;
         let ints_struct =
             DataType::Struct(vec![Field::new("ints", DataType::Int32, true)].into());
-        let list_type = DataType::List(Box::new(Field::new("item", ints_struct, true)));
+        let list_type = DataType::List(Arc::new(Field::new("item", ints_struct, true)));
         let list_field = Field::new("list", list_type, true);
         let schema = Arc::new(Schema::new(vec![list_field]));
         let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
@@ -1379,7 +1357,7 @@ mod tests {
         ]);
 
         let map_data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
                 true,

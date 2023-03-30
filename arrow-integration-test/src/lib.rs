@@ -858,7 +858,7 @@ pub fn array_from_json(
             let array = MapArray::from(array_data);
             Ok(Arc::new(array))
         }
-        DataType::Union(fields, field_type_ids, _) => {
+        DataType::Union(fields, _) => {
             let type_ids = if let Some(type_id) = json_col.type_id {
                 type_id
             } else {
@@ -874,13 +874,14 @@ pub fn array_from_json(
             });
 
             let mut children: Vec<(Field, Arc<dyn Array>)> = vec![];
-            for (field, col) in fields.iter().zip(json_col.children.unwrap()) {
+            for ((_, field), col) in fields.iter().zip(json_col.children.unwrap()) {
                 let array = array_from_json(field, col, dictionaries)?;
-                children.push((field.clone(), array));
+                children.push((field.as_ref().clone(), array));
             }
 
+            let field_type_ids = fields.iter().map(|(id, _)| id).collect::<Vec<_>>();
             let array = UnionArray::try_new(
-                field_type_ids,
+                &field_type_ids,
                 Buffer::from(&type_ids.to_byte_slice()),
                 offset,
                 children,
@@ -1097,7 +1098,7 @@ mod tests {
             Field::new("c3", DataType::Utf8, true),
             Field::new(
                 "c4",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "custom_item",
                     DataType::Int32,
                     false,
@@ -1184,7 +1185,7 @@ mod tests {
             Field::new("utf8s", DataType::Utf8, true),
             Field::new(
                 "lists",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
                 true,
             ),
             Field::new(
@@ -1259,7 +1260,7 @@ mod tests {
         let value_data = Int32Array::from(vec![None, Some(2), None, None]);
         let value_offsets = Buffer::from_slice_ref([0, 3, 4, 4]);
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)

@@ -174,15 +174,15 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
             )))
         }
         // type ids. UnionArray doesn't have null bitmap so buffer index begins with 0.
-        (DataType::Union(_, _, _), 0) => i8::BITS as _,
+        (DataType::Union(_, _), 0) => i8::BITS as _,
         // Only DenseUnion has 2nd buffer
-        (DataType::Union(_, _, UnionMode::Dense), 1) => i32::BITS as _,
-        (DataType::Union(_, _, UnionMode::Sparse), _) => {
+        (DataType::Union(_, UnionMode::Dense), 1) => i32::BITS as _,
+        (DataType::Union(_, UnionMode::Sparse), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type:?}\" expects 1 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
-        (DataType::Union(_, _, UnionMode::Dense), _) => {
+        (DataType::Union(_, UnionMode::Dense), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type:?}\" expects 2 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
@@ -662,7 +662,7 @@ mod tests {
             .collect::<Buffer>();
 
         // Construct a list array from the above two
-        let list_data_type = GenericListArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let list_data_type = GenericListArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::Int32, false),
         ));
 
@@ -921,7 +921,7 @@ mod tests {
             .build()?;
 
         let list_data_type =
-            DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int32, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new("f", DataType::Int32, false)), 3);
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .null_bit_buffer(Some(Buffer::from(validity_bits)))
