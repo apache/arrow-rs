@@ -84,7 +84,7 @@ impl FlightSqlServiceImpl {
         if token == FAKE_TOKEN {
             Ok(())
         } else {
-            Err(Status::unauthenticated(""))
+            Err(Status::unauthenticated("invalid token "))
         }
     }
 
@@ -703,6 +703,47 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(res, FAKE_UPDATE_RESULT);
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_auth() {
+        test_client(|mut client| async move {
+            // no handshake
+            assert!(client
+                .prepare("select 1;".to_string())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("No authorization header"));
+
+            // Invalid credentials
+            assert!(client
+                .handshake("admin", "password2")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid credentials"));
+
+            // forget to set_token
+            client.handshake("admin", "password").await.unwrap();
+            assert!(client
+                .prepare("select 1;".to_string())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("No authorization header"));
+
+            // Invalid Tokens
+            client.handshake("admin", "password").await.unwrap();
+            client.set_token("wrong token".to_string());
+            assert!(client
+                .prepare("select 1;".to_string())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("invalid token"));
         })
         .await
     }
