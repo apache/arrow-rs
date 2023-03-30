@@ -327,7 +327,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             Type::primitive_type_builder(name, PhysicalType::INT64)
                 .with_logical_type(Some(LogicalType::Timestamp {
                     // If timezone set, values are normalized to UTC timezone
-                    is_adjusted_to_u_t_c: matches!(tz, Some(z) if !z.as_str().is_empty()),
+                    is_adjusted_to_u_t_c: matches!(tz, Some(z) if !z.as_ref().is_empty()),
                     unit: match time_unit {
                         TimeUnit::Second => unreachable!(),
                         TimeUnit::Millisecond => {
@@ -507,7 +507,9 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             let dict_field = Field::new(name, *value.clone(), field.is_nullable());
             arrow_to_parquet_type(&dict_field)
         }
-        DataType::RunEndEncoded(_, _) => Err(arrow_err!("Converting RunEndEncodedType to parquet not supported",))
+        DataType::RunEndEncoded(_, _) => Err(arrow_err!(
+            "Converting RunEndEncodedType to parquet not supported",
+        )),
     }
 }
 
@@ -641,7 +643,7 @@ mod tests {
             ProjectionMask::all(),
             None,
         )
-            .unwrap();
+        .unwrap();
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
     }
 
@@ -1317,7 +1319,7 @@ mod tests {
             ),
             Field::new(
                 "ts_nano",
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_string())),
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
                 false,
             ),
             Field::new(
@@ -1343,20 +1345,9 @@ mod tests {
                 ))),
                 false,
             ),
-            Field::new(
-                "decimal_int32",
-                DataType::Decimal128(8, 2),
-                false,
-            ),
-            Field::new(
-                "decimal_int64",
-                DataType::Decimal128(16, 2),
-                false,
-            ),
-            Field::new(
-                "decimal_fix_length",
-                DataType::Decimal128(30, 2),
-                false, ),
+            Field::new("decimal_int32", DataType::Decimal128(8, 2), false),
+            Field::new("decimal_int64", DataType::Decimal128(16, 2), false),
+            Field::new("decimal_fix_length", DataType::Decimal128(30, 2), false),
         ];
 
         assert_eq!(arrow_fields, converted_arrow_fields);
@@ -1447,27 +1438,27 @@ mod tests {
             ),
             Field::new(
                 "ts_seconds",
-                DataType::Timestamp(TimeUnit::Second, Some("UTC".to_string())),
+                DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
                 false,
             ),
             Field::new(
                 "ts_micro_utc",
-                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string())),
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
                 false,
             ),
             Field::new(
                 "ts_millis_zero_offset",
-                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".to_string())),
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
                 false,
             ),
             Field::new(
                 "ts_millis_zero_negative_offset",
-                DataType::Timestamp(TimeUnit::Millisecond, Some("-00:00".to_string())),
+                DataType::Timestamp(TimeUnit::Millisecond, Some("-00:00".into())),
                 false,
             ),
             Field::new(
                 "ts_micro_non_utc",
-                DataType::Timestamp(TimeUnit::Microsecond, Some("+01:00".to_string())),
+                DataType::Timestamp(TimeUnit::Microsecond, Some("+01:00".into())),
                 false,
             ),
             Field::new(
@@ -1492,18 +1483,9 @@ mod tests {
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                 false,
             ),
-            Field::new(
-                "decimal_int32",
-                DataType::Decimal128(8, 2),
-                false),
-            Field::new("decimal_int64",
-                       DataType::Decimal128(16, 2),
-                       false),
-            Field::new(
-                "decimal_fix_length",
-                DataType::Decimal128(30, 2),
-                false,
-            ),
+            Field::new("decimal_int32", DataType::Decimal128(8, 2), false),
+            Field::new("decimal_int64", DataType::Decimal128(16, 2), false),
+            Field::new("decimal_fix_length", DataType::Decimal128(30, 2), false),
         ];
         let arrow_schema = Schema::new(arrow_fields);
         let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema).unwrap();
@@ -1594,14 +1576,14 @@ mod tests {
                 Field::new("c15", DataType::Timestamp(TimeUnit::Second, None), false),
                 Field::new(
                     "c16",
-                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".to_string())),
+                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
                     false,
                 ),
                 Field::new(
                     "c17",
                     DataType::Timestamp(
                         TimeUnit::Microsecond,
-                        Some("Africa/Johannesburg".to_string()),
+                        Some("Africa/Johannesburg".into()),
                     ),
                     false,
                 ),

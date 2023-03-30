@@ -290,7 +290,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
         }
         crate::Type::Timestamp => {
             let timestamp = field.type_as_timestamp().unwrap();
-            let timezone: Option<String> = timestamp.timezone().map(|tz| tz.to_string());
+            let timezone: Option<_> = timestamp.timezone().map(|tz| tz.into());
             match timestamp.unit() {
                 crate::TimeUnit::SECOND => {
                     DataType::Timestamp(TimeUnit::Second, timezone)
@@ -636,8 +636,8 @@ pub(crate) fn get_fb_field_type<'a>(
             }
         }
         Timestamp(unit, tz) => {
-            let tz = tz.clone().unwrap_or_default();
-            let tz_str = fbb.create_string(tz.as_str());
+            let tz = tz.as_deref().unwrap_or_default();
+            let tz_str = fbb.create_string(tz);
             let mut builder = crate::TimestampBuilder::new(fbb);
             let time_unit = match unit {
                 TimeUnit::Second => crate::TimeUnit::SECOND,
@@ -882,7 +882,7 @@ mod tests {
                     "timestamp[us]",
                     DataType::Timestamp(
                         TimeUnit::Microsecond,
-                        Some("Africa/Johannesburg".to_string()),
+                        Some("Africa/Johannesburg".into()),
                     ),
                     false,
                 ),

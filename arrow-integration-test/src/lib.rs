@@ -1104,10 +1104,10 @@ mod tests {
 
     #[test]
     fn test_arrow_data_equality() {
-        let secs_tz = Some("Europe/Budapest".to_string());
-        let millis_tz = Some("America/New_York".to_string());
-        let micros_tz = Some("UTC".to_string());
-        let nanos_tz = Some("Africa/Johannesburg".to_string());
+        let secs_tz = Some("Europe/Budapest".into());
+        let millis_tz = Some("America/New_York".into());
+        let micros_tz = Some("UTC".into());
+        let nanos_tz = Some("Africa/Johannesburg".into());
 
         let schema = Schema::new(vec![
             Field::new("bools-with-metadata-map", DataType::Boolean, true).with_metadata(

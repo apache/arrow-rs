@@ -16,6 +16,7 @@
 // under the License.
 
 use std::fmt;
+use std::sync::Arc;
 
 use crate::field::Field;
 
@@ -131,7 +132,14 @@ pub enum DataType {
     /// empty to "Europe/Paris" would require converting the timestamp values
     /// from "Europe/Paris" to "UTC", which seems counter-intuitive but is
     /// nevertheless correct).
-    Timestamp(TimeUnit, Option<String>),
+    ///
+    /// ```
+    /// # use arrow_schema::{DataType, TimeUnit};
+    /// DataType::Timestamp(TimeUnit::Second, None);
+    /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
+    /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
+    /// ```
+    Timestamp(TimeUnit, Option<Arc<str>>),
     /// A 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days (32 bits).
     Date32,
@@ -476,7 +484,7 @@ impl DataType {
                 | DataType::Decimal128(_, _)
                 | DataType::Decimal256(_, _) => 0,
                 DataType::Timestamp(_, s) => {
-                    s.as_ref().map(|s| s.capacity()).unwrap_or_default()
+                    s.as_ref().map(|s| s.len()).unwrap_or_default()
                 }
                 DataType::List(field)
                 | DataType::FixedSizeList(field, _)

@@ -1364,7 +1364,7 @@ mod tests {
         let result = take_impl(&input, &index, None).unwrap();
         match result.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-                assert_eq!(tz.clone(), Some("UTC".to_owned()))
+                assert_eq!(tz.clone(), Some("UTC".into()))
             }
             _ => panic!(),
         }
