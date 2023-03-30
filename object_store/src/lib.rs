@@ -499,6 +499,14 @@ impl ObjectStore for Box<dyn ObjectStore> {
         self.as_ref().list(prefix).await
     }
 
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        self.as_ref().list_with_offset(prefix, offset).await
+    }
+
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
         self.as_ref().list_with_delimiter(prefix).await
     }
