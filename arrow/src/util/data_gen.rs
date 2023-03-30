@@ -273,7 +273,7 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new(
                 "b",
-                DataType::List(Box::new(Field::new("item", DataType::LargeUtf8, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::LargeUtf8, true))),
                 false,
             ),
             Field::new("a", DataType::Int32, false),
@@ -303,9 +303,9 @@ mod tests {
             Field::new("b", DataType::Boolean, true),
             Field::new(
                 "c",
-                DataType::LargeList(Box::new(Field::new(
+                DataType::LargeList(Arc::new(Field::new(
                     "item",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "item",
                         DataType::FixedSizeBinary(6),
                         true,

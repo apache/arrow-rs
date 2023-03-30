@@ -22,7 +22,7 @@ use std::sync::Arc;
 /// Parse a data type from a JSON representation.
 pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
     use serde_json::Value;
-    let default_field = Field::new("", DataType::Boolean, true);
+    let default_field = Arc::new(Field::new("", DataType::Boolean, true));
     match *json {
         Value::Object(ref map) => match map.get("name") {
             Some(s) if s == "null" => Ok(DataType::Null),
@@ -186,17 +186,17 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             },
             Some(s) if s == "list" => {
                 // return a list with any type as its child isn't defined in the map
-                Ok(DataType::List(Box::new(default_field)))
+                Ok(DataType::List(default_field))
             }
             Some(s) if s == "largelist" => {
                 // return a largelist with any type as its child isn't defined in the map
-                Ok(DataType::LargeList(Box::new(default_field)))
+                Ok(DataType::LargeList(default_field))
             }
             Some(s) if s == "fixedsizelist" => {
                 // return a list with any type as its child isn't defined in the map
                 if let Some(Value::Number(size)) = map.get("listSize") {
                     Ok(DataType::FixedSizeList(
-                        Box::new(default_field),
+                        default_field,
                         size.as_i64().unwrap() as i32,
                     ))
                 } else {
@@ -212,7 +212,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             Some(s) if s == "map" => {
                 if let Some(Value::Bool(keys_sorted)) = map.get("keysSorted") {
                     // Return a map with an empty type as its children aren't defined in the map
-                    Ok(DataType::Map(Box::new(default_field), *keys_sorted))
+                    Ok(DataType::Map(default_field, *keys_sorted))
                 } else {
                     Err(ArrowError::ParseError(
                         "Expecting a keysSorted for map".to_string(),
@@ -231,11 +231,10 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                         )));
                     };
                     if let Some(values) = map.get("typeIds") {
-                        let field = Arc::new(default_field);
                         let values = values.as_array().unwrap();
                         let fields = values
                             .iter()
-                            .map(|t| (t.as_i64().unwrap() as i8, field.clone()))
+                            .map(|t| (t.as_i64().unwrap() as i8, default_field.clone()))
                             .collect();
 
                         Ok(DataType::Union(fields, union_mode))

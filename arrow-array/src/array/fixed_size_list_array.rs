@@ -30,6 +30,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```
+/// # use std::sync::Arc;
 /// # use arrow_array::{Array, FixedSizeListArray, Int32Array};
 /// # use arrow_data::ArrayData;
 /// # use arrow_schema::{DataType, Field};
@@ -41,7 +42,7 @@ use std::sync::Arc;
 ///     .build()
 ///     .unwrap();
 /// let list_data_type = DataType::FixedSizeList(
-///     Box::new(Field::new("item", DataType::Int32, false)),
+///     Arc::new(Field::new("item", DataType::Int32, false)),
 ///     3,
 /// );
 /// let list_data = ArrayData::builder(list_data_type.clone())
@@ -270,7 +271,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, false)),
             3,
         );
         let list_data = ArrayData::builder(list_data_type.clone())
@@ -343,7 +344,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, false)),
             3,
         );
         let list_data = unsafe {
@@ -374,7 +375,7 @@ mod tests {
 
         // Construct a fixed size list array from the above two
         let list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, false)),
             2,
         );
         let list_data = ArrayData::builder(list_data_type)
@@ -435,7 +436,7 @@ mod tests {
 
         // Construct a fixed size list array from the above two
         let list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, false)),
             2,
         );
         let list_data = ArrayData::builder(list_data_type)

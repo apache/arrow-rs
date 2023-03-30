@@ -171,17 +171,17 @@ fn create_list_primitive_bench_batch(
     let fields = vec![
         Field::new(
             "_1",
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
             true,
         ),
         Field::new(
             "_2",
-            DataType::List(Box::new(Field::new("item", DataType::Boolean, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
             true,
         ),
         Field::new(
             "_3",
-            DataType::LargeList(Box::new(Field::new("item", DataType::Utf8, true))),
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Utf8, true))),
             true,
         ),
     ];
@@ -202,17 +202,17 @@ fn create_list_primitive_bench_batch_non_null(
     let fields = vec![
         Field::new(
             "_1",
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
             false,
         ),
         Field::new(
             "_2",
-            DataType::List(Box::new(Field::new("item", DataType::Boolean, false))),
+            DataType::List(Arc::new(Field::new("item", DataType::Boolean, false))),
             false,
         ),
         Field::new(
             "_3",
-            DataType::LargeList(Box::new(Field::new("item", DataType::Utf8, false))),
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Utf8, false))),
             false,
         ),
     ];
@@ -256,9 +256,9 @@ fn _create_nested_bench_batch(
         ),
         Field::new(
             "_2",
-            DataType::LargeList(Box::new(Field::new(
+            DataType::LargeList(Arc::new(Field::new(
                 "item",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "item",
                     DataType::Struct(Fields::from(vec![
                         Field::new(
@@ -272,7 +272,7 @@ fn _create_nested_bench_batch(
                         ),
                         Field::new(
                             "_2",
-                            DataType::List(Box::new(Field::new(
+                            DataType::List(Arc::new(Field::new(
                                 "",
                                 DataType::FixedSizeBinary(2),
                                 true,

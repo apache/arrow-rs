@@ -22,6 +22,7 @@ use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, WIPOffset,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{size_prefixed_root_as_message, CONTINUATION_MARKER};
 use DataType::*;
@@ -337,14 +338,14 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             if children.len() != 1 {
                 panic!("expect a list to have one child")
             }
-            DataType::List(Box::new(children.get(0).into()))
+            DataType::List(Arc::new(children.get(0).into()))
         }
         crate::Type::LargeList => {
             let children = field.children().unwrap();
             if children.len() != 1 {
                 panic!("expect a large list to have one child")
             }
-            DataType::LargeList(Box::new(children.get(0).into()))
+            DataType::LargeList(Arc::new(children.get(0).into()))
         }
         crate::Type::FixedSizeList => {
             let children = field.children().unwrap();
@@ -352,7 +353,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
                 panic!("expect a list to have one child")
             }
             let fsl = field.type_as_fixed_size_list().unwrap();
-            DataType::FixedSizeList(Box::new(children.get(0).into()), fsl.listSize())
+            DataType::FixedSizeList(Arc::new(children.get(0).into()), fsl.listSize())
         }
         crate::Type::Struct_ => {
             let fields = match field.children() {
@@ -371,7 +372,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             }
             let run_ends_field = children.get(0).into();
             let values_field = children.get(1).into();
-            DataType::RunEndEncoded(Box::new(run_ends_field), Box::new(values_field))
+            DataType::RunEndEncoded(Arc::new(run_ends_field), Arc::new(values_field))
         }
         crate::Type::Map => {
             let map = field.type_as_map().unwrap();
@@ -379,7 +380,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             if children.len() != 1 {
                 panic!("expect a map to have one child")
             }
-            DataType::Map(Box::new(children.get(0).into()), map.keysSorted())
+            DataType::Map(Arc::new(children.get(0).into()), map.keysSorted())
         }
         crate::Type::Decimal => {
             let fsb = field.type_as_decimal().unwrap();
@@ -907,12 +908,12 @@ mod tests {
                 Field::new("binary", DataType::Binary, false),
                 Field::new(
                     "list[u8]",
-                    DataType::List(Box::new(Field::new("item", DataType::UInt8, false))),
+                    DataType::List(Arc::new(Field::new("item", DataType::UInt8, false))),
                     true,
                 ),
                 Field::new(
                     "list[struct<float32, int32, bool>]",
-                    List(Box::new(Field::new(
+                    List(Arc::new(Field::new(
                         "struct",
                         Struct(Fields::from(vec![
                             Field::new("float32", DataType::UInt8, false),
@@ -938,13 +939,13 @@ mod tests {
                         Field::new("int64", DataType::Int64, true),
                         Field::new(
                             "list[struct<date32, list[struct<>]>]",
-                            DataType::List(Box::new(Field::new(
+                            DataType::List(Arc::new(Field::new(
                                 "struct",
                                 DataType::Struct(Fields::from(vec![
                                     Field::new("date32", DataType::Date32, true),
                                     Field::new(
                                         "list[struct<>]",
-                                        DataType::List(Box::new(Field::new(
+                                        DataType::List(Arc::new(Field::new(
                                             "struct",
                                             DataType::Struct(Fields::empty()),
                                             false,
@@ -968,7 +969,7 @@ mod tests {
                                 Field::new("int64", DataType::Int64, true),
                                 Field::new(
                                     "list[union<date32, list[union<>]>]",
-                                    DataType::List(Box::new(Field::new(
+                                    DataType::List(Arc::new(Field::new(
                                         "union<date32, list[union<>]>",
                                         DataType::Union(
                                             UnionFields::new(
@@ -981,7 +982,7 @@ mod tests {
                                                     ),
                                                     Field::new(
                                                         "list[union<>]",
-                                                        DataType::List(Box::new(
+                                                        DataType::List(Arc::new(
                                                             Field::new(
                                                                 "union",
                                                                 DataType::Union(

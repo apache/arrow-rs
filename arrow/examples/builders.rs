@@ -100,7 +100,7 @@ fn main() {
 
     // Construct a list array from the above two
     let list_data_type =
-        DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+        DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)

@@ -149,7 +149,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "map",
             ArrowType::Map(
-                Box::new(Field::new(
+                Arc::new(Field::new(
                     "entries",
                     ArrowType::Struct(Fields::from(vec![
                         Field::new("keys", ArrowType::Utf8, false),

@@ -62,7 +62,7 @@ impl ParquetField {
             rep_level: self.rep_level,
             def_level: self.def_level,
             nullable: false,
-            arrow_type: DataType::List(Box::new(Field::new(
+            arrow_type: DataType::List(Arc::new(Field::new(
                 name,
                 self.arrow_type.clone(),
                 false,
@@ -362,7 +362,7 @@ impl Visitor {
                     rep_level,
                     def_level,
                     nullable,
-                    arrow_type: DataType::Map(Box::new(map_field), sorted),
+                    arrow_type: DataType::Map(Arc::new(map_field), sorted),
                     field_type: ParquetFieldType::Group {
                         children: vec![key, value],
                     },
@@ -479,7 +479,7 @@ impl Visitor {
 
         match self.dispatch(item_type, new_context) {
             Ok(Some(item)) => {
-                let item_field = Box::new(convert_field(item_type, &item, arrow_field));
+                let item_field = Arc::new(convert_field(item_type, &item, arrow_field));
 
                 // Use arrow type as hint for index size
                 let arrow_type = match context.data_type {
