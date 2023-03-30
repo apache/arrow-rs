@@ -298,10 +298,10 @@ impl IpcDataGenerator {
                     write_options,
                 )?;
             }
-            DataType::Union(fields, type_ids, _) => {
+            DataType::Union(fields, _) => {
                 let union = as_union_array(column);
-                for (field, type_id) in fields.iter().zip(type_ids) {
-                    let column = union.child(*type_id);
+                for (type_id, field) in fields.iter() {
+                    let column = union.child(type_id);
                     self.encode_dictionaries(
                         field,
                         column,
@@ -937,7 +937,7 @@ impl<W: Write> StreamWriter<W> {
     ///     255, 255, 255, 255,   0,   0,   0,   0
     /// ];
     ///
-    /// let schema = Schema::new(vec![]);
+    /// let schema = Schema::empty();
     /// let buffer: Vec<u8> = Vec::new();
     /// let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
     /// let stream_writer = StreamWriter::try_new_with_options(buffer, &schema, options)?;
@@ -1069,7 +1069,7 @@ fn has_validity_bitmap(data_type: &DataType, write_options: &IpcWriteOptions) ->
     } else {
         !matches!(
             data_type,
-            DataType::Null | DataType::Union(_, _, _) | DataType::RunEndEncoded(_, _)
+            DataType::Null | DataType::Union(_, _) | DataType::RunEndEncoded(_, _)
         )
     }
 }
@@ -1781,11 +1781,13 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "union",
             DataType::Union(
-                vec![
-                    Field::new("a", DataType::Int32, false),
-                    Field::new("c", DataType::Float64, false),
-                ],
-                vec![0, 1],
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("a", DataType::Int32, false),
+                        Field::new("c", DataType::Float64, false),
+                    ],
+                ),
                 UnionMode::Sparse,
             ),
             true,
@@ -2024,15 +2026,11 @@ mod tests {
         );
 
         let sliced = array.slice(1, 2);
-        let read_sliced: &UInt32Array = sliced.as_primitive();
-        assert_eq!(
-            vec![Some(2), Some(3)],
-            read_sliced.iter().collect::<Vec<_>>()
-        );
+        assert_eq!(vec![Some(2), Some(3)], sliced.iter().collect::<Vec<_>>());
 
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, true)])),
-            vec![sliced],
+            vec![Arc::new(sliced)],
         )
         .expect("new batch");
 

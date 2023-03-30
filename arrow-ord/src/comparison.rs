@@ -26,8 +26,7 @@
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{bit_util, Buffer, MutableBuffer};
-use arrow_data::bit_mask::combine_option_bitmap;
+use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use arrow_select::take::take;
@@ -1220,8 +1219,7 @@ where
         ));
     }
 
-    let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], len);
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
     // we process the data in chunks so that each iteration results in one u64 of comparison result bits
     const CHUNK_SIZE: usize = 64;
@@ -1282,18 +1280,8 @@ where
         result_remainder.copy_from_slice(remainder_mask_as_bytes);
     }
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            len,
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    let values = BooleanBuffer::new(result.into(), 0, len);
+    Ok(BooleanArray::new(values, nulls))
 }
 
 /// Helper function to perform boolean lambda function on values from an array and a scalar value using
@@ -2724,19 +2712,13 @@ where
 
     let num_bytes = bit_util::ceil(left_len, 8);
 
-    let not_both_null_bit_buffer =
-        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len) {
-            Some(buff) => buff,
-            None => new_all_set_buffer(num_bytes),
-        };
-    let not_both_null_bitmap = not_both_null_bit_buffer.as_slice();
-
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
     let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
     let bool_slice = bool_buf.as_slice_mut();
 
     // if both array slots are valid, check if list contains primitive
     for i in 0..left_len {
-        if bit_util::get_bit(not_both_null_bitmap, i) {
+        if nulls.as_ref().map(|n| n.is_valid(i)).unwrap_or(true) {
             let list = right.value(i);
             let list = list.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
 
@@ -2749,18 +2731,8 @@ where
         }
     }
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            None,
-            0,
-            vec![bool_buf.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    let values = BooleanBuffer::new(bool_buf.into(), 0, left_len);
+    Ok(BooleanArray::new(values, None))
 }
 
 /// Checks if a [`GenericListArray`] contains a value in the [`GenericStringArray`]
@@ -2781,24 +2753,15 @@ where
 
     let num_bytes = bit_util::ceil(left_len, 8);
 
-    let not_both_null_bit_buffer =
-        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len) {
-            Some(buff) => buff,
-            None => new_all_set_buffer(num_bytes),
-        };
-    let not_both_null_bitmap = not_both_null_bit_buffer.as_slice();
-
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
     let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
     let bool_slice = &mut bool_buf;
 
     for i in 0..left_len {
         // contains(null, null) = false
-        if bit_util::get_bit(not_both_null_bitmap, i) {
+        if nulls.as_ref().map(|n| n.is_valid(i)).unwrap_or(true) {
             let list = right.value(i);
-            let list = list
-                .as_any()
-                .downcast_ref::<GenericStringArray<OffsetSize>>()
-                .unwrap();
+            let list = list.as_string::<OffsetSize>();
 
             for j in 0..list.len() {
                 if list.is_valid(j) && (left.value(i) == list.value(j)) {
@@ -2808,28 +2771,8 @@ where
             }
         }
     }
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            None,
-            0,
-            vec![bool_buf.into()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
-}
-
-// create a buffer and fill it with valid bits
-#[inline]
-fn new_all_set_buffer(len: usize) -> Buffer {
-    let buffer = MutableBuffer::new(len);
-    let buffer = buffer.with_bitset(len, true);
-
-    buffer.into()
+    let values = BooleanBuffer::new(bool_buf.into(), 0, left_len);
+    Ok(BooleanArray::new(values, None))
 }
 
 // disable wrapping inside literal vectors used for test data and assertions
@@ -2842,6 +2785,7 @@ mod tests {
     };
     use arrow_buffer::i256;
     use arrow_schema::Field;
+    use std::sync::Arc;
 
     /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
     /// `A_VEC` and `B_VEC` can be of type `Vec<T>` or `Vec<Option<T>>` where `T` is the native
@@ -2858,7 +2802,7 @@ mod tests {
             // slice and test if the dynamic array works
             let a = a.slice(0, a.len());
             let b = b.slice(0, b.len());
-            let c = $DYN_KERNEL(a.as_ref(), b.as_ref()).unwrap();
+            let c = $DYN_KERNEL(&a, &b).unwrap();
             assert_eq!(BooleanArray::from($EXPECTED), c);
 
             // test with a larger version of the same data to ensure we cover the chunked part of the comparison
@@ -2995,8 +2939,7 @@ mod tests {
     fn test_primitive_array_eq_scalar_with_slice() {
         let a = Int32Array::from(vec![Some(1), None, Some(2), Some(3)]);
         let a = a.slice(1, 3);
-        let a: &Int32Array = a.as_primitive();
-        let a_eq = eq_scalar(a, 2).unwrap();
+        let a_eq = eq_scalar(&a, 2).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![None, Some(true), Some(false)])
@@ -3466,7 +3409,7 @@ mod tests {
         .into_data();
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 6, 9]);
         let list_data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .add_buffer(value_offsets)
@@ -3797,14 +3740,13 @@ mod tests {
             vec![Some("hi"), None, Some("hello"), Some("world"), Some("")],
         );
         let a = a.slice(1, 4);
-        let a = a.as_string::<i32>();
-        let a_eq = eq_utf8_scalar(a, "hello").unwrap();
+        let a_eq = eq_utf8_scalar(&a, "hello").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![None, Some(true), Some(false), Some(false)])
         );
 
-        let a_eq2 = eq_utf8_scalar(a, "").unwrap();
+        let a_eq2 = eq_utf8_scalar(&a, "").unwrap();
 
         assert_eq!(
             a_eq2,

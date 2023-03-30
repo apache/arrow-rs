@@ -278,7 +278,7 @@ fn make_formatter<'a>(
         }
         DataType::Struct(_) => array_format(as_struct_array(array), options),
         DataType::Map(_, _) => array_format(as_map_array(array), options),
-        DataType::Union(_, _, _) => array_format(as_union_array(array), options),
+        DataType::Union(_, _) => array_format(as_union_array(array), options),
         d => Err(ArrowError::NotYetImplemented(format!("formatting {d} is not yet supported"))),
     }
 }
@@ -801,16 +801,16 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
     );
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let (fields, type_ids, mode) = match (*self).data_type() {
-            DataType::Union(fields, type_ids, mode) => (fields, type_ids, mode),
+        let (fields, mode) = match (*self).data_type() {
+            DataType::Union(fields, mode) => (fields, mode),
             _ => unreachable!(),
         };
 
-        let max_id = type_ids.iter().copied().max().unwrap_or_default() as usize;
+        let max_id = fields.iter().map(|(id, _)| id).max().unwrap_or_default() as usize;
         let mut out: Vec<Option<FieldDisplay>> = (0..max_id + 1).map(|_| None).collect();
-        for (i, field) in type_ids.iter().zip(fields) {
-            let formatter = make_formatter(self.child(*i).as_ref(), options)?;
-            out[*i as usize] = Some((field.name().as_str(), formatter))
+        for (i, field) in fields.iter() {
+            let formatter = make_formatter(self.child(i).as_ref(), options)?;
+            out[i as usize] = Some((field.name().as_str(), formatter))
         }
         Ok((out, *mode))
     }
@@ -818,7 +818,7 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let id = self.type_id(idx);
         let idx = match s.1 {
-            UnionMode::Dense => self.value_offset(idx) as usize,
+            UnionMode::Dense => self.value_offset(idx),
             UnionMode::Sparse => idx,
         };
         let (name, field) = s.0[id as usize].as_ref().unwrap();

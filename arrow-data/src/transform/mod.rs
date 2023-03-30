@@ -231,7 +231,7 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::FixedSizeBinary(_) => fixed_binary::build_extend(array),
         DataType::Float16 => primitive::build_extend::<f16>(array),
         DataType::FixedSizeList(_, _) => fixed_size_list::build_extend(array),
-        DataType::Union(_, _, mode) => match mode {
+        DataType::Union(_, mode) => match mode {
             UnionMode::Sparse => union::build_extend_sparse(array),
             UnionMode::Dense => union::build_extend_dense(array),
         },
@@ -283,7 +283,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         DataType::FixedSizeBinary(_) => fixed_binary::extend_nulls,
         DataType::Float16 => primitive::extend_nulls::<f16>,
         DataType::FixedSizeList(_, _) => fixed_size_list::extend_nulls,
-        DataType::Union(_, _, mode) => match mode {
+        DataType::Union(_, mode) => match mode {
             UnionMode::Sparse => union::extend_nulls_sparse,
             UnionMode::Dense => union::extend_nulls_dense,
         },
@@ -501,7 +501,7 @@ impl<'a> MutableArrayData<'a> {
                     .collect::<Vec<_>>();
                 vec![MutableArrayData::new(childs, use_nulls, array_capacity)]
             }
-            DataType::Union(fields, _, _) => (0..fields.len())
+            DataType::Union(fields, _) => (0..fields.len())
                 .map(|i| {
                     let child_arrays = arrays
                         .iter()
@@ -669,10 +669,11 @@ impl<'a> MutableArrayData<'a> {
 mod test {
     use super::*;
     use arrow_schema::Field;
+    use std::sync::Arc;
 
     #[test]
     fn test_list_append_with_capacities() {
-        let array = ArrayData::new_empty(&DataType::List(Box::new(Field::new(
+        let array = ArrayData::new_empty(&DataType::List(Arc::new(Field::new(
             "element",
             DataType::Int64,
             false,

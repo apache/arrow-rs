@@ -136,7 +136,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
         ],
-        DataType::Union(_, _, mode) => {
+        DataType::Union(_, mode) => {
             let type_ids = MutableBuffer::new(capacity * mem::size_of::<i8>());
             match mode {
                 UnionMode::Sparse => [type_ids, empty_buffer],
@@ -162,7 +162,7 @@ pub(crate) fn into_buffers(
         | DataType::Binary
         | DataType::LargeUtf8
         | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
-        DataType::Union(_, _, mode) => {
+        DataType::Union(_, mode) => {
             match mode {
                 // Based on Union's DataTypeLayout
                 UnionMode::Sparse => vec![buffer1.into()],
@@ -621,8 +621,9 @@ impl ArrayData {
                     vec![ArrayData::new_empty(v.as_ref())],
                     true,
                 ),
-                DataType::Union(f, i, mode) => {
-                    let ids = Buffer::from_iter(std::iter::repeat(i[0]).take(len));
+                DataType::Union(f, mode) => {
+                    let (id, _) = f.iter().next().unwrap();
+                    let ids = Buffer::from_iter(std::iter::repeat(id).take(len));
                     let buffers = match mode {
                         UnionMode::Sparse => vec![ids],
                         UnionMode::Dense => {
@@ -634,7 +635,7 @@ impl ArrayData {
                     let children = f
                         .iter()
                         .enumerate()
-                        .map(|(idx, f)| match idx {
+                        .map(|(idx, (_, f))| match idx {
                             0 => Self::new_null(f.data_type(), len),
                             _ => Self::new_empty(f.data_type()),
                         })
@@ -986,10 +987,10 @@ impl ArrayData {
                 }
                 Ok(())
             }
-            DataType::Union(fields, _, mode) => {
+            DataType::Union(fields, mode) => {
                 self.validate_num_child_data(fields.len())?;
 
-                for (i, field) in fields.iter().enumerate() {
+                for (i, (_, field)) in fields.iter().enumerate() {
                     let field_data = self.get_valid_child_data(i, field.data_type())?;
 
                     if mode == &UnionMode::Sparse
@@ -1255,7 +1256,7 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i64>(child.len)
             }
-            DataType::Union(_, _, _) => {
+            DataType::Union(_, _) => {
                 // Validate Union Array as part of implementing new Union semantics
                 // See comments in `ArrayData::validate()`
                 // https://github.com/apache/arrow-rs/issues/85
@@ -1568,7 +1569,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i64>()),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
         DataType::RunEndEncoded(_, _) => DataTypeLayout::new_empty(), // all in child data,
-        DataType::Union(_, _, mode) => {
+        DataType::Union(_, mode) => {
             let type_ids = BufferSpec::FixedWidth {
                 byte_width: size_of::<i8>(),
             };
@@ -1823,7 +1824,7 @@ impl From<ArrayData> for ArrayDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::Field;
+    use arrow_schema::{Field, UnionFields};
 
     // See arrow/tests/array_data_validation.rs for test of array validation
 
@@ -1874,7 +1875,8 @@ mod tests {
         )
         .unwrap();
 
-        let data_type = DataType::Struct(vec![Field::new("x", DataType::Int32, true)]);
+        let field = Arc::new(Field::new("x", DataType::Int32, true));
+        let data_type = DataType::Struct(vec![field].into());
 
         let arr_data = ArrayData::builder(data_type)
             .len(5)
@@ -2071,8 +2073,8 @@ mod tests {
     #[test]
     fn test_into_buffers() {
         let data_types = vec![
-            DataType::Union(vec![], vec![], UnionMode::Dense),
-            DataType::Union(vec![], vec![], UnionMode::Sparse),
+            DataType::Union(UnionFields::empty(), UnionMode::Dense),
+            DataType::Union(UnionFields::empty(), UnionMode::Sparse),
         ];
 
         for data_type in data_types {

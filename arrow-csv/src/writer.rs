@@ -624,7 +624,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let schema = Schema::new(vec![
             Field::new(
                 "c1",
-                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".to_string())),
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
                 true,
             ),
             Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),

@@ -440,7 +440,7 @@ mod tests {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 
         // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
-        let data = ArrayDataBuilder::new(ArrowType::List(Box::new(Field::new(
+        let data = ArrayDataBuilder::new(ArrowType::List(Arc::new(Field::new(
             "item",
             decimals.data_type().clone(),
             false,

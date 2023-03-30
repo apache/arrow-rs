@@ -47,13 +47,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     }
 
     fn from_list(v: GenericListArray<OffsetSize>) -> Self {
+        let v = v.into_data();
         assert_eq!(
-            v.data_ref().child_data().len(),
+            v.child_data().len(),
             1,
             "BinaryArray can only be created from list array of u8 values \
              (i.e. List<PrimitiveArray<u8>>)."
         );
-        let child_data = &v.data_ref().child_data()[0];
+        let child_data = &v.child_data()[0];
 
         assert_eq!(
             child_data.child_data().len(),
@@ -75,7 +76,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         let builder = ArrayData::builder(Self::DATA_TYPE)
             .len(v.len())
             .offset(v.offset())
-            .add_buffer(v.data_ref().buffers()[0].clone())
+            .add_buffer(v.buffers()[0].clone())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
             .nulls(v.nulls().cloned());
 
@@ -209,8 +210,8 @@ where
         let data_len = offsets.len() - 1;
         let array_data = ArrayData::builder(Self::DATA_TYPE)
             .len(data_len)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_buffer(Buffer::from_slice_ref(&values))
+            .add_buffer(Buffer::from_vec(offsets))
+            .add_buffer(Buffer::from_vec(values))
             .null_bit_buffer(Some(null_buf.into()));
         let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
@@ -302,6 +303,7 @@ mod tests {
     use super::*;
     use crate::{ListArray, StringArray};
     use arrow_schema::Field;
+    use std::sync::Arc;
 
     #[test]
     fn test_binary_array() {
@@ -452,7 +454,7 @@ mod tests {
             .unwrap();
         let binary_array1 = GenericBinaryArray::<O>::from(array_data1);
 
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, false),
         ));
 
@@ -502,7 +504,7 @@ mod tests {
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
         let null_buffer = Buffer::from_slice_ref([0b101]);
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, false),
         ));
 
@@ -547,7 +549,7 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, true),
         ));
 
@@ -640,7 +642,7 @@ mod tests {
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::UInt32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::UInt32, false)));
         let array_data = ArrayData::builder(data_type)
             .len(3)
             .add_buffer(Buffer::from_slice_ref(offsets))

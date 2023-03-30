@@ -408,6 +408,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
 
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        // TODO: Slice buffers directly (#3880)
+        self.data.slice(offset, length).into()
+    }
+
     /// Reinterprets this array's contents as a different data type without copying
     ///
     /// This can be used to efficiently convert between primitive arrays with the
@@ -706,8 +712,7 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        // TODO: Slice buffers directly (#3880)
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
@@ -971,7 +976,7 @@ macro_rules! def_numeric_from_vec {
             fn from(data: Vec<<$ty as ArrowPrimitiveType>::Native>) -> Self {
                 let array_data = ArrayData::builder($ty::DATA_TYPE)
                     .len(data.len())
-                    .add_buffer(Buffer::from_slice_ref(&data));
+                    .add_buffer(Buffer::from_vec(data));
                 let array_data = unsafe { array_data.build_unchecked() };
                 PrimitiveArray::from(array_data)
             }
@@ -1058,12 +1063,12 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     }
 
     /// Construct a timestamp array with an optional timezone
-    pub fn with_timezone_opt(&self, timezone: Option<String>) -> Self {
+    pub fn with_timezone_opt<S: Into<Arc<str>>>(&self, timezone: Option<S>) -> Self {
         let array_data = unsafe {
             self.data
                 .clone()
                 .into_builder()
-                .data_type(DataType::Timestamp(T::UNIT, timezone))
+                .data_type(DataType::Timestamp(T::UNIT, timezone.map(Into::into)))
                 .build_unchecked()
         };
         PrimitiveArray::from(array_data)

@@ -59,20 +59,41 @@ macro_rules! status {
     };
 }
 
+const FAKE_TOKEN: &str = "uuid_token";
+const FAKE_HANDLE: &str = "uuid_handle";
+const FAKE_UPDATE_RESULT: i64 = 1;
+
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {}
 
 impl FlightSqlServiceImpl {
+    fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
+        let metadata = req.metadata();
+        let auth = metadata.get("authorization").ok_or_else(|| {
+            Status::internal(format!("No authorization header! metadata = {metadata:?}"))
+        })?;
+        let str = auth
+            .to_str()
+            .map_err(|e| Status::internal(format!("Error parsing header: {e}")))?;
+        let authorization = str.to_string();
+        let bearer = "Bearer ";
+        if !authorization.starts_with(bearer) {
+            Err(Status::internal("Invalid auth header!"))?;
+        }
+        let token = authorization[bearer.len()..].to_string();
+        if token == FAKE_TOKEN {
+            Ok(())
+        } else {
+            Err(Status::unauthenticated("invalid token "))
+        }
+    }
+
     fn fake_result() -> Result<RecordBatch, ArrowError> {
         let schema = Schema::new(vec![Field::new("salutation", DataType::Utf8, false)]);
         let mut builder = StringBuilder::new();
         builder.append_value("Hello, FlightSQL!");
         let cols = vec![Arc::new(builder.finish()) as ArrayRef];
         RecordBatch::try_new(Arc::new(schema), cols)
-    }
-
-    fn fake_update_result() -> i64 {
-        1
     }
 }
 
@@ -118,7 +139,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let result = HandshakeResponse {
             protocol_version: 0,
-            payload: "random_uuid_token".into(),
+            payload: FAKE_TOKEN.into(),
         };
         let result = Ok(result);
         let output = futures::stream::iter(vec![result]);
@@ -127,9 +148,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_get_fallback(
         &self,
-        _request: Request<Ticket>,
+        request: Request<Ticket>,
         _message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        self.check_token(&request)?;
         let batch =
             Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
         let schema = (*batch.schema()).clone();
@@ -158,8 +180,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn get_flight_info_prepared_statement(
         &self,
         cmd: CommandPreparedStatementQuery,
-        _request: Request<FlightDescriptor>,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
+        self.check_token(&request)?;
         let handle = std::str::from_utf8(&cmd.prepared_statement_handle)
             .map_err(|e| status!("Unable to parse handle", e))?;
         let batch =
@@ -395,7 +418,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _ticket: CommandStatementUpdate,
         _request: Request<Streaming<FlightData>>,
     ) -> Result<i64, Status> {
-        Ok(FlightSqlServiceImpl::fake_update_result())
+        Ok(FAKE_UPDATE_RESULT)
     }
 
     async fn do_put_prepared_statement_query(
@@ -421,9 +444,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_action_create_prepared_statement(
         &self,
         _query: ActionCreatePreparedStatementRequest,
-        _request: Request<Action>,
+        request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        let handle = "some_uuid";
+        self.check_token(&request)?;
         let schema = Self::fake_result()
             .map_err(|e| status!("Error getting result schema", e))?
             .schema();
@@ -432,7 +455,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| status!("Unable to serialize schema", e))?;
         let IpcMessage(schema_bytes) = message;
         let res = ActionCreatePreparedStatementResult {
-            prepared_statement_handle: handle.into(),
+            prepared_statement_handle: FAKE_HANDLE.into(),
             dataset_schema: schema_bytes,
             parameter_schema: Default::default(), // TODO: parameters
         };
@@ -505,12 +528,13 @@ mod tests {
     use super::*;
     use futures::TryStreamExt;
     use std::fs;
+    use std::future::Future;
     use std::time::Duration;
     use tempfile::NamedTempFile;
     use tokio::net::{UnixListener, UnixStream};
     use tokio::time::sleep;
     use tokio_stream::wrappers::UnixListenerStream;
-    use tonic::transport::ClientTlsConfig;
+    use tonic::transport::{Channel, ClientTlsConfig};
 
     use arrow_cast::pretty::pretty_format_batches;
     use arrow_flight::sql::client::FlightSqlServiceClient;
@@ -518,7 +542,7 @@ mod tests {
     use tonic::transport::{Certificate, Endpoint};
     use tower::service_fn;
 
-    async fn client_with_uds(path: String) -> FlightSqlServiceClient {
+    async fn client_with_uds(path: String) -> FlightSqlServiceClient<Channel> {
         let connector = service_fn(move |_| UnixStream::connect(path.clone()));
         let channel = Endpoint::try_from("http://example.com")
             .unwrap()
@@ -549,6 +573,20 @@ mod tests {
             .await
     }
 
+    fn endpoint(addr: String) -> Result<Endpoint, ArrowError> {
+        let endpoint = Endpoint::new(addr)
+            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
+            .connect_timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(20))
+            .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
+            .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
+            .http2_keep_alive_interval(Duration::from_secs(300))
+            .keep_alive_timeout(Duration::from_secs(20))
+            .keep_alive_while_idle(true);
+
+        Ok(endpoint)
+    }
+
     #[tokio::test]
     async fn test_select_https() {
         tokio::spawn(async {
@@ -573,6 +611,7 @@ mod tests {
             let channel = endpoint.connect().await.unwrap();
             let mut client = FlightSqlServiceClient::new(channel);
             let token = client.handshake("admin", "password").await.unwrap();
+            client.set_token(String::from_utf8(token.to_vec()).unwrap());
             println!("Auth succeeded with token: {:?}", token);
             let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
             let flight_info = stmt.execute().await.unwrap();
@@ -593,29 +632,48 @@ mod tests {
         };
 
         tokio::select! {
+            _ = request_future => println!("Client finished!"),
+        }
+    }
+
+    async fn auth_client(client: &mut FlightSqlServiceClient<Channel>) {
+        let token = client.handshake("admin", "password").await.unwrap();
+        client.set_token(String::from_utf8(token.to_vec()).unwrap());
+    }
+
+    async fn test_client<F, C>(f: F)
+    where
+        F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
+        C: Future<Output = ()>,
+    {
+        let file = NamedTempFile::new().unwrap();
+        let path = file.into_temp_path().to_str().unwrap().to_string();
+        let _ = fs::remove_file(path.clone());
+
+        let uds = UnixListener::bind(path.clone()).unwrap();
+        let stream = UnixListenerStream::new(uds);
+
+        // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
+        let service = FlightSqlServiceImpl {};
+        let serve_future = Server::builder()
+            .add_service(FlightServiceServer::new(service))
+            .serve_with_incoming(stream);
+
+        let request_future = async {
+            let client = client_with_uds(path).await;
+            f(client).await
+        };
+
+        tokio::select! {
+            _ = serve_future => panic!("server returned first"),
             _ = request_future => println!("Client finished!"),
         }
     }
 
     #[tokio::test]
     async fn test_select_1() {
-        let file = NamedTempFile::new().unwrap();
-        let path = file.into_temp_path().to_str().unwrap().to_string();
-        let _ = fs::remove_file(path.clone());
-
-        let uds = UnixListener::bind(path.clone()).unwrap();
-        let stream = UnixListenerStream::new(uds);
-
-        // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
-        let service = FlightSqlServiceImpl {};
-        let serve_future = Server::builder()
-            .add_service(FlightServiceServer::new(service))
-            .serve_with_incoming(stream);
-
-        let request_future = async {
-            let mut client = client_with_uds(path).await;
-            let token = client.handshake("admin", "password").await.unwrap();
-            println!("Auth succeeded with token: {:?}", token);
+        test_client(|mut client| async move {
+            auth_client(&mut client).await;
             let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
             let flight_info = stmt.execute().await.unwrap();
             let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
@@ -632,57 +690,61 @@ mod tests {
                 .trim()
                 .to_string();
             assert_eq!(res.to_string(), expected);
-        };
-
-        tokio::select! {
-            _ = serve_future => panic!("server returned first"),
-            _ = request_future => println!("Client finished!"),
-        }
+        })
+        .await
     }
 
     #[tokio::test]
     async fn test_execute_update() {
-        let file = NamedTempFile::new().unwrap();
-        let path = file.into_temp_path().to_str().unwrap().to_string();
-        let _ = fs::remove_file(path.clone());
-
-        let uds = UnixListener::bind(path.clone()).unwrap();
-        let stream = UnixListenerStream::new(uds);
-
-        // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
-        let service = FlightSqlServiceImpl {};
-        let serve_future = Server::builder()
-            .add_service(FlightServiceServer::new(service))
-            .serve_with_incoming(stream);
-
-        let request_future = async {
-            let mut client = client_with_uds(path).await;
-            let token = client.handshake("admin", "password").await.unwrap();
-            println!("Auth succeeded with token: {:?}", token);
+        test_client(|mut client| async move {
+            auth_client(&mut client).await;
             let res = client
                 .execute_update("creat table test(a int);".to_string())
                 .await
                 .unwrap();
-            assert_eq!(res, FlightSqlServiceImpl::fake_update_result());
-        };
-
-        tokio::select! {
-            _ = serve_future => panic!("server returned first"),
-            _ = request_future => println!("Client finished!"),
-        }
+            assert_eq!(res, FAKE_UPDATE_RESULT);
+        })
+        .await
     }
 
-    fn endpoint(addr: String) -> Result<Endpoint, ArrowError> {
-        let endpoint = Endpoint::new(addr)
-            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
-            .connect_timeout(Duration::from_secs(20))
-            .timeout(Duration::from_secs(20))
-            .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
-            .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
-            .http2_keep_alive_interval(Duration::from_secs(300))
-            .keep_alive_timeout(Duration::from_secs(20))
-            .keep_alive_while_idle(true);
+    #[tokio::test]
+    async fn test_auth() {
+        test_client(|mut client| async move {
+            // no handshake
+            assert!(client
+                .prepare("select 1;".to_string())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("No authorization header"));
 
-        Ok(endpoint)
+            // Invalid credentials
+            assert!(client
+                .handshake("admin", "password2")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid credentials"));
+
+            // forget to set_token
+            client.handshake("admin", "password").await.unwrap();
+            assert!(client
+                .prepare("select 1;".to_string())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("No authorization header"));
+
+            // Invalid Tokens
+            client.handshake("admin", "password").await.unwrap();
+            client.set_token("wrong token".to_string());
+            assert!(client
+                .prepare("select 1;".to_string())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("invalid token"));
+        })
+        .await
     }
 }

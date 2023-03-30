@@ -147,6 +147,16 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         Ok(PermitWrapper::new(s, permit).boxed())
     }
 
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
+        let s = self.inner.list_with_offset(prefix, offset).await?;
+        Ok(PermitWrapper::new(s, permit).boxed())
+    }
+
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.list_with_delimiter(prefix).await

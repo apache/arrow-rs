@@ -16,14 +16,14 @@
 // under the License.
 
 use crate::{field_from_json, field_to_json};
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Fields, Schema};
 use arrow::error::{ArrowError, Result};
 use std::collections::HashMap;
 
 /// Generate a JSON representation of the `Schema`.
 pub fn schema_to_json(schema: &Schema) -> serde_json::Value {
     serde_json::json!({
-        "fields": schema.fields().iter().map(field_to_json).collect::<Vec<_>>(),
+        "fields": schema.fields().iter().map(|f| field_to_json(f.as_ref())).collect::<Vec<_>>(),
         "metadata": serde_json::to_value(schema.metadata()).unwrap()
     })
 }
@@ -33,12 +33,15 @@ pub fn schema_from_json(json: &serde_json::Value) -> Result<Schema> {
     use serde_json::Value;
     match *json {
         Value::Object(ref schema) => {
-            let fields = if let Some(Value::Array(fields)) = schema.get("fields") {
-                fields.iter().map(field_from_json).collect::<Result<_>>()?
-            } else {
-                return Err(ArrowError::ParseError(
-                    "Schema fields should be an array".to_string(),
-                ));
+            let fields: Fields = match schema.get("fields") {
+                Some(Value::Array(fields)) => {
+                    fields.iter().map(field_from_json).collect::<Result<_>>()?
+                }
+                _ => {
+                    return Err(ArrowError::ParseError(
+                        "Schema fields should be an array".to_string(),
+                    ))
+                }
             };
 
             let metadata = if let Some(value) = schema.get("metadata") {
@@ -100,8 +103,9 @@ struct MetadataKeyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
     use serde_json::Value;
+    use std::sync::Arc;
 
     #[test]
     fn schema_json() {
@@ -131,14 +135,14 @@ mod tests {
                 Field::new("c15", DataType::Timestamp(TimeUnit::Second, None), false),
                 Field::new(
                     "c16",
-                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".to_string())),
+                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
                     false,
                 ),
                 Field::new(
                     "c17",
                     DataType::Timestamp(
                         TimeUnit::Microsecond,
-                        Some("Africa/Johannesburg".to_string()),
+                        Some("Africa/Johannesburg".into()),
                     ),
                     false,
                 ),
@@ -152,24 +156,24 @@ mod tests {
                 Field::new("c21", DataType::Interval(IntervalUnit::MonthDayNano), false),
                 Field::new(
                     "c22",
-                    DataType::List(Box::new(Field::new("item", DataType::Boolean, true))),
+                    DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
                     false,
                 ),
                 Field::new(
                     "c23",
                     DataType::FixedSizeList(
-                        Box::new(Field::new("bools", DataType::Boolean, false)),
+                        Arc::new(Field::new("bools", DataType::Boolean, false)),
                         5,
                     ),
                     false,
                 ),
                 Field::new(
                     "c24",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "inner_list",
-                        DataType::List(Box::new(Field::new(
+                        DataType::List(Arc::new(Field::new(
                             "struct",
-                            DataType::Struct(vec![]),
+                            DataType::Struct(Fields::empty()),
                             true,
                         ))),
                         false,
@@ -178,10 +182,10 @@ mod tests {
                 ),
                 Field::new(
                     "c25",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("a", DataType::Utf8, false),
                         Field::new("b", DataType::UInt16, false),
-                    ]),
+                    ])),
                     false,
                 ),
                 Field::new("c26", DataType::Interval(IntervalUnit::YearMonth), true),
@@ -205,11 +209,11 @@ mod tests {
                 Field::new("c35", DataType::LargeUtf8, true),
                 Field::new(
                     "c36",
-                    DataType::LargeList(Box::new(Field::new(
+                    DataType::LargeList(Arc::new(Field::new(
                         "inner_large_list",
-                        DataType::LargeList(Box::new(Field::new(
+                        DataType::LargeList(Arc::new(Field::new(
                             "struct",
-                            DataType::Struct(vec![]),
+                            DataType::Struct(Fields::empty()),
                             false,
                         ))),
                         true,
@@ -219,12 +223,12 @@ mod tests {
                 Field::new(
                     "c37",
                     DataType::Map(
-                        Box::new(Field::new(
+                        Arc::new(Field::new(
                             "my_entries",
-                            DataType::Struct(vec![
+                            DataType::Struct(Fields::from(vec![
                                 Field::new("my_keys", DataType::Utf8, false),
                                 Field::new("my_values", DataType::UInt16, true),
-                            ]),
+                            ])),
                             false,
                         )),
                         true,

@@ -225,6 +225,11 @@ impl i256 {
         (high_negative == low_negative && high_valid).then_some(self.low as i128)
     }
 
+    /// Wraps this `i256` into an `i128`
+    pub fn as_i128(self) -> i128 {
+        self.low as i128
+    }
+
     /// Return the memory representation of this integer as a byte array in little-endian byte order.
     #[inline]
     pub const fn to_le_bytes(self) -> [u8; 32] {
@@ -963,6 +968,25 @@ mod tests {
         let a = i256::from_i128(i64::MIN as i128 - 1);
         assert!(a.to_i64().is_none());
         assert!(a.to_u64().is_none());
+    }
+
+    #[test]
+    fn test_i256_as_i128() {
+        let a = i256::from_i128(i128::MAX).wrapping_add(i256::from_i128(1));
+        let i128 = a.as_i128();
+        assert_eq!(i128, i128::MIN);
+
+        let a = i256::from_i128(i128::MAX).wrapping_add(i256::from_i128(2));
+        let i128 = a.as_i128();
+        assert_eq!(i128, i128::MIN + 1);
+
+        let a = i256::from_i128(i128::MIN).wrapping_sub(i256::from_i128(1));
+        let i128 = a.as_i128();
+        assert_eq!(i128, i128::MAX);
+
+        let a = i256::from_i128(i128::MIN).wrapping_sub(i256::from_i128(2));
+        let i128 = a.as_i128();
+        assert_eq!(i128, i128::MAX - 1);
     }
 
     #[test]

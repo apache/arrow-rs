@@ -16,14 +16,13 @@
 // under the License.
 
 use arrow::array::{
-    make_array, Array, BooleanBuilder, Decimal128Builder, FixedSizeListBuilder,
-    Int32Array, Int32Builder, Int64Array, StringArray, StructBuilder, UInt64Array,
-    UInt8Builder,
+    make_array, Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder,
+    Int64Array, StringArray, StructBuilder, UInt64Array,
 };
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, UnionMode};
+use arrow_schema::{DataType, Field, UnionFields, UnionMode};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -368,7 +367,7 @@ fn test_validate_fixed_size_list() {
     // 10 is off the end of the buffer
     let field = Field::new("field", DataType::Int32, true);
     ArrayData::try_new(
-        DataType::FixedSizeList(Box::new(field), 2),
+        DataType::FixedSizeList(Arc::new(field), 2),
         3,
         None,
         0,
@@ -387,7 +386,7 @@ fn test_validate_struct_child_type() {
 
     // validate the the type of struct fields matches child fields
     ArrayData::try_new(
-        DataType::Struct(vec![Field::new("field1", DataType::Int64, true)]),
+        DataType::Struct(vec![Field::new("field1", DataType::Int64, true)].into()),
         3,
         None,
         0,
@@ -408,7 +407,7 @@ fn test_validate_struct_child_length() {
         .collect::<Int32Array>();
 
     ArrayData::try_new(
-        DataType::Struct(vec![Field::new("field1", DataType::Int32, true)]),
+        DataType::Struct(vec![Field::new("field1", DataType::Int32, true)].into()),
         6,
         None,
         0,
@@ -716,7 +715,7 @@ fn check_list_offsets<T: ArrowNativeType>(data_type: DataType) {
 )]
 fn test_validate_list_offsets() {
     let field_type = Field::new("f", DataType::Int32, true);
-    check_list_offsets::<i32>(DataType::List(Box::new(field_type)));
+    check_list_offsets::<i32>(DataType::List(Arc::new(field_type)));
 }
 
 #[test]
@@ -725,7 +724,7 @@ fn test_validate_list_offsets() {
 )]
 fn test_validate_large_list_offsets() {
     let field_type = Field::new("f", DataType::Int32, true);
-    check_list_offsets::<i64>(DataType::LargeList(Box::new(field_type)));
+    check_list_offsets::<i64>(DataType::LargeList(Arc::new(field_type)));
 }
 
 /// Test that the list of type `data_type` generates correct errors for negative offsets
@@ -736,7 +735,7 @@ fn test_validate_large_list_offsets() {
 fn test_validate_list_negative_offsets() {
     let values: Int32Array = [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
     let field_type = Field::new("f", values.data_type().clone(), true);
-    let data_type = DataType::List(Box::new(field_type));
+    let data_type = DataType::List(Arc::new(field_type));
 
     // -1 is an invalid offset any way you look at it
     let offsets: Vec<i32> = vec![0, 2, -1, 4];
@@ -769,11 +768,13 @@ fn test_validate_union_different_types() {
 
     ArrayData::try_new(
         DataType::Union(
-            vec![
-                Field::new("field1", DataType::Int32, true),
-                Field::new("field2", DataType::Int64, true), // data is int32
-            ],
-            vec![0, 1],
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true), // data is int32
+                ],
+            ),
             UnionMode::Sparse,
         ),
         2,
@@ -800,11 +801,13 @@ fn test_validate_union_sparse_different_child_len() {
 
     ArrayData::try_new(
         DataType::Union(
-            vec![
-                Field::new("field1", DataType::Int32, true),
-                Field::new("field2", DataType::Int64, true),
-            ],
-            vec![0, 1],
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
+                ],
+            ),
             UnionMode::Sparse,
         ),
         2,
@@ -827,11 +830,13 @@ fn test_validate_union_dense_without_offsets() {
 
     ArrayData::try_new(
         DataType::Union(
-            vec![
-                Field::new("field1", DataType::Int32, true),
-                Field::new("field2", DataType::Int64, true),
-            ],
-            vec![0, 1],
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
+                ],
+            ),
             UnionMode::Dense,
         ),
         2,
@@ -855,11 +860,13 @@ fn test_validate_union_dense_with_bad_len() {
 
     ArrayData::try_new(
         DataType::Union(
-            vec![
-                Field::new("field1", DataType::Int32, true),
-                Field::new("field2", DataType::Int64, true),
-            ],
-            vec![0, 1],
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
+                ],
+            ),
             UnionMode::Dense,
         ),
         2,
@@ -941,9 +948,7 @@ fn test_try_new_sliced_struct() {
 
     let struct_array = builder.finish();
     let struct_array_slice = struct_array.slice(1, 3);
-    let struct_array_data = struct_array_slice.data();
-
-    let cloned = make_array(struct_array_data.clone());
+    let cloned = struct_array_slice.clone();
     assert_eq!(&struct_array_slice, &cloned);
 }
 
@@ -996,28 +1001,8 @@ fn test_string_data_from_foreign() {
 
 #[test]
 fn test_decimal_full_validation() {
-    let values_builder = UInt8Builder::with_capacity(10);
-    let byte_width = 16;
-    let mut fixed_size_builder = FixedSizeListBuilder::new(values_builder, byte_width);
-    let value_as_bytes = 123456_i128.to_le_bytes();
-    fixed_size_builder
-        .values()
-        .append_slice(value_as_bytes.as_slice());
-    fixed_size_builder.append(true);
-    let fixed_size_array = fixed_size_builder.finish();
-
-    // Build ArrayData for Decimal
-    let builder = ArrayData::builder(DataType::Decimal128(5, 3))
-        .len(fixed_size_array.len())
-        .add_buffer(fixed_size_array.data_ref().child_data()[0].buffers()[0].clone());
-    let array_data = unsafe { builder.build_unchecked() };
-    array_data.validate_full().unwrap();
-
-    let array = Decimal128Array::from(array_data);
-    let error = array
-        .validate_decimal_precision(array.precision())
-        .unwrap_err();
-
+    let array = Decimal128Array::from(vec![123456_i128]);
+    let error = array.validate_decimal_precision(5).unwrap_err();
     assert_eq!(
         "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
         error.to_string()
@@ -1042,7 +1027,7 @@ fn test_sliced_array_child() {
     let offsets = Buffer::from_iter([1_i32, 3_i32]);
 
     let list_field = Field::new("element", DataType::Int32, false);
-    let data_type = DataType::List(Box::new(list_field));
+    let data_type = DataType::List(Arc::new(list_field));
 
     let data = unsafe {
         ArrayData::new_unchecked(

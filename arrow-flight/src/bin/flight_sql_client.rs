@@ -25,7 +25,7 @@ use arrow_flight::{
 use arrow_schema::{ArrowError, Schema};
 use clap::Parser;
 use futures::TryStreamExt;
-use tonic::transport::{ClientTlsConfig, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing_log::log::info;
 
 /// A ':' separated key value pair
@@ -140,7 +140,9 @@ fn setup_logging() {
     tracing_subscriber::fmt::init();
 }
 
-async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient, ArrowError> {
+async fn setup_client(
+    args: ClientArgs,
+) -> Result<FlightSqlServiceClient<Channel>, ArrowError> {
     let port = args.port.unwrap_or(if args.tls { 443 } else { 80 });
 
     let protocol = if args.tls { "https" } else { "http" };

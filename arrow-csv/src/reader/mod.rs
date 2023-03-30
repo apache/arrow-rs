@@ -275,7 +275,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     }
 
     // build schema from inference results
-    let fields = column_types
+    let fields: Fields = column_types
         .iter()
         .zip(&headers)
         .map(|(inferred, field_name)| Field::new(field_name, inferred.get(), true))
@@ -392,10 +392,8 @@ impl<R: Read> Reader<R> {
         match &self.decoder.projection {
             Some(projection) => {
                 let fields = self.decoder.schema.fields();
-                let projected_fields: Vec<Field> =
-                    projection.iter().map(|i| fields[*i].clone()).collect();
-
-                Arc::new(Schema::new(projected_fields))
+                let projected = projection.iter().map(|i| fields[*i].clone());
+                Arc::new(Schema::new(projected.collect::<Fields>()))
             }
             None => self.decoder.schema.clone(),
         }
@@ -586,7 +584,7 @@ impl Decoder {
 /// Parses a slice of [`StringRecords`] into a [RecordBatch]
 fn parse(
     rows: &StringRecords<'_>,
-    fields: &[Field],
+    fields: &Fields,
     metadata: Option<std::collections::HashMap<String, String>>,
     projection: Option<&Vec<usize>>,
     line_number: usize,
@@ -772,7 +770,7 @@ fn parse(
         })
         .collect();
 
-    let projected_fields: Vec<Field> =
+    let projected_fields: Fields =
         projection.iter().map(|i| fields[*i].clone()).collect();
 
     let projected_schema = Arc::new(match metadata {
@@ -1739,7 +1737,7 @@ mod tests {
     }
 
     fn test_parse_timestamp_impl<T: ArrowTimestampType>(
-        timezone: Option<String>,
+        timezone: Option<Arc<str>>,
         expected: &[i64],
     ) {
         let csv = [
@@ -1775,23 +1773,23 @@ mod tests {
             &[0, 0, -7_200_000_000_000],
         );
         test_parse_timestamp_impl::<TimestampNanosecondType>(
-            Some("+00:00".to_string()),
+            Some("+00:00".into()),
             &[0, 0, -7_200_000_000_000],
         );
         test_parse_timestamp_impl::<TimestampNanosecondType>(
-            Some("-05:00".to_string()),
+            Some("-05:00".into()),
             &[18_000_000_000_000, 0, -7_200_000_000_000],
         );
         test_parse_timestamp_impl::<TimestampMicrosecondType>(
-            Some("-03".to_string()),
+            Some("-03".into()),
             &[10_800_000_000, 0, -7_200_000_000],
         );
         test_parse_timestamp_impl::<TimestampMillisecondType>(
-            Some("-03".to_string()),
+            Some("-03".into()),
             &[10_800_000, 0, -7_200_000],
         );
         test_parse_timestamp_impl::<TimestampSecondType>(
-            Some("-03".to_string()),
+            Some("-03".into()),
             &[10_800, 0, -7_200],
         );
     }
