@@ -22,7 +22,7 @@ use arrow::array::{
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, UnionMode};
+use arrow_schema::{DataType, Field, UnionFields, UnionMode};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -768,11 +768,13 @@ fn test_validate_union_different_types() {
 
     ArrayData::try_new(
         DataType::Union(
-            vec![
-                Field::new("field1", DataType::Int32, true),
-                Field::new("field2", DataType::Int64, true), // data is int32
-            ],
-            vec![0, 1],
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true), // data is int32
+                ],
+            ),
             UnionMode::Sparse,
         ),
         2,
@@ -799,11 +801,13 @@ fn test_validate_union_sparse_different_child_len() {
 
     ArrayData::try_new(
         DataType::Union(
-            vec![
-                Field::new("field1", DataType::Int32, true),
-                Field::new("field2", DataType::Int64, true),
-            ],
-            vec![0, 1],
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
+                ],
+            ),
             UnionMode::Sparse,
         ),
         2,
@@ -826,11 +830,13 @@ fn test_validate_union_dense_without_offsets() {
 
     ArrayData::try_new(
         DataType::Union(
-            vec![
-                Field::new("field1", DataType::Int32, true),
-                Field::new("field2", DataType::Int64, true),
-            ],
-            vec![0, 1],
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
+                ],
+            ),
             UnionMode::Dense,
         ),
         2,
@@ -854,11 +860,13 @@ fn test_validate_union_dense_with_bad_len() {
 
     ArrayData::try_new(
         DataType::Union(
-            vec![
-                Field::new("field1", DataType::Int32, true),
-                Field::new("field2", DataType::Int64, true),
-            ],
-            vec![0, 1],
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
+                ],
+            ),
             UnionMode::Dense,
         ),
         2,

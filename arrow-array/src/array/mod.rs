@@ -586,7 +586,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
-        DataType::Union(_, _, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
+        DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
         DataType::FixedSizeList(_, _) => {
             Arc::new(FixedSizeListArray::from(data)) as ArrayRef
         }
@@ -740,7 +740,7 @@ mod tests {
     use crate::cast::{as_union_array, downcast_array};
     use crate::downcast_run_array;
     use arrow_buffer::{Buffer, MutableBuffer};
-    use arrow_schema::{Field, Fields, UnionMode};
+    use arrow_schema::{Field, Fields, UnionFields, UnionMode};
 
     #[test]
     fn test_empty_primitive() {
@@ -874,11 +874,13 @@ mod tests {
     fn test_null_union() {
         for mode in [UnionMode::Sparse, UnionMode::Dense] {
             let data_type = DataType::Union(
-                vec![
-                    Field::new("foo", DataType::Int32, true),
-                    Field::new("bar", DataType::Int64, true),
-                ],
-                vec![2, 1],
+                UnionFields::new(
+                    vec![2, 1],
+                    vec![
+                        Field::new("foo", DataType::Int32, true),
+                        Field::new("bar", DataType::Int64, true),
+                    ],
+                ),
                 mode,
             );
             let array = new_null_array(&data_type, 4);

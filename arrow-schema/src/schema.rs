@@ -365,7 +365,7 @@ impl Hash for Schema {
 #[cfg(test)]
 mod tests {
     use crate::datatype::DataType;
-    use crate::{TimeUnit, UnionMode};
+    use crate::{TimeUnit, UnionFields, UnionMode};
 
     use super::*;
 
@@ -778,11 +778,13 @@ mod tests {
                 Schema::new(vec![Field::new(
                     "c1",
                     DataType::Union(
-                        vec![
-                            Field::new("c11", DataType::Utf8, true),
-                            Field::new("c12", DataType::Utf8, true),
-                        ],
-                        vec![0, 1],
+                        UnionFields::new(
+                            vec![0, 1],
+                            vec![
+                                Field::new("c11", DataType::Utf8, true),
+                                Field::new("c12", DataType::Utf8, true),
+                            ]
+                        ),
                         UnionMode::Dense
                     ),
                     false
@@ -790,11 +792,17 @@ mod tests {
                 Schema::new(vec![Field::new(
                     "c1",
                     DataType::Union(
-                        vec![
-                            Field::new("c12", DataType::Utf8, true),
-                            Field::new("c13", DataType::Time64(TimeUnit::Second), true),
-                        ],
-                        vec![1, 2],
+                        UnionFields::new(
+                            vec![1, 2],
+                            vec![
+                                Field::new("c12", DataType::Utf8, true),
+                                Field::new(
+                                    "c13",
+                                    DataType::Time64(TimeUnit::Second),
+                                    true
+                                ),
+                            ]
+                        ),
                         UnionMode::Dense
                     ),
                     false
@@ -804,12 +812,14 @@ mod tests {
             Schema::new(vec![Field::new(
                 "c1",
                 DataType::Union(
-                    vec![
-                        Field::new("c11", DataType::Utf8, true),
-                        Field::new("c12", DataType::Utf8, true),
-                        Field::new("c13", DataType::Time64(TimeUnit::Second), true),
-                    ],
-                    vec![0, 1, 2],
+                    UnionFields::new(
+                        vec![0, 1, 2],
+                        vec![
+                            Field::new("c11", DataType::Utf8, true),
+                            Field::new("c12", DataType::Utf8, true),
+                            Field::new("c13", DataType::Time64(TimeUnit::Second), true),
+                        ]
+                    ),
                     UnionMode::Dense
                 ),
                 false

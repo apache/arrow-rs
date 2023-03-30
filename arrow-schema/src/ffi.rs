@@ -34,7 +34,9 @@
 //! assert_eq!(schema, back);
 //! ```
 
-use crate::{ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionMode};
+use crate::{
+    ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionFields, UnionMode,
+};
 use bitflags::bitflags;
 use std::sync::Arc;
 use std::{
@@ -484,7 +486,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             ));
                         }
 
-                        DataType::Union(fields, type_ids, UnionMode::Dense)
+                        DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
                     }
                     // SparseUnion
                     ["+us", extra] => {
@@ -506,7 +508,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             ));
                         }
 
-                        DataType::Union(fields, type_ids, UnionMode::Sparse)
+                        DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Sparse)
                     }
 
                     // Timestamps in format "tts:" and "tts:America/New_York" for no timezones and timezones resp.
@@ -585,9 +587,9 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
             | DataType::Map(child, _) => {
                 vec![FFI_ArrowSchema::try_from(child.as_ref())?]
             }
-            DataType::Union(fields, _, _) => fields
+            DataType::Union(fields, _) => fields
                 .iter()
-                .map(FFI_ArrowSchema::try_from)
+                .map(|(_, f)| f.as_ref().try_into())
                 .collect::<Result<Vec<_>, ArrowError>>()?,
             DataType::Struct(fields) => fields
                 .iter()
@@ -658,8 +660,11 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
         DataType::Struct(_) => Ok("+s".to_string()),
         DataType::Map(_, _) => Ok("+m".to_string()),
         DataType::Dictionary(key_data_type, _) => get_format_string(key_data_type),
-        DataType::Union(_, type_ids, mode) => {
-            let formats = type_ids.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        DataType::Union(fields, mode) => {
+            let formats = fields
+                .iter()
+                .map(|(t, _)| t.to_string())
+                .collect::<Vec<_>>();
             match mode {
                 UnionMode::Dense => Ok(format!("{}:{}", "+ud", formats.join(","))),
                 UnionMode::Sparse => Ok(format!("{}:{}", "+us", formats.join(","))),

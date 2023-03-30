@@ -703,11 +703,13 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "Teamsters",
             DataType::Union(
-                vec![
-                    Field::new("a", DataType::Int32, false),
-                    Field::new("b", DataType::Float64, false),
-                ],
-                vec![0, 1],
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("a", DataType::Int32, false),
+                        Field::new("b", DataType::Float64, false),
+                    ],
+                ),
                 UnionMode::Dense,
             ),
             false,
@@ -743,11 +745,13 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "Teamsters",
             DataType::Union(
-                vec![
-                    Field::new("a", DataType::Int32, false),
-                    Field::new("b", DataType::Float64, false),
-                ],
-                vec![0, 1],
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("a", DataType::Int32, false),
+                        Field::new("b", DataType::Float64, false),
+                    ],
+                ),
                 UnionMode::Sparse,
             ),
             false,
@@ -785,11 +789,13 @@ mod tests {
         let inner_field = Field::new(
             "European Union",
             DataType::Union(
-                vec![
-                    Field::new("b", DataType::Int32, false),
-                    Field::new("c", DataType::Float64, false),
-                ],
-                vec![0, 1],
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("b", DataType::Int32, false),
+                        Field::new("c", DataType::Float64, false),
+                    ],
+                ),
                 UnionMode::Dense,
             ),
             false,
@@ -809,8 +815,10 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "Teamsters",
             DataType::Union(
-                vec![Field::new("a", DataType::Int32, true), inner_field],
-                vec![0, 1],
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![Field::new("a", DataType::Int32, true), inner_field],
+                ),
                 UnionMode::Sparse,
             ),
             false,

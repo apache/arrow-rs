@@ -19,7 +19,7 @@ use crate::{make_array, Array, ArrayRef};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, Field, UnionMode};
+use arrow_schema::{ArrowError, DataType, Field, UnionFields, UnionMode};
 /// Contains the `UnionArray` type.
 ///
 use std::any::Any;
@@ -145,8 +145,7 @@ impl UnionArray {
         value_offsets: Option<Buffer>,
         child_arrays: Vec<(Field, ArrayRef)>,
     ) -> Self {
-        let (field_types, field_values): (Vec<_>, Vec<_>) =
-            child_arrays.into_iter().unzip();
+        let (fields, field_values): (Vec<_>, Vec<_>) = child_arrays.into_iter().unzip();
         let len = type_ids.len();
 
         let mode = if value_offsets.is_some() {
@@ -156,8 +155,7 @@ impl UnionArray {
         };
 
         let builder = ArrayData::builder(DataType::Union(
-            field_types,
-            Vec::from(field_type_ids),
+            UnionFields::new(field_type_ids.iter().copied(), fields),
             mode,
         ))
         .add_buffer(type_ids)
@@ -282,9 +280,9 @@ impl UnionArray {
     /// Returns the names of the types in the union.
     pub fn type_names(&self) -> Vec<&str> {
         match self.data.data_type() {
-            DataType::Union(fields, _, _) => fields
+            DataType::Union(fields, _) => fields
                 .iter()
-                .map(|f| f.name().as_str())
+                .map(|(_, f)| f.name().as_str())
                 .collect::<Vec<&str>>(),
             _ => unreachable!("Union array's data type is not a union!"),
         }
@@ -293,7 +291,7 @@ impl UnionArray {
     /// Returns whether the `UnionArray` is dense (or sparse if `false`).
     fn is_dense(&self) -> bool {
         match self.data.data_type() {
-            DataType::Union(_, _, mode) => mode == &UnionMode::Dense,
+            DataType::Union(_, mode) => mode == &UnionMode::Dense,
             _ => unreachable!("Union array's data type is not a union!"),
         }
     }
@@ -307,8 +305,8 @@ impl UnionArray {
 
 impl From<ArrayData> for UnionArray {
     fn from(data: ArrayData) -> Self {
-        let (field_ids, mode) = match data.data_type() {
-            DataType::Union(_, ids, mode) => (ids, *mode),
+        let (fields, mode) = match data.data_type() {
+            DataType::Union(fields, mode) => (fields, *mode),
             d => panic!("UnionArray expected ArrayData with type Union got {d}"),
         };
         let (type_ids, offsets) = match mode {
@@ -326,10 +324,10 @@ impl From<ArrayData> for UnionArray {
             ),
         };
 
-        let max_id = field_ids.iter().copied().max().unwrap_or_default() as usize;
+        let max_id = fields.iter().map(|(i, _)| i).max().unwrap_or_default() as usize;
         let mut boxed_fields = vec![None; max_id + 1];
-        for (cd, field_id) in data.child_data().iter().zip(field_ids) {
-            boxed_fields[*field_id as usize] = Some(make_array(cd.clone()));
+        for (cd, (field_id, _)) in data.child_data().iter().zip(fields.iter()) {
+            boxed_fields[field_id as usize] = Some(make_array(cd.clone()));
         }
         Self {
             data,
@@ -402,19 +400,18 @@ impl std::fmt::Debug for UnionArray {
         writeln!(f, "-- type id buffer:")?;
         writeln!(f, "{:?}", self.type_ids)?;
 
-        let (fields, ids) = match self.data_type() {
-            DataType::Union(f, ids, _) => (f, ids),
-            _ => unreachable!(),
-        };
-
         if let Some(offsets) = &self.offsets {
             writeln!(f, "-- offsets buffer:")?;
             writeln!(f, "{:?}", offsets)?;
         }
 
-        assert_eq!(fields.len(), ids.len());
-        for (field, type_id) in fields.iter().zip(ids) {
-            let child = self.child(*type_id);
+        let fields = match self.data_type() {
+            DataType::Union(fields, _) => fields,
+            _ => unreachable!(),
+        };
+
+        for (type_id, field) in fields.iter() {
+            let child = self.child(type_id);
             writeln!(
                 f,
                 "-- child {}: \"{}\" ({:?})",
@@ -1058,12 +1055,14 @@ mod tests {
     #[test]
     fn test_custom_type_ids() {
         let data_type = DataType::Union(
-            vec![
-                Field::new("strings", DataType::Utf8, false),
-                Field::new("integers", DataType::Int32, false),
-                Field::new("floats", DataType::Float64, false),
-            ],
-            vec![8, 4, 9],
+            UnionFields::new(
+                vec![8, 4, 9],
+                vec![
+                    Field::new("strings", DataType::Utf8, false),
+                    Field::new("integers", DataType::Int32, false),
+                    Field::new("floats", DataType::Float64, false),
+                ],
+            ),
             UnionMode::Dense,
         );
 

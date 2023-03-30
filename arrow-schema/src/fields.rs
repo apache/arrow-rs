@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{Field, FieldRef};
+use crate::{ArrowError, Field, FieldRef};
 use std::ops::Deref;
 use std::sync::Arc;
 
 /// A cheaply cloneable, owned slice of [`FieldRef`]
 ///
-/// Similar to `Arc<Vec<FieldPtr>>` or `Arc<[FieldPtr]>`
+/// Similar to `Arc<Vec<FieldRef>>` or `Arc<[FieldRef]>`
 ///
 /// Can be constructed in a number of ways
 ///
@@ -55,7 +55,9 @@ impl Fields {
 
     /// Return size of this instance in bytes.
     pub fn size(&self) -> usize {
-        self.iter().map(|field| field.size()).sum()
+        self.iter()
+            .map(|field| field.size() + std::mem::size_of::<FieldRef>())
+            .sum()
     }
 
     /// Searches for a field by name, returning it along with its index if found
@@ -146,5 +148,93 @@ impl<'de> serde::Deserialize<'de> for Fields {
         D: serde::Deserializer<'de>,
     {
         Ok(Vec::<Field>::deserialize(deserializer)?.into())
+    }
+}
+
+/// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding type ids
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct UnionFields(Arc<[(i8, FieldRef)]>);
+
+impl std::fmt::Debug for UnionFields {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.as_ref().fmt(f)
+    }
+}
+
+impl UnionFields {
+    /// Create a new [`UnionFields`] with no fields
+    pub fn empty() -> Self {
+        Self(Arc::from([]))
+    }
+
+    /// Create a new [`UnionFields`] from a [`Fields`] and array of type_ids
+    pub fn new<F, T>(type_ids: T, fields: F) -> Self
+    where
+        F: IntoIterator,
+        F::Item: Into<FieldRef>,
+        T: IntoIterator<Item = i8>,
+    {
+        let fields = fields.into_iter().map(Into::into);
+        type_ids.into_iter().zip(fields).collect()
+    }
+
+    /// Return size of this instance in bytes.
+    pub fn size(&self) -> usize {
+        self.iter()
+            .map(|(_, field)| field.size() + std::mem::size_of::<(i8, FieldRef)>())
+            .sum()
+    }
+
+    /// Returns the number of fields in this [`UnionFields`]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns `true` if this is empty
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Returns an iterator over the fields and type ids in this [`UnionFields`]
+    ///
+    /// Note: the iteration order is not guaranteed
+    pub fn iter(&self) -> impl Iterator<Item = (i8, &FieldRef)> + '_ {
+        self.0.iter().map(|(id, f)| (*id, f))
+    }
+
+    pub(crate) fn try_merge(&mut self, other: &Self) -> Result<(), ArrowError> {
+        let mut output: Vec<_> = self.iter().map(|(id, f)| (id, f.clone())).collect();
+        for (field_type_id, from_field) in other.iter() {
+            let mut is_new_field = true;
+            for (self_type_id, self_field) in output.iter_mut() {
+                if from_field == self_field {
+                    // If the nested fields in two unions are the same, they must have same
+                    // type id.
+                    if *self_type_id != field_type_id {
+                        return Err(ArrowError::SchemaError(
+                            format!("Fail to merge schema field '{}' because the self_type_id = {} does not equal field_type_id = {}",
+                                    self_field.name(), self_type_id, field_type_id)
+                        ));
+                    }
+
+                    is_new_field = false;
+                    break;
+                }
+            }
+
+            if is_new_field {
+                output.push((field_type_id, from_field.clone()))
+            }
+        }
+        *self = output.into_iter().collect();
+        Ok(())
+    }
+}
+
+impl FromIterator<(i8, FieldRef)> for UnionFields {
+    fn from_iter<T: IntoIterator<Item = (i8, FieldRef)>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
     }
 }

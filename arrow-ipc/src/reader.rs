@@ -263,7 +263,7 @@ fn create_array(
                 value_array.clone(),
             )?
         }
-        Union(fields, field_type_ids, mode) => {
+        Union(fields, mode) => {
             let union_node = nodes.get(node_index);
             node_index += 1;
 
@@ -292,9 +292,10 @@ fn create_array(
                 UnionMode::Sparse => None,
             };
 
-            let mut children = vec![];
+            let mut children = Vec::with_capacity(fields.len());
+            let mut ids = Vec::with_capacity(fields.len());
 
-            for field in fields {
+            for (id, field) in fields.iter() {
                 let triple = create_array(
                     nodes,
                     field,
@@ -310,11 +311,11 @@ fn create_array(
                 node_index = triple.1;
                 buffer_index = triple.2;
 
-                children.push((field.clone(), triple.0));
+                children.push((field.as_ref().clone(), triple.0));
+                ids.push(id);
             }
 
-            let array =
-                UnionArray::try_new(field_type_ids, type_ids, value_offsets, children)?;
+            let array = UnionArray::try_new(&ids, type_ids, value_offsets, children)?;
             Arc::new(array)
         }
         Null => {
@@ -418,7 +419,7 @@ fn skip_field(
             node_index += 1;
             buffer_index += 2;
         }
-        Union(fields, _field_type_ids, mode) => {
+        Union(fields, mode) => {
             node_index += 1;
             buffer_index += 1;
 
@@ -429,7 +430,7 @@ fn skip_field(
                 UnionMode::Sparse => {}
             };
 
-            for field in fields {
+            for (_, field) in fields.iter() {
                 let tuple = skip_field(field.data_type(), node_index, buffer_index)?;
 
                 node_index = tuple.0;
@@ -1265,11 +1266,15 @@ mod tests {
         let dict_data_type =
             DataType::Dictionary(Box::new(key_type), Box::new(value_type));
 
-        let union_fileds = vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Float64, false),
-        ];
-        let union_data_type = DataType::Union(union_fileds, vec![0, 1], UnionMode::Dense);
+        let union_fields = UnionFields::new(
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Float64, false),
+            ],
+        );
+
+        let union_data_type = DataType::Union(union_fields, UnionMode::Dense);
 
         let struct_fields = Fields::from(vec![
             Field::new("id", DataType::Int32, false),

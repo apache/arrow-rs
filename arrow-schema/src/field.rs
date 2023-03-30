@@ -235,8 +235,8 @@ impl Field {
     fn _fields(dt: &DataType) -> Vec<&Field> {
         match dt {
             DataType::Struct(fields) => fields.iter().flat_map(|f| f.fields()).collect(),
-            DataType::Union(fields, _, _) => {
-                fields.iter().flat_map(|f| f.fields()).collect()
+            DataType::Union(fields, _) => {
+                fields.iter().flat_map(|(_, f)| f.fields()).collect()
             }
             DataType::List(field)
             | DataType::LargeList(field)
@@ -341,36 +341,9 @@ impl Field {
                             self.name, from.data_type)
                 ))}
             },
-            DataType::Union(nested_fields, type_ids, _) => match &from.data_type {
-                DataType::Union(from_nested_fields, from_type_ids, _) => {
-                    for (idx, from_field) in from_nested_fields.iter().enumerate() {
-                        let mut is_new_field = true;
-                        let field_type_id = from_type_ids.get(idx).unwrap();
-
-                        for (self_idx, self_field) in nested_fields.iter_mut().enumerate()
-                        {
-                            if from_field == self_field {
-                                let self_type_id = type_ids.get(self_idx).unwrap();
-
-                                // If the nested fields in two unions are the same, they must have same
-                                // type id.
-                                if self_type_id != field_type_id {
-                                    return Err(ArrowError::SchemaError(
-                                        format!("Fail to merge schema field '{}' because the self_type_id = {} does not equal field_type_id = {}",
-                                            self.name, self_type_id, field_type_id)
-                                    ));
-                                }
-
-                                is_new_field = false;
-                                break;
-                            }
-                        }
-
-                        if is_new_field {
-                            nested_fields.push(from_field.clone());
-                            type_ids.push(*field_type_id);
-                        }
-                    }
+            DataType::Union(nested_fields, _) => match &from.data_type {
+                DataType::Union(from_nested_fields, _) => {
+                    nested_fields.try_merge(from_nested_fields)?
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(

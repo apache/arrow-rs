@@ -17,6 +17,7 @@
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionMode};
 use arrow::error::{ArrowError, Result};
+use std::sync::Arc;
 
 /// Parse a data type from a JSON representation.
 pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
@@ -229,20 +230,15 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                             "Unknown union mode {mode:?} for union"
                         )));
                     };
-                    if let Some(type_ids) = map.get("typeIds") {
-                        let type_ids = type_ids
-                            .as_array()
-                            .unwrap()
+                    if let Some(values) = map.get("typeIds") {
+                        let field = Arc::new(default_field.clone());
+                        let values = values.as_array().unwrap();
+                        let fields = values
                             .iter()
-                            .map(|t| t.as_i64().unwrap() as i8)
-                            .collect::<Vec<_>>();
+                            .map(|t| (t.as_i64().unwrap() as i8, field.clone()))
+                            .collect();
 
-                        let default_fields = type_ids
-                            .iter()
-                            .map(|_| default_field.clone())
-                            .collect::<Vec<_>>();
-
-                        Ok(DataType::Union(default_fields, type_ids, union_mode))
+                        Ok(DataType::Union(fields, union_mode))
                     } else {
                         Err(ArrowError::ParseError(
                             "Expecting a typeIds for union ".to_string(),
@@ -290,7 +286,7 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
             json!({"name": "fixedsizebinary", "byteWidth": byte_width})
         }
         DataType::Struct(_) => json!({"name": "struct"}),
-        DataType::Union(_, _, _) => json!({"name": "union"}),
+        DataType::Union(_, _) => json!({"name": "union"}),
         DataType::List(_) => json!({ "name": "list"}),
         DataType::LargeList(_) => json!({ "name": "largelist"}),
         DataType::FixedSizeList(_, length) => {
