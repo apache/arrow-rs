@@ -528,6 +528,7 @@ mod tests {
     use super::*;
     use futures::TryStreamExt;
     use std::fs;
+    use std::future::Future;
     use std::time::Duration;
     use tempfile::NamedTempFile;
     use tokio::net::{UnixListener, UnixStream};
@@ -570,6 +571,20 @@ mod tests {
             .add_service(svc)
             .serve(addr)
             .await
+    }
+
+    fn endpoint(addr: String) -> Result<Endpoint, ArrowError> {
+        let endpoint = Endpoint::new(addr)
+            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
+            .connect_timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(20))
+            .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
+            .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
+            .http2_keep_alive_interval(Duration::from_secs(300))
+            .keep_alive_timeout(Duration::from_secs(20))
+            .keep_alive_while_idle(true);
+
+        Ok(endpoint)
     }
 
     #[tokio::test]
@@ -621,8 +636,16 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_select_1() {
+    async fn auth_client(client: &mut FlightSqlServiceClient<Channel>) {
+        let token = client.handshake("admin", "password").await.unwrap();
+        client.set_token(String::from_utf8(token.to_vec()).unwrap());
+    }
+
+    async fn test_client<F, C>(f: F)
+    where
+        F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
+        C: Future<Output = ()>,
+    {
         let file = NamedTempFile::new().unwrap();
         let path = file.into_temp_path().to_str().unwrap().to_string();
         let _ = fs::remove_file(path.clone());
@@ -637,10 +660,20 @@ mod tests {
             .serve_with_incoming(stream);
 
         let request_future = async {
-            let mut client = client_with_uds(path).await;
-            let token = client.handshake("admin", "password").await.unwrap();
-            client.set_token(String::from_utf8(token.to_vec()).unwrap());
-            println!("Auth succeeded with token: {:?}", token);
+            let client = client_with_uds(path).await;
+            f(client).await
+        };
+
+        tokio::select! {
+            _ = serve_future => panic!("server returned first"),
+            _ = request_future => println!("Client finished!"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_select_1() {
+        test_client(|mut client| async move {
+            auth_client(&mut client).await;
             let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
             let flight_info = stmt.execute().await.unwrap();
             let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
@@ -657,58 +690,20 @@ mod tests {
                 .trim()
                 .to_string();
             assert_eq!(res.to_string(), expected);
-        };
-
-        tokio::select! {
-            _ = serve_future => panic!("server returned first"),
-            _ = request_future => println!("Client finished!"),
-        }
+        })
+        .await
     }
 
     #[tokio::test]
     async fn test_execute_update() {
-        let file = NamedTempFile::new().unwrap();
-        let path = file.into_temp_path().to_str().unwrap().to_string();
-        let _ = fs::remove_file(path.clone());
-
-        let uds = UnixListener::bind(path.clone()).unwrap();
-        let stream = UnixListenerStream::new(uds);
-
-        // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
-        let service = FlightSqlServiceImpl {};
-        let serve_future = Server::builder()
-            .add_service(FlightServiceServer::new(service))
-            .serve_with_incoming(stream);
-
-        let request_future = async {
-            let mut client = client_with_uds(path).await;
-            let token = client.handshake("admin", "password").await.unwrap();
-            client.set_token(String::from_utf8(token.to_vec()).unwrap());
-            println!("Auth succeeded with token: {:?}", token);
+        test_client(|mut client| async move {
+            auth_client(&mut client).await;
             let res = client
                 .execute_update("creat table test(a int);".to_string())
                 .await
                 .unwrap();
             assert_eq!(res, FAKE_UPDATE_RESULT);
-        };
-
-        tokio::select! {
-            _ = serve_future => panic!("server returned first"),
-            _ = request_future => println!("Client finished!"),
-        }
-    }
-
-    fn endpoint(addr: String) -> Result<Endpoint, ArrowError> {
-        let endpoint = Endpoint::new(addr)
-            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
-            .connect_timeout(Duration::from_secs(20))
-            .timeout(Duration::from_secs(20))
-            .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
-            .tcp_keepalive(Option::Some(Duration::from_secs(3600)))
-            .http2_keep_alive_interval(Duration::from_secs(300))
-            .keep_alive_timeout(Duration::from_secs(20))
-            .keep_alive_while_idle(true);
-
-        Ok(endpoint)
+        })
+        .await
     }
 }
