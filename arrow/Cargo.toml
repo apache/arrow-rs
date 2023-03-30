@@ -17,12 +17,12 @@
 
 [package]
 name = "arrow"
-version = "36.0.0"
+version = { workspace = true }
 description = "Rust implementation of Apache Arrow"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
 keywords = ["arrow"]
 include = [
     "benches/*.rs",
@@ -30,8 +30,8 @@ include = [
     "tests/*.rs",
     "Cargo.toml",
 ]
-edition = "2021"
-rust-version = "1.62"
+edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "arrow"
@@ -45,19 +45,19 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-arith = { version = "36.0.0", path = "../arrow-arith" }
-arrow-array = { version = "36.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "36.0.0", path = "../arrow-buffer" }
-arrow-cast = { version = "36.0.0", path = "../arrow-cast" }
-arrow-csv = { version = "36.0.0", path = "../arrow-csv", optional = true }
-arrow-data = { version = "36.0.0", path = "../arrow-data" }
-arrow-ipc = { version = "36.0.0", path = "../arrow-ipc", optional = true }
-arrow-json = { version = "36.0.0", path = "../arrow-json", optional = true }
-arrow-ord = { version = "36.0.0", path = "../arrow-ord" }
-arrow-row = { version = "36.0.0", path = "../arrow-row" }
-arrow-schema = { version = "36.0.0", path = "../arrow-schema" }
-arrow-select = { version = "36.0.0", path = "../arrow-select" }
-arrow-string = { version = "36.0.0", path = "../arrow-string" }
+arrow-arith = { workspace = true }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-cast = { workspace = true }
+arrow-csv = { workspace = true, optional = true }
+arrow-data = { workspace = true }
+arrow-ipc = { workspace = true, optional = true }
+arrow-json = { workspace = true, optional = true }
+arrow-ord = { workspace = true }
+arrow-row = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-select = { workspace = true }
+arrow-string = { workspace = true }
 
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 pyo3 = { version = "0.18", default-features = false, optional = true }
