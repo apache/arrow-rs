@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Fields, SchemaBuilder};
 
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
@@ -82,6 +82,7 @@ fn build_map_reader(
 
     match (key_reader, value_reader) {
         (Some(key_reader), Some(value_reader)) => {
+            // Need to retrieve underlying data type to handle projection
             let key_type = key_reader.get_data_type().clone();
             let value_type = value_reader.get_data_type().clone();
 
@@ -89,11 +90,12 @@ fn build_map_reader(
                 DataType::Map(map_field, is_sorted) => match map_field.data_type() {
                     DataType::Struct(fields) => {
                         assert_eq!(fields.len(), 2);
-                        let struct_field =
-                            map_field.clone().with_data_type(DataType::Struct(vec![
-                                fields[0].clone().with_data_type(key_type),
-                                fields[1].clone().with_data_type(value_type),
-                            ]));
+                        let struct_field = map_field.clone().with_data_type(
+                            DataType::Struct(Fields::from(vec![
+                                fields[0].as_ref().clone().with_data_type(key_type),
+                                fields[1].as_ref().clone().with_data_type(value_type),
+                            ])),
+                        );
                         DataType::Map(Box::new(struct_field), *is_sorted)
                     }
                     _ => unreachable!(),
@@ -111,11 +113,9 @@ fn build_map_reader(
             ))))
         }
         (None, None) => Ok(None),
-        _ => {
-            Err(general_err!(
-                "partial projection of MapArray is not supported"
-            ))
-        }
+        _ => Err(general_err!(
+            "partial projection of MapArray is not supported"
+        )),
     }
 }
 
@@ -131,6 +131,7 @@ fn build_list_reader(
 
     let reader = match build_reader(&children[0], mask, row_groups)? {
         Some(item_reader) => {
+            // Need to retrieve underlying data type to handle projection
             let item_type = item_reader.get_data_type().clone();
             let data_type = match &field.arrow_type {
                 DataType::List(f) => {
@@ -270,12 +271,13 @@ fn build_struct_reader(
     assert_eq!(arrow_fields.len(), children.len());
 
     let mut readers = Vec::with_capacity(children.len());
-    let mut projected_fields = Vec::with_capacity(children.len());
+    let mut builder = SchemaBuilder::with_capacity(children.len());
 
     for (arrow, parquet) in arrow_fields.iter().zip(children) {
         if let Some(reader) = build_reader(parquet, mask, row_groups)? {
+            // Need to retrieve underlying data type to handle projection
             let child_type = reader.get_data_type().clone();
-            projected_fields.push(arrow.clone().with_data_type(child_type));
+            builder.push(arrow.as_ref().clone().with_data_type(child_type));
             readers.push(reader);
         }
     }
@@ -285,7 +287,7 @@ fn build_struct_reader(
     }
 
     Ok(Some(Box::new(StructArrayReader::new(
-        DataType::Struct(projected_fields),
+        DataType::Struct(builder.finish().fields),
         readers,
         field.def_level,
         field.rep_level,
@@ -321,11 +323,11 @@ mod tests {
             build_array_reader(fields.as_ref(), &mask, &file_reader).unwrap();
 
         // Create arrow types
-        let arrow_type = DataType::Struct(vec![Field::new(
+        let arrow_type = DataType::Struct(Fields::from(vec![Field::new(
             "b_struct",
-            DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)]),
+            DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)].into()),
             true,
-        )]);
+        )]));
 
         assert_eq!(array_reader.get_data_type(), &arrow_type);
     }

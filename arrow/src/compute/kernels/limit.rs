@@ -161,7 +161,7 @@ mod tests {
             Field::new("a", DataType::Boolean, true),
             Field::new("b", DataType::Int32, true),
         ];
-        let struct_array_data = ArrayData::builder(DataType::Struct(field_types))
+        let struct_array_data = ArrayData::builder(DataType::Struct(field_types.into()))
             .len(5)
             .add_child_data(boolean_data.clone())
             .add_child_data(int_data.clone())

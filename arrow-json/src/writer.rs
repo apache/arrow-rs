@@ -997,14 +997,16 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new(
                 "c1",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("c11", DataType::Int32, true),
                     Field::new(
                         "c12",
-                        DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)]),
+                        DataType::Struct(
+                            vec![Field::new("c121", DataType::Utf8, false)].into(),
+                        ),
                         false,
                     ),
-                ]),
+                ])),
                 false,
             ),
             Field::new("c2", DataType::Utf8, false),
@@ -1018,7 +1020,9 @@ mod tests {
             (
                 Field::new(
                     "c12",
-                    DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)]),
+                    DataType::Struct(
+                        vec![Field::new("c121", DataType::Utf8, false)].into(),
+                    ),
                     false,
                 ),
                 Arc::new(StructArray::from(vec![(
@@ -1158,14 +1162,16 @@ mod tests {
             "c1",
             DataType::List(Box::new(Field::new(
                 "s",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("c11", DataType::Int32, true),
                     Field::new(
                         "c12",
-                        DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)]),
+                        DataType::Struct(
+                            vec![Field::new("c121", DataType::Utf8, false)].into(),
+                        ),
                         false,
                     ),
-                ]),
+                ])),
                 false,
             ))),
             true,
@@ -1181,7 +1187,9 @@ mod tests {
             (
                 Field::new(
                     "c12",
-                    DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)]),
+                    DataType::Struct(
+                        vec![Field::new("c121", DataType::Utf8, false)].into(),
+                    ),
                     false,
                 ),
                 Arc::new(StructArray::from(vec![(
@@ -1316,7 +1324,7 @@ mod tests {
         {"list": [null]}
         "#;
         let ints_struct =
-            DataType::Struct(vec![Field::new("ints", DataType::Int32, true)]);
+            DataType::Struct(vec![Field::new("ints", DataType::Int32, true)].into());
         let list_type = DataType::List(Box::new(Field::new("item", ints_struct, true)));
         let list_field = Field::new("list", list_type, true);
         let schema = Arc::new(Schema::new(vec![list_field]));

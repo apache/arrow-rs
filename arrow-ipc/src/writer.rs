@@ -937,7 +937,7 @@ impl<W: Write> StreamWriter<W> {
     ///     255, 255, 255, 255,   0,   0,   0,   0
     /// ];
     ///
-    /// let schema = Schema::new(vec![]);
+    /// let schema = Schema::empty();
     /// let buffer: Vec<u8> = Vec::new();
     /// let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
     /// let stream_writer = StreamWriter::try_new_with_options(buffer, &schema, options)?;

@@ -34,7 +34,7 @@
 //! assert_eq!(schema, back);
 //! ```
 
-use crate::{ArrowError, DataType, Field, Schema, TimeUnit, UnionMode};
+use crate::{ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionMode};
 use bitflags::bitflags;
 use std::sync::Arc;
 use std::{
@@ -394,7 +394,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             }
             "+s" => {
                 let fields = c_schema.children().map(Field::try_from);
-                DataType::Struct(fields.collect::<Result<Vec<_>, ArrowError>>()?)
+                DataType::Struct(fields.collect::<Result<_, ArrowError>>()?)
             }
             "+m" => {
                 let c_child = c_schema.child(0);
@@ -671,6 +671,14 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
     }
 }
 
+impl TryFrom<&FieldRef> for FFI_ArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(value: &FieldRef) -> Result<Self, Self::Error> {
+        value.as_ref().try_into()
+    }
+}
+
 impl TryFrom<&Field> for FFI_ArrowSchema {
     type Error = ArrowError;
 
@@ -730,6 +738,7 @@ impl TryFrom<Schema> for FFI_ArrowSchema {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Fields;
 
     fn round_trip_type(dtype: DataType) {
         let c_schema = FFI_ArrowSchema::try_from(&dtype).unwrap();
@@ -767,16 +776,16 @@ mod tests {
             DataType::Int16,
             false,
         ))));
-        round_trip_type(DataType::Struct(vec![Field::new(
+        round_trip_type(DataType::Struct(Fields::from(vec![Field::new(
             "a",
             DataType::Utf8,
             true,
-        )]));
+        )])));
     }
 
     #[test]
     fn test_field() {
-        let dtype = DataType::Struct(vec![Field::new("a", DataType::Utf8, true)]);
+        let dtype = DataType::Struct(vec![Field::new("a", DataType::Utf8, true)].into());
         round_trip_field(Field::new("test", dtype, true));
     }
 
@@ -792,10 +801,10 @@ mod tests {
         round_trip_schema(schema);
 
         // test that we can interpret struct types as schema
-        let dtype = DataType::Struct(vec![
+        let dtype = DataType::Struct(Fields::from(vec![
             Field::new("a", DataType::Utf8, true),
             Field::new("b", DataType::Int16, false),
-        ]);
+        ]));
         let c_schema = FFI_ArrowSchema::try_from(&dtype).unwrap();
         let schema = Schema::try_from(&c_schema).unwrap();
         assert_eq!(schema.fields().len(), 2);
@@ -810,7 +819,7 @@ mod tests {
     fn test_map_keys_sorted() {
         let keys = Field::new("keys", DataType::Int32, false);
         let values = Field::new("values", DataType::UInt32, false);
-        let entry_struct = DataType::Struct(vec![keys, values]);
+        let entry_struct = DataType::Struct(vec![keys, values].into());
 
         // Construct a map array from the above two
         let map_data_type =

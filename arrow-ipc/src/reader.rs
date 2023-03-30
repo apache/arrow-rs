@@ -183,7 +183,7 @@ fn create_array(
                 )?;
                 node_index = triple.1;
                 buffer_index = triple.2;
-                struct_arrays.push((struct_field.clone(), triple.0));
+                struct_arrays.push((struct_field.as_ref().clone(), triple.0));
             }
             let null_count = struct_node.null_count() as usize;
             let struct_array = if null_count > 0 {
@@ -737,10 +737,8 @@ pub fn read_dictionary(
     let dictionary_values: ArrayRef = match first_field.data_type() {
         DataType::Dictionary(_, ref value_type) => {
             // Make a fake schema for the dictionary batch.
-            let schema = Schema {
-                fields: vec![Field::new("", value_type.as_ref().clone(), true)],
-                metadata: HashMap::new(),
-            };
+            let value = value_type.as_ref().clone();
+            let schema = Schema::new(vec![Field::new("", value, true)]);
             // Read a single column
             let record_batch = read_record_batch(
                 buf,
@@ -1273,14 +1271,14 @@ mod tests {
         ];
         let union_data_type = DataType::Union(union_fileds, vec![0, 1], UnionMode::Dense);
 
-        let struct_fields = vec![
+        let struct_fields = Fields::from(vec![
             Field::new("id", DataType::Int32, false),
             Field::new(
                 "list",
                 DataType::List(Box::new(Field::new("item", DataType::Int8, true))),
                 false,
             ),
-        ];
+        ]);
         let struct_data_type = DataType::Struct(struct_fields);
 
         let run_encoded_data_type = DataType::RunEndEncoded(
@@ -1829,7 +1827,7 @@ mod tests {
 
     #[test]
     fn test_no_columns_batch() {
-        let schema = Arc::new(Schema::new(vec![]));
+        let schema = Arc::new(Schema::empty());
         let options = RecordBatchOptions::new()
             .with_match_field_names(true)
             .with_row_count(Some(10));

@@ -218,6 +218,7 @@ mod tests {
     use arrow::buffer::Buffer;
     use arrow::datatypes::Field;
     use arrow_array::{Array, Int32Array, ListArray};
+    use arrow_schema::Fields;
 
     #[test]
     fn test_struct_array_reader() {
@@ -237,10 +238,10 @@ mod tests {
             Some(vec![0, 1, 1, 1, 1]),
         );
 
-        let struct_type = ArrowType::Struct(vec![
+        let struct_type = ArrowType::Struct(Fields::from(vec![
             Field::new("f1", array_1.data_type().clone(), true),
             Field::new("f2", array_2.data_type().clone(), true),
-        ]);
+        ]));
 
         let mut struct_array_reader = StructArrayReader::new(
             struct_type,

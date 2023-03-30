@@ -362,7 +362,7 @@ mod tests {
     use arrow_array::{Array, StructArray};
     use arrow_buffer::ArrowNativeType;
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field, Fields, Schema};
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
     use std::sync::Arc;
@@ -510,23 +510,25 @@ mod tests {
             ),
             Field::new(
                 "nested",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("a", DataType::Int32, true),
                     Field::new("b", DataType::Int32, true),
-                ]),
+                ])),
                 true,
             ),
             Field::new(
                 "nested_list",
-                DataType::Struct(vec![Field::new(
+                DataType::Struct(Fields::from(vec![Field::new(
                     "list2",
                     DataType::List(Box::new(Field::new(
                         "element",
-                        DataType::Struct(vec![Field::new("c", DataType::Int32, false)]),
+                        DataType::Struct(
+                            vec![Field::new("c", DataType::Int32, false)].into(),
+                        ),
                         false,
                     ))),
                     true,
-                )]),
+                )])),
                 true,
             ),
         ]));
@@ -582,20 +584,22 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "nested",
-                DataType::Struct(vec![Field::new("a", DataType::Int32, false)]),
+                DataType::Struct(vec![Field::new("a", DataType::Int32, false)].into()),
                 true,
             ),
             Field::new(
                 "nested_list",
-                DataType::Struct(vec![Field::new(
+                DataType::Struct(Fields::from(vec![Field::new(
                     "list2",
                     DataType::List(Box::new(Field::new(
                         "element",
-                        DataType::Struct(vec![Field::new("d", DataType::Int32, true)]),
+                        DataType::Struct(
+                            vec![Field::new("d", DataType::Int32, true)].into(),
+                        ),
                         false,
                     ))),
                     true,
-                )]),
+                )])),
                 true,
             ),
         ]));
@@ -636,10 +640,10 @@ mod tests {
            {"map": {"c": null, "a": ["baz"]}}
         "#;
         let list = DataType::List(Box::new(Field::new("element", DataType::Utf8, true)));
-        let entries = DataType::Struct(vec![
+        let entries = DataType::Struct(Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", list, true),
-        ]);
+        ]));
 
         let map = DataType::Map(Box::new(Field::new("entries", entries, true)), false);
         let schema = Arc::new(Schema::new(vec![Field::new("map", map, true)]));
@@ -1008,29 +1012,29 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "protocol",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("minReaderVersion", DataType::Int32, true),
                     Field::new("minWriterVersion", DataType::Int32, true),
-                ]),
+                ])),
                 true,
             ),
             Field::new(
                 "add",
-                DataType::Struct(vec![Field::new(
+                DataType::Struct(Fields::from(vec![Field::new(
                     "partitionValues",
                     DataType::Map(
                         Box::new(Field::new(
                             "key_value",
-                            DataType::Struct(vec![
+                            DataType::Struct(Fields::from(vec![
                                 Field::new("key", DataType::Utf8, false),
                                 Field::new("value", DataType::Utf8, true),
-                            ]),
+                            ])),
                             false,
                         )),
                         false,
                     ),
                     false,
-                )]),
+                )])),
                 true,
             ),
         ]));
@@ -1054,7 +1058,7 @@ mod tests {
             let non_null = r#"{"foo": {}}"#;
             let schema = Arc::new(Schema::new(vec![Field::new(
                 "foo",
-                DataType::Struct(vec![Field::new("bar", child, false)]),
+                DataType::Struct(vec![Field::new("bar", child, false)].into()),
                 true,
             )]));
             let mut reader = RawReaderBuilder::new(schema.clone())

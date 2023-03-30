@@ -20,7 +20,7 @@ use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 use crate::{error::Result, FlightData, SchemaAsIpc};
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{ready, stream::BoxStream, Stream, StreamExt};
 
@@ -309,7 +309,7 @@ impl Stream for FlightDataEncoder {
 ///
 /// See hydrate_dictionary for more information
 fn prepare_schema_for_flight(schema: &Schema) -> Schema {
-    let fields = schema
+    let fields: Fields = schema
         .fields()
         .iter()
         .map(|field| match field.data_type() {
@@ -319,7 +319,7 @@ fn prepare_schema_for_flight(schema: &Schema) -> Schema {
                 field.is_nullable(),
             )
             .with_metadata(field.metadata().clone()),
-            _ => field.clone(),
+            _ => field.as_ref().clone(),
         })
         .collect();
 

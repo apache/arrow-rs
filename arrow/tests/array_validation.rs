@@ -386,7 +386,7 @@ fn test_validate_struct_child_type() {
 
     // validate the the type of struct fields matches child fields
     ArrayData::try_new(
-        DataType::Struct(vec![Field::new("field1", DataType::Int64, true)]),
+        DataType::Struct(vec![Field::new("field1", DataType::Int64, true)].into()),
         3,
         None,
         0,
@@ -407,7 +407,7 @@ fn test_validate_struct_child_length() {
         .collect::<Int32Array>();
 
     ArrayData::try_new(
-        DataType::Struct(vec![Field::new("field1", DataType::Int32, true)]),
+        DataType::Struct(vec![Field::new("field1", DataType::Int32, true)].into()),
         6,
         None,
         0,

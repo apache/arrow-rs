@@ -20,7 +20,7 @@ use crate::raw::{make_decoder, tape_error, ArrayDecoder};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, Fields};
 
 pub struct StructArrayDecoder {
     data_type: DataType,
@@ -142,7 +142,7 @@ impl ArrayDecoder for StructArrayDecoder {
     }
 }
 
-fn struct_fields(data_type: &DataType) -> &[Field] {
+fn struct_fields(data_type: &DataType) -> &Fields {
     match &data_type {
         DataType::Struct(f) => f,
         _ => unreachable!(),

@@ -355,13 +355,10 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             DataType::FixedSizeList(Box::new(children.get(0).into()), fsl.listSize())
         }
         crate::Type::Struct_ => {
-            let mut fields = vec![];
-            if let Some(children) = field.children() {
-                for i in 0..children.len() {
-                    fields.push(children.get(i).into());
-                }
+            let fields = match field.children() {
+                Some(children) => children.iter().map(Field::from).collect(),
+                None => Fields::empty(),
             };
-
             DataType::Struct(fields)
         }
         crate::Type::RunEndEncoded => {
@@ -915,54 +912,51 @@ mod tests {
                 ),
                 Field::new(
                     "list[struct<float32, int32, bool>]",
-                    DataType::List(Box::new(Field::new(
+                    List(Box::new(Field::new(
                         "struct",
-                        DataType::Struct(vec![
+                        Struct(Fields::from(vec![
                             Field::new("float32", DataType::UInt8, false),
                             Field::new("int32", DataType::Int32, true),
                             Field::new("bool", DataType::Boolean, true),
-                        ]),
+                        ])),
                         true,
                     ))),
                     false,
                 ),
                 Field::new(
                     "struct<dictionary<int32, utf8>>",
-                    DataType::Struct(vec![Field::new(
+                    Struct(Fields::from(vec![Field::new(
                         "dictionary<int32, utf8>",
-                        DataType::Dictionary(
-                            Box::new(DataType::Int32),
-                            Box::new(DataType::Utf8),
-                        ),
+                        Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                         false,
-                    )]),
+                    )])),
                     false,
                 ),
                 Field::new(
                     "struct<int64, list[struct<date32, list[struct<>]>]>",
-                    DataType::Struct(vec![
+                    Struct(Fields::from(vec![
                         Field::new("int64", DataType::Int64, true),
                         Field::new(
                             "list[struct<date32, list[struct<>]>]",
                             DataType::List(Box::new(Field::new(
                                 "struct",
-                                DataType::Struct(vec![
+                                DataType::Struct(Fields::from(vec![
                                     Field::new("date32", DataType::Date32, true),
                                     Field::new(
                                         "list[struct<>]",
                                         DataType::List(Box::new(Field::new(
                                             "struct",
-                                            DataType::Struct(vec![]),
+                                            DataType::Struct(Fields::empty()),
                                             false,
                                         ))),
                                         false,
                                     ),
-                                ]),
+                                ])),
                                 false,
                             ))),
                             false,
                         ),
-                    ]),
+                    ])),
                     false,
                 ),
                 Field::new(
@@ -1004,7 +998,7 @@ mod tests {
                     ),
                     false,
                 ),
-                Field::new("struct<>", DataType::Struct(vec![]), true),
+                Field::new("struct<>", DataType::Struct(Fields::empty()), true),
                 Field::new(
                     "union<>",
                     DataType::Union(vec![], vec![], UnionMode::Dense),

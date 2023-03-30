@@ -81,6 +81,12 @@ pub struct ArrowJsonField {
     pub metadata: Option<Value>,
 }
 
+impl From<&FieldRef> for ArrowJsonField {
+    fn from(value: &FieldRef) -> Self {
+        Self::from(value.as_ref())
+    }
+}
+
 impl From<&Field> for ArrowJsonField {
     fn from(field: &Field) -> Self {
         let metadata_value = match field.metadata().is_empty() {
@@ -1183,10 +1189,10 @@ mod tests {
             ),
             Field::new(
                 "structs",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("int32s", DataType::Int32, true),
                     Field::new("utf8s", DataType::Utf8, true),
-                ]),
+                ])),
                 true,
             ),
         ]);
@@ -1265,10 +1271,10 @@ mod tests {
 
         let structs_int32s = Int32Array::from(vec![None, Some(-2), None]);
         let structs_utf8s = StringArray::from(vec![None, None, Some("aaaaaa")]);
-        let struct_data_type = DataType::Struct(vec![
+        let struct_data_type = DataType::Struct(Fields::from(vec![
             Field::new("int32s", DataType::Int32, true),
             Field::new("utf8s", DataType::Utf8, true),
-        ]);
+        ]));
         let struct_data = ArrayData::builder(struct_data_type)
             .len(3)
             .add_child_data(structs_int32s.into_data())

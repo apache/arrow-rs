@@ -1874,7 +1874,8 @@ mod tests {
         )
         .unwrap();
 
-        let data_type = DataType::Struct(vec![Field::new("x", DataType::Int32, true)]);
+        let field = Arc::new(Field::new("x", DataType::Int32, true));
+        let data_type = DataType::Struct(vec![field].into());
 
         let arr_data = ArrayData::builder(data_type)
             .len(5)

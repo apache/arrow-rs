@@ -704,7 +704,7 @@ mod tests {
     use arrow_array::{RecordBatch, RecordBatchReader};
     use arrow_buffer::Buffer;
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::{DataType as ArrowDataType, Field, Schema};
+    use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema};
 
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReader,
@@ -1104,16 +1104,17 @@ mod tests {
     fn test_decimal_nullable_struct() {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 
-        let data = ArrayDataBuilder::new(ArrowDataType::Struct(vec![Field::new(
-            "decimals",
-            decimals.data_type().clone(),
-            false,
-        )]))
-        .len(8)
-        .null_bit_buffer(Some(Buffer::from(&[0b11101111])))
-        .child_data(vec![decimals.into_data()])
-        .build()
-        .unwrap();
+        let data =
+            ArrayDataBuilder::new(ArrowDataType::Struct(Fields::from(vec![Field::new(
+                "decimals",
+                decimals.data_type().clone(),
+                false,
+            )])))
+            .len(8)
+            .null_bit_buffer(Some(Buffer::from(&[0b11101111])))
+            .child_data(vec![decimals.into_data()])
+            .build()
+            .unwrap();
 
         let written = RecordBatch::try_from_iter([(
             "struct",
@@ -1140,16 +1141,17 @@ mod tests {
     #[test]
     fn test_int32_nullable_struct() {
         let int32 = Int32Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
-        let data = ArrayDataBuilder::new(ArrowDataType::Struct(vec![Field::new(
-            "int32",
-            int32.data_type().clone(),
-            false,
-        )]))
-        .len(8)
-        .null_bit_buffer(Some(Buffer::from(&[0b11101111])))
-        .child_data(vec![int32.into_data()])
-        .build()
-        .unwrap();
+        let data =
+            ArrayDataBuilder::new(ArrowDataType::Struct(Fields::from(vec![Field::new(
+                "int32",
+                int32.data_type().clone(),
+                false,
+            )])))
+            .len(8)
+            .null_bit_buffer(Some(Buffer::from(&[0b11101111])))
+            .child_data(vec![int32.into_data()])
+            .build()
+            .unwrap();
 
         let written = RecordBatch::try_from_iter([(
             "struct",
@@ -1867,19 +1869,19 @@ mod tests {
         let expected_schema = Schema::new(vec![
             Field::new(
                 "roll_num",
-                ArrowDataType::Struct(vec![Field::new(
+                ArrowDataType::Struct(Fields::from(vec![Field::new(
                     "count",
                     ArrowDataType::UInt64,
                     false,
-                )]),
+                )])),
                 false,
             ),
             Field::new(
                 "PC_CUR",
-                ArrowDataType::Struct(vec![
+                ArrowDataType::Struct(Fields::from(vec![
                     Field::new("mean", ArrowDataType::Int64, false),
                     Field::new("sum", ArrowDataType::Int64, false),
-                ]),
+                ])),
                 false,
             ),
         ]);
@@ -1947,11 +1949,13 @@ mod tests {
 
         let reader = builder.with_projection(mask).build().unwrap();
 
-        let expected_schema = Schema::new(vec![Field::new(
+        let expected_schema = Schema::new(Fields::from(vec![Field::new(
             "group",
-            ArrowDataType::Struct(vec![Field::new("leaf", ArrowDataType::Int32, false)]),
+            ArrowDataType::Struct(
+                vec![Field::new("leaf", ArrowDataType::Int32, false)].into(),
+            ),
             true,
-        )]);
+        )]));
 
         let batch = reader.into_iter().next().unwrap().unwrap();
         assert_eq!(batch.schema().as_ref(), &expected_schema);

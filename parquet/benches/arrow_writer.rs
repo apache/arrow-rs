@@ -233,25 +233,25 @@ fn _create_nested_bench_batch(
     let fields = vec![
         Field::new(
             "_1",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("_1", DataType::Int8, true),
                 Field::new(
                     "_2",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("_1", DataType::Int8, true),
                         Field::new(
                             "_1",
-                            DataType::Struct(vec![
+                            DataType::Struct(Fields::from(vec![
                                 Field::new("_1", DataType::Int8, true),
                                 Field::new("_2", DataType::Utf8, true),
-                            ]),
+                            ])),
                             true,
                         ),
                         Field::new("_2", DataType::UInt8, true),
-                    ]),
+                    ])),
                     true,
                 ),
-            ]),
+            ])),
             true,
         ),
         Field::new(
@@ -260,14 +260,14 @@ fn _create_nested_bench_batch(
                 "item",
                 DataType::List(Box::new(Field::new(
                     "item",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new(
                             "_1",
-                            DataType::Struct(vec![
+                            DataType::Struct(Fields::from(vec![
                                 Field::new("_1", DataType::Int8, true),
                                 Field::new("_2", DataType::Int16, true),
                                 Field::new("_3", DataType::Int32, true),
-                            ]),
+                            ])),
                             true,
                         ),
                         Field::new(
@@ -279,7 +279,7 @@ fn _create_nested_bench_batch(
                             ))),
                             true,
                         ),
-                    ]),
+                    ])),
                     true,
                 ))),
                 true,

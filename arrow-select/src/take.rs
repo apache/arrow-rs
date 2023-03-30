@@ -157,23 +157,21 @@ where
             Ok(Arc::new(MapArray::from(unsafe { builder.build_unchecked() })))
         }
         DataType::Struct(fields) => {
-            let struct_: &StructArray =
-                values.as_any().downcast_ref::<StructArray>().unwrap();
-            let arrays: Result<Vec<ArrayRef>, _> = struct_
+            let array: &StructArray = values.as_struct();
+            let arrays  = array
                 .columns()
                 .iter()
                 .map(|a| take_impl(a.as_ref(), indices, Some(options.clone())))
-                .collect();
-            let arrays = arrays?;
+                .collect::<Result<Vec<ArrayRef>, _>>()?;
             let fields: Vec<(Field, ArrayRef)> =
-                fields.clone().into_iter().zip(arrays).collect();
+                fields.iter().map(|f| f.as_ref().clone()).zip(arrays).collect();
 
             // Create the null bit buffer.
             let is_valid: Buffer = indices
                 .iter()
                 .map(|index| {
                     if let Some(index) = index {
-                        struct_.is_valid(index.to_usize().unwrap())
+                        array.is_valid(index.to_usize().unwrap())
                     } else {
                         false
                     }
@@ -962,7 +960,7 @@ where
 mod tests {
     use super::*;
     use arrow_array::builder::*;
-    use arrow_schema::TimeUnit;
+    use arrow_schema::{Fields, TimeUnit};
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,
@@ -1060,10 +1058,10 @@ mod tests {
         values: Vec<Option<(Option<bool>, Option<i32>)>>,
     ) -> StructArray {
         let mut struct_builder = StructBuilder::new(
-            vec![
+            Fields::from(vec![
                 Field::new("a", DataType::Boolean, true),
                 Field::new("b", DataType::Int32, true),
-            ],
+            ]),
             vec![
                 Box::new(BooleanBuilder::with_capacity(values.len())),
                 Box::new(Int32Builder::with_capacity(values.len())),
