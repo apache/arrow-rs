@@ -711,7 +711,7 @@ mod tests {
         {
             arrow_fields.push(Field::new(
                 "my_list",
-                DataType::List(Box::new(Field::new("element", DataType::Utf8, true))),
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8, true))),
                 false,
             ));
         }
@@ -725,7 +725,7 @@ mod tests {
         {
             arrow_fields.push(Field::new(
                 "my_list",
-                DataType::List(Box::new(Field::new("element", DataType::Utf8, false))),
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8, false))),
                 true,
             ));
         }
@@ -744,10 +744,10 @@ mod tests {
         // }
         {
             let arrow_inner_list =
-                DataType::List(Box::new(Field::new("element", DataType::Int32, false)));
+                DataType::List(Arc::new(Field::new("element", DataType::Int32, false)));
             arrow_fields.push(Field::new(
                 "array_of_arrays",
-                DataType::List(Box::new(Field::new("element", arrow_inner_list, false))),
+                DataType::List(Arc::new(Field::new("element", arrow_inner_list, false))),
                 true,
             ));
         }
@@ -761,7 +761,7 @@ mod tests {
         {
             arrow_fields.push(Field::new(
                 "my_list",
-                DataType::List(Box::new(Field::new("str", DataType::Utf8, false))),
+                DataType::List(Arc::new(Field::new("str", DataType::Utf8, false))),
                 true,
             ));
         }
@@ -773,7 +773,7 @@ mod tests {
         {
             arrow_fields.push(Field::new(
                 "my_list",
-                DataType::List(Box::new(Field::new("element", DataType::Int32, false))),
+                DataType::List(Arc::new(Field::new("element", DataType::Int32, false))),
                 true,
             ));
         }
@@ -792,7 +792,7 @@ mod tests {
             ]));
             arrow_fields.push(Field::new(
                 "my_list",
-                DataType::List(Box::new(Field::new("element", arrow_struct, false))),
+                DataType::List(Arc::new(Field::new("element", arrow_struct, false))),
                 true,
             ));
         }
@@ -809,7 +809,7 @@ mod tests {
             let arrow_struct = DataType::Struct(fields);
             arrow_fields.push(Field::new(
                 "my_list",
-                DataType::List(Box::new(Field::new("array", arrow_struct, false))),
+                DataType::List(Arc::new(Field::new("array", arrow_struct, false))),
                 true,
             ));
         }
@@ -826,7 +826,7 @@ mod tests {
             let arrow_struct = DataType::Struct(fields);
             arrow_fields.push(Field::new(
                 "my_list",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "my_list_tuple",
                     arrow_struct,
                     false,
@@ -840,7 +840,7 @@ mod tests {
         {
             arrow_fields.push(Field::new(
                 "name",
-                DataType::List(Box::new(Field::new("name", DataType::Int32, false))),
+                DataType::List(Arc::new(Field::new("name", DataType::Int32, false))),
                 false,
             ));
         }
@@ -891,7 +891,7 @@ mod tests {
         {
             arrow_fields.push(Field::new(
                 "my_list1",
-                DataType::List(Box::new(Field::new("element", DataType::Utf8, true))),
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8, true))),
                 false,
             ));
         }
@@ -905,7 +905,7 @@ mod tests {
         {
             arrow_fields.push(Field::new(
                 "my_list2",
-                DataType::List(Box::new(Field::new("element", DataType::Utf8, false))),
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8, false))),
                 true,
             ));
         }
@@ -919,7 +919,7 @@ mod tests {
         {
             arrow_fields.push(Field::new(
                 "my_list3",
-                DataType::List(Box::new(Field::new("element", DataType::Utf8, false))),
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8, false))),
                 false,
             ));
         }
@@ -976,7 +976,7 @@ mod tests {
             arrow_fields.push(Field::new(
                 "my_map1",
                 DataType::Map(
-                    Box::new(Field::new(
+                    Arc::new(Field::new(
                         "key_value",
                         DataType::Struct(Fields::from(vec![
                             Field::new("key", DataType::Utf8, false),
@@ -1001,7 +1001,7 @@ mod tests {
             arrow_fields.push(Field::new(
                 "my_map2",
                 DataType::Map(
-                    Box::new(Field::new(
+                    Arc::new(Field::new(
                         "map",
                         DataType::Struct(Fields::from(vec![
                             Field::new("str", DataType::Utf8, false),
@@ -1026,7 +1026,7 @@ mod tests {
             arrow_fields.push(Field::new(
                 "my_map3",
                 DataType::Map(
-                    Box::new(Field::new(
+                    Arc::new(Field::new(
                         "map",
                         DataType::Struct(Fields::from(vec![
                             Field::new("key", DataType::Utf8, false),
@@ -1201,7 +1201,7 @@ mod tests {
 
             let inner_group_list = Field::new(
                 "innerGroup",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "innerGroup",
                     DataType::Struct(
                         vec![Field::new("leaf3", DataType::Int32, true)].into(),
@@ -1213,7 +1213,7 @@ mod tests {
 
             let outer_group_list = Field::new(
                 "outerGroup",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "outerGroup",
                     DataType::Struct(Fields::from(vec![
                         Field::new("leaf2", DataType::Int32, true),
@@ -1302,7 +1302,7 @@ mod tests {
             Field::new("string", DataType::Utf8, true),
             Field::new(
                 "bools",
-                DataType::List(Box::new(Field::new("bools", DataType::Boolean, false))),
+                DataType::List(Arc::new(Field::new("bools", DataType::Boolean, false))),
                 false,
             ),
             Field::new("date", DataType::Date32, true),
@@ -1326,12 +1326,12 @@ mod tests {
             ),
             Field::new(
                 "int_list",
-                DataType::List(Box::new(Field::new("int_list", DataType::Int32, false))),
+                DataType::List(Arc::new(Field::new("int_list", DataType::Int32, false))),
                 false,
             ),
             Field::new(
                 "byte_list",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "byte_list",
                     DataType::Binary,
                     false,
@@ -1340,7 +1340,7 @@ mod tests {
             ),
             Field::new(
                 "string_list",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "string_list",
                     DataType::Utf8,
                     false,
@@ -1417,12 +1417,12 @@ mod tests {
             Field::new("string", DataType::Utf8, true),
             Field::new(
                 "bools",
-                DataType::List(Box::new(Field::new("element", DataType::Boolean, true))),
+                DataType::List(Arc::new(Field::new("element", DataType::Boolean, true))),
                 true,
             ),
             Field::new(
                 "bools_non_null",
-                DataType::List(Box::new(Field::new("element", DataType::Boolean, false))),
+                DataType::List(Arc::new(Field::new("element", DataType::Boolean, false))),
                 false,
             ),
             Field::new("date", DataType::Date32, true),
@@ -1470,7 +1470,7 @@ mod tests {
                     Field::new("uint32", DataType::UInt32, false),
                     Field::new(
                         "int32",
-                        DataType::List(Box::new(Field::new(
+                        DataType::List(Arc::new(Field::new(
                             "element",
                             DataType::Int32,
                             true,
@@ -1602,7 +1602,7 @@ mod tests {
                 Field::new("c20", DataType::Interval(IntervalUnit::YearMonth), false),
                 Field::new(
                     "c21",
-                    DataType::List(Box::new(Field::new("list", DataType::Boolean, true))),
+                    DataType::List(Arc::new(Field::new("list", DataType::Boolean, true))),
                     false,
                 ),
                 // Field::new(
@@ -1663,13 +1663,13 @@ mod tests {
                 Field::new(
                     "c39",
                     DataType::Map(
-                        Box::new(Field::new(
+                        Arc::new(Field::new(
                             "key_value",
                             DataType::Struct(Fields::from(vec![
                                 Field::new("key", DataType::Utf8, false),
                                 Field::new(
                                     "value",
-                                    DataType::List(Box::new(Field::new(
+                                    DataType::List(Arc::new(Field::new(
                                         "element",
                                         DataType::Utf8,
                                         true,
@@ -1686,13 +1686,13 @@ mod tests {
                 Field::new(
                     "c40",
                     DataType::Map(
-                        Box::new(Field::new(
+                        Arc::new(Field::new(
                             "my_entries",
                             DataType::Struct(Fields::from(vec![
                                 Field::new("my_key", DataType::Utf8, false),
                                 Field::new(
                                     "my_value",
-                                    DataType::List(Box::new(Field::new(
+                                    DataType::List(Arc::new(Field::new(
                                         "item",
                                         DataType::Utf8,
                                         true,
@@ -1709,13 +1709,13 @@ mod tests {
                 Field::new(
                     "c41",
                     DataType::Map(
-                        Box::new(Field::new(
+                        Arc::new(Field::new(
                             "my_entries",
                             DataType::Struct(Fields::from(vec![
                                 Field::new("my_key", DataType::Utf8, false),
                                 Field::new(
                                     "my_value",
-                                    DataType::List(Box::new(Field::new(
+                                    DataType::List(Arc::new(Field::new(
                                         "item",
                                         DataType::Utf8,
                                         true,
@@ -1762,7 +1762,7 @@ mod tests {
             vec![
                 Field::new(
                     "c21",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "array",
                         DataType::Boolean,
                         true,
@@ -1772,16 +1772,16 @@ mod tests {
                 Field::new(
                     "c22",
                     DataType::FixedSizeList(
-                        Box::new(Field::new("items", DataType::Boolean, false)),
+                        Arc::new(Field::new("items", DataType::Boolean, false)),
                         5,
                     ),
                     false,
                 ),
                 Field::new(
                     "c23",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "items",
-                        DataType::LargeList(Box::new(Field::new(
+                        DataType::LargeList(Arc::new(Field::new(
                             "items",
                             DataType::Struct(Fields::from(vec![
                                 Field::new("a", DataType::Int16, true),

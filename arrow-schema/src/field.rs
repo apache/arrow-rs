@@ -454,6 +454,7 @@ mod test {
     use crate::Fields;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+    use std::sync::Arc;
 
     #[test]
     fn test_new_with_string() {
@@ -502,13 +503,13 @@ mod test {
                 dict1.clone(),
                 Field::new(
                     "list[struct<dict1, list[struct<dict2>]>]",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "struct<dict1, list[struct<dict2>]>",
                         DataType::Struct(Fields::from(vec![
                             dict1.clone(),
                             Field::new(
                                 "list[struct<dict2>]",
-                                DataType::List(Box::new(Field::new(
+                                DataType::List(Arc::new(Field::new(
                                     "struct<dict2>",
                                     DataType::Struct(vec![dict2.clone()].into()),
                                     false,

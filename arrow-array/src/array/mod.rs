@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn test_empty_list_primitive() {
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let array = new_empty_array(&data_type);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 0);
@@ -822,7 +822,7 @@ mod tests {
     #[test]
     fn test_null_list_primitive() {
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let array = new_null_array(&data_type, 9);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 9);
@@ -835,7 +835,7 @@ mod tests {
     #[test]
     fn test_null_map() {
         let data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entry",
                 DataType::Struct(Fields::from(vec![
                     Field::new("key", DataType::Utf8, false),
@@ -903,8 +903,8 @@ mod tests {
     fn test_null_runs() {
         for r in [DataType::Int16, DataType::Int32, DataType::Int64] {
             let data_type = DataType::RunEndEncoded(
-                Box::new(Field::new("run_ends", r, false)),
-                Box::new(Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new("run_ends", r, false)),
+                Arc::new(Field::new("values", DataType::Utf8, true)),
             );
 
             let array = new_null_array(&data_type, 4);

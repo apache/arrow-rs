@@ -505,7 +505,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "list",
-                DataType::List(Box::new(Field::new("element", DataType::Int32, false))),
+                DataType::List(Arc::new(Field::new("element", DataType::Int32, false))),
                 true,
             ),
             Field::new(
@@ -520,7 +520,7 @@ mod tests {
                 "nested_list",
                 DataType::Struct(Fields::from(vec![Field::new(
                     "list2",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "element",
                         DataType::Struct(
                             vec![Field::new("c", DataType::Int32, false)].into(),
@@ -591,7 +591,7 @@ mod tests {
                 "nested_list",
                 DataType::Struct(Fields::from(vec![Field::new(
                     "list2",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "element",
                         DataType::Struct(
                             vec![Field::new("d", DataType::Int32, true)].into(),
@@ -639,13 +639,13 @@ mod tests {
            {"map": {"a": [null], "b": []}}
            {"map": {"c": null, "a": ["baz"]}}
         "#;
-        let list = DataType::List(Box::new(Field::new("element", DataType::Utf8, true)));
+        let list = DataType::List(Arc::new(Field::new("element", DataType::Utf8, true)));
         let entries = DataType::Struct(Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", list, true),
         ]));
 
-        let map = DataType::Map(Box::new(Field::new("entries", entries, true)), false);
+        let map = DataType::Map(Arc::new(Field::new("entries", entries, true)), false);
         let schema = Arc::new(Schema::new(vec![Field::new("map", map, true)]));
 
         let batches = do_read(buf, 1024, false, schema);
@@ -1023,7 +1023,7 @@ mod tests {
                 DataType::Struct(Fields::from(vec![Field::new(
                     "partitionValues",
                     DataType::Map(
-                        Box::new(Field::new(
+                        Arc::new(Field::new(
                             "key_value",
                             DataType::Struct(Fields::from(vec![
                                 Field::new("key", DataType::Utf8, false),

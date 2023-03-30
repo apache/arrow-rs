@@ -1057,7 +1057,7 @@ mod tests {
     fn write_struct_with_list_field() {
         let field_c1 = Field::new(
             "c1",
-            DataType::List(Box::new(Field::new("c_list", DataType::Utf8, false))),
+            DataType::List(Arc::new(Field::new("c_list", DataType::Utf8, false))),
             false,
         );
         let field_c2 = Field::new("c2", DataType::Int32, false);
@@ -1102,12 +1102,12 @@ mod tests {
     fn write_nested_list() {
         let list_inner_type = Field::new(
             "a",
-            DataType::List(Box::new(Field::new("b", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new("b", DataType::Int32, false))),
             false,
         );
         let field_c1 = Field::new(
             "c1",
-            DataType::List(Box::new(list_inner_type.clone())),
+            DataType::List(Arc::new(list_inner_type.clone())),
             false,
         );
         let field_c2 = Field::new("c2", DataType::Utf8, true);
@@ -1160,7 +1160,7 @@ mod tests {
     fn write_list_of_struct() {
         let field_c1 = Field::new(
             "c1",
-            DataType::List(Box::new(Field::new(
+            DataType::List(Arc::new(Field::new(
                 "s",
                 DataType::Struct(Fields::from(vec![
                     Field::new("c11", DataType::Int32, true),
@@ -1325,7 +1325,7 @@ mod tests {
         "#;
         let ints_struct =
             DataType::Struct(vec![Field::new("ints", DataType::Int32, true)].into());
-        let list_type = DataType::List(Box::new(Field::new("item", ints_struct, true)));
+        let list_type = DataType::List(Arc::new(Field::new("item", ints_struct, true)));
         let list_field = Field::new("list", list_type, true);
         let schema = Arc::new(Schema::new(vec![list_field]));
         let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
@@ -1379,7 +1379,7 @@ mod tests {
         ]);
 
         let map_data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
                 true,

@@ -662,7 +662,7 @@ mod tests {
             .collect::<Buffer>();
 
         // Construct a list array from the above two
-        let list_data_type = GenericListArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let list_data_type = GenericListArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::Int32, false),
         ));
 
@@ -921,7 +921,7 @@ mod tests {
             .build()?;
 
         let list_data_type =
-            DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int32, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new("f", DataType::Int32, false)), 3);
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .null_bit_buffer(Some(Buffer::from(validity_bits)))

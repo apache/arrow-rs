@@ -90,13 +90,13 @@ fn build_map_reader(
                 DataType::Map(map_field, is_sorted) => match map_field.data_type() {
                     DataType::Struct(fields) => {
                         assert_eq!(fields.len(), 2);
-                        let struct_field = map_field.clone().with_data_type(
+                        let struct_field = map_field.as_ref().clone().with_data_type(
                             DataType::Struct(Fields::from(vec![
                                 fields[0].as_ref().clone().with_data_type(key_type),
                                 fields[1].as_ref().clone().with_data_type(value_type),
                             ])),
                         );
-                        DataType::Map(Box::new(struct_field), *is_sorted)
+                        DataType::Map(Arc::new(struct_field), *is_sorted)
                     }
                     _ => unreachable!(),
                 },
@@ -135,11 +135,11 @@ fn build_list_reader(
             let item_type = item_reader.get_data_type().clone();
             let data_type = match &field.arrow_type {
                 DataType::List(f) => {
-                    DataType::List(Box::new(f.clone().with_data_type(item_type)))
+                    DataType::List(Arc::new(f.as_ref().clone().with_data_type(item_type)))
                 }
-                DataType::LargeList(f) => {
-                    DataType::LargeList(Box::new(f.clone().with_data_type(item_type)))
-                }
+                DataType::LargeList(f) => DataType::LargeList(Arc::new(
+                    f.as_ref().clone().with_data_type(item_type),
+                )),
                 _ => unreachable!(),
             };
 

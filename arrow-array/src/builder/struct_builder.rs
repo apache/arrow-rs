@@ -529,7 +529,7 @@ mod tests {
     )]
     fn test_struct_array_builder_from_schema_unsupported_type() {
         let list_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
         let fields = vec![
             Field::new("f1", DataType::Int16, false),
             Field::new("f2", list_type, false),

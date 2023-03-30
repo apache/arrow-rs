@@ -388,11 +388,11 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "tDn" => DataType::Duration(TimeUnit::Nanosecond),
             "+l" => {
                 let c_child = c_schema.child(0);
-                DataType::List(Box::new(Field::try_from(c_child)?))
+                DataType::List(Arc::new(Field::try_from(c_child)?))
             }
             "+L" => {
                 let c_child = c_schema.child(0);
-                DataType::LargeList(Box::new(Field::try_from(c_child)?))
+                DataType::LargeList(Arc::new(Field::try_from(c_child)?))
             }
             "+s" => {
                 let fields = c_schema.children().map(Field::try_from);
@@ -401,7 +401,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "+m" => {
                 let c_child = c_schema.child(0);
                 let map_keys_sorted = c_schema.map_keys_sorted();
-                DataType::Map(Box::new(Field::try_from(c_child)?), map_keys_sorted)
+                DataType::Map(Arc::new(Field::try_from(c_child)?), map_keys_sorted)
             }
             // Parametrized types, requiring string parse
             other => {
@@ -421,7 +421,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             ArrowError::CDataInterface(
                                 "The FixedSizeList type requires an integer parameter representing number of elements per list".to_string())
                         })?;
-                        DataType::FixedSizeList(Box::new(Field::try_from(c_child)?), parsed_num_elems)
+                        DataType::FixedSizeList(Arc::new(Field::try_from(c_child)?), parsed_num_elems)
                     },
                     // Decimal types in format "d:precision,scale" or "d:precision,scale,bitWidth"
                     ["d", extra] => {
@@ -772,11 +772,11 @@ mod tests {
         round_trip_type(DataType::Time64(TimeUnit::Nanosecond));
         round_trip_type(DataType::FixedSizeBinary(12));
         round_trip_type(DataType::FixedSizeList(
-            Box::new(Field::new("a", DataType::Int64, false)),
+            Arc::new(Field::new("a", DataType::Int64, false)),
             5,
         ));
         round_trip_type(DataType::Utf8);
-        round_trip_type(DataType::List(Box::new(Field::new(
+        round_trip_type(DataType::List(Arc::new(Field::new(
             "a",
             DataType::Int16,
             false,
@@ -828,7 +828,7 @@ mod tests {
 
         // Construct a map array from the above two
         let map_data_type =
-            DataType::Map(Box::new(Field::new("entries", entry_struct, true)), true);
+            DataType::Map(Arc::new(Field::new("entries", entry_struct, true)), true);
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());

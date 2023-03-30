@@ -712,7 +712,7 @@ mod tests {
             Field::new("a1", DataType::Int32, false),
             Field::new(
                 "a2",
-                DataType::List(Box::new(Field::new("item", DataType::Int8, false))),
+                DataType::List(Arc::new(Field::new("item", DataType::Int8, false))),
                 false,
             ),
         ];
@@ -721,7 +721,7 @@ mod tests {
 
         let a1: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let a2_child = Int8Array::from(vec![1, 2, 3, 4]);
-        let a2 = ArrayDataBuilder::new(DataType::List(Box::new(Field::new(
+        let a2 = ArrayDataBuilder::new(DataType::List(Arc::new(Field::new(
             "array",
             DataType::Int8,
             false,

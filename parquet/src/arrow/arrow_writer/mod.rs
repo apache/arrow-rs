@@ -750,7 +750,7 @@ mod tests {
         // define schema
         let schema = Schema::new(vec![Field::new(
             "a",
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
             true,
         )]);
 
@@ -763,7 +763,7 @@ mod tests {
             arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
             false,
@@ -791,7 +791,7 @@ mod tests {
         // define schema
         let schema = Schema::new(vec![Field::new(
             "a",
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
             false,
         )]);
 
@@ -804,7 +804,7 @@ mod tests {
             arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
             false,
@@ -890,12 +890,12 @@ mod tests {
         let struct_field_f = Field::new("f", DataType::Float32, true);
         let struct_field_g = Field::new(
             "g",
-            DataType::List(Box::new(Field::new("item", DataType::Int16, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int16, true))),
             false,
         );
         let struct_field_h = Field::new(
             "h",
-            DataType::List(Box::new(Field::new("item", DataType::Int16, false))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int16, false))),
             true,
         );
         let struct_field_e = Field::new(
@@ -1025,7 +1025,7 @@ mod tests {
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Box::new(Field::new("entries", entries_struct_type, false)),
+                Arc::new(Field::new("entries", entries_struct_type, false)),
                 false,
             ),
             true,
@@ -1766,14 +1766,14 @@ mod tests {
     fn null_list_single_column() {
         let null_field = Field::new("item", DataType::Null, true);
         let list_field =
-            Field::new("emptylist", DataType::List(Box::new(null_field)), true);
+            Field::new("emptylist", DataType::List(Arc::new(null_field)), true);
 
         let schema = Schema::new(vec![list_field]);
 
         // Build [[], null, [null, null]]
         let a_values = NullArray::new(2);
         let a_value_offsets = arrow::buffer::Buffer::from(&[0, 0, 0, 2].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Null,
             true,
@@ -1804,7 +1804,7 @@ mod tests {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets =
             arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
             false,
@@ -1829,7 +1829,7 @@ mod tests {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets =
             arrow::buffer::Buffer::from(&[0i64, 1, 3, 3, 6, 10].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::LargeList(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::LargeList(Arc::new(Field::new(
             "large_item",
             DataType::Int32,
             true,
@@ -2256,7 +2256,7 @@ mod tests {
             true,
         );
 
-        let list_a = Field::new("list", DataType::List(Box::new(struct_a)), true);
+        let list_a = Field::new("list", DataType::List(Arc::new(struct_a)), true);
         let struct_b = Field::new(
             "struct_b",
             DataType::Struct(vec![list_a.clone()].into()),

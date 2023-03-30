@@ -367,7 +367,7 @@ fn test_validate_fixed_size_list() {
     // 10 is off the end of the buffer
     let field = Field::new("field", DataType::Int32, true);
     ArrayData::try_new(
-        DataType::FixedSizeList(Box::new(field), 2),
+        DataType::FixedSizeList(Arc::new(field), 2),
         3,
         None,
         0,
@@ -715,7 +715,7 @@ fn check_list_offsets<T: ArrowNativeType>(data_type: DataType) {
 )]
 fn test_validate_list_offsets() {
     let field_type = Field::new("f", DataType::Int32, true);
-    check_list_offsets::<i32>(DataType::List(Box::new(field_type)));
+    check_list_offsets::<i32>(DataType::List(Arc::new(field_type)));
 }
 
 #[test]
@@ -724,7 +724,7 @@ fn test_validate_list_offsets() {
 )]
 fn test_validate_large_list_offsets() {
     let field_type = Field::new("f", DataType::Int32, true);
-    check_list_offsets::<i64>(DataType::LargeList(Box::new(field_type)));
+    check_list_offsets::<i64>(DataType::LargeList(Arc::new(field_type)));
 }
 
 /// Test that the list of type `data_type` generates correct errors for negative offsets
@@ -735,7 +735,7 @@ fn test_validate_large_list_offsets() {
 fn test_validate_list_negative_offsets() {
     let values: Int32Array = [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
     let field_type = Field::new("f", values.data_type().clone(), true);
-    let data_type = DataType::List(Box::new(field_type));
+    let data_type = DataType::List(Arc::new(field_type));
 
     // -1 is an invalid offset any way you look at it
     let offsets: Vec<i32> = vec![0, 2, -1, 4];
@@ -1027,7 +1027,7 @@ fn test_sliced_array_child() {
     let offsets = Buffer::from_iter([1_i32, 3_i32]);
 
     let list_field = Field::new("element", DataType::Int32, false);
-    let data_type = DataType::List(Box::new(list_field));
+    let data_type = DataType::List(Arc::new(list_field));
 
     let data = unsafe {
         ArrayData::new_unchecked(

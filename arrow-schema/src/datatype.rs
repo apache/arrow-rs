@@ -18,8 +18,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::field::Field;
-use crate::{Fields, UnionFields};
+use crate::{FieldRef, Fields, UnionFields};
 
 /// The set of datatypes that are supported by this implementation of Apache Arrow.
 ///
@@ -183,13 +182,13 @@ pub enum DataType {
     /// A list of some logical data type with variable length.
     ///
     /// A single List array can store up to [`i32::MAX`] elements in total
-    List(Box<Field>),
+    List(FieldRef),
     /// A list of some logical data type with fixed length.
-    FixedSizeList(Box<Field>, i32),
+    FixedSizeList(FieldRef, i32),
     /// A list of some logical data type with variable length and 64-bit offsets.
     ///
     /// A single LargeList array can store up to [`i64::MAX`] elements in total
-    LargeList(Box<Field>),
+    LargeList(FieldRef),
     /// A nested datatype that contains a number of sub-fields.
     Struct(Fields),
     /// A nested datatype that can represent slots of differing types. Components:
@@ -249,7 +248,7 @@ pub enum DataType {
     /// has two children: key type and the second the value type. The names of the
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
-    Map(Box<Field>, bool),
+    Map(FieldRef, bool),
     /// A run-end encoding (REE) is a variation of run-length encoding (RLE). These
     /// encodings are well-suited for representing data containing sequences of the
     /// same value, called runs. Each run is represented as a value and an integer giving
@@ -261,7 +260,7 @@ pub enum DataType {
     ///
     /// These child arrays are prescribed the standard names of "run_ends" and "values"
     /// respectively.
-    RunEndEncoded(Box<Field>, Box<Field>),
+    RunEndEncoded(FieldRef, FieldRef),
 }
 
 /// An absolute length of time in seconds, milliseconds, microseconds or nanoseconds.
@@ -520,6 +519,7 @@ pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Field;
 
     #[test]
     #[cfg(feature = "serde")]
@@ -574,21 +574,21 @@ mod tests {
     #[test]
     fn test_list_datatype_equality() {
         // tests that list type equality is checked while ignoring list names
-        let list_a = DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
-        let list_b = DataType::List(Box::new(Field::new("array", DataType::Int32, true)));
-        let list_c = DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
-        let list_d = DataType::List(Box::new(Field::new("item", DataType::UInt32, true)));
+        let list_a = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_b = DataType::List(Arc::new(Field::new("array", DataType::Int32, true)));
+        let list_c = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_d = DataType::List(Arc::new(Field::new("item", DataType::UInt32, true)));
         assert!(list_a.equals_datatype(&list_b));
         assert!(!list_a.equals_datatype(&list_c));
         assert!(!list_b.equals_datatype(&list_c));
         assert!(!list_a.equals_datatype(&list_d));
 
         let list_e =
-            DataType::FixedSizeList(Box::new(Field::new("item", list_a, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new("item", list_a, false)), 3);
         let list_f =
-            DataType::FixedSizeList(Box::new(Field::new("array", list_b, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new("array", list_b, false)), 3);
         let list_g = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::FixedSizeBinary(3), true)),
+            Arc::new(Field::new("item", DataType::FixedSizeBinary(3), true)),
             3,
         );
         assert!(list_e.equals_datatype(&list_f));
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_nested() {
-        let list = DataType::List(Box::new(Field::new("foo", DataType::Utf8, true)));
+        let list = DataType::List(Arc::new(Field::new("foo", DataType::Utf8, true)));
 
         assert!(!DataType::is_nested(&DataType::Boolean));
         assert!(!DataType::is_nested(&DataType::Int32));

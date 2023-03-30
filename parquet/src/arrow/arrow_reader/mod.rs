@@ -1181,7 +1181,7 @@ mod tests {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 
         // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
-        let data = ArrayDataBuilder::new(ArrowDataType::List(Box::new(Field::new(
+        let data = ArrayDataBuilder::new(ArrowDataType::List(Arc::new(Field::new(
             "item",
             decimals.data_type().clone(),
             false,
@@ -2122,7 +2122,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "emptylist",
-            ArrowDataType::List(Box::new(Field::new("item", ArrowDataType::Null, true))),
+            ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Null, true))),
             true,
         );
 
@@ -2236,7 +2236,7 @@ mod tests {
     fn test_row_group_batch(row_group_size: usize, batch_size: usize) {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "list",
-            ArrowDataType::List(Box::new(Field::new("item", ArrowDataType::Int32, true))),
+            ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Int32, true))),
             true,
         )]));
 

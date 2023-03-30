@@ -241,7 +241,7 @@ fn make_fixed_size_list_array() -> FixedSizeListArray {
 
     // Construct a fixed size list array from the above two
     let list_data_type =
-        DataType::FixedSizeList(Box::new(Field::new("item", DataType::Int32, true)), 2);
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 2);
     let list_data = ArrayData::builder(list_data_type)
         .len(5)
         .add_child_data(value_data)
@@ -275,7 +275,7 @@ fn make_list_array() -> ListArray {
 
     // Construct a list array from the above two
     let list_data_type =
-        DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+        DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)
@@ -299,7 +299,7 @@ fn make_large_list_array() -> LargeListArray {
 
     // Construct a list array from the above two
     let list_data_type =
-        DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+        DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)
@@ -394,12 +394,12 @@ fn get_all_types() -> Vec<DataType> {
         LargeBinary,
         Utf8,
         LargeUtf8,
-        List(Box::new(Field::new("item", DataType::Int8, true))),
-        List(Box::new(Field::new("item", DataType::Utf8, true))),
-        FixedSizeList(Box::new(Field::new("item", DataType::Int8, true)), 10),
-        FixedSizeList(Box::new(Field::new("item", DataType::Utf8, false)), 10),
-        LargeList(Box::new(Field::new("item", DataType::Int8, true))),
-        LargeList(Box::new(Field::new("item", DataType::Utf8, false))),
+        List(Arc::new(Field::new("item", DataType::Int8, true))),
+        List(Arc::new(Field::new("item", DataType::Utf8, true))),
+        FixedSizeList(Arc::new(Field::new("item", DataType::Int8, true)), 10),
+        FixedSizeList(Arc::new(Field::new("item", DataType::Utf8, false)), 10),
+        LargeList(Arc::new(Field::new("item", DataType::Int8, true))),
+        LargeList(Arc::new(Field::new("item", DataType::Utf8, false))),
         Struct(Fields::from(vec![
             Field::new("f1", DataType::Int32, true),
             Field::new("f2", DataType::Utf8, true),

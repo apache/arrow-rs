@@ -1254,10 +1254,10 @@ mod tests {
     fn create_test_projection_schema() -> Schema {
         // define field types
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
 
         let fixed_size_list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, false)),
             3,
         );
 
@@ -1280,15 +1280,15 @@ mod tests {
             Field::new("id", DataType::Int32, false),
             Field::new(
                 "list",
-                DataType::List(Box::new(Field::new("item", DataType::Int8, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Int8, true))),
                 false,
             ),
         ]);
         let struct_data_type = DataType::Struct(struct_fields);
 
         let run_encoded_data_type = DataType::RunEndEncoded(
-            Box::new(Field::new("run_ends", DataType::Int16, false)),
-            Box::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
         );
 
         // define schema
@@ -1691,7 +1691,7 @@ mod tests {
             (values_field, make_array(value_dict_array.into_data())),
         ]);
         let map_data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
                 true,
@@ -1763,7 +1763,7 @@ mod tests {
     #[test]
     fn test_roundtrip_stream_dict_of_list_of_dict() {
         // list
-        let list_data_type = DataType::List(Box::new(Field::new_dict(
+        let list_data_type = DataType::List(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
@@ -1777,7 +1777,7 @@ mod tests {
         );
 
         // large list
-        let list_data_type = DataType::LargeList(Box::new(Field::new_dict(
+        let list_data_type = DataType::LargeList(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
@@ -1799,7 +1799,7 @@ mod tests {
         let dict_data = dict_array.data();
 
         let list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new_dict(
+            Arc::new(Field::new_dict(
                 "item",
                 DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
                 true,

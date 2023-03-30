@@ -268,7 +268,7 @@ mod tests {
         data_type: ArrowType,
         item_nullable: bool,
     ) -> ArrowType {
-        let field = Box::new(Field::new("item", data_type, item_nullable));
+        let field = Arc::new(Field::new("item", data_type, item_nullable));
         GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field)
     }
 
@@ -584,7 +584,7 @@ mod tests {
             batch.data_type(),
             &ArrowType::Struct(Fields::from(vec![Field::new(
                 "table_info",
-                ArrowType::List(Box::new(Field::new(
+                ArrowType::List(Arc::new(Field::new(
                     "table_info",
                     ArrowType::Struct(
                         vec![Field::new("name", ArrowType::Binary, false)].into()

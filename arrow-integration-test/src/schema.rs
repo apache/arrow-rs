@@ -105,6 +105,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
     use serde_json::Value;
+    use std::sync::Arc;
 
     #[test]
     fn schema_json() {
@@ -155,22 +156,22 @@ mod tests {
                 Field::new("c21", DataType::Interval(IntervalUnit::MonthDayNano), false),
                 Field::new(
                     "c22",
-                    DataType::List(Box::new(Field::new("item", DataType::Boolean, true))),
+                    DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
                     false,
                 ),
                 Field::new(
                     "c23",
                     DataType::FixedSizeList(
-                        Box::new(Field::new("bools", DataType::Boolean, false)),
+                        Arc::new(Field::new("bools", DataType::Boolean, false)),
                         5,
                     ),
                     false,
                 ),
                 Field::new(
                     "c24",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "inner_list",
-                        DataType::List(Box::new(Field::new(
+                        DataType::List(Arc::new(Field::new(
                             "struct",
                             DataType::Struct(Fields::empty()),
                             true,
@@ -208,9 +209,9 @@ mod tests {
                 Field::new("c35", DataType::LargeUtf8, true),
                 Field::new(
                     "c36",
-                    DataType::LargeList(Box::new(Field::new(
+                    DataType::LargeList(Arc::new(Field::new(
                         "inner_large_list",
-                        DataType::LargeList(Box::new(Field::new(
+                        DataType::LargeList(Arc::new(Field::new(
                             "struct",
                             DataType::Struct(Fields::empty()),
                             false,
@@ -222,7 +223,7 @@ mod tests {
                 Field::new(
                     "c37",
                     DataType::Map(
-                        Box::new(Field::new(
+                        Arc::new(Field::new(
                             "my_entries",
                             DataType::Struct(Fields::from(vec![
                                 Field::new("my_keys", DataType::Utf8, false),

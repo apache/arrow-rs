@@ -126,13 +126,13 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                         }
                         match data_type {
                             DataType::List(_) => {
-                                DataType::List(Box::new(field_from_json(&values[0])?))
+                                DataType::List(Arc::new(field_from_json(&values[0])?))
                             }
-                            DataType::LargeList(_) => DataType::LargeList(Box::new(
+                            DataType::LargeList(_) => DataType::LargeList(Arc::new(
                                 field_from_json(&values[0])?,
                             )),
                             DataType::FixedSizeList(_, int) => DataType::FixedSizeList(
-                                Box::new(field_from_json(&values[0])?),
+                                Arc::new(field_from_json(&values[0])?),
                                 int,
                             ),
                             _ => unreachable!(
@@ -173,7 +173,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                             // child must be a struct
                             match child.data_type() {
                                 DataType::Struct(map_fields) if map_fields.len() == 2 => {
-                                    DataType::Map(Box::new(child), keys_sorted)
+                                    DataType::Map(Arc::new(child), keys_sorted)
                                 }
                                 t  => {
                                     return Err(ArrowError::ParseError(
@@ -354,7 +354,7 @@ mod tests {
         let f = Field::new(
             "my_map",
             DataType::Map(
-                Box::new(Field::new(
+                Arc::new(Field::new(
                     "my_entries",
                     DataType::Struct(Fields::from(vec![
                         Field::new("my_keys", DataType::Utf8, false),
@@ -518,7 +518,7 @@ mod tests {
         let expected = Field::new(
             "my_map",
             DataType::Map(
-                Box::new(Field::new(
+                Arc::new(Field::new(
                     "my_entries",
                     DataType::Struct(Fields::from(vec![
                         Field::new("my_keys", DataType::Utf8, false),
