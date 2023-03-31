@@ -680,16 +680,8 @@ mod tests {
     #[test]
     fn write_dictionary() {
         let schema = Schema::new(vec![
-            Field::new(
-                "c1",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                true,
-            ),
-            Field::new(
-                "c2",
-                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-                true,
-            ),
+            Field::new_dictionary("c1", DataType::Int32, DataType::Utf8, true),
+            Field::new_dictionary("c2", DataType::Int8, DataType::Utf8, true),
         ]);
 
         let a: DictionaryArray<Int32Type> = vec![

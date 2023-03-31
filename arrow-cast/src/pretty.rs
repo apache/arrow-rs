@@ -257,9 +257,8 @@ mod tests {
     #[test]
     fn test_pretty_format_dictionary() {
         // define a schema.
-        let field_type =
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-        let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
+        let field = Field::new_dictionary("d1", DataType::Int32, DataType::Utf8, true);
+        let schema = Arc::new(Schema::new(vec![field]));
 
         let mut builder = StringDictionaryBuilder::<Int32Type>::new();
 
@@ -633,18 +632,16 @@ mod tests {
     #[test]
     fn test_pretty_format_struct() {
         let schema = Schema::new(vec![
-            Field::new(
+            Field::new_struct(
                 "c1",
-                DataType::Struct(Fields::from(vec![
+                vec![
                     Field::new("c11", DataType::Int32, true),
-                    Field::new(
+                    Field::new_struct(
                         "c12",
-                        DataType::Struct(
-                            vec![Field::new("c121", DataType::Utf8, false)].into(),
-                        ),
+                        vec![Field::new("c121", DataType::Utf8, false)],
                         false,
                     ),
-                ])),
+                ],
                 false,
             ),
             Field::new("c2", DataType::Utf8, false),
@@ -656,11 +653,9 @@ mod tests {
                 Arc::new(Int32Array::from(vec![Some(1), None, Some(5)])) as ArrayRef,
             ),
             (
-                Field::new(
+                Field::new_struct(
                     "c12",
-                    DataType::Struct(
-                        vec![Field::new("c121", DataType::Utf8, false)].into(),
-                    ),
+                    vec![Field::new("c121", DataType::Utf8, false)],
                     false,
                 ),
                 Arc::new(StructArray::from(vec![(
@@ -700,19 +695,14 @@ mod tests {
         builder.append_null::<Int32Type>("a").unwrap();
         let union = builder.build().unwrap();
 
-        let schema = Schema::new(vec![Field::new(
+        let schema = Schema::new(vec![Field::new_union(
             "Teamsters",
-            DataType::Union(
-                UnionFields::new(
-                    vec![0, 1],
-                    vec![
-                        Field::new("a", DataType::Int32, false),
-                        Field::new("b", DataType::Float64, false),
-                    ],
-                ),
-                UnionMode::Dense,
-            ),
-            false,
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Float64, false),
+            ],
+            UnionMode::Dense,
         )]);
 
         let batch =
@@ -742,19 +732,14 @@ mod tests {
         builder.append_null::<Int32Type>("a").unwrap();
         let union = builder.build().unwrap();
 
-        let schema = Schema::new(vec![Field::new(
+        let schema = Schema::new(vec![Field::new_union(
             "Teamsters",
-            DataType::Union(
-                UnionFields::new(
-                    vec![0, 1],
-                    vec![
-                        Field::new("a", DataType::Int32, false),
-                        Field::new("b", DataType::Float64, false),
-                    ],
-                ),
-                UnionMode::Sparse,
-            ),
-            false,
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Float64, false),
+            ],
+            UnionMode::Sparse,
         )]);
 
         let batch =
@@ -786,19 +771,14 @@ mod tests {
         builder.append_null::<Float64Type>("c").unwrap();
         let inner = builder.build().unwrap();
 
-        let inner_field = Field::new(
+        let inner_field = Field::new_union(
             "European Union",
-            DataType::Union(
-                UnionFields::new(
-                    vec![0, 1],
-                    vec![
-                        Field::new("b", DataType::Int32, false),
-                        Field::new("c", DataType::Float64, false),
-                    ],
-                ),
-                UnionMode::Dense,
-            ),
-            false,
+            vec![0, 1],
+            vec![
+                Field::new("b", DataType::Int32, false),
+                Field::new("c", DataType::Float64, false),
+            ],
+            UnionMode::Dense,
         );
 
         // Can't use UnionBuilder with non-primitive types, so manually build outer UnionArray
@@ -812,16 +792,11 @@ mod tests {
 
         let outer = UnionArray::try_new(&[0, 1], type_ids, None, children).unwrap();
 
-        let schema = Schema::new(vec![Field::new(
+        let schema = Schema::new(vec![Field::new_union(
             "Teamsters",
-            DataType::Union(
-                UnionFields::new(
-                    vec![0, 1],
-                    vec![Field::new("a", DataType::Int32, true), inner_field],
-                ),
-                UnionMode::Sparse,
-            ),
-            false,
+            vec![0, 1],
+            vec![Field::new("a", DataType::Int32, true), inner_field],
+            UnionMode::Sparse,
         )]);
 
         let batch =

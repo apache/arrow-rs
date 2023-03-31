@@ -906,107 +906,91 @@ mod tests {
                 ),
                 Field::new("utf8", DataType::Utf8, false),
                 Field::new("binary", DataType::Binary, false),
-                Field::new(
+                Field::new_list(
                     "list[u8]",
-                    DataType::List(Arc::new(Field::new("item", DataType::UInt8, false))),
+                    Field::new("item", DataType::UInt8, false),
                     true,
                 ),
-                Field::new(
+                Field::new_list(
                     "list[struct<float32, int32, bool>]",
-                    List(Arc::new(Field::new(
+                    Field::new_struct(
                         "struct",
-                        Struct(Fields::from(vec![
-                            Field::new("float32", DataType::UInt8, false),
-                            Field::new("int32", DataType::Int32, true),
-                            Field::new("bool", DataType::Boolean, true),
-                        ])),
+                        vec![
+                            Field::new("float32", UInt8, false),
+                            Field::new("int32", Int32, true),
+                            Field::new("bool", Boolean, true),
+                        ],
                         true,
-                    ))),
+                    ),
                     false,
                 ),
-                Field::new(
+                Field::new_struct(
                     "struct<dictionary<int32, utf8>>",
-                    Struct(Fields::from(vec![Field::new(
+                    vec![Field::new(
                         "dictionary<int32, utf8>",
                         Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                         false,
-                    )])),
+                    )],
                     false,
                 ),
-                Field::new(
+                Field::new_struct(
                     "struct<int64, list[struct<date32, list[struct<>]>]>",
-                    Struct(Fields::from(vec![
+                    vec![
                         Field::new("int64", DataType::Int64, true),
-                        Field::new(
+                        Field::new_list(
                             "list[struct<date32, list[struct<>]>]",
-                            DataType::List(Arc::new(Field::new(
+                            Field::new_struct(
                                 "struct",
-                                DataType::Struct(Fields::from(vec![
+                                vec![
                                     Field::new("date32", DataType::Date32, true),
-                                    Field::new(
+                                    Field::new_list(
                                         "list[struct<>]",
-                                        DataType::List(Arc::new(Field::new(
+                                        Field::new(
                                             "struct",
                                             DataType::Struct(Fields::empty()),
                                             false,
-                                        ))),
-                                        false,
-                                    ),
-                                ])),
-                                false,
-                            ))),
-                            false,
-                        ),
-                    ])),
-                    false,
-                ),
-                Field::new(
-                    "union<int64, list[union<date32, list[union<>]>]>",
-                    DataType::Union(
-                        UnionFields::new(
-                            vec![0, 1],
-                            vec![
-                                Field::new("int64", DataType::Int64, true),
-                                Field::new(
-                                    "list[union<date32, list[union<>]>]",
-                                    DataType::List(Arc::new(Field::new(
-                                        "union<date32, list[union<>]>",
-                                        DataType::Union(
-                                            UnionFields::new(
-                                                vec![0, 1],
-                                                vec![
-                                                    Field::new(
-                                                        "date32",
-                                                        DataType::Date32,
-                                                        true,
-                                                    ),
-                                                    Field::new(
-                                                        "list[union<>]",
-                                                        DataType::List(Arc::new(
-                                                            Field::new(
-                                                                "union",
-                                                                DataType::Union(
-                                                                    UnionFields::empty(),
-                                                                    UnionMode::Sparse,
-                                                                ),
-                                                                false,
-                                                            ),
-                                                        )),
-                                                        false,
-                                                    ),
-                                                ],
-                                            ),
-                                            UnionMode::Dense,
                                         ),
                                         false,
-                                    ))),
-                                    false,
-                                ),
-                            ],
+                                    ),
+                                ],
+                                false,
+                            ),
+                            false,
                         ),
-                        UnionMode::Sparse,
-                    ),
+                    ],
                     false,
+                ),
+                Field::new_union(
+                    "union<int64, list[union<date32, list[union<>]>]>",
+                    vec![0, 1],
+                    vec![
+                        Field::new("int64", DataType::Int64, true),
+                        Field::new_list(
+                            "list[union<date32, list[union<>]>]",
+                            Field::new_union(
+                                "union<date32, list[union<>]>",
+                                vec![0, 1],
+                                vec![
+                                    Field::new("date32", DataType::Date32, true),
+                                    Field::new_list(
+                                        "list[union<>]",
+                                        Field::new(
+                                            "union",
+                                            DataType::Union(
+                                                UnionFields::empty(),
+                                                UnionMode::Sparse,
+                                            ),
+                                            false,
+                                        ),
+                                        false,
+                                    ),
+                                ],
+                                UnionMode::Dense,
+                            ),
+                            false,
+                        ),
+                    ],
+                    UnionMode::Sparse,
                 ),
                 Field::new("struct<>", DataType::Struct(Fields::empty()), true),
                 Field::new(
