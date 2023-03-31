@@ -418,7 +418,7 @@ impl<'a> MutableArrayData<'a> {
             | DataType::Interval(_)
             | DataType::FixedSizeBinary(_) => vec![],
             DataType::Map(_, _) | DataType::List(_) | DataType::LargeList(_) => {
-                let childs = arrays
+                let children = arrays
                     .iter()
                     .map(|array| &array.child_data()[0])
                     .collect::<Vec<_>>();
@@ -435,7 +435,7 @@ impl<'a> MutableArrayData<'a> {
                 };
 
                 vec![MutableArrayData::with_capacities(
-                    childs, use_nulls, capacities,
+                    children, use_nulls, capacities,
                 )]
             }
             // the dictionary type just appends keys and clones the values.
@@ -495,11 +495,11 @@ impl<'a> MutableArrayData<'a> {
                 ]
             }
             DataType::FixedSizeList(_, _) => {
-                let childs = arrays
+                let children = arrays
                     .iter()
                     .map(|array| &array.child_data()[0])
                     .collect::<Vec<_>>();
-                vec![MutableArrayData::new(childs, use_nulls, array_capacity)]
+                vec![MutableArrayData::new(children, use_nulls, array_capacity)]
             }
             DataType::Union(fields, _) => (0..fields.len())
                 .map(|i| {
