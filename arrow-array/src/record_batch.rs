@@ -451,7 +451,7 @@ impl From<StructArray> for RecordBatch {
         assert_eq!(
             value.null_count(),
             0,
-            "Cannot convert nullable StructArray to RecordBatch"
+            "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
         );
         let row_count = value.len();
         let schema = Arc::new(Schema::new(value.fields().clone()));
