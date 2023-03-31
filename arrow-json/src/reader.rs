@@ -2172,7 +2172,7 @@ mod tests {
     }
 
     #[test]
-    fn test_coersion_scalar_and_list() {
+    fn test_coercion_scalar_and_list() {
         use arrow_schema::DataType::*;
 
         assert_eq!(

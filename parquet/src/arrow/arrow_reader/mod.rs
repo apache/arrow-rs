@@ -2642,7 +2642,7 @@ mod tests {
     }
 
     #[test]
-    fn test_arbitary_decimal() {
+    fn test_arbitrary_decimal() {
         let values = [1, 2, 3, 4, 5, 6, 7, 8];
         let decimals_19_0 = Decimal128Array::from_iter_values(values)
             .with_precision_and_scale(19, 0)

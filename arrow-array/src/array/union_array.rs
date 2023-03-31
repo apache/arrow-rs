@@ -957,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn test_union_array_validaty() {
+    fn test_union_array_validity() {
         let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append_null::<Int32Type>("a").unwrap();

@@ -38,7 +38,7 @@ async fn test_empty() {
 
 #[tokio::test]
 async fn test_empty_batch() {
-    let batch = make_primative_batch(5);
+    let batch = make_primitive_batch(5);
     let empty = RecordBatch::new_empty(batch.schema());
     roundtrip(vec![empty]).await;
 }
@@ -59,13 +59,13 @@ async fn test_error() {
 }
 
 #[tokio::test]
-async fn test_primative_one() {
-    roundtrip(vec![make_primative_batch(5)]).await;
+async fn test_primitive_one() {
+    roundtrip(vec![make_primitive_batch(5)]).await;
 }
 
 #[tokio::test]
 async fn test_schema_metadata() {
-    let batch = make_primative_batch(5);
+    let batch = make_primitive_batch(5);
     let metadata = HashMap::from([("some_key".to_owned(), "some_value".to_owned())]);
 
     // create a batch that has schema level metadata
@@ -76,18 +76,18 @@ async fn test_schema_metadata() {
 }
 
 #[tokio::test]
-async fn test_primative_many() {
+async fn test_primitive_many() {
     roundtrip(vec![
-        make_primative_batch(1),
-        make_primative_batch(7),
-        make_primative_batch(32),
+        make_primitive_batch(1),
+        make_primitive_batch(7),
+        make_primitive_batch(32),
     ])
     .await;
 }
 
 #[tokio::test]
-async fn test_primative_empty() {
-    let batch = make_primative_batch(5);
+async fn test_primitive_empty() {
+    let batch = make_primitive_batch(5);
     let empty = RecordBatch::new_empty(batch.schema());
 
     roundtrip(vec![batch, empty]).await;
@@ -137,7 +137,7 @@ async fn test_zero_batches_schema_specified() {
 }
 
 #[tokio::test]
-async fn test_zero_batches_dictonary_schema_specified() {
+async fn test_zero_batches_dictionary_schema_specified() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int64, false),
         Field::new(
@@ -166,7 +166,7 @@ async fn test_zero_batches_dictonary_schema_specified() {
 
 #[tokio::test]
 async fn test_app_metadata() {
-    let input_batch_stream = futures::stream::iter(vec![Ok(make_primative_batch(78))]);
+    let input_batch_stream = futures::stream::iter(vec![Ok(make_primitive_batch(78))]);
 
     let app_metadata = Bytes::from("My Metadata");
     let encoder = FlightDataEncoderBuilder::default().with_metadata(app_metadata.clone());
@@ -196,7 +196,7 @@ async fn test_app_metadata() {
 
 #[tokio::test]
 async fn test_max_message_size() {
-    let input_batch_stream = futures::stream::iter(vec![Ok(make_primative_batch(5))]);
+    let input_batch_stream = futures::stream::iter(vec![Ok(make_primitive_batch(5))]);
 
     // 5 input rows, with a very small limit should result in 5 batch messages
     let encoder = FlightDataEncoderBuilder::default().with_max_flight_data_size(1);
@@ -223,13 +223,13 @@ async fn test_max_message_size_fuzz() {
     // send through batches of varying sizes with various max
     // batch sizes and ensure the data gets through ok
     let input = vec![
-        make_primative_batch(123),
-        make_primative_batch(17),
-        make_primative_batch(201),
-        make_primative_batch(2),
-        make_primative_batch(1),
-        make_primative_batch(11),
-        make_primative_batch(127),
+        make_primitive_batch(123),
+        make_primitive_batch(17),
+        make_primitive_batch(201),
+        make_primitive_batch(2),
+        make_primitive_batch(1),
+        make_primitive_batch(11),
+        make_primitive_batch(127),
     ];
 
     for max_message_size_bytes in [10, 1024, 2048, 6400, 3211212] {
@@ -257,7 +257,7 @@ async fn test_max_message_size_fuzz() {
 async fn test_mismatched_record_batch_schema() {
     // send 2 batches with different schemas
     let input_batch_stream = futures::stream::iter(vec![
-        Ok(make_primative_batch(5)),
+        Ok(make_primitive_batch(5)),
         Ok(make_dictionary_batch(3)),
     ]);
 
@@ -274,7 +274,7 @@ async fn test_mismatched_record_batch_schema() {
 
 #[tokio::test]
 async fn test_chained_streams_batch_decoder() {
-    let batch1 = make_primative_batch(5);
+    let batch1 = make_primitive_batch(5);
     let batch2 = make_dictionary_batch(3);
 
     // Model sending two flight streams back to back, with different schemas
@@ -299,7 +299,7 @@ async fn test_chained_streams_batch_decoder() {
 
 #[tokio::test]
 async fn test_chained_streams_data_decoder() {
-    let batch1 = make_primative_batch(5);
+    let batch1 = make_primitive_batch(5);
     let batch2 = make_dictionary_batch(3);
 
     // Model sending two flight streams back to back, with different schemas
@@ -363,27 +363,27 @@ async fn test_mismatched_schema_message() {
 
     // primitive batch first (has more columns)
     do_test(
-        make_primative_batch(5),
+        make_primitive_batch(5),
         make_dictionary_batch(3),
         "Error decoding ipc RecordBatch: Io error: Invalid data for schema",
     )
     .await;
 
-    // dictioanry batch first
+    // dictionary batch first
     do_test(
         make_dictionary_batch(3),
-        make_primative_batch(5),
+        make_primitive_batch(5),
         "Error decoding ipc RecordBatch: Invalid argument error",
     )
     .await;
 }
 
-/// Make a primtive batch for testing
+/// Make a primitive batch for testing
 ///
 /// Example:
 /// i: 0, 1, None, 3, 4
 /// f: 5.0, 4.0, None, 2.0, 1.0
-fn make_primative_batch(num_rows: usize) -> RecordBatch {
+fn make_primitive_batch(num_rows: usize) -> RecordBatch {
     let i: UInt8Array = (0..num_rows)
         .map(|i| {
             if i == num_rows / 2 {

@@ -614,7 +614,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "The child array cannot contain null values.")]
-    fn test_stirng_array_from_list_array_with_child_nulls_failed() {
+    fn test_string_array_from_list_array_with_child_nulls_failed() {
         _test_generic_string_array_from_list_array_with_child_nulls_failed::<i32>();
     }
 

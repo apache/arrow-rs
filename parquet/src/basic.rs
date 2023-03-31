@@ -2023,7 +2023,7 @@ mod tests {
     }
 
     #[test]
-    fn test_column_order_get_coverted_type_sort_order() {
+    fn test_column_order_get_converted_type_sort_order() {
         // Helper to check the order in a list of values.
         // Only converted type is checked.
         fn check_sort_order(types: Vec<ConvertedType>, expected_order: SortOrder) {
