@@ -150,18 +150,29 @@ impl Field {
     /// Create a new [`Field`] with [`DataType::Dictionary`]
     ///
     /// Use [`Self::new_dict`] for more advanced dictionary options
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`!key.is_dictionary_key_type`][DataType::is_dictionary_key_type]
     pub fn new_dictionary(
         name: impl Into<String>,
         key: DataType,
         value: DataType,
         nullable: bool,
     ) -> Self {
-        // TODO: Should this enforce `key` is a dictionary key type
+        assert!(
+            key.is_dictionary_key_type(),
+            "{key} is not a valid dictionary key"
+        );
         let data_type = DataType::Dictionary(Box::new(key), Box::new(value));
         Self::new(name, data_type, nullable)
     }
 
     /// Create a new [`Field`] with [`DataType::Struct`]
+    ///
+    /// - `name`: the name of the [`DataType::List`] field
+    /// - `fields`: the description of each struct element
+    /// - `nullable`: if the [`DataType::Struct`] array is nullable
     pub fn new_struct(
         name: impl Into<String>,
         fields: impl Into<Fields>,
