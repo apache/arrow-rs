@@ -267,7 +267,7 @@ impl RawDecoder {
     /// It can also be used with arbitrary [`Serialize`] types
     ///
     /// ```
-    /// use std::collections::HashMap;
+    /// use std::collections::BTreeMap;
     /// use std::sync::Arc;
     /// use arrow_array::StructArray;
     /// use arrow_cast::display::{ArrayFormatter, FormatOptions};
@@ -304,7 +304,7 @@ impl RawDecoder {
     ///
     /// #[derive(Serialize)]
     /// struct Nested {
-    ///     map: HashMap<String, Vec<String>>
+    ///     map: BTreeMap<String, Vec<String>>
     /// }
     ///
     /// impl Nested {
@@ -365,7 +365,7 @@ impl RawDecoder {
     /// let options = FormatOptions::default().with_null("null");
     /// let formatter = ArrayFormatter::try_new(&s, &options).unwrap();
     ///
-    /// assert_eq!(&formatter.value(0).to_string(), "{int32: 34, list: [1.0, 2.0, 34.0], nested: [null, {map: {key2: [baz], key1: [foo, bar]}}]}");
+    /// assert_eq!(&formatter.value(0).to_string(), "{int32: 34, list: [1.0, 2.0, 34.0], nested: [null, {map: {key1: [foo, bar], key2: [baz]}}]}");
     /// assert_eq!(&formatter.value(1).to_string(), "{int32: 56, list: [], nested: []}");
     /// assert_eq!(&formatter.value(2).to_string(), "{int32: 24, list: [-1.0, 245.0], nested: [null]}");
     /// ```
