@@ -383,7 +383,7 @@ pub fn sort_to_indices(
             DataType::Int64 => sort_run_to_indices::<Int64Type>(values, &options, limit),
             dt => {
                 return Err(ArrowError::ComputeError(format!(
-                    "Inavlid run end data type: {dt}"
+                    "Invalid run end data type: {dt}"
                 )))
             }
         },
