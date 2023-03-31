@@ -288,14 +288,14 @@ impl RawDecoder {
     ///         let nested = DataType::Struct(Nested::fields());
     ///         Fields::from([
     ///             Arc::new(Field::new("int32", DataType::Int32, false)),
-    ///             Arc::new(Field::new(
+    ///             Arc::new(Field::new_list(
     ///                 "list",
-    ///                 DataType::List(Arc::new(Field::new("element", DataType::Float64, false))),
+    ///                 Field::new("element", DataType::Float64, false),
     ///                 false,
     ///             )),
-    ///             Arc::new(Field::new(
+    ///             Arc::new(Field::new_list(
     ///                 "nested",
-    ///                 DataType::List(Arc::new(Field::new("element", nested, true))),
+    ///                 Field::new("element", nested, true),
     ///                 true,
     ///             )),
     ///         ])
@@ -310,19 +310,16 @@ impl RawDecoder {
     /// impl Nested {
     ///     /// Returns the [`Fields`] for [`Nested`]
     ///     fn fields() -> Fields {
-    ///         let value = DataType::List(Arc::new(Field::new(
-    ///             "element", DataType::Utf8, false
-    ///         )));
-    ///         let map = DataType::Struct(Fields::from([
-    ///             Arc::new(Field::new("key", DataType::Utf8, false)),
-    ///             Arc::new(Field::new("value", value, false)),
-    ///         ]));
+    ///         let element = Field::new("element", DataType::Utf8, false);
     ///         Fields::from([
-    ///             Arc::new(Field::new(
+    ///             Arc::new(Field::new_map(
     ///                 "map",
-    ///                 DataType::Map(Arc::new(Field::new("element", map, true)), false),
-    ///                 true,
-    ///             )),
+    ///                 "entries",
+    ///                 Field::new("key", DataType::Utf8, false),
+    ///                 Field::new_list("value", element, false),
+    ///                 false, // sorted
+    ///                 false, // nullable
+    ///             ))
     ///         ])
     ///     }
     /// }
