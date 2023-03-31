@@ -242,6 +242,8 @@ impl RawDecoder {
     /// compile-time, may benefit from instead implementing custom conversion logic as described
     /// in [arrow_array::builder]
     ///
+    /// This can be used with [`serde_json::Value`]
+    ///
     /// ```
     /// # use std::sync::Arc;
     /// # use serde_json::{Value, json};
@@ -260,6 +262,112 @@ impl RawDecoder {
     /// assert_eq!(batch.num_columns(), 1);
     /// let values = batch.column(0).as_primitive::<Float32Type>().values();
     /// assert_eq!(values, &[2.3, 5.7])
+    /// ```
+    ///
+    /// It can also be used with arbitrary [`Serialize`] types
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    /// use arrow_array::StructArray;
+    /// use arrow_cast::display::{ArrayFormatter, FormatOptions};
+    /// use arrow_json::RawReaderBuilder;
+    /// use arrow_schema::{DataType, Field, Fields, Schema};
+    /// use serde::Serialize;
+    ///
+    /// #[derive(Serialize)]
+    /// struct MyStruct {
+    ///     int32: i32,
+    ///     list: Vec<f64>,
+    ///     nested: Vec<Option<Nested>>,
+    /// }
+    ///
+    /// impl MyStruct {
+    ///     /// Returns the [`Fields`] for [`MyStruct`]
+    ///     fn fields() -> Fields {
+    ///         let nested = DataType::Struct(Nested::fields());
+    ///         Fields::from([
+    ///             Arc::new(Field::new("int32", DataType::Int32, false)),
+    ///             Arc::new(Field::new(
+    ///                 "list",
+    ///                 DataType::List(Arc::new(Field::new("element", DataType::Float64, false))),
+    ///                 false,
+    ///             )),
+    ///             Arc::new(Field::new(
+    ///                 "nested",
+    ///                 DataType::List(Arc::new(Field::new("element", nested, true))),
+    ///                 true,
+    ///             )),
+    ///         ])
+    ///     }
+    /// }
+    ///
+    /// #[derive(Serialize)]
+    /// struct Nested {
+    ///     map: HashMap<String, Vec<String>>
+    /// }
+    ///
+    /// impl Nested {
+    ///     /// Returns the [`Fields`] for [`Nested`]
+    ///     fn fields() -> Fields {
+    ///         let value = DataType::List(Arc::new(Field::new(
+    ///             "element", DataType::Utf8, false
+    ///         )));
+    ///         let map = DataType::Struct(Fields::from([
+    ///             Arc::new(Field::new("key", DataType::Utf8, false)),
+    ///             Arc::new(Field::new("value", value, false)),
+    ///         ]));
+    ///         Fields::from([
+    ///             Arc::new(Field::new(
+    ///                 "map",
+    ///                 DataType::Map(Arc::new(Field::new("element", map, true)), false),
+    ///                 true,
+    ///             )),
+    ///         ])
+    ///     }
+    /// }
+    ///
+    /// let data = vec![
+    ///     MyStruct {
+    ///         int32: 34,
+    ///         list: vec![1., 2., 34.],
+    ///         nested: vec![
+    ///             None,
+    ///             Some(Nested {
+    ///                 map: vec![
+    ///                     ("key1".to_string(), vec!["foo".to_string(), "bar".to_string()]),
+    ///                     ("key2".to_string(), vec!["baz".to_string()])
+    ///                 ].into_iter().collect()
+    ///             })
+    ///         ]
+    ///     },
+    ///     MyStruct {
+    ///         int32: 56,
+    ///         list: vec![],
+    ///         nested: vec![]
+    ///     },
+    ///     MyStruct {
+    ///         int32: 24,
+    ///         list: vec![-1., 245.],
+    ///         nested: vec![None]
+    ///     }
+    /// ];
+    ///
+    /// let schema = Schema::new(MyStruct::fields());
+    /// let mut decoder = RawReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
+    /// decoder.serialize(&data).unwrap();
+    /// let batch = decoder.flush().unwrap().unwrap();
+    /// assert_eq!(batch.num_rows(), 3);
+    /// assert_eq!(batch.num_columns(), 3);
+    ///
+    /// // Convert to StructArray to format
+    /// let s = StructArray::from(batch);
+    /// let options = FormatOptions::default().with_null("null");
+    /// let formatter = ArrayFormatter::try_new(&s, &options).unwrap();
+    ///
+    /// assert_eq!(&formatter.value(0).to_string(), "{int32: 34, list: [1.0, 2.0, 34.0], nested: [null, {map: {key2: [baz], key1: [foo, bar]}}]}");
+    /// assert_eq!(&formatter.value(1).to_string(), "{int32: 56, list: [], nested: []}");
+    /// assert_eq!(&formatter.value(2).to_string(), "{int32: 24, list: [-1.0, 245.0], nested: [null]}");
     /// ```
     ///
     /// Note: this ignores any batch size setting, and always decodes all rows
