@@ -45,10 +45,7 @@ fn compare_boolean(left: &dyn Array, right: &dyn Array) -> DynComparator {
     Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
 }
 
-fn compare_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
-where
-    T: OffsetSizeTrait,
-{
+fn compare_string(left: &dyn Array, right: &dyn Array) -> DynComparator {
     let left: StringArray = StringArray::from(left.data().clone());
     let right: StringArray = StringArray::from(right.data().clone());
 
@@ -229,8 +226,8 @@ pub fn build_compare(
         (Duration(Nanosecond), Duration(Nanosecond)) => {
             compare_primitives::<DurationNanosecondType>(left, right)
         }
-        (Utf8, Utf8) => compare_string::<i32>(left, right),
-        (LargeUtf8, LargeUtf8) => compare_string::<i64>(left, right),
+        (Utf8, Utf8) => compare_string(left, right),
+        (LargeUtf8, LargeUtf8) => compare_string(left, right),
         (
             Dictionary(key_type_lhs, value_type_lhs),
             Dictionary(key_type_rhs, value_type_rhs),
