@@ -15,25 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the logical data types of Arrow arrays.
-//!
-//! The most important things you might be looking for are:
-//!  * [`Schema`](crate::datatypes::Schema) to describe a schema.
-//!  * [`Field`](crate::datatypes::Field) to describe one field within a schema.
-//!  * [`DataType`](crate::datatypes::DataType) to describe the type of a field.
+use arrow_buffer::i256;
+use criterion::*;
+use std::str::FromStr;
 
-pub use arrow_array::types::*;
-pub use arrow_array::{
-    ArrowFloatNumericType, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType,
-};
-pub use arrow_buffer::{i256, ArrowNativeType, ToByteSlice};
-pub use arrow_data::decimal::*;
-pub use arrow_schema::{
-    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaBuilder, SchemaRef,
-    TimeUnit, UnionFields, UnionMode,
-};
+fn criterion_benchmark(c: &mut Criterion) {
+    let numbers = vec![
+        i256::ZERO,
+        i256::ONE,
+        i256::MINUS_ONE,
+        i256::from_i128(1233456789),
+        i256::from_i128(-1233456789),
+        i256::from_i128(i128::MAX),
+        i256::from_i128(i128::MIN),
+        i256::MIN,
+        i256::MAX,
+    ];
 
-#[cfg(feature = "ffi")]
-mod ffi;
-#[cfg(feature = "ffi")]
-pub use ffi::*;
+    for number in numbers {
+        let t = black_box(number.to_string());
+        c.bench_function(&format!("i256_parse({t})"), |b| {
+            b.iter(|| i256::from_str(&t).unwrap());
+        });
+    }
+}
+
+criterion_group!(benches, criterion_benchmark);
+criterion_main!(benches);

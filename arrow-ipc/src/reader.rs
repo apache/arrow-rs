@@ -183,7 +183,7 @@ fn create_array(
                 )?;
                 node_index = triple.1;
                 buffer_index = triple.2;
-                struct_arrays.push((struct_field.clone(), triple.0));
+                struct_arrays.push((struct_field.as_ref().clone(), triple.0));
             }
             let null_count = struct_node.null_count() as usize;
             let struct_array = if null_count > 0 {
@@ -263,7 +263,7 @@ fn create_array(
                 value_array.clone(),
             )?
         }
-        Union(fields, field_type_ids, mode) => {
+        Union(fields, mode) => {
             let union_node = nodes.get(node_index);
             node_index += 1;
 
@@ -292,9 +292,10 @@ fn create_array(
                 UnionMode::Sparse => None,
             };
 
-            let mut children = vec![];
+            let mut children = Vec::with_capacity(fields.len());
+            let mut ids = Vec::with_capacity(fields.len());
 
-            for field in fields {
+            for (id, field) in fields.iter() {
                 let triple = create_array(
                     nodes,
                     field,
@@ -310,11 +311,11 @@ fn create_array(
                 node_index = triple.1;
                 buffer_index = triple.2;
 
-                children.push((field.clone(), triple.0));
+                children.push((field.as_ref().clone(), triple.0));
+                ids.push(id);
             }
 
-            let array =
-                UnionArray::try_new(field_type_ids, type_ids, value_offsets, children)?;
+            let array = UnionArray::try_new(&ids, type_ids, value_offsets, children)?;
             Arc::new(array)
         }
         Null => {
@@ -418,7 +419,7 @@ fn skip_field(
             node_index += 1;
             buffer_index += 2;
         }
-        Union(fields, _field_type_ids, mode) => {
+        Union(fields, mode) => {
             node_index += 1;
             buffer_index += 1;
 
@@ -429,7 +430,7 @@ fn skip_field(
                 UnionMode::Sparse => {}
             };
 
-            for field in fields {
+            for (_, field) in fields.iter() {
                 let tuple = skip_field(field.data_type(), node_index, buffer_index)?;
 
                 node_index = tuple.0;
@@ -737,10 +738,8 @@ pub fn read_dictionary(
     let dictionary_values: ArrayRef = match first_field.data_type() {
         DataType::Dictionary(_, ref value_type) => {
             // Make a fake schema for the dictionary batch.
-            let schema = Schema {
-                fields: vec![Field::new("", value_type.as_ref().clone(), true)],
-                metadata: HashMap::new(),
-            };
+            let value = value_type.as_ref().clone();
+            let schema = Schema::new(vec![Field::new("", value, true)]);
             // Read a single column
             let record_batch = read_record_batch(
                 buf,
@@ -1255,10 +1254,10 @@ mod tests {
     fn create_test_projection_schema() -> Schema {
         // define field types
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
 
         let fixed_size_list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, false)),
             3,
         );
 
@@ -1267,25 +1266,29 @@ mod tests {
         let dict_data_type =
             DataType::Dictionary(Box::new(key_type), Box::new(value_type));
 
-        let union_fileds = vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Float64, false),
-        ];
-        let union_data_type = DataType::Union(union_fileds, vec![0, 1], UnionMode::Dense);
+        let union_fields = UnionFields::new(
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Float64, false),
+            ],
+        );
 
-        let struct_fields = vec![
+        let union_data_type = DataType::Union(union_fields, UnionMode::Dense);
+
+        let struct_fields = Fields::from(vec![
             Field::new("id", DataType::Int32, false),
             Field::new(
                 "list",
-                DataType::List(Box::new(Field::new("item", DataType::Int8, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Int8, true))),
                 false,
             ),
-        ];
+        ]);
         let struct_data_type = DataType::Struct(struct_fields);
 
         let run_encoded_data_type = DataType::RunEndEncoded(
-            Box::new(Field::new("run_ends", DataType::Int16, false)),
-            Box::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
         );
 
         // define schema
@@ -1688,7 +1691,7 @@ mod tests {
             (values_field, make_array(value_dict_array.into_data())),
         ]);
         let map_data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
                 true,
@@ -1760,7 +1763,7 @@ mod tests {
     #[test]
     fn test_roundtrip_stream_dict_of_list_of_dict() {
         // list
-        let list_data_type = DataType::List(Box::new(Field::new_dict(
+        let list_data_type = DataType::List(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
@@ -1774,7 +1777,7 @@ mod tests {
         );
 
         // large list
-        let list_data_type = DataType::LargeList(Box::new(Field::new_dict(
+        let list_data_type = DataType::LargeList(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
@@ -1796,7 +1799,7 @@ mod tests {
         let dict_data = dict_array.data();
 
         let list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new_dict(
+            Arc::new(Field::new_dict(
                 "item",
                 DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
                 true,
@@ -1829,7 +1832,7 @@ mod tests {
 
     #[test]
     fn test_no_columns_batch() {
-        let schema = Arc::new(Schema::new(vec![]));
+        let schema = Arc::new(Schema::empty());
         let options = RecordBatchOptions::new()
             .with_match_field_names(true)
             .with_row_count(Some(10));

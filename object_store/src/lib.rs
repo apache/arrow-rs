@@ -258,7 +258,7 @@ use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT}
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt};
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use snafu::Snafu;
 use std::fmt::{Debug, Formatter};
 #[cfg(not(target_arch = "wasm32"))]
@@ -371,10 +371,32 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
+    ///
+    /// Note: the order of returned [`ObjectMeta`] is not guaranteed
     async fn list(
         &self,
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>>;
+
+    /// List all the objects with the given prefix and a location greater than `offset`
+    ///
+    /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
+    /// the number of network requests required
+    ///
+    /// Note: the order of returned [`ObjectMeta`] is not guaranteed
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        let offset = offset.clone();
+        let stream = self
+            .list(prefix)
+            .await?
+            .try_filter(move |f| futures::future::ready(f.location > offset))
+            .boxed();
+        Ok(stream)
+    }
 
     /// List objects with the given prefix and an implementation specific
     /// delimiter. Returns common prefixes (directories) in addition to object
@@ -475,6 +497,14 @@ impl ObjectStore for Box<dyn ObjectStore> {
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
         self.as_ref().list(prefix).await
+    }
+
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        self.as_ref().list_with_offset(prefix, offset).await
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -926,6 +956,65 @@ mod tests {
 
         let files = flatten_list_stream(storage, None).await.unwrap();
         assert!(files.is_empty(), "{files:?}");
+
+        // Test list order
+        let files = vec![
+            Path::from("a a/b.file"),
+            Path::parse("a%2Fa.file").unwrap(),
+            Path::from("a/😀.file"),
+            Path::from("a/a file"),
+            Path::parse("a/a%2F.file").unwrap(),
+            Path::from("a/a.file"),
+            Path::from("a/a/b.file"),
+            Path::from("a/b.file"),
+            Path::from("aa/a.file"),
+            Path::from("ab/a.file"),
+        ];
+
+        for file in &files {
+            storage.put(file, "foo".into()).await.unwrap();
+        }
+
+        let cases = [
+            (None, Path::from("a")),
+            (None, Path::from("a/a file")),
+            (None, Path::from("a/a/b.file")),
+            (None, Path::from("ab/a.file")),
+            (None, Path::from("a%2Fa.file")),
+            (None, Path::from("a/😀.file")),
+            (Some(Path::from("a")), Path::from("")),
+            (Some(Path::from("a")), Path::from("a")),
+            (Some(Path::from("a")), Path::from("a/😀")),
+            (Some(Path::from("a")), Path::from("a/😀.file")),
+            (Some(Path::from("a")), Path::from("a/b")),
+            (Some(Path::from("a")), Path::from("a/a/b.file")),
+        ];
+
+        for (prefix, offset) in cases {
+            let s = storage
+                .list_with_offset(prefix.as_ref(), &offset)
+                .await
+                .unwrap();
+
+            let mut actual: Vec<_> =
+                s.map_ok(|x| x.location).try_collect().await.unwrap();
+
+            actual.sort_unstable();
+
+            let expected: Vec<_> = files
+                .iter()
+                .cloned()
+                .filter(|x| {
+                    let prefix_match =
+                        prefix.as_ref().map(|p| x.prefix_matches(p)).unwrap_or(true);
+                    prefix_match && x > &offset
+                })
+                .collect();
+
+            assert_eq!(actual, expected, "{prefix:?} - {offset:?}");
+        }
+
+        delete_fixtures(storage).await;
     }
 
     fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {

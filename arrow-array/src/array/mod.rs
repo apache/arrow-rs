@@ -266,7 +266,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     #[allow(deprecated)] // (#3880)
     fn get_array_memory_size(&self) -> usize {
         // both data.get_array_memory_size and size_of_val(self) include ArrayData fields,
-        // to only count additional fields of this array substract size_of(ArrayData)
+        // to only count additional fields of this array subtract size_of(ArrayData)
         self.data_ref().get_array_memory_size() + std::mem::size_of_val(self)
             - std::mem::size_of::<ArrayData>()
     }
@@ -586,7 +586,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
-        DataType::Union(_, _, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
+        DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
         DataType::FixedSizeList(_, _) => {
             Arc::new(FixedSizeListArray::from(data)) as ArrayRef
         }
@@ -740,7 +740,7 @@ mod tests {
     use crate::cast::{as_union_array, downcast_array};
     use crate::downcast_run_array;
     use arrow_buffer::{Buffer, MutableBuffer};
-    use arrow_schema::{Field, UnionMode};
+    use arrow_schema::{Field, Fields, UnionFields, UnionMode};
 
     #[test]
     fn test_empty_primitive() {
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn test_empty_list_primitive() {
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let array = new_empty_array(&data_type);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 0);
@@ -794,7 +794,7 @@ mod tests {
         // It is possible to create a null struct containing a non-nullable child
         // see https://github.com/apache/arrow-rs/pull/3244 for details
         let struct_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         let array = new_null_array(&struct_type, 9);
 
         let a = array.as_any().downcast_ref::<StructArray>().unwrap();
@@ -822,7 +822,7 @@ mod tests {
     #[test]
     fn test_null_list_primitive() {
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let array = new_null_array(&data_type, 9);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 9);
@@ -835,12 +835,12 @@ mod tests {
     #[test]
     fn test_null_map() {
         let data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entry",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("key", DataType::Utf8, false),
                     Field::new("value", DataType::Int32, true),
-                ]),
+                ])),
                 false,
             )),
             false,
@@ -874,11 +874,13 @@ mod tests {
     fn test_null_union() {
         for mode in [UnionMode::Sparse, UnionMode::Dense] {
             let data_type = DataType::Union(
-                vec![
-                    Field::new("foo", DataType::Int32, true),
-                    Field::new("bar", DataType::Int64, true),
-                ],
-                vec![2, 1],
+                UnionFields::new(
+                    vec![2, 1],
+                    vec![
+                        Field::new("foo", DataType::Int32, true),
+                        Field::new("bar", DataType::Int64, true),
+                    ],
+                ),
                 mode,
             );
             let array = new_null_array(&data_type, 4);
@@ -901,8 +903,8 @@ mod tests {
     fn test_null_runs() {
         for r in [DataType::Int16, DataType::Int32, DataType::Int64] {
             let data_type = DataType::RunEndEncoded(
-                Box::new(Field::new("run_ends", r, false)),
-                Box::new(Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new("run_ends", r, false)),
+                Arc::new(Field::new("values", DataType::Utf8, true)),
             );
 
             let array = new_null_array(&data_type, 4);
@@ -962,7 +964,7 @@ mod tests {
         let empty =
             PrimitiveArray::<Int64Type>::from(ArrayData::new_empty(arr.data_type()));
 
-        // substract empty array to avoid magic numbers for the size of additional fields
+        // subtract empty array to avoid magic numbers for the size of additional fields
         assert_eq!(
             arr.get_array_memory_size() - empty.get_array_memory_size(),
             128 * std::mem::size_of::<i64>()
@@ -991,7 +993,7 @@ mod tests {
             empty_with_bitmap.get_array_memory_size()
         );
 
-        // substract empty array to avoid magic numbers for the size of additional fields
+        // subtract empty array to avoid magic numbers for the size of additional fields
         // the size of the validity bitmap is rounded up to 64 bytes
         assert_eq!(
             arr.get_array_memory_size() - empty_with_bitmap.get_array_memory_size(),

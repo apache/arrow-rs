@@ -541,7 +541,7 @@ macro_rules! cast_list_to_string {
 fn make_timestamp_array(
     array: &PrimitiveArray<Int64Type>,
     unit: TimeUnit,
-    tz: Option<String>,
+    tz: Option<Arc<str>>,
 ) -> ArrayRef {
     match unit {
         TimeUnit::Second => Arc::new(
@@ -2635,7 +2635,7 @@ fn cast_string_to_timestamp<
     TimestampType: ArrowTimestampType<Native = i64>,
 >(
     array: &dyn Array,
-    to_tz: &Option<String>,
+    to_tz: &Option<Arc<str>>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let string_array = array
@@ -4667,7 +4667,7 @@ mod tests {
         let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
         let b = cast(
             &array,
-            &DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         )
         .unwrap();
         assert_eq!(5, b.len());
@@ -4691,7 +4691,7 @@ mod tests {
         let array = Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]);
         let b = cast(
             &array,
-            &DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         )
         .unwrap();
         assert_eq!(5, b.len());
@@ -4720,7 +4720,7 @@ mod tests {
         let array = array.slice(2, 4);
         let b = cast(
             &array,
-            &DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
         )
         .unwrap();
         assert_eq!(4, b.len());
@@ -4833,7 +4833,7 @@ mod tests {
         // Construct a list array from the above two
         // [[0,0,0], [-1, -2, -1], [2, 100000000]]
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -4844,7 +4844,7 @@ mod tests {
 
         let cast_array = cast(
             &list_array,
-            &DataType::List(Box::new(Field::new("item", DataType::UInt16, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::UInt16, true))),
         )
         .unwrap();
 
@@ -4896,7 +4896,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -4907,7 +4907,7 @@ mod tests {
 
         cast(
             &list_array,
-            &DataType::List(Box::new(Field::new(
+            &DataType::List(Arc::new(Field::new(
                 "item",
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 true,
@@ -7104,12 +7104,12 @@ mod tests {
     fn test_cast_null_from_and_to_nested_type() {
         // Cast null from and to map
         let data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entry",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("key", DataType::Utf8, false),
                     Field::new("value", DataType::Int32, true),
-                ]),
+                ])),
                 false,
             )),
             false,
@@ -7118,13 +7118,13 @@ mod tests {
 
         // Cast null from and to list
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         cast_from_null_to_other(&data_type);
         let data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         cast_from_null_to_other(&data_type);
         let data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, true)),
+            Arc::new(Field::new("item", DataType::Int32, true)),
             4,
         );
         cast_from_null_to_other(&data_type);
@@ -7138,7 +7138,7 @@ mod tests {
 
         // Cast null from and to struct
         let data_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         cast_from_null_to_other(&data_type);
     }
 
@@ -7229,7 +7229,7 @@ mod tests {
         let array = Arc::new(make_large_list_array()) as ArrayRef;
         let list_array = cast(
             &array,
-            &DataType::List(Box::new(Field::new("", DataType::Int32, false))),
+            &DataType::List(Arc::new(Field::new("", DataType::Int32, false))),
         )
         .unwrap();
         let actual = list_array.as_any().downcast_ref::<ListArray>().unwrap();
@@ -7243,7 +7243,7 @@ mod tests {
         let array = Arc::new(make_list_array()) as ArrayRef;
         let large_list_array = cast(
             &array,
-            &DataType::LargeList(Box::new(Field::new("", DataType::Int32, false))),
+            &DataType::LargeList(Arc::new(Field::new("", DataType::Int32, false))),
         )
         .unwrap();
         let actual = large_list_array
@@ -7271,7 +7271,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -7295,7 +7295,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -7324,7 +7324,7 @@ mod tests {
         let array1 = make_list_array().slice(1, 2);
         let array2 = Arc::new(make_list_array()) as ArrayRef;
 
-        let dt = DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+        let dt = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         let out1 = cast(&array1, &dt).unwrap();
         let out2 = cast(&array2, &dt).unwrap();
 
@@ -7342,7 +7342,7 @@ mod tests {
             .unwrap();
 
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -8034,7 +8034,7 @@ mod tests {
 
         let b = cast(
             &b,
-            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_string())),
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
         )
         .unwrap();
         let v = b.as_primitive::<TimestampNanosecondType>();
@@ -8044,7 +8044,7 @@ mod tests {
 
         let b = cast(
             &b,
-            &DataType::Timestamp(TimeUnit::Millisecond, Some("+02:00".to_string())),
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("+02:00".into())),
         )
         .unwrap();
         let v = b.as_primitive::<TimestampMillisecondType>();
@@ -8055,7 +8055,7 @@ mod tests {
 
     #[test]
     fn test_cast_utf8_to_timestamp() {
-        fn test_tz(tz: String) {
+        fn test_tz(tz: Arc<str>) {
             let valid = StringArray::from(vec![
                 "2023-01-01 04:05:06.789000-08:00",
                 "2023-01-01 04:05:06.789000-07:00",
@@ -8091,8 +8091,8 @@ mod tests {
             assert_eq!(1672531200000000000, c.value(8));
         }
 
-        test_tz("+00:00".to_owned());
-        test_tz("+02:00".to_owned());
+        test_tz("+00:00".into());
+        test_tz("+02:00".into());
     }
 
     #[test]
@@ -8119,11 +8119,11 @@ mod tests {
         let array = Arc::new(valid) as ArrayRef;
         let b = cast(
             &array,
-            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_owned())),
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
         )
         .unwrap();
 
-        let expect = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_owned()));
+        let expect = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into()));
 
         assert_eq!(b.data_type(), &expect);
         let c = b

@@ -611,7 +611,7 @@ impl fmt::Display for Reader {
 // ----------------------------------------------------------------------
 // Row iterators
 
-/// The enum Either with variants That represet a reference and a box of
+/// The enum Either with variants That represents a reference and a box of
 /// [`FileReader`](crate::file::reader::FileReader).
 enum Either<'a> {
     Left(&'a dyn FileReader),

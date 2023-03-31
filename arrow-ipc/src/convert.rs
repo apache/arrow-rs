@@ -22,6 +22,7 @@ use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, WIPOffset,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{size_prefixed_root_as_message, CONTINUATION_MARKER};
 use DataType::*;
@@ -160,7 +161,7 @@ pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema, ArrowErr
 /// Try deserialize the IPC format bytes into a schema
 pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
     // There are two protocol types: https://issues.apache.org/jira/browse/ARROW-6313
-    // The original protocal is:
+    // The original protocol is:
     //   4 bytes - the byte length of the payload
     //   a flatbuffer Message whose header is the Schema
     // The latest version of protocol is:
@@ -290,7 +291,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
         }
         crate::Type::Timestamp => {
             let timestamp = field.type_as_timestamp().unwrap();
-            let timezone: Option<String> = timestamp.timezone().map(|tz| tz.to_string());
+            let timezone: Option<_> = timestamp.timezone().map(|tz| tz.into());
             match timestamp.unit() {
                 crate::TimeUnit::SECOND => {
                     DataType::Timestamp(TimeUnit::Second, timezone)
@@ -337,14 +338,14 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             if children.len() != 1 {
                 panic!("expect a list to have one child")
             }
-            DataType::List(Box::new(children.get(0).into()))
+            DataType::List(Arc::new(children.get(0).into()))
         }
         crate::Type::LargeList => {
             let children = field.children().unwrap();
             if children.len() != 1 {
                 panic!("expect a large list to have one child")
             }
-            DataType::LargeList(Box::new(children.get(0).into()))
+            DataType::LargeList(Arc::new(children.get(0).into()))
         }
         crate::Type::FixedSizeList => {
             let children = field.children().unwrap();
@@ -352,16 +353,13 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
                 panic!("expect a list to have one child")
             }
             let fsl = field.type_as_fixed_size_list().unwrap();
-            DataType::FixedSizeList(Box::new(children.get(0).into()), fsl.listSize())
+            DataType::FixedSizeList(Arc::new(children.get(0).into()), fsl.listSize())
         }
         crate::Type::Struct_ => {
-            let mut fields = vec![];
-            if let Some(children) = field.children() {
-                for i in 0..children.len() {
-                    fields.push(children.get(i).into());
-                }
+            let fields = match field.children() {
+                Some(children) => children.iter().map(Field::from).collect(),
+                None => Fields::empty(),
             };
-
             DataType::Struct(fields)
         }
         crate::Type::RunEndEncoded => {
@@ -374,7 +372,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             }
             let run_ends_field = children.get(0).into();
             let values_field = children.get(1).into();
-            DataType::RunEndEncoded(Box::new(run_ends_field), Box::new(values_field))
+            DataType::RunEndEncoded(Arc::new(run_ends_field), Arc::new(values_field))
         }
         crate::Type::Map => {
             let map = field.type_as_map().unwrap();
@@ -382,7 +380,7 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             if children.len() != 1 {
                 panic!("expect a map to have one child")
             }
-            DataType::Map(Box::new(children.get(0).into()), map.keysSorted())
+            DataType::Map(Arc::new(children.get(0).into()), map.keysSorted())
         }
         crate::Type::Decimal => {
             let fsb = field.type_as_decimal().unwrap();
@@ -413,16 +411,16 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             let mut fields = vec![];
             if let Some(children) = field.children() {
                 for i in 0..children.len() {
-                    fields.push(children.get(i).into());
+                    fields.push(Field::from(children.get(i)));
                 }
             };
 
-            let type_ids: Vec<i8> = match union.typeIds() {
-                None => (0_i8..fields.len() as i8).collect(),
-                Some(ids) => ids.iter().map(|i| i as i8).collect(),
+            let fields = match union.typeIds() {
+                None => UnionFields::new(0_i8..fields.len() as i8, fields),
+                Some(ids) => UnionFields::new(ids.iter().map(|i| i as i8), fields),
             };
 
-            DataType::Union(fields, type_ids, union_mode)
+            DataType::Union(fields, union_mode)
         }
         t => unimplemented!("Type {:?} not supported", t),
     }
@@ -636,8 +634,8 @@ pub(crate) fn get_fb_field_type<'a>(
             }
         }
         Timestamp(unit, tz) => {
-            let tz = tz.clone().unwrap_or_default();
-            let tz_str = fbb.create_string(tz.as_str());
+            let tz = tz.as_deref().unwrap_or_default();
+            let tz_str = fbb.create_string(tz);
             let mut builder = crate::TimestampBuilder::new(fbb);
             let time_unit = match unit {
                 TimeUnit::Second => crate::TimeUnit::SECOND,
@@ -772,9 +770,9 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
-        Union(fields, type_ids, mode) => {
+        Union(fields, mode) => {
             let mut children = vec![];
-            for field in fields {
+            for (_, field) in fields.iter() {
                 children.push(build_field(fbb, field));
             }
 
@@ -784,7 +782,7 @@ pub(crate) fn get_fb_field_type<'a>(
             };
 
             let fbb_type_ids = fbb
-                .create_vector(&type_ids.iter().map(|t| *t as i32).collect::<Vec<_>>());
+                .create_vector(&fields.iter().map(|(t, _)| t as i32).collect::<Vec<_>>());
             let mut builder = crate::UnionBuilder::new(fbb);
             builder.add_mode(union_mode);
             builder.add_typeIds(fbb_type_ids);
@@ -882,7 +880,7 @@ mod tests {
                     "timestamp[us]",
                     DataType::Timestamp(
                         TimeUnit::Microsecond,
-                        Some("Africa/Johannesburg".to_string()),
+                        Some("Africa/Johannesburg".into()),
                     ),
                     false,
                 ),
@@ -910,119 +908,127 @@ mod tests {
                 Field::new("binary", DataType::Binary, false),
                 Field::new(
                     "list[u8]",
-                    DataType::List(Box::new(Field::new("item", DataType::UInt8, false))),
+                    DataType::List(Arc::new(Field::new("item", DataType::UInt8, false))),
                     true,
                 ),
                 Field::new(
                     "list[struct<float32, int32, bool>]",
-                    DataType::List(Box::new(Field::new(
+                    List(Arc::new(Field::new(
                         "struct",
-                        DataType::Struct(vec![
+                        Struct(Fields::from(vec![
                             Field::new("float32", DataType::UInt8, false),
                             Field::new("int32", DataType::Int32, true),
                             Field::new("bool", DataType::Boolean, true),
-                        ]),
+                        ])),
                         true,
                     ))),
                     false,
                 ),
                 Field::new(
                     "struct<dictionary<int32, utf8>>",
-                    DataType::Struct(vec![Field::new(
+                    Struct(Fields::from(vec![Field::new(
                         "dictionary<int32, utf8>",
-                        DataType::Dictionary(
-                            Box::new(DataType::Int32),
-                            Box::new(DataType::Utf8),
-                        ),
+                        Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                         false,
-                    )]),
+                    )])),
                     false,
                 ),
                 Field::new(
                     "struct<int64, list[struct<date32, list[struct<>]>]>",
-                    DataType::Struct(vec![
+                    Struct(Fields::from(vec![
                         Field::new("int64", DataType::Int64, true),
                         Field::new(
                             "list[struct<date32, list[struct<>]>]",
-                            DataType::List(Box::new(Field::new(
+                            DataType::List(Arc::new(Field::new(
                                 "struct",
-                                DataType::Struct(vec![
+                                DataType::Struct(Fields::from(vec![
                                     Field::new("date32", DataType::Date32, true),
                                     Field::new(
                                         "list[struct<>]",
-                                        DataType::List(Box::new(Field::new(
+                                        DataType::List(Arc::new(Field::new(
                                             "struct",
-                                            DataType::Struct(vec![]),
+                                            DataType::Struct(Fields::empty()),
                                             false,
                                         ))),
                                         false,
                                     ),
-                                ]),
+                                ])),
                                 false,
                             ))),
                             false,
                         ),
-                    ]),
+                    ])),
                     false,
                 ),
                 Field::new(
                     "union<int64, list[union<date32, list[union<>]>]>",
                     DataType::Union(
-                        vec![
-                            Field::new("int64", DataType::Int64, true),
-                            Field::new(
-                                "list[union<date32, list[union<>]>]",
-                                DataType::List(Box::new(Field::new(
-                                    "union<date32, list[union<>]>",
-                                    DataType::Union(
-                                        vec![
-                                            Field::new("date32", DataType::Date32, true),
-                                            Field::new(
-                                                "list[union<>]",
-                                                DataType::List(Box::new(Field::new(
-                                                    "union",
-                                                    DataType::Union(
-                                                        vec![],
-                                                        vec![],
-                                                        UnionMode::Sparse,
+                        UnionFields::new(
+                            vec![0, 1],
+                            vec![
+                                Field::new("int64", DataType::Int64, true),
+                                Field::new(
+                                    "list[union<date32, list[union<>]>]",
+                                    DataType::List(Arc::new(Field::new(
+                                        "union<date32, list[union<>]>",
+                                        DataType::Union(
+                                            UnionFields::new(
+                                                vec![0, 1],
+                                                vec![
+                                                    Field::new(
+                                                        "date32",
+                                                        DataType::Date32,
+                                                        true,
                                                     ),
-                                                    false,
-                                                ))),
-                                                false,
+                                                    Field::new(
+                                                        "list[union<>]",
+                                                        DataType::List(Arc::new(
+                                                            Field::new(
+                                                                "union",
+                                                                DataType::Union(
+                                                                    UnionFields::empty(),
+                                                                    UnionMode::Sparse,
+                                                                ),
+                                                                false,
+                                                            ),
+                                                        )),
+                                                        false,
+                                                    ),
+                                                ],
                                             ),
-                                        ],
-                                        vec![0, 1],
-                                        UnionMode::Dense,
-                                    ),
+                                            UnionMode::Dense,
+                                        ),
+                                        false,
+                                    ))),
                                     false,
-                                ))),
-                                false,
-                            ),
-                        ],
-                        vec![0, 1],
+                                ),
+                            ],
+                        ),
                         UnionMode::Sparse,
                     ),
                     false,
                 ),
-                Field::new("struct<>", DataType::Struct(vec![]), true),
+                Field::new("struct<>", DataType::Struct(Fields::empty()), true),
                 Field::new(
                     "union<>",
-                    DataType::Union(vec![], vec![], UnionMode::Dense),
+                    DataType::Union(UnionFields::empty(), UnionMode::Dense),
                     true,
                 ),
                 Field::new(
                     "union<>",
-                    DataType::Union(vec![], vec![], UnionMode::Sparse),
+                    DataType::Union(UnionFields::empty(), UnionMode::Sparse),
                     true,
                 ),
                 Field::new(
                     "union<int32, utf8>",
                     DataType::Union(
-                        vec![
-                            Field::new("int32", DataType::Int32, true),
-                            Field::new("utf8", DataType::Utf8, true),
-                        ],
-                        vec![2, 3], // non-default type ids
+                        UnionFields::new(
+                            vec![2, 3], // non-default type ids
+                            vec![
+                                Field::new("int32", DataType::Int32, true),
+                                Field::new("utf8", DataType::Utf8, true),
+                            ],
+                        ),
                         UnionMode::Dense,
                     ),
                     true,

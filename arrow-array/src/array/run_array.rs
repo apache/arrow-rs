@@ -98,8 +98,8 @@ impl<R: RunEndIndexType> RunArray<R> {
         let run_ends_type = run_ends.data_type().clone();
         let values_type = values.data_type().clone();
         let ree_array_type = DataType::RunEndEncoded(
-            Box::new(Field::new("run_ends", run_ends_type, false)),
-            Box::new(Field::new("values", values_type, true)),
+            Arc::new(Field::new("run_ends", run_ends_type, false)),
+            Arc::new(Field::new("values", values_type, true)),
         );
         let len = RunArray::logical_len(run_ends);
         let builder = ArrayDataBuilder::new(ree_array_type)
@@ -202,7 +202,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         // to iterate `logical_indices` in sorted order.
         let mut ordered_indices: Vec<usize> = (0..indices_len).collect();
 
-        // Instead of sorting `logical_idices` directly, sort the `ordered_indices`
+        // Instead of sorting `logical_indices` directly, sort the `ordered_indices`
         // whose values are index of `logical_indices`
         ordered_indices.sort_unstable_by(|lhs, rhs| {
             logical_indices[*lhs]

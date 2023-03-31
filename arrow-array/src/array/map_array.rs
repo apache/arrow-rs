@@ -106,7 +106,7 @@ impl MapArray {
 impl From<ArrayData> for MapArray {
     fn from(data: ArrayData) -> Self {
         Self::try_new_from_array_data(data)
-            .expect("Expected infallable creation of MapArray from ArrayData failed")
+            .expect("Expected infallible creation of MapArray from ArrayData failed")
     }
 }
 
@@ -193,7 +193,7 @@ impl MapArray {
         ]);
 
         let map_data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
                 true,
@@ -275,6 +275,7 @@ mod tests {
     use crate::cast::AsArray;
     use crate::types::UInt32Type;
     use crate::{Int32Array, UInt32Array};
+    use arrow_schema::Fields;
     use std::sync::Arc;
 
     use super::*;
@@ -307,7 +308,7 @@ mod tests {
 
         // Construct a map array from the above two
         let map_data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
                 true,
@@ -353,7 +354,7 @@ mod tests {
 
         // Construct a map array from the above two
         let map_data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
                 true,
@@ -482,7 +483,7 @@ mod tests {
 
         // Construct a map array from the above two
         let map_data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
                 true,
@@ -515,10 +516,10 @@ mod tests {
     fn test_from_array_data_validation() {
         // A DictionaryArray has similar buffer layout to a MapArray
         // but the meaning of the values differs
-        let struct_t = DataType::Struct(vec![
+        let struct_t = DataType::Struct(Fields::from(vec![
             Field::new("keys", DataType::Int32, true),
             Field::new("values", DataType::UInt32, true),
-        ]);
+        ]));
         let dict_t = DataType::Dictionary(Box::new(DataType::Int32), Box::new(struct_t));
         let _ = MapArray::from(ArrayData::new_empty(&dict_t));
     }

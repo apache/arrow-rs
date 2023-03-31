@@ -198,7 +198,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
                 ParquetTimeUnit::NANOS(_) => TimeUnit::Nanosecond,
             },
             if is_adjusted_to_u_t_c {
-                Some("UTC".to_string())
+                Some("UTC".into())
             } else {
                 None
             },

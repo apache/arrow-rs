@@ -273,7 +273,22 @@ impl ObjectStore for AmazonS3 {
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
         let stream = self
             .client
-            .list_paginated(prefix, false)
+            .list_paginated(prefix, false, None)
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .try_flatten()
+            .boxed();
+
+        Ok(stream)
+    }
+
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        let stream = self
+            .client
+            .list_paginated(prefix, false, Some(offset))
             .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
             .boxed();
@@ -282,7 +297,7 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.client.list_paginated(prefix, true);
+        let mut stream = self.client.list_paginated(prefix, true, None);
 
         let mut common_prefixes = BTreeSet::new();
         let mut objects = Vec::new();

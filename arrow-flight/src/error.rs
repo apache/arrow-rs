@@ -30,7 +30,7 @@ pub enum FlightError {
     Tonic(tonic::Status),
     /// Some unexpected message was received
     ProtocolError(String),
-    /// An error occured during decoding
+    /// An error occurred during decoding
     DecodeError(String),
     /// External error that can provide source of error by calling `Error::source`.
     ExternalError(Box<dyn Error + Send + Sync>),

@@ -291,7 +291,7 @@ mod tests {
     fn test_pretty_format_fixed_size_list() {
         // define a schema.
         let field_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, true)),
+            Arc::new(Field::new("item", DataType::Int32, true)),
             3,
         );
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
@@ -635,14 +635,16 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new(
                 "c1",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("c11", DataType::Int32, true),
                     Field::new(
                         "c12",
-                        DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)]),
+                        DataType::Struct(
+                            vec![Field::new("c121", DataType::Utf8, false)].into(),
+                        ),
                         false,
                     ),
-                ]),
+                ])),
                 false,
             ),
             Field::new("c2", DataType::Utf8, false),
@@ -656,7 +658,9 @@ mod tests {
             (
                 Field::new(
                     "c12",
-                    DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)]),
+                    DataType::Struct(
+                        vec![Field::new("c121", DataType::Utf8, false)].into(),
+                    ),
                     false,
                 ),
                 Arc::new(StructArray::from(vec![(
@@ -699,11 +703,13 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "Teamsters",
             DataType::Union(
-                vec![
-                    Field::new("a", DataType::Int32, false),
-                    Field::new("b", DataType::Float64, false),
-                ],
-                vec![0, 1],
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("a", DataType::Int32, false),
+                        Field::new("b", DataType::Float64, false),
+                    ],
+                ),
                 UnionMode::Dense,
             ),
             false,
@@ -739,11 +745,13 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "Teamsters",
             DataType::Union(
-                vec![
-                    Field::new("a", DataType::Int32, false),
-                    Field::new("b", DataType::Float64, false),
-                ],
-                vec![0, 1],
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("a", DataType::Int32, false),
+                        Field::new("b", DataType::Float64, false),
+                    ],
+                ),
                 UnionMode::Sparse,
             ),
             false,
@@ -781,11 +789,13 @@ mod tests {
         let inner_field = Field::new(
             "European Union",
             DataType::Union(
-                vec![
-                    Field::new("b", DataType::Int32, false),
-                    Field::new("c", DataType::Float64, false),
-                ],
-                vec![0, 1],
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("b", DataType::Int32, false),
+                        Field::new("c", DataType::Float64, false),
+                    ],
+                ),
                 UnionMode::Dense,
             ),
             false,
@@ -805,8 +815,10 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "Teamsters",
             DataType::Union(
-                vec![Field::new("a", DataType::Int32, true), inner_field],
-                vec![0, 1],
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![Field::new("a", DataType::Int32, true), inner_field],
+                ),
                 UnionMode::Sparse,
             ),
             false,

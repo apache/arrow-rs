@@ -98,7 +98,7 @@ impl CompressionCodec {
         // compressed
         let decompressed_length = read_uncompressed_size(input);
         let buffer = if decompressed_length == 0 {
-            // emtpy
+            // empty
             Buffer::from([])
         } else if decompressed_length == LENGTH_NO_COMPRESSED_DATA {
             // no compression

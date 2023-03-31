@@ -517,7 +517,7 @@ impl Date32Type {
     /// # Arguments
     ///
     /// * `date` - The date on which to perform the operation
-    /// * `delta` - The interval to substract
+    /// * `delta` - The interval to subtract
     pub fn subtract_year_months(
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -641,7 +641,7 @@ impl Date64Type {
     /// # Arguments
     ///
     /// * `date` - The date on which to perform the operation
-    /// * `delta` - The interval to substract
+    /// * `delta` - The interval to subtract
     pub fn subtract_year_months(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
