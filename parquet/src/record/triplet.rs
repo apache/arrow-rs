@@ -496,7 +496,7 @@ mod tests {
         }
     }
 
-    // Check values of a selectd column in a file
+    // Check values of a selected column in a file
     fn test_column_in_file(
         file_name: &str,
         batch_size: usize,

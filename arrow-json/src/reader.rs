@@ -672,7 +672,7 @@ impl Decoder {
     }
 
     /// Read the next batch of [`serde_json::Value`] records from the
-    /// interator into a [`RecordBatch`].
+    /// iterator into a [`RecordBatch`].
     ///
     /// Returns `None` if the input iterator is exhausted.
     pub fn next_batch<I>(
@@ -2172,7 +2172,7 @@ mod tests {
     }
 
     #[test]
-    fn test_coersion_scalar_and_list() {
+    fn test_coercion_scalar_and_list() {
         use arrow_schema::DataType::*;
 
         assert_eq!(

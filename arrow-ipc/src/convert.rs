@@ -161,7 +161,7 @@ pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema, ArrowErr
 /// Try deserialize the IPC format bytes into a schema
 pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
     // There are two protocol types: https://issues.apache.org/jira/browse/ARROW-6313
-    // The original protocal is:
+    // The original protocol is:
     //   4 bytes - the byte length of the payload
     //   a flatbuffer Message whose header is the Schema
     // The latest version of protocol is:

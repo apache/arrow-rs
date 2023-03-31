@@ -1233,7 +1233,7 @@ mod tests {
         let expected = read_to_string(test_file).unwrap();
         for (r, e) in result.lines().zip(expected.lines()) {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
-            // remove null value from object to make comparision consistent:
+            // remove null value from object to make comparison consistent:
             if let Value::Object(obj) = expected_json {
                 expected_json = Value::Object(
                     obj.into_iter().filter(|(_, v)| *v != Value::Null).collect(),
@@ -1424,7 +1424,7 @@ mod tests {
         let expected = read_to_string(test_file).unwrap();
         for (r, e) in result.lines().zip(expected.lines()) {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
-            // remove null value from object to make comparision consistent:
+            // remove null value from object to make comparison consistent:
             if let Value::Object(obj) = expected_json {
                 expected_json = Value::Object(
                     obj.into_iter().filter(|(_, v)| *v != Value::Null).collect(),
@@ -1468,7 +1468,7 @@ mod tests {
         let expected = format!("{expected}\n{expected}");
         for (r, e) in result.lines().zip(expected.lines()) {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
-            // remove null value from object to make comparision consistent:
+            // remove null value from object to make comparison consistent:
             if let Value::Object(obj) = expected_json {
                 expected_json = Value::Object(
                     obj.into_iter().filter(|(_, v)| *v != Value::Null).collect(),

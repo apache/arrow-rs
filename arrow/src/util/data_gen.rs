@@ -78,7 +78,7 @@ pub fn create_random_array(
         UInt64 => Arc::new(create_primitive_array::<UInt64Type>(size, null_density)),
         Float16 => {
             return Err(ArrowError::NotYetImplemented(
-                "Float16 is not implememted".to_string(),
+                "Float16 is not implemented".to_string(),
             ))
         }
         Float32 => Arc::new(create_primitive_array::<Float32Type>(size, null_density)),

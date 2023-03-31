@@ -1116,7 +1116,7 @@ mod tests {
             RowSelector::select(5),
             // Skip full page past page boundary
             RowSelector::skip(12),
-            // Select to final page bounday
+            // Select to final page boundary
             RowSelector::select(12),
             RowSelector::skip(1),
             // Skip across final page boundary

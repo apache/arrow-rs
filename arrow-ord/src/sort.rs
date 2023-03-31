@@ -383,7 +383,7 @@ pub fn sort_to_indices(
             DataType::Int64 => sort_run_to_indices::<Int64Type>(values, &options, limit),
             dt => {
                 return Err(ArrowError::ComputeError(format!(
-                    "Inavlid run end data type: {dt}"
+                    "Invalid run end data type: {dt}"
                 )))
             }
         },
@@ -771,7 +771,7 @@ where
     // Call the consumer using the run length and starting logical index.
     for physical_index in values_indices.values() {
         // As the values were sliced with offset = start_physical_index, it has to be added back
-        // before accesing `RunArray::run_ends`
+        // before accessing `RunArray::run_ends`
         let physical_index = *physical_index as usize + start_physical_index;
 
         // calculate the run length and logical index of sorted values

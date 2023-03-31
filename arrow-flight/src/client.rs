@@ -391,7 +391,7 @@ impl FlightClient {
     }
 
     /// Make a `ListFlights` call to the server with the provided
-    /// critera and returning a [`Stream`](futures::Stream) of [`FlightInfo`].
+    /// criteria and returning a [`Stream`](futures::Stream) of [`FlightInfo`].
     ///
     /// # Example:
     /// ```no_run

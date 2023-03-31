@@ -106,7 +106,7 @@ pub struct ByteArray {
     data: Option<ByteBufferPtr>,
 }
 
-// Special case Debug that prints out byte arrays that are vaid utf8 as &str's
+// Special case Debug that prints out byte arrays that are valid utf8 as &str's
 impl std::fmt::Debug for ByteArray {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug_struct = f.debug_struct("ByteArray");
@@ -259,7 +259,7 @@ impl fmt::Display for ByteArray {
 /// types, although there are code paths in the Rust (and potentially the C++) versions that
 /// warrant this.
 ///
-/// With this wrapper type the compiler generates more targetted code paths matching the higher
+/// With this wrapper type the compiler generates more targeted code paths matching the higher
 /// level logical types, removing the data-hazard from all decoding and encoding paths.
 #[repr(transparent)]
 #[derive(Clone, Debug, Default)]

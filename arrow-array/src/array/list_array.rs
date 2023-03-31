@@ -182,7 +182,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericListArray<OffsetSize> {
     fn from(data: ArrayData) -> Self {
         Self::try_new_from_array_data(data).expect(
-            "Expected infallable creation of GenericListArray from ArrayDataRef failed",
+            "Expected infallible creation of GenericListArray from ArrayDataRef failed",
         )
     }
 }

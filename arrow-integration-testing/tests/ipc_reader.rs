@@ -96,7 +96,7 @@ fn read_1_0_0_bigendian() {
         FileReader::try_new(file, None).unwrap();
 
         // While the the reader doesn't error but the values are not
-        // read correctly on little endian platforms so verifing the
+        // read correctly on little endian platforms so verifying the
         // contents fails
         //
         // https://github.com/apache/arrow-rs/issues/3459

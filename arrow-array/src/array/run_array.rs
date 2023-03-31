@@ -202,7 +202,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         // to iterate `logical_indices` in sorted order.
         let mut ordered_indices: Vec<usize> = (0..indices_len).collect();
 
-        // Instead of sorting `logical_idices` directly, sort the `ordered_indices`
+        // Instead of sorting `logical_indices` directly, sort the `ordered_indices`
         // whose values are index of `logical_indices`
         ordered_indices.sort_unstable_by(|lhs, rhs| {
             logical_indices[*lhs]
