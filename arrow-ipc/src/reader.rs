@@ -1261,11 +1261,6 @@ mod tests {
             3,
         );
 
-        let key_type = DataType::Int8;
-        let value_type = DataType::Utf8;
-        let dict_data_type =
-            DataType::Dictionary(Box::new(key_type), Box::new(value_type));
-
         let union_fields = UnionFields::new(
             vec![0, 1],
             vec![
@@ -1278,11 +1273,7 @@ mod tests {
 
         let struct_fields = Fields::from(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new(
-                "list",
-                DataType::List(Arc::new(Field::new("item", DataType::Int8, true))),
-                false,
-            ),
+            Field::new_list("list", Field::new("item", DataType::Int8, true), false),
         ]);
         let struct_data_type = DataType::Struct(struct_fields);
 
@@ -1305,7 +1296,7 @@ mod tests {
             Field::new("f9", struct_data_type, false),
             Field::new("f10", run_encoded_data_type, false),
             Field::new("f11", DataType::Boolean, false),
-            Field::new("f12", dict_data_type, false),
+            Field::new_dictionary("f12", DataType::Int8, DataType::Utf8, false),
             Field::new("f13", DataType::Utf8, false),
         ])
     }

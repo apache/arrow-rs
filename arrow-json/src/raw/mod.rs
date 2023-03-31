@@ -504,7 +504,7 @@ mod tests {
     use arrow_array::{Array, StructArray};
     use arrow_buffer::ArrowNativeType;
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
-    use arrow_schema::{DataType, Field, Fields, Schema};
+    use arrow_schema::{DataType, Field, Schema};
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
     use std::sync::Arc;
@@ -645,32 +645,26 @@ mod tests {
         "#;
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "list",
-                DataType::List(Arc::new(Field::new("element", DataType::Int32, false))),
-                true,
-            ),
-            Field::new(
+            Field::new_list("list", Field::new("element", DataType::Int32, false), true),
+            Field::new_struct(
                 "nested",
-                DataType::Struct(Fields::from(vec![
+                vec![
                     Field::new("a", DataType::Int32, true),
                     Field::new("b", DataType::Int32, true),
-                ])),
+                ],
                 true,
             ),
-            Field::new(
+            Field::new_struct(
                 "nested_list",
-                DataType::Struct(Fields::from(vec![Field::new(
+                vec![Field::new_list(
                     "list2",
-                    DataType::List(Arc::new(Field::new(
+                    Field::new_struct(
                         "element",
-                        DataType::Struct(
-                            vec![Field::new("c", DataType::Int32, false)].into(),
-                        ),
+                        vec![Field::new("c", DataType::Int32, false)],
                         false,
-                    ))),
+                    ),
                     true,
-                )])),
+                )],
                 true,
             ),
         ]));
@@ -724,24 +718,22 @@ mod tests {
         "#;
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
+            Field::new_struct(
                 "nested",
-                DataType::Struct(vec![Field::new("a", DataType::Int32, false)].into()),
+                vec![Field::new("a", DataType::Int32, false)],
                 true,
             ),
-            Field::new(
+            Field::new_struct(
                 "nested_list",
-                DataType::Struct(Fields::from(vec![Field::new(
+                vec![Field::new_list(
                     "list2",
-                    DataType::List(Arc::new(Field::new(
+                    Field::new_struct(
                         "element",
-                        DataType::Struct(
-                            vec![Field::new("d", DataType::Int32, true)].into(),
-                        ),
+                        vec![Field::new("d", DataType::Int32, true)],
                         false,
-                    ))),
+                    ),
                     true,
-                )])),
+                )],
                 true,
             ),
         ]));
@@ -781,14 +773,16 @@ mod tests {
            {"map": {"a": [null], "b": []}}
            {"map": {"c": null, "a": ["baz"]}}
         "#;
-        let list = DataType::List(Arc::new(Field::new("element", DataType::Utf8, true)));
-        let entries = DataType::Struct(Fields::from(vec![
+        let map = Field::new_map(
+            "map",
+            "entries",
             Field::new("key", DataType::Utf8, false),
-            Field::new("value", list, true),
-        ]));
+            Field::new_list("value", Field::new("element", DataType::Utf8, true), true),
+            false,
+            true,
+        );
 
-        let map = DataType::Map(Arc::new(Field::new("entries", entries, true)), false);
-        let schema = Arc::new(Schema::new(vec![Field::new("map", map, true)]));
+        let schema = Arc::new(Schema::new(vec![map]));
 
         let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
@@ -1152,31 +1146,24 @@ mod tests {
     fn test_delta_checkpoint() {
         let json = "{\"protocol\":{\"minReaderVersion\":1,\"minWriterVersion\":2}}";
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
+            Field::new_struct(
                 "protocol",
-                DataType::Struct(Fields::from(vec![
+                vec![
                     Field::new("minReaderVersion", DataType::Int32, true),
                     Field::new("minWriterVersion", DataType::Int32, true),
-                ])),
+                ],
                 true,
             ),
-            Field::new(
+            Field::new_struct(
                 "add",
-                DataType::Struct(Fields::from(vec![Field::new(
+                vec![Field::new_map(
                     "partitionValues",
-                    DataType::Map(
-                        Arc::new(Field::new(
-                            "key_value",
-                            DataType::Struct(Fields::from(vec![
-                                Field::new("key", DataType::Utf8, false),
-                                Field::new("value", DataType::Utf8, true),
-                            ])),
-                            false,
-                        )),
-                        false,
-                    ),
+                    "key_value",
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Utf8, true),
                     false,
-                )])),
+                    false,
+                )],
                 true,
             ),
         ]));
@@ -1198,9 +1185,9 @@ mod tests {
         let do_test = |child: DataType| {
             // Test correctly enforced nullability
             let non_null = r#"{"foo": {}}"#;
-            let schema = Arc::new(Schema::new(vec![Field::new(
+            let schema = Arc::new(Schema::new(vec![Field::new_struct(
                 "foo",
-                DataType::Struct(vec![Field::new("bar", child, false)].into()),
+                vec![Field::new("bar", child, false)],
                 true,
             )]));
             let mut reader = RawReaderBuilder::new(schema.clone())

@@ -140,11 +140,7 @@ async fn test_zero_batches_schema_specified() {
 async fn test_zero_batches_dictionary_schema_specified() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int64, false),
-        Field::new(
-            "b",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            false,
-        ),
+        Field::new_dictionary("b", DataType::Int32, DataType::Utf8, false),
     ]));
 
     // Expect dictionary to be hydrated in output (#3389)

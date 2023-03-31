@@ -888,36 +888,28 @@ mod tests {
         // define schema
         let struct_field_d = Field::new("d", DataType::Float64, true);
         let struct_field_f = Field::new("f", DataType::Float32, true);
-        let struct_field_g = Field::new(
-            "g",
-            DataType::List(Arc::new(Field::new("item", DataType::Int16, true))),
-            false,
-        );
-        let struct_field_h = Field::new(
-            "h",
-            DataType::List(Arc::new(Field::new("item", DataType::Int16, false))),
-            true,
-        );
-        let struct_field_e = Field::new(
+        let struct_field_g =
+            Field::new_list("g", Field::new("item", DataType::Int16, true), false);
+        let struct_field_h =
+            Field::new_list("h", Field::new("item", DataType::Int16, false), true);
+        let struct_field_e = Field::new_struct(
             "e",
-            DataType::Struct(Fields::from(vec![
+            vec![
                 struct_field_f.clone(),
                 struct_field_g.clone(),
                 struct_field_h.clone(),
-            ])),
+            ],
             false,
         );
-        let schema = Schema::new(Fields::from(vec![
+        let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, true),
-            Field::new(
+            Field::new_struct(
                 "c",
-                DataType::Struct(
-                    vec![struct_field_d.clone(), struct_field_e.clone()].into(),
-                ),
+                vec![struct_field_d.clone(), struct_field_e.clone()],
                 false,
             ),
-        ]));
+        ]);
 
         // create some data
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);

@@ -303,17 +303,17 @@ pub fn field_to_json(field: &Field) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{Fields, UnionFields, UnionMode};
+    use arrow::datatypes::UnionMode;
     use serde_json::Value;
 
     #[test]
     fn struct_field_to_json() {
-        let f = Field::new(
+        let f = Field::new_struct(
             "address",
-            DataType::Struct(Fields::from(vec![
+            vec![
                 Field::new("street", DataType::Utf8, false),
                 Field::new("zip", DataType::UInt16, false),
-            ])),
+            ],
             false,
         );
         let value: Value = serde_json::from_str(
@@ -351,19 +351,12 @@ mod tests {
 
     #[test]
     fn map_field_to_json() {
-        let f = Field::new(
+        let f = Field::new_map(
             "my_map",
-            DataType::Map(
-                Arc::new(Field::new(
-                    "my_entries",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new("my_keys", DataType::Utf8, false),
-                        Field::new("my_values", DataType::UInt16, true),
-                    ])),
-                    false,
-                )),
-                true,
-            ),
+            "my_entries",
+            Field::new("my_keys", DataType::Utf8, false),
+            Field::new("my_values", DataType::UInt16, true),
+            true,
             false,
         );
         let value: Value = serde_json::from_str(
@@ -459,12 +452,12 @@ mod tests {
         let value: Value = serde_json::from_str(json).unwrap();
         let dt = field_from_json(&value).unwrap();
 
-        let expected = Field::new(
+        let expected = Field::new_struct(
             "address",
-            DataType::Struct(Fields::from(vec![
+            vec![
                 Field::new("street", DataType::Utf8, false),
                 Field::new("zip", DataType::UInt16, false),
-            ])),
+            ],
             false,
         );
 
@@ -515,19 +508,12 @@ mod tests {
         let value: Value = serde_json::from_str(json).unwrap();
         let dt = field_from_json(&value).unwrap();
 
-        let expected = Field::new(
+        let expected = Field::new_map(
             "my_map",
-            DataType::Map(
-                Arc::new(Field::new(
-                    "my_entries",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new("my_keys", DataType::Utf8, false),
-                        Field::new("my_values", DataType::UInt16, true),
-                    ])),
-                    false,
-                )),
-                true,
-            ),
+            "my_entries",
+            Field::new("my_keys", DataType::Utf8, false),
+            Field::new("my_values", DataType::UInt16, true),
+            true,
             false,
         );
 
@@ -573,19 +559,14 @@ mod tests {
         let value: Value = serde_json::from_str(json).unwrap();
         let dt = field_from_json(&value).unwrap();
 
-        let expected = Field::new(
+        let expected = Field::new_union(
             "my_union",
-            DataType::Union(
-                UnionFields::new(
-                    vec![5, 7],
-                    vec![
-                        Field::new("f1", DataType::Int32, true),
-                        Field::new("f2", DataType::Utf8, true),
-                    ],
-                ),
-                UnionMode::Sparse,
-            ),
-            false,
+            vec![5, 7],
+            vec![
+                Field::new("f1", DataType::Int32, true),
+                Field::new("f2", DataType::Utf8, true),
+            ],
+            UnionMode::Sparse,
         );
 
         assert_eq!(expected, dt);
