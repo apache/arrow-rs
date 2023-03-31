@@ -54,7 +54,7 @@ rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 # AWS Profile support
 aws-types = { version = "0.54", optional = true }
 aws-credential-types = { version = "0.54", optional = true }
-aws-config = { version = "0.54", optional = true }
+aws-config = { version = "0.55", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util", "fs"] }
