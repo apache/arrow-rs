@@ -173,7 +173,7 @@ impl Field {
     /// Create a new [`Field`] with [`DataType::List`]
     ///
     /// - `name`: the name of the [`DataType::List`] field
-    /// - `value`: the list elements
+    /// - `value`: the description of each list element
     /// - `nullable`: if the [`DataType::List`] array is nullable
     ///
     /// Uses "item" as the name of the child field, this can be overridden with [`Self::new`]
@@ -188,7 +188,7 @@ impl Field {
     /// Create a new [`Field`] with [`DataType::LargeList`]
     ///
     /// - `name`: the name of the [`DataType::LargeList`] field
-    /// - `value`: the list elements
+    /// - `value`: the description of each list element
     /// - `nullable`: if the [`DataType::LargeList`] array is nullable
     pub fn new_large_list(
         name: impl Into<String>,
@@ -227,7 +227,7 @@ impl Field {
 
     /// Create a new [`Field`] with [`DataType::Union`]
     ///
-    /// - `name`: the name of the [`DataType::Map`] field
+    /// - `name`: the name of the [`DataType::Union`] field
     /// - `type_ids`: the union type ids
     /// - `fields`: the union fields
     /// - `mode`: the union mode
