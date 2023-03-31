@@ -180,7 +180,7 @@ pub(crate) fn into_buffers(
 /// # Memory Layout
 ///
 /// `ArrayData` has references to one or more underlying data buffers
-/// and optional child ArrayDatas, depending on type as illustrated
+/// and optional child ArrayData, depending on type as illustrated
 /// below. Bitmaps are not shown for simplicity but they are stored
 /// similarly to the buffers.
 ///

@@ -396,7 +396,7 @@ macro_rules! downcast_primitive_array {
 ///
 /// let arr: ArrayRef = Arc::new(Int32Array::from(vec![Some(1)]));
 ///
-/// // Downcast an `ArrayRef` to Int32Array / PrimiveArray<Int32>:
+/// // Downcast an `ArrayRef` to Int32Array / PrimitiveArray<Int32>:
 /// let primitive_array: &Int32Array = as_primitive_array(&arr);
 ///
 /// // Equivalently:

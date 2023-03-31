@@ -179,7 +179,7 @@ pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
 }
 
 /// Create string array to be used by run array builder. The string array
-/// will result in run array with physial length of `physical_array_len`
+/// will result in run array with physical length of `physical_array_len`
 /// and logical length of `logical_array_len`
 pub fn create_string_array_for_runs(
     physical_array_len: usize,

@@ -436,7 +436,7 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
         // Note: workaround for gen2 accounts with hierarchical namespaces. These accounts also
         // return path segments as "directories" and include blobs in list requests with prefix,
         // if the prefix mateches the blob. When we want directories, its always via
-        // the BlobPrefix mechanics, and during lists we state that prefixes are evaluated on path segement basis.
+        // the BlobPrefix mechanics, and during lists we state that prefixes are evaluated on path segment basis.
         .filter_map_ok(|obj| {
             if obj.size > 0 && obj.location.as_ref().len() > prefix.as_ref().len() {
                 Some(obj)

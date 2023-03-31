@@ -183,7 +183,7 @@ fn infer_file_schema_with_csv_options<R: Read + Seek>(
 /// `max_read_records` controlling the maximum number of records to read. If `max_read_records` is
 /// not set, all records are read to infer the schema.
 ///
-/// Return infered schema and number of records used for inference.
+/// Return inferred schema and number of records used for inference.
 pub fn infer_reader_schema<R: Read>(
     reader: R,
     delimiter: u8,
@@ -287,7 +287,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
 /// Infer schema from a list of CSV files by reading through first n records
 /// with `max_read_records` controlling the maximum number of records to read.
 ///
-/// Files will be read in the given order untill n records have been reached.
+/// Files will be read in the given order until n records have been reached.
 ///
 /// If `max_read_records` is not set, all files will be read fully to infer the schema.
 pub fn infer_schema_from_files(
@@ -1048,14 +1048,14 @@ impl ReaderBuilder {
     }
 
     /// Set the datetime regex used to parse the string to Date64Type
-    /// this regex is used while infering schema
+    /// this regex is used while inferring schema
     pub fn with_datetime_re(mut self, datetime_re: Regex) -> Self {
         self.datetime_re = Some(datetime_re);
         self
     }
 
-    /// Set the datetime fromat used to parse the string to Date64Type
-    /// this fromat is used while when the schema wants to parse Date64Type.
+    /// Set the datetime format used to parse the string to Date64Type
+    /// this format is used while when the schema wants to parse Date64Type.
     ///
     /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
     ///

@@ -106,7 +106,7 @@ impl MapArray {
 impl From<ArrayData> for MapArray {
     fn from(data: ArrayData) -> Self {
         Self::try_new_from_array_data(data)
-            .expect("Expected infallable creation of MapArray from ArrayData failed")
+            .expect("Expected infallible creation of MapArray from ArrayData failed")
     }
 }
 

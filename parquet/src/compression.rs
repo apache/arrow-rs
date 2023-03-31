@@ -726,7 +726,7 @@ mod lz4_hadoop_codec {
                 }
                 Err(e) if !self.backward_compatible_lz4 => Err(e.into()),
                 // Fallback done to be backward compatible with older versions of this
-                // libray and older versions of parquet-cpp.
+                // library and older versions of parquet-cpp.
                 Err(_) => {
                     // Truncate any inserted element before tryingg next algorithm.
                     output_buf.truncate(output_len);

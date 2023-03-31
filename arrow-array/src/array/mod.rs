@@ -266,7 +266,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     #[allow(deprecated)] // (#3880)
     fn get_array_memory_size(&self) -> usize {
         // both data.get_array_memory_size and size_of_val(self) include ArrayData fields,
-        // to only count additional fields of this array substract size_of(ArrayData)
+        // to only count additional fields of this array subtract size_of(ArrayData)
         self.data_ref().get_array_memory_size() + std::mem::size_of_val(self)
             - std::mem::size_of::<ArrayData>()
     }
@@ -964,7 +964,7 @@ mod tests {
         let empty =
             PrimitiveArray::<Int64Type>::from(ArrayData::new_empty(arr.data_type()));
 
-        // substract empty array to avoid magic numbers for the size of additional fields
+        // subtract empty array to avoid magic numbers for the size of additional fields
         assert_eq!(
             arr.get_array_memory_size() - empty.get_array_memory_size(),
             128 * std::mem::size_of::<i64>()
@@ -993,7 +993,7 @@ mod tests {
             empty_with_bitmap.get_array_memory_size()
         );
 
-        // substract empty array to avoid magic numbers for the size of additional fields
+        // subtract empty array to avoid magic numbers for the size of additional fields
         // the size of the validity bitmap is rounded up to 64 bytes
         assert_eq!(
             arr.get_array_memory_size() - empty_with_bitmap.get_array_memory_size(),
