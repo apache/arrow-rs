@@ -708,16 +708,11 @@ mod tests {
 
     #[test]
     fn create_record_batch_field_name_mismatch() {
-        let struct_fields = vec![
+        let fields = vec![
             Field::new("a1", DataType::Int32, false),
-            Field::new(
-                "a2",
-                DataType::List(Arc::new(Field::new("item", DataType::Int8, false))),
-                false,
-            ),
+            Field::new_list("a2", Field::new("item", DataType::Int8, false), false),
         ];
-        let struct_type = DataType::Struct(struct_fields.into());
-        let schema = Arc::new(Schema::new(vec![Field::new("a", struct_type, true)]));
+        let schema = Arc::new(Schema::new(vec![Field::new_struct("a", fields, true)]));
 
         let a1: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let a2_child = Int8Array::from(vec![1, 2, 3, 4]);

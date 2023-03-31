@@ -19,12 +19,14 @@ use crate::error::ArrowError;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use crate::datatype::DataType;
 use crate::schema::SchemaBuilder;
+use crate::{Fields, UnionFields, UnionMode};
 
 /// A reference counted [`Field`]
-pub type FieldRef = std::sync::Arc<Field>;
+pub type FieldRef = Arc<Field>;
 
 /// Describes a single column in a [`Schema`](super::Schema).
 ///
@@ -143,6 +145,115 @@ impl Field {
             dict_is_ordered,
             metadata: HashMap::default(),
         }
+    }
+
+    /// Create a new [`Field`] with [`DataType::Dictionary`]
+    ///
+    /// Use [`Self::new_dict`] for more advanced dictionary options
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`!key.is_dictionary_key_type`][DataType::is_dictionary_key_type]
+    pub fn new_dictionary(
+        name: impl Into<String>,
+        key: DataType,
+        value: DataType,
+        nullable: bool,
+    ) -> Self {
+        assert!(
+            key.is_dictionary_key_type(),
+            "{key} is not a valid dictionary key"
+        );
+        let data_type = DataType::Dictionary(Box::new(key), Box::new(value));
+        Self::new(name, data_type, nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::Struct`]
+    ///
+    /// - `name`: the name of the [`DataType::List`] field
+    /// - `fields`: the description of each struct element
+    /// - `nullable`: if the [`DataType::Struct`] array is nullable
+    pub fn new_struct(
+        name: impl Into<String>,
+        fields: impl Into<Fields>,
+        nullable: bool,
+    ) -> Self {
+        Self::new(name, DataType::Struct(fields.into()), nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::List`]
+    ///
+    /// - `name`: the name of the [`DataType::List`] field
+    /// - `value`: the description of each list element
+    /// - `nullable`: if the [`DataType::List`] array is nullable
+    ///
+    /// Uses "item" as the name of the child field, this can be overridden with [`Self::new`]
+    pub fn new_list(
+        name: impl Into<String>,
+        value: impl Into<FieldRef>,
+        nullable: bool,
+    ) -> Self {
+        Self::new(name, DataType::List(value.into()), nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::LargeList`]
+    ///
+    /// - `name`: the name of the [`DataType::LargeList`] field
+    /// - `value`: the description of each list element
+    /// - `nullable`: if the [`DataType::LargeList`] array is nullable
+    pub fn new_large_list(
+        name: impl Into<String>,
+        value: impl Into<FieldRef>,
+        nullable: bool,
+    ) -> Self {
+        Self::new(name, DataType::LargeList(value.into()), nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::Map`]
+    ///
+    /// - `name`: the name of the [`DataType::Map`] field
+    /// - `entries`: the name of the inner [`DataType::Struct`] field
+    /// - `keys`: the map keys
+    /// - `values`: the map values
+    /// - `sorted`: if the [`DataType::Map`] array is sorted
+    /// - `nullable`: if the [`DataType::Map`] array is nullable
+    pub fn new_map(
+        name: impl Into<String>,
+        entries: impl Into<String>,
+        keys: impl Into<FieldRef>,
+        values: impl Into<FieldRef>,
+        sorted: bool,
+        nullable: bool,
+    ) -> Self {
+        let data_type = DataType::Map(
+            Arc::new(Field::new(
+                entries.into(),
+                DataType::Struct(Fields::from([keys.into(), values.into()])),
+                false, // The inner map field is always non-nullable (#1697),
+            )),
+            sorted,
+        );
+        Self::new(name, data_type, nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::Union`]
+    ///
+    /// - `name`: the name of the [`DataType::Union`] field
+    /// - `type_ids`: the union type ids
+    /// - `fields`: the union fields
+    /// - `mode`: the union mode
+    pub fn new_union<S, F, T>(name: S, type_ids: T, fields: F, mode: UnionMode) -> Self
+    where
+        S: Into<String>,
+        F: IntoIterator,
+        F::Item: Into<FieldRef>,
+        T: IntoIterator<Item = i8>,
+    {
+        Self::new(
+            name,
+            DataType::Union(UnionFields::new(type_ids, fields), mode),
+            false, // Unions cannot be nullable
+        )
     }
 
     /// Sets the `Field`'s optional custom metadata.

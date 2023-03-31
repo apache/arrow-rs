@@ -7104,12 +7104,12 @@ mod tests {
     fn test_cast_null_from_and_to_nested_type() {
         // Cast null from and to map
         let data_type = DataType::Map(
-            Arc::new(Field::new(
+            Arc::new(Field::new_struct(
                 "entry",
-                DataType::Struct(Fields::from(vec![
+                vec![
                     Field::new("key", DataType::Utf8, false),
                     Field::new("value", DataType::Int32, true),
-                ])),
+                ],
                 false,
             )),
             false,

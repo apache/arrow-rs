@@ -24,7 +24,7 @@ use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
-use arrow_schema::{DataType, Field, Fields, Schema, SchemaBuilder};
+use arrow_schema::{DataType, Field, Schema, SchemaBuilder};
 
 fn get_repetition(t: &Type) -> Repetition {
     let info = t.get_basic_info();
@@ -351,9 +351,9 @@ impl Visitor {
                     _ => HashMap::default(),
                 };
 
-                let map_field = Field::new(
+                let map_field = Field::new_struct(
                     map_key_value.name(),
-                    DataType::Struct(Fields::from([key_field, value_field])),
+                    [key_field, value_field],
                     false, // The inner map field is always non-nullable (#1697)
                 )
                 .with_metadata(field_metadata);

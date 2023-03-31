@@ -347,11 +347,7 @@ mod tests {
             Field::new("c4", DataType::Boolean, true),
             Field::new("c5", DataType::Timestamp(TimeUnit::Millisecond, None), true),
             Field::new("c6", DataType::Time32(TimeUnit::Second), false),
-            Field::new(
-                "c7",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                false,
-            ),
+            Field::new_dictionary("c7", DataType::Int32, DataType::Utf8, false),
         ]);
 
         let c1 = StringArray::from(vec![

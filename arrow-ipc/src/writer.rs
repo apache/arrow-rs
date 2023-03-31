@@ -1778,19 +1778,14 @@ mod tests {
     }
 
     fn write_union_file(options: IpcWriteOptions) {
-        let schema = Schema::new(vec![Field::new(
+        let schema = Schema::new(vec![Field::new_union(
             "union",
-            DataType::Union(
-                UnionFields::new(
-                    vec![0, 1],
-                    vec![
-                        Field::new("a", DataType::Int32, false),
-                        Field::new("c", DataType::Float64, false),
-                    ],
-                ),
-                UnionMode::Sparse,
-            ),
-            true,
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("c", DataType::Float64, false),
+            ],
+            UnionMode::Sparse,
         )]);
         let mut builder = UnionBuilder::with_capacity_sparse(5);
         builder.append::<Int32Type>("a", 1).unwrap();
