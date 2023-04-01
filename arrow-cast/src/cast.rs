@@ -364,9 +364,9 @@ where
                 })
             }),
             false => array.try_unary::<_, D, _>(|v| {
-                v.as_().div_checked(scale_factor).and_then(|v| {
-                    D::validate_decimal_precision(v, precision).and_then(|_| Ok(v))
-                })
+                v.as_()
+                    .div_checked(scale_factor)
+                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
             })?,
         }
     } else {
@@ -377,9 +377,9 @@ where
                 })
             }),
             false => array.try_unary::<_, D, _>(|v| {
-                v.as_().mul_checked(scale_factor).and_then(|v| {
-                    D::validate_decimal_precision(v, precision).and_then(|_| Ok(v))
-                })
+                v.as_()
+                    .mul_checked(scale_factor)
+                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
             })?,
         }
     };
