@@ -8158,11 +8158,31 @@ mod tests {
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
 
-        let casted_array = cast_with_options(
+        let err = cast_with_options(
             &array,
             &DataType::Decimal128(7, 3),
             &CastOptions { safe: false },
         );
-        assert!(casted_array.is_err());
+        assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal128 of precision 7. Max is 9999999", err.unwrap_err().to_string());
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal256_precision_overflow() {
+        let array = Int64Array::from(vec![1234567]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(7, 3),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let err = cast_with_options(
+            &array,
+            &DataType::Decimal256(7, 3),
+            &CastOptions { safe: false },
+        );
+        assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal256 of precision 7. Max is 9999999", err.unwrap_err().to_string());
     }
 }
