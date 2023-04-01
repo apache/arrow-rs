@@ -8142,8 +8142,7 @@ mod tests {
 
     #[test]
     fn test_cast_decimal_to_utf8() {
-        fn test_decimal_to_string<IN: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
-            input_type: DataType,
+        fn test_decimal_to_string<OffsetSize: OffsetSizeTrait>(
             output_type: DataType,
             array: PrimitiveArray<IN>,
         ) {
@@ -8152,10 +8151,7 @@ mod tests {
             let b = cast(&array, &output_type).unwrap();
 
             assert_eq!(b.data_type(), &output_type);
-            let c = b
-                .as_any()
-                .downcast_ref::<GenericByteArray<GenericStringType<OffsetSize>>>()
-                .unwrap();
+            let c = b.as_string::<OffsetSize>()
 
             assert_eq!("1123.454", c.value(0));
             assert_eq!("2123.456", c.value(1));
