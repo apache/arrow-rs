@@ -18,9 +18,10 @@
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
 use crate::{
-    bit_util, buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer, MutableBuffer,
+    bit_util, buffer_bin_and, buffer_bin_or, buffer_bin_xor, buffer_unary_not, Buffer,
+    MutableBuffer,
 };
-use std::ops::{BitAnd, BitOr, Not};
+use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
 #[derive(Debug, Clone, Eq)]
@@ -224,6 +225,25 @@ impl BitOr<&BooleanBuffer> for &BooleanBuffer {
         assert_eq!(self.len, rhs.len);
         BooleanBuffer {
             buffer: buffer_bin_or(
+                &self.buffer,
+                self.offset,
+                &rhs.buffer,
+                rhs.offset,
+                self.len,
+            ),
+            offset: 0,
+            len: self.len,
+        }
+    }
+}
+
+impl BitXor<&BooleanBuffer> for &BooleanBuffer {
+    type Output = BooleanBuffer;
+
+    fn bitxor(self, rhs: &BooleanBuffer) -> Self::Output {
+        assert_eq!(self.len, rhs.len);
+        BooleanBuffer {
+            buffer: buffer_bin_xor(
                 &self.buffer,
                 self.offset,
                 &rhs.buffer,
