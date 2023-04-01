@@ -4391,8 +4391,7 @@ mod tests {
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
         let array: &Decimal128Array = array.as_primitive();
-        let err = array.validate_decimal_precision(3);
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", err.unwrap_err().to_string());
+        assert!(array.is_null(4));
 
         // test i8 to decimal type with overflow the result type
         // the 100 will be converted to 1000_i128, but it is out of range for max value in the precision 3.
@@ -4401,8 +4400,7 @@ mod tests {
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
         let array: &Decimal128Array = array.as_primitive();
-        let err = array.validate_decimal_precision(3);
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", err.unwrap_err().to_string());
+        assert!(array.is_null(4));
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
@@ -4560,8 +4558,7 @@ mod tests {
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
         let array: &Decimal256Array = array.as_primitive();
-        let err = array.validate_decimal_precision(3);
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal256 of precision 3. Max is 999", err.unwrap_err().to_string());
+        assert!(array.is_null(4));
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
