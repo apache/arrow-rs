@@ -18,12 +18,34 @@
 use crate::{make_array, Array, ArrayRef, RecordBatch};
 use arrow_buffer::{buffer_bin_or, Buffer, NullBuffer};
 use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, Field, SchemaBuilder};
+use arrow_schema::{ArrowError, DataType, Field, Fields, SchemaBuilder};
 use std::sync::Arc;
 use std::{any::Any, ops::Index};
 
 /// A nested array type where each child (called *field*) is represented by a separate
 /// array.
+///
+///
+/// # Comparison with [RecordBatch]
+///
+/// Both [`RecordBatch`] and [`StructArray`] represent a collection of columns / arrays with the
+/// same length.
+///
+/// However, there are a couple of key differences:
+///
+/// * [`StructArray`] can be nested within other [`Array`], including itself
+/// * [`RecordBatch`] can contain top-level metadata on its associated [`Schema`][arrow_schema::Schema]
+/// * [`StructArray`] can contain top-level nulls, i.e. `null`
+/// * [`RecordBatch`] can only represent nulls in its child columns, i.e. `{"field": null}`
+///
+/// [`StructArray`] is therefore a more general data container than [`RecordBatch`], and as such
+/// code that needs to handle both will typically share an implementation in terms of
+/// [`StructArray`] and convert to/from [`RecordBatch`] as necessary.
+///
+/// [`From`] implementations are provided to facilitate this conversion, however, converting
+/// from a [`StructArray`] containing top-level nulls to a [`RecordBatch`] will panic, as there
+/// is no way to preserve them.
+///
 /// # Example: Create an array from a vector of fields
 ///
 /// ```
@@ -86,6 +108,14 @@ impl StructArray {
                 .map(|f| f.name().as_str())
                 .collect::<Vec<&str>>(),
             _ => unreachable!("Struct array's data type is not struct!"),
+        }
+    }
+
+    /// Returns the [`Fields`] of this [`StructArray`]
+    pub fn fields(&self) -> &Fields {
+        match self.data_type() {
+            DataType::Struct(f) => f,
+            _ => unreachable!(),
         }
     }
 
