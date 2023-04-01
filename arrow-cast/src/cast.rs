@@ -145,6 +145,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // decimal to signed numeric
         (Decimal128(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) |
         (Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) => true,
+        // decimal to Utf8
+        (Decimal128(_, _), Utf8 | LargeUtf8) => true,
+        (Decimal256(_, _), Utf8 | LargeUtf8) => true,
         // Utf8 to decimal
         (Utf8 | LargeUtf8, Decimal128(_, _)) => true,
         (Utf8 | LargeUtf8, Decimal256(_, _)) => true,
@@ -826,6 +829,8 @@ pub fn cast_with_options(
                         x as f64 / 10_f64.powi(*scale as i32)
                     })
                 }
+                Utf8 => value_to_string::<i32>(array),
+                LargeUtf8 => value_to_string::<i64>(array),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {from_type:?} to {to_type:?} not supported"
@@ -893,6 +898,8 @@ pub fn cast_with_options(
                         x.to_f64().unwrap() / 10_f64.powi(*scale as i32)
                     })
                 }
+                Utf8 => value_to_string::<i32>(array),
+                LargeUtf8 => value_to_string::<i64>(array),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {from_type:?} to {to_type:?} not supported"
@@ -8144,6 +8151,60 @@ mod tests {
             .downcast_ref::<TimestampNanosecondArray>()
             .unwrap();
         assert_eq!(1672531200000000000, c.value(0));
+    }
+
+    #[test]
+    fn test_cast_decimal_to_utf8() {
+        fn test_decimal_to_string<IN: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
+            output_type: DataType,
+            array: PrimitiveArray<IN>,
+        ) {
+            let b = cast(&array, &output_type).unwrap();
+
+            assert_eq!(b.data_type(), &output_type);
+            let c = b.as_string::<OffsetSize>();
+
+            assert_eq!("1123.454", c.value(0));
+            assert_eq!("2123.456", c.value(1));
+            assert_eq!("-3123.453", c.value(2));
+            assert_eq!("-3123.456", c.value(3));
+            assert_eq!("0.000", c.value(4));
+            assert_eq!("0.123", c.value(5));
+            assert_eq!("1234.567", c.value(6));
+            assert_eq!("-1234.567", c.value(7));
+            assert!(c.is_null(8));
+        }
+        let array128: Vec<Option<i128>> = vec![
+            Some(1123454),
+            Some(2123456),
+            Some(-3123453),
+            Some(-3123456),
+            Some(0),
+            Some(123),
+            Some(123456789),
+            Some(-123456789),
+            None,
+        ];
+
+        let array256: Vec<Option<i256>> =
+            array128.iter().map(|v| v.map(i256::from_i128)).collect();
+
+        test_decimal_to_string::<arrow_array::types::Decimal128Type, i32>(
+            DataType::Utf8,
+            create_decimal_array(array128.clone(), 7, 3).unwrap(),
+        );
+        test_decimal_to_string::<arrow_array::types::Decimal128Type, i64>(
+            DataType::LargeUtf8,
+            create_decimal_array(array128, 7, 3).unwrap(),
+        );
+        test_decimal_to_string::<arrow_array::types::Decimal256Type, i32>(
+            DataType::Utf8,
+            create_decimal256_array(array256.clone(), 7, 3).unwrap(),
+        );
+        test_decimal_to_string::<arrow_array::types::Decimal256Type, i64>(
+            DataType::LargeUtf8,
+            create_decimal256_array(array256, 7, 3).unwrap(),
+        );
     }
 
     #[test]
