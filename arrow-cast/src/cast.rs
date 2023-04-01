@@ -8142,16 +8142,14 @@ mod tests {
 
     #[test]
     fn test_cast_decimal_to_utf8() {
-        fn test_decimal_to_string<OffsetSize: OffsetSizeTrait>(
+        fn test_decimal_to_string<IN: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
             output_type: DataType,
             array: PrimitiveArray<IN>,
         ) {
-            assert!(can_cast_types(&input_type, &output_type));
-
             let b = cast(&array, &output_type).unwrap();
 
             assert_eq!(b.data_type(), &output_type);
-            let c = b.as_string::<OffsetSize>()
+            let c = b.as_string::<OffsetSize>();
 
             assert_eq!("1123.454", c.value(0));
             assert_eq!("2123.456", c.value(1));
@@ -8179,22 +8177,18 @@ mod tests {
             array128.iter().map(|v| v.map(i256::from_i128)).collect();
 
         test_decimal_to_string::<arrow_array::types::Decimal128Type, i32>(
-            DataType::Decimal128(7, 3),
             DataType::Utf8,
             create_decimal_array(array128.clone(), 7, 3).unwrap(),
         );
         test_decimal_to_string::<arrow_array::types::Decimal128Type, i64>(
-            DataType::Decimal128(7, 3),
             DataType::LargeUtf8,
             create_decimal_array(array128, 7, 3).unwrap(),
         );
         test_decimal_to_string::<arrow_array::types::Decimal256Type, i32>(
-            DataType::Decimal128(7, 3),
             DataType::Utf8,
             create_decimal256_array(array256.clone(), 7, 3).unwrap(),
         );
         test_decimal_to_string::<arrow_array::types::Decimal256Type, i64>(
-            DataType::Decimal128(7, 3),
             DataType::LargeUtf8,
             create_decimal256_array(array256, 7, 3).unwrap(),
         );
