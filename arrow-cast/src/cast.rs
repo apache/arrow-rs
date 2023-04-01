@@ -361,13 +361,29 @@ where
 
     let array = if scale < 0 {
         match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| v.as_().div_checked(scale_factor).ok()),
-            false => array.try_unary::<_, D, _>(|v| v.as_().div_checked(scale_factor))?,
+            true => array.unary_opt::<_, D>(|v| {
+                v.as_().div_checked(scale_factor).ok().and_then(|v| {
+                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
+                })
+            }),
+            false => array.try_unary::<_, D, _>(|v| {
+                v.as_()
+                    .div_checked(scale_factor)
+                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+            })?,
         }
     } else {
         match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| v.as_().mul_checked(scale_factor).ok()),
-            false => array.try_unary::<_, D, _>(|v| v.as_().mul_checked(scale_factor))?,
+            true => array.unary_opt::<_, D>(|v| {
+                v.as_().mul_checked(scale_factor).ok().and_then(|v| {
+                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
+                })
+            }),
+            false => array.try_unary::<_, D, _>(|v| {
+                v.as_()
+                    .mul_checked(scale_factor)
+                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+            })?,
         }
     };
 
@@ -4382,8 +4398,7 @@ mod tests {
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
         let array: &Decimal128Array = array.as_primitive();
-        let err = array.validate_decimal_precision(3);
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", err.unwrap_err().to_string());
+        assert!(array.is_null(4));
 
         // test i8 to decimal type with overflow the result type
         // the 100 will be converted to 1000_i128, but it is out of range for max value in the precision 3.
@@ -4392,8 +4407,7 @@ mod tests {
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
         let array: &Decimal128Array = array.as_primitive();
-        let err = array.validate_decimal_precision(3);
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", err.unwrap_err().to_string());
+        assert!(array.is_null(4));
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
@@ -4551,8 +4565,7 @@ mod tests {
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
         let array: &Decimal256Array = array.as_primitive();
-        let err = array.validate_decimal_precision(3);
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal256 of precision 3. Max is 999", err.unwrap_err().to_string());
+        assert!(array.is_null(4));
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
@@ -8192,5 +8205,45 @@ mod tests {
             DataType::LargeUtf8,
             create_decimal256_array(array256, 7, 3).unwrap(),
         );
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal128_precision_overflow() {
+        let array = Int64Array::from(vec![1234567]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(7, 3),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let err = cast_with_options(
+            &array,
+            &DataType::Decimal128(7, 3),
+            &CastOptions { safe: false },
+        );
+        assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal128 of precision 7. Max is 9999999", err.unwrap_err().to_string());
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal256_precision_overflow() {
+        let array = Int64Array::from(vec![1234567]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(7, 3),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let err = cast_with_options(
+            &array,
+            &DataType::Decimal256(7, 3),
+            &CastOptions { safe: false },
+        );
+        assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal256 of precision 7. Max is 9999999", err.unwrap_err().to_string());
     }
 }
