@@ -358,13 +358,29 @@ where
 
     let array = if scale < 0 {
         match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| v.as_().div_checked(scale_factor).ok()),
-            false => array.try_unary::<_, D, _>(|v| v.as_().div_checked(scale_factor))?,
+            true => array.unary_opt::<_, D>(|v| {
+                v.as_().div_checked(scale_factor).ok().and_then(|v| {
+                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
+                })
+            }),
+            false => array.try_unary::<_, D, _>(|v| {
+                v.as_().div_checked(scale_factor).and_then(|v| {
+                    D::validate_decimal_precision(v, precision).and_then(|_| Ok(v))
+                })
+            })?,
         }
     } else {
         match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| v.as_().mul_checked(scale_factor).ok()),
-            false => array.try_unary::<_, D, _>(|v| v.as_().mul_checked(scale_factor))?,
+            true => array.unary_opt::<_, D>(|v| {
+                v.as_().mul_checked(scale_factor).ok().and_then(|v| {
+                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
+                })
+            }),
+            false => array.try_unary::<_, D, _>(|v| {
+                v.as_().mul_checked(scale_factor).and_then(|v| {
+                    D::validate_decimal_precision(v, precision).and_then(|_| Ok(v))
+                })
+            })?,
         }
     };
 
@@ -8131,5 +8147,25 @@ mod tests {
             .downcast_ref::<TimestampNanosecondArray>()
             .unwrap();
         assert_eq!(1672531200000000000, c.value(0));
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal128_precision_overflow() {
+        let array = Int64Array::from(vec![1234567]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(7, 3),
+            &CastOptions { safe: true },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(7, 3),
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
     }
 }
