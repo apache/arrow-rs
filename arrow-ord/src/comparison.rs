@@ -1192,7 +1192,7 @@ where
 {
     // TODO: Use take_boolean (#2967)
     let array = take(&dict_comparison, dict.keys(), None)?;
-    Ok(BooleanArray::from(array.data().clone()))
+    Ok(BooleanArray::from(array.to_data()))
 }
 
 /// Helper function to perform boolean lambda function on values from two arrays using

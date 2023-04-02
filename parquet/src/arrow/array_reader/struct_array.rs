@@ -17,7 +17,7 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{builder::BooleanBufferBuilder, ArrayRef, StructArray};
+use arrow_array::{builder::BooleanBufferBuilder, ArrayRef, StructArray, Array};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
@@ -130,7 +130,7 @@ impl ArrayReader for StructArrayReader {
             .child_data(
                 children_array
                     .iter()
-                    .map(|x| x.data().clone())
+                    .map(|x| x.to_data())
                     .collect::<Vec<ArrayData>>(),
             );
 

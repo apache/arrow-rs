@@ -2171,7 +2171,7 @@ mod tests {
             .into_data()
             .into_builder()
             .data_type(data_type)
-            .add_child_data(values.data().clone())
+            .add_child_data(values.to_data())
             .build()
             .unwrap();
 

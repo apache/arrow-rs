@@ -290,7 +290,7 @@ impl Array for ArrayRef {
     }
 
     fn into_data(self) -> ArrayData {
-        self.data().clone()
+        self.to_data()
     }
 
     #[allow(deprecated)]
@@ -357,7 +357,7 @@ impl<'a, T: Array> Array for &'a T {
     }
 
     fn into_data(self) -> ArrayData {
-        self.data().clone()
+        self.to_data()
     }
 
     #[allow(deprecated)]

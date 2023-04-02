@@ -2086,7 +2086,7 @@ mod tests {
             .downcast_ref::<DictionaryArray<Int16Type>>()
             .unwrap();
 
-        let result_values: StringArray = result.values().data().clone().into();
+        let result_values: StringArray = result.values().to_data().into();
 
         // dictionary values should stay the same
         let expected_values = StringArray::from(vec!["foo", "bar", ""]);

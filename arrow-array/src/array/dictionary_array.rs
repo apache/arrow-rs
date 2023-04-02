@@ -252,11 +252,11 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
 
         // Note: This use the ArrayDataBuilder::build_unchecked and afterwards
         // call the new function which only validates that the keys are in bounds.
-        let data = keys.data().clone();
+        let data = keys.to_data();
         let builder = data
             .into_builder()
             .data_type(dict_data_type)
-            .add_child_data(values.data().clone());
+            .add_child_data(values.to_data());
 
         // Safety: `validate` ensures key type is correct, and
         //  `validate_values` ensures all offsets are within range
@@ -397,7 +397,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
                 Box::new(K::DATA_TYPE),
                 Box::new(values.data_type().clone()),
             ))
-            .child_data(vec![values.data().clone()]);
+            .child_data(vec![values.to_data()]);
 
         // SAFETY:
         // Offsets were valid before and verified length is greater than or equal
@@ -1076,7 +1076,7 @@ mod tests {
         let boxed: ArrayRef = Arc::new(dict_array);
 
         let col: DictionaryArray<Int8Type> =
-            DictionaryArray::<Int8Type>::from(boxed.data().clone());
+            DictionaryArray::<Int8Type>::from(boxed.to_data());
         let err = col.into_primitive_dict_builder::<Int32Type>();
 
         let returned = err.unwrap_err();

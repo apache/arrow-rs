@@ -456,7 +456,7 @@ mod tests {
         let data: Vec<Option<&str>> = vec![None];
         let array = StringArray::from(data);
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }
@@ -466,7 +466,7 @@ mod tests {
         let data: Vec<Option<&str>> = vec![None];
         let array = LargeStringArray::from(data);
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }

@@ -17,7 +17,7 @@
 
 use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
-use crate::{ArrayRef, GenericListArray, OffsetSizeTrait};
+use crate::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::Field;
@@ -228,7 +228,7 @@ where
     pub fn finish(&mut self) -> GenericListArray<OffsetSize> {
         let len = self.len();
         let values_arr = self.values_builder.finish();
-        let values_data = values_arr.data();
+        let values_data = values_arr.to_data();
 
         let offset_buffer = self.offsets_builder.finish();
         let null_bit_buffer = self.null_buffer_builder.finish();
@@ -242,7 +242,7 @@ where
         let array_data_builder = ArrayData::builder(data_type)
             .len(len)
             .add_buffer(offset_buffer)
-            .add_child_data(values_data.clone())
+            .add_child_data(values_data)
             .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data_builder.build_unchecked() };
@@ -254,7 +254,7 @@ where
     pub fn finish_cloned(&self) -> GenericListArray<OffsetSize> {
         let len = self.len();
         let values_arr = self.values_builder.finish_cloned();
-        let values_data = values_arr.data();
+        let values_data = values_arr.to_data();
 
         let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
         let null_bit_buffer = self
@@ -270,7 +270,7 @@ where
         let array_data_builder = ArrayData::builder(data_type)
             .len(len)
             .add_buffer(offset_buffer)
-            .add_child_data(values_data.clone())
+            .add_child_data(values_data)
             .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data_builder.build_unchecked() };

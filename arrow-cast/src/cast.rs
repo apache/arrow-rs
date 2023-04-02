@@ -634,7 +634,7 @@ pub fn cast_with_options(
     let from_type = array.data_type();
     // clone array if types are the same
     if from_type == to_type {
-        return Ok(make_array(array.data().clone()));
+        return Ok(make_array(array.to_data()));
     }
     match (from_type, to_type) {
         (
@@ -3108,7 +3108,7 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                 })?;
 
             let keys_array: ArrayRef =
-                Arc::new(PrimitiveArray::<K>::from(dict_array.keys().data().clone()));
+                Arc::new(PrimitiveArray::<K>::from(dict_array.keys().to_data()));
             let values_array = dict_array.values();
             let cast_keys = cast_with_options(&keys_array, to_index_type, cast_options)?;
             let cast_values =
@@ -3182,7 +3182,7 @@ where
 
     // Note take requires first casting the indices to u32
     let keys_array: ArrayRef =
-        Arc::new(PrimitiveArray::<K>::from(dict_array.keys().data().clone()));
+        Arc::new(PrimitiveArray::<K>::from(dict_array.keys().to_data()));
     let indices = cast_with_options(&keys_array, &DataType::UInt32, cast_options)?;
     let u32_indices =
         indices
@@ -3379,7 +3379,7 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
     to_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let data = array.data().clone();
+    let data = array.to_data();
     let underlying_array = make_array(data.child_data()[0].clone());
     let cast_array =
         cast_with_options(underlying_array.as_ref(), to.data_type(), cast_options)?;

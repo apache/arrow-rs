@@ -683,7 +683,7 @@ mod tests {
         let data = vec![None];
         let array = BinaryArray::from(data);
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }
@@ -693,7 +693,7 @@ mod tests {
         let data = vec![None];
         let array = LargeBinaryArray::from(data);
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }

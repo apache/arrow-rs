@@ -1185,7 +1185,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn precision(&self) -> u8 {
         match T::BYTE_LENGTH {
             16 => {
-                if let DataType::Decimal128(p, _) = self.data().data_type() {
+                if let DataType::Decimal128(p, _) = self.data_type() {
                     *p
                 } else {
                     unreachable!(
@@ -1195,7 +1195,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 }
             }
             32 => {
-                if let DataType::Decimal256(p, _) = self.data().data_type() {
+                if let DataType::Decimal256(p, _) = self.data_type() {
                     *p
                 } else {
                     unreachable!(
@@ -1212,7 +1212,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn scale(&self) -> i8 {
         match T::BYTE_LENGTH {
             16 => {
-                if let DataType::Decimal128(_, s) = self.data().data_type() {
+                if let DataType::Decimal128(_, s) = self.data_type() {
                     *s
                 } else {
                     unreachable!(
@@ -1222,7 +1222,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 }
             }
             32 => {
-                if let DataType::Decimal256(_, s) = self.data().data_type() {
+                if let DataType::Decimal256(_, s) = self.data_type() {
                     *s
                 } else {
                     unreachable!(
@@ -1874,7 +1874,7 @@ mod tests {
         let array = PrimitiveArray::<Decimal128Type>::from(values.clone());
         assert_eq!(array.values(), &values);
 
-        let array = PrimitiveArray::<Decimal128Type>::from(array.data().clone());
+        let array = PrimitiveArray::<Decimal128Type>::from(array.to_data());
         assert_eq!(array.values(), &values);
     }
 
@@ -1894,7 +1894,7 @@ mod tests {
         let array = PrimitiveArray::<Decimal256Type>::from(values.clone());
         assert_eq!(array.values(), &values);
 
-        let array = PrimitiveArray::<Decimal256Type>::from(array.data().clone());
+        let array = PrimitiveArray::<Decimal256Type>::from(array.to_data());
         assert_eq!(array.values(), &values);
     }
 
@@ -2190,7 +2190,7 @@ mod tests {
 
         let boxed: ArrayRef = Arc::new(array);
 
-        let col: Int32Array = PrimitiveArray::<Int32Type>::from(boxed.data().clone());
+        let col: Int32Array = PrimitiveArray::<Int32Type>::from(boxed.to_data());
         let err = col.into_builder();
 
         match err {

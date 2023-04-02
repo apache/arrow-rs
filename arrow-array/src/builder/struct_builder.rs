@@ -233,7 +233,7 @@ impl StructBuilder {
         let mut child_data = Vec::with_capacity(self.field_builders.len());
         for f in &mut self.field_builders {
             let arr = f.finish();
-            child_data.push(arr.data().clone());
+            child_data.push(arr.to_data());
         }
         let length = self.len();
         let null_bit_buffer = self.null_buffer_builder.finish();
@@ -254,7 +254,7 @@ impl StructBuilder {
         let mut child_data = Vec::with_capacity(self.field_builders.len());
         for f in &self.field_builders {
             let arr = f.finish_cloned();
-            child_data.push(arr.data().clone());
+            child_data.push(arr.to_data());
         }
         let length = self.len();
         let null_bit_buffer = self

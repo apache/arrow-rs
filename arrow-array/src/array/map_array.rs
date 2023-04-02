@@ -189,7 +189,7 @@ impl MapArray {
 
         let entry_struct = StructArray::from(vec![
             (keys_field, Arc::new(keys_data) as ArrayRef),
-            (values_field, make_array(values.data().clone())),
+            (values_field, make_array(values.to_data())),
         ]);
 
         let map_data_type = DataType::Map(

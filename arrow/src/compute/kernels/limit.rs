@@ -172,8 +172,8 @@ mod tests {
 
         assert_eq!(5, struct_array.len());
         assert_eq!(1, struct_array.null_count());
-        assert_eq!(&boolean_data, struct_array.column(0).data());
-        assert_eq!(&int_data, struct_array.column(1).data());
+        assert_eq!(boolean_data, struct_array.column(0).to_data());
+        assert_eq!(int_data, struct_array.column(1).to_data());
 
         let array: ArrayRef = Arc::new(struct_array);
 

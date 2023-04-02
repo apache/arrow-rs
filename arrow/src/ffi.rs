@@ -1104,7 +1104,7 @@ mod tests {
         )]);
 
         // export it
-        let array = ArrowArray::try_from(struct_array.data().clone())?;
+        let array = ArrowArray::try_from(struct_array.to_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1128,7 +1128,7 @@ mod tests {
         let union = builder.build().unwrap();
 
         // export it
-        let array = ArrowArray::try_from(union.data().clone())?;
+        let array = ArrowArray::try_from(union.to_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;

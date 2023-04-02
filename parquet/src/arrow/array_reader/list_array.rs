@@ -143,11 +143,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         let mut skipped = 0;
 
         // Builder used to construct the filtered child data, skipping empty lists and nulls
-        let mut child_data_builder = MutableArrayData::new(
-            vec![next_batch_array.data()],
-            false,
-            next_batch_array.len(),
-        );
+        let data = next_batch_array.to_data();
+        let mut child_data_builder =
+            MutableArrayData::new(vec![&data], false, next_batch_array.len());
 
         def_levels.iter().zip(rep_levels).try_for_each(|(d, r)| {
             match r.cmp(&self.rep_level) {
@@ -201,7 +199,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 
         let child_data = if skipped == 0 {
             // No filtered values - can reuse original array
-            next_batch_array.data().clone()
+            next_batch_array.to_data()
         } else {
             // One or more filtered values - must build new array
             if let Some(start) = filter_start.take() {
