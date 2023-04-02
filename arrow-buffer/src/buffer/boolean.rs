@@ -18,9 +18,10 @@
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
 use crate::{
-    bit_util, buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer, MutableBuffer,
+    bit_util, buffer_bin_and, buffer_bin_or, buffer_bin_xor, buffer_unary_not, Buffer,
+    MutableBuffer,
 };
-use std::ops::{BitAnd, BitOr, Not};
+use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
 #[derive(Debug, Clone, Eq)]
@@ -236,11 +237,93 @@ impl BitOr<&BooleanBuffer> for &BooleanBuffer {
     }
 }
 
+impl BitXor<&BooleanBuffer> for &BooleanBuffer {
+    type Output = BooleanBuffer;
+
+    fn bitxor(self, rhs: &BooleanBuffer) -> Self::Output {
+        assert_eq!(self.len, rhs.len);
+        BooleanBuffer {
+            buffer: buffer_bin_xor(
+                &self.buffer,
+                self.offset,
+                &rhs.buffer,
+                rhs.offset,
+                self.len,
+            ),
+            offset: 0,
+            len: self.len,
+        }
+    }
+}
+
 impl<'a> IntoIterator for &'a BooleanBuffer {
     type Item = bool;
     type IntoIter = BitIterator<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         BitIterator::new(self.values(), self.offset, self.len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bitand() {
+        let offset = 0;
+        let len = 40;
+
+        let buf1 = Buffer::from(&[0, 1, 1, 0, 0]);
+        let boolean_buf1 = &BooleanBuffer::new(buf1, offset, len);
+
+        let buf2 = Buffer::from(&[0, 1, 1, 1, 0]);
+        let boolean_buf2 = &BooleanBuffer::new(buf2, offset, len);
+
+        let expected = BooleanBuffer::new(Buffer::from(&[0, 1, 1, 0, 0]), offset, len);
+        assert_eq!(boolean_buf1 & boolean_buf2, expected);
+    }
+
+    #[test]
+    fn test_bitor() {
+        let offset = 0;
+        let len = 40;
+
+        let buf1 = Buffer::from(&[0, 1, 1, 0, 0]);
+        let boolean_buf1 = &BooleanBuffer::new(buf1, offset, len);
+
+        let buf2 = Buffer::from(&[0, 1, 1, 1, 0]);
+        let boolean_buf2 = &BooleanBuffer::new(buf2, offset, len);
+
+        let expected = BooleanBuffer::new(Buffer::from(&[0, 1, 1, 1, 0]), offset, len);
+        assert_eq!(boolean_buf1 | boolean_buf2, expected);
+    }
+
+    #[test]
+    fn test_bitxor() {
+        let offset = 0;
+        let len = 40;
+
+        let buf1 = Buffer::from(&[0, 1, 1, 0, 0]);
+        let boolean_buf1 = &BooleanBuffer::new(buf1, offset, len);
+
+        let buf2 = Buffer::from(&[0, 1, 1, 1, 0]);
+        let boolean_buf2 = &BooleanBuffer::new(buf2, offset, len);
+
+        let expected = BooleanBuffer::new(Buffer::from(&[0, 0, 0, 1, 0]), offset, len);
+        assert_eq!(boolean_buf1 ^ boolean_buf2, expected);
+    }
+
+    #[test]
+    fn test_not() {
+        let offset = 0;
+        let len = 40;
+
+        let buf = Buffer::from(&[0, 1, 1, 0, 0]);
+        let boolean_buf = &BooleanBuffer::new(buf, offset, len);
+
+        let expected =
+            BooleanBuffer::new(Buffer::from(&[255, 254, 254, 255, 255]), offset, len);
+        assert_eq!(!boolean_buf, expected);
     }
 }
