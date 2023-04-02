@@ -52,6 +52,11 @@ impl MapArray {
         &self.values
     }
 
+    /// Returns a reference to the [`StructArray`] entries of this map
+    pub fn entries(&self) -> &ArrayRef {
+        &self.entries
+    }
+
     /// Returns the data type of the map's keys.
     pub fn key_type(&self) -> &DataType {
         self.keys.data_type()

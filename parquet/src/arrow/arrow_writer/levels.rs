@@ -210,7 +210,7 @@ impl LevelInfoBuilder {
                 self.write_list(
                     array.value_offsets(),
                     array.nulls(),
-                    array.values(),
+                    array.entries(),
                     range,
                 )
             }
