@@ -492,7 +492,7 @@ mod tests {
     use arrow_array::*;
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_cast::display::array_value_to_string;
-    use arrow_data::ArrayDataBuilder;
+    use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{Fields, Schema};
 
     #[test]
