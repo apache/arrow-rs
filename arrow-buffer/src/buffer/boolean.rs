@@ -270,7 +270,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_bitand() {
+    fn test_boolean_new() {
+        let bytes = &[0, 1, 2, 3, 4];
+        let buf = Buffer::from(bytes);
+        let offset = 0;
+        let len = 24;
+
+        let boolean_buf = BooleanBuffer::new(buf.clone(), offset, len);
+        assert_eq!(bytes, boolean_buf.values());
+        assert_eq!(offset, boolean_buf.offset);
+        assert_eq!(len, boolean_buf.len);
+
+        assert_eq!(2, boolean_buf.count_set_bits());
+        assert_eq!(&buf, boolean_buf.inner());
+        assert_eq!(buf, boolean_buf.clone().into_inner());
+
+        assert!(!boolean_buf.is_empty())
+    }
+
+    #[test]
+    fn test_boolean_data_equality() {
+        let boolean_buf1 = BooleanBuffer::new(Buffer::from(&[0, 1, 4, 3, 5]), 0, 32);
+        let boolean_buf2 = BooleanBuffer::new(Buffer::from(&[0, 1, 4, 3, 5]), 0, 32);
+        assert_eq!(boolean_buf1, boolean_buf2);
+
+        // slice with same offset and same length should still preserve equality
+        let boolean_buf3 = boolean_buf1.slice(8, 16);
+        assert_ne!(boolean_buf1, boolean_buf3);
+        let boolean_buf4 = boolean_buf1.slice(0, 32);
+        assert_eq!(boolean_buf1, boolean_buf4);
+
+        // unequal because of different elements
+        let boolean_buf2 = BooleanBuffer::new(Buffer::from(&[0, 0, 2, 3, 4]), 0, 32);
+        assert_ne!(boolean_buf1, boolean_buf2);
+
+        // unequal because of different length
+        let boolean_buf2 = BooleanBuffer::new(Buffer::from(&[0, 1, 4, 3, 5]), 0, 24);
+        assert_ne!(boolean_buf1, boolean_buf2);
+
+        // ptr_eq
+        assert!(boolean_buf1.ptr_eq(&boolean_buf1));
+        assert!(boolean_buf2.ptr_eq(&boolean_buf2));
+        assert!(!boolean_buf1.ptr_eq(&boolean_buf2));
+    }
+
+    #[test]
+    fn test_boolean_slice() {
+        let bytes = &[0, 3, 2, 6, 2];
+        let boolean_buf1 = BooleanBuffer::new(Buffer::from(bytes), 0, 32);
+        let boolean_buf2 = BooleanBuffer::new(Buffer::from(bytes), 0, 32);
+
+        let boolean_slice1 = boolean_buf1.slice(16, 16);
+        let boolean_slice2 = boolean_buf2.slice(0, 16);
+        assert_eq!(boolean_slice1.values(), boolean_slice2.values());
+
+        assert_eq!(bytes, boolean_slice1.values());
+        assert_eq!(16, boolean_slice1.offset);
+        assert_eq!(16, boolean_slice1.len);
+
+        assert_eq!(bytes, boolean_slice2.values());
+        assert_eq!(0, boolean_slice2.offset);
+        assert_eq!(16, boolean_slice2.len);
+    }
+
+    #[test]
+    fn test_boolean_bitand() {
         let offset = 0;
         let len = 40;
 
@@ -285,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bitor() {
+    fn test_boolean_bitor() {
         let offset = 0;
         let len = 40;
 
@@ -300,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bitxor() {
+    fn test_boolean_bitxor() {
         let offset = 0;
         let len = 40;
 
@@ -315,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn test_not() {
+    fn test_boolean_not() {
         let offset = 0;
         let len = 40;
 
