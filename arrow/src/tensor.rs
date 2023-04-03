@@ -93,6 +93,7 @@ pub type UInt8Tensor<'a> = Tensor<'a, UInt8Type>;
 pub type UInt16Tensor<'a> = Tensor<'a, UInt16Type>;
 pub type UInt32Tensor<'a> = Tensor<'a, UInt32Type>;
 pub type UInt64Tensor<'a> = Tensor<'a, UInt64Type>;
+pub type Float16Tensor<'a> = Tensor<'a, Float16Type>;
 pub type Float32Tensor<'a> = Tensor<'a, Float32Type>;
 pub type Float64Tensor<'a> = Tensor<'a, Float64Type>;
 
