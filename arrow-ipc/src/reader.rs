@@ -792,6 +792,9 @@ pub struct FileReader<R: Read + Seek> {
     /// Metadata version
     metadata_version: crate::MetadataVersion,
 
+    /// User defined metadata
+    custom_metadata: HashMap<String, String>,
+
     /// Optional projection and projected_schema
     projection: Option<(Vec<usize>, Schema)>,
 }
@@ -862,6 +865,16 @@ impl<R: Read + Seek> FileReader<R> {
         let ipc_schema = footer.schema().unwrap();
         let schema = crate::convert::fb_to_schema(ipc_schema);
 
+        let mut custom_metadata = HashMap::new();
+        if let Some(fb_custom_metadata) = footer.custom_metadata() {
+            for kv in fb_custom_metadata.into_iter() {
+                custom_metadata.insert(
+                    kv.key().unwrap().to_string(),
+                    kv.value().unwrap().to_string(),
+                );
+            }
+        }
+
         // Create an array of optional dictionary value arrays, one per field.
         let mut dictionaries_by_id = HashMap::new();
         if let Some(dictionaries) = footer.dictionaries() {
@@ -926,8 +939,14 @@ impl<R: Read + Seek> FileReader<R> {
             total_blocks,
             dictionaries_by_id,
             metadata_version: footer.version(),
+            custom_metadata,
             projection,
         })
+    }
+
+    /// Return user defined customized metadata
+    pub fn custom_metadata(&self) -> &HashMap<String, String> {
+        &self.custom_metadata
     }
 
     /// Return the number of batches in the file
@@ -1520,6 +1539,25 @@ mod tests {
             crate::reader::StreamReader::try_new(std::io::Cursor::new(buf), None)
                 .unwrap();
         reader.next().unwrap().unwrap()
+    }
+
+    #[test]
+    fn test_roundtrip_with_custom_metadata() {
+        let schema = Schema::new(vec![Field::new("dummy", DataType::Float64, false)]);
+        let mut buf = Vec::new();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+        let mut test_metadata = HashMap::new();
+        test_metadata.insert("abc".to_string(), "abc".to_string());
+        test_metadata.insert("def".to_string(), "def".to_string());
+        for (k, v) in &test_metadata {
+            writer.write_metadata(k, v);
+        }
+        writer.finish().unwrap();
+        drop(writer);
+
+        let reader =
+            crate::reader::FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
+        assert_eq!(reader.custom_metadata(), &test_metadata);
     }
 
     #[test]

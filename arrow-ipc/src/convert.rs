@@ -24,7 +24,7 @@ use flatbuffers::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::{size_prefixed_root_as_message, CONTINUATION_MARKER};
+use crate::{size_prefixed_root_as_message, KeyValue, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Serialize a schema in IPC format
@@ -38,6 +38,25 @@ pub fn schema_to_fb(schema: &Schema) -> FlatBufferBuilder {
     fbb
 }
 
+pub fn metadata_to_fb<'a>(
+    fbb: &mut FlatBufferBuilder<'a>,
+    metadata: &HashMap<String, String>,
+) -> WIPOffset<Vector<'a, ForwardsUOffset<KeyValue<'a>>>> {
+    let custom_metadata = metadata
+        .iter()
+        .map(|(k, v)| {
+            let fb_key_name = fbb.create_string(k);
+            let fb_val_name = fbb.create_string(v);
+
+            let mut kv_builder = crate::KeyValueBuilder::new(fbb);
+            kv_builder.add_key(fb_key_name);
+            kv_builder.add_value(fb_val_name);
+            kv_builder.finish()
+        })
+        .collect::<Vec<_>>();
+    fbb.create_vector(&custom_metadata)
+}
+
 pub fn schema_to_fb_offset<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     schema: &Schema,
@@ -49,24 +68,8 @@ pub fn schema_to_fb_offset<'a>(
         .collect::<Vec<_>>();
     let fb_field_list = fbb.create_vector(&fields);
 
-    let fb_metadata_list = if !schema.metadata().is_empty() {
-        let custom_metadata = schema
-            .metadata()
-            .iter()
-            .map(|(k, v)| {
-                let fb_key_name = fbb.create_string(k);
-                let fb_val_name = fbb.create_string(v);
-
-                let mut kv_builder = crate::KeyValueBuilder::new(fbb);
-                kv_builder.add_key(fb_key_name);
-                kv_builder.add_value(fb_val_name);
-                kv_builder.finish()
-            })
-            .collect::<Vec<_>>();
-        Some(fbb.create_vector(&custom_metadata))
-    } else {
-        None
-    };
+    let fb_metadata_list =
+        (!schema.metadata().is_empty()).then(|| metadata_to_fb(fbb, schema.metadata()));
 
     let mut builder = crate::SchemaBuilder::new(fbb);
     builder.add_fields(fb_field_list);
@@ -440,16 +443,7 @@ pub(crate) fn build_field<'a>(
     // Optional custom metadata.
     let mut fb_metadata = None;
     if !field.metadata().is_empty() {
-        let mut kv_vec = vec![];
-        for (k, v) in field.metadata() {
-            let kv_args = crate::KeyValueArgs {
-                key: Some(fbb.create_string(k.as_str())),
-                value: Some(fbb.create_string(v.as_str())),
-            };
-            let kv_offset = crate::KeyValue::create(fbb, &kv_args);
-            kv_vec.push(kv_offset);
-        }
-        fb_metadata = Some(fbb.create_vector(&kv_vec));
+        fb_metadata = Some(metadata_to_fb(fbb, field.metadata()));
     };
 
     let fb_field_name = fbb.create_string(field.name().as_str());

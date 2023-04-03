@@ -706,6 +706,8 @@ pub struct FileWriter<W: Write> {
     finished: bool,
     /// Keeps track of dictionaries that have been written
     dictionary_tracker: DictionaryTracker,
+    /// User level customized metadata
+    custom_metadata: HashMap<String, String>,
 
     data_gen: IpcDataGenerator,
 }
@@ -742,8 +744,13 @@ impl<W: Write> FileWriter<W> {
             record_blocks: vec![],
             finished: false,
             dictionary_tracker: DictionaryTracker::new(true),
+            custom_metadata: HashMap::new(),
             data_gen,
         })
+    }
+
+    pub fn write_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.custom_metadata.insert(key.into(), value.into());
     }
 
     /// Write a record batch to the file
@@ -798,6 +805,8 @@ impl<W: Write> FileWriter<W> {
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
         let record_batches = fbb.create_vector(&self.record_blocks);
         let schema = crate::convert::schema_to_fb_offset(&mut fbb, &self.schema);
+        let fb_custom_metadata = (!self.custom_metadata.is_empty())
+            .then(|| crate::convert::metadata_to_fb(&mut fbb, &self.custom_metadata));
 
         let root = {
             let mut footer_builder = crate::FooterBuilder::new(&mut fbb);
@@ -805,6 +814,9 @@ impl<W: Write> FileWriter<W> {
             footer_builder.add_schema(schema);
             footer_builder.add_dictionaries(dictionaries);
             footer_builder.add_recordBatches(record_batches);
+            if let Some(fb_custom_metadata) = fb_custom_metadata {
+                footer_builder.add_custom_metadata(fb_custom_metadata);
+            }
             footer_builder.finish()
         };
         fbb.finish(root, None);
