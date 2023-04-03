@@ -23,7 +23,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
@@ -36,7 +36,7 @@ use num::{ToPrimitive, Zero};
 /// │        A        │      │    0    │                              │        A        │
 /// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
 /// │        D        │      │    2    │                              │        B        │
-/// ├─────────────────┤      ├─────────┤   take(values, indices)     ├─────────────────┤
+/// ├─────────────────┤      ├─────────┤   take(values, indices)      ├─────────────────┤
 /// │        B        │      │    3    │ ─────────────────────────▶   │        C        │
 /// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
 /// │        C        │      │    1    │                              │        D        │
@@ -252,19 +252,8 @@ where
 
 // take implementation when only values contain nulls
 fn take_values_nulls<T, I>(
-    values: &PrimitiveArray<T>,
-    indices: &[I],
-) -> Result<(Buffer, Option<Buffer>), ArrowError>
-where
-    T: ArrowPrimitiveType,
-    I: ArrowNativeType,
-{
-    take_values_nulls_inner(values.data(), values.values(), indices)
-}
-
-fn take_values_nulls_inner<T, I>(
-    values_data: &ArrayData,
     values: &[T],
+    values_nulls: &NullBuffer,
     indices: &[I],
 ) -> Result<(Buffer, Option<Buffer>), ArrowError>
 where
@@ -278,7 +267,7 @@ where
 
     let values = indices.iter().enumerate().map(|(i, index)| {
         let index = maybe_usize::<I>(*index)?;
-        if values_data.is_null(index) {
+        if values_nulls.is_null(index) {
             null_count += 1;
             bit_util::unset_bit(null_slice, i);
         }
@@ -300,20 +289,8 @@ where
 // take implementation when only indices contain nulls
 fn take_indices_nulls<T, I>(
     values: &[T],
-    indices: &PrimitiveArray<I>,
-) -> Result<(Buffer, Option<Buffer>), ArrowError>
-where
-    T: ArrowNativeType,
-    I: ArrowPrimitiveType,
-    I::Native: ToPrimitive,
-{
-    take_indices_nulls_inner(values, indices.values(), indices.data())
-}
-
-fn take_indices_nulls_inner<T, I>(
-    values: &[T],
     indices: &[I],
-    indices_data: &ArrayData,
+    indices_nulls: &NullBuffer,
 ) -> Result<(Buffer, Option<Buffer>), ArrowError>
 where
     T: ArrowNativeType,
@@ -324,7 +301,7 @@ where
         Result::<_, ArrowError>::Ok(match values.get(index) {
             Some(value) => *value,
             None => {
-                if indices_data.is_null(index) {
+                if indices_nulls.is_null(index) {
                     T::default()
                 } else {
                     panic!("Out-of-bounds index {index}")
@@ -335,33 +312,15 @@ where
 
     // Soundness: `slice.map` is `TrustedLen`.
     let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
-
-    Ok((buffer, indices_data.nulls().map(|b| b.inner().sliced())))
+    Ok((buffer, Some(indices_nulls.inner().sliced())))
 }
 
 // take implementation when both values and indices contain nulls
 fn take_values_indices_nulls<T, I>(
-    values: &PrimitiveArray<T>,
-    indices: &PrimitiveArray<I>,
-) -> Result<(Buffer, Option<Buffer>), ArrowError>
-where
-    T: ArrowPrimitiveType,
-    I: ArrowPrimitiveType,
-    I::Native: ToPrimitive,
-{
-    take_values_indices_nulls_inner(
-        values.values(),
-        values.data(),
-        indices.values(),
-        indices.data(),
-    )
-}
-
-fn take_values_indices_nulls_inner<T, I>(
     values: &[T],
-    values_data: &ArrayData,
+    values_nulls: &NullBuffer,
     indices: &[I],
-    indices_data: &ArrayData,
+    indices_nulls: &NullBuffer,
 ) -> Result<(Buffer, Option<Buffer>), ArrowError>
 where
     T: ArrowNativeType,
@@ -373,13 +332,13 @@ where
     let mut null_count = 0;
 
     let values = indices.iter().enumerate().map(|(i, &index)| {
-        if indices_data.is_null(i) {
+        if indices_nulls.is_null(i) {
             null_count += 1;
             bit_util::unset_bit(null_slice, i);
             Ok(T::default())
         } else {
             let index = maybe_usize::<I>(index)?;
-            if values_data.is_null(index) {
+            if values_nulls.is_null(index) {
                 null_count += 1;
                 bit_util::unset_bit(null_slice, i);
             }
@@ -417,31 +376,36 @@ where
     I: ArrowPrimitiveType,
     I::Native: ToPrimitive,
 {
-    let indices_has_nulls = indices.null_count() > 0;
-    let values_has_nulls = values.null_count() > 0;
+    let indices_nulls = indices.nulls().filter(|x| x.null_count() > 0);
+    let values_nulls = values.nulls().filter(|x| x.null_count() > 0);
+
     // note: this function should only panic when "an index is not null and out of bounds".
     // if the index is null, its value is undefined and therefore we should not read from it.
-
-    let (buffer, nulls) = match (values_has_nulls, indices_has_nulls) {
-        (false, false) => {
+    let (buffer, nulls) = match (values_nulls, indices_nulls) {
+        (None, None) => {
             // * no nulls
             // * all `indices.values()` are valid
-            take_no_nulls::<T::Native, I::Native>(values.values(), indices.values())?
+            take_no_nulls(values.values(), indices.values())?
         }
-        (true, false) => {
+        (Some(values_nulls), None) => {
             // * nulls come from `values` alone
             // * all `indices.values()` are valid
-            take_values_nulls::<T, I::Native>(values, indices.values())?
+            take_values_nulls(values.values(), values_nulls, indices.values())?
         }
-        (false, true) => {
+        (None, Some(indices_nulls)) => {
             // in this branch it is unsound to read and use `index.values()`,
             // as doing so is UB when they come from a null slot.
-            take_indices_nulls::<T::Native, I>(values.values(), indices)?
+            take_indices_nulls(values.values(), indices.values(), indices_nulls)?
         }
-        (true, true) => {
+        (Some(values_nulls), Some(indices_nulls)) => {
             // in this branch it is unsound to read and use `index.values()`,
             // as doing so is UB when they come from a null slot.
-            take_values_indices_nulls::<T, I>(values, indices)?
+            take_values_indices_nulls(
+                values.values(),
+                values_nulls,
+                indices.values(),
+                indices_nulls,
+            )?
         }
     };
 
