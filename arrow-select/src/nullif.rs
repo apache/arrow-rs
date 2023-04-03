@@ -27,8 +27,8 @@ use arrow_schema::ArrowError;
 ///
 /// Typically used to implement NULLIF.
 pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowError> {
-    let left_data = left.data();
-    let right_data = right.data();
+    let left_data = left.to_data();
+    let right_data = right.to_data();
 
     if left_data.len() != right_data.len() {
         return Err(ArrowError::ComputeError(
@@ -481,9 +481,10 @@ mod tests {
             .collect();
 
         let r = nullif(values, filter).unwrap();
-        r.data().validate().unwrap();
+        let r_data = r.to_data();
+        r_data.validate().unwrap();
 
-        assert_eq!(expected.data(), r.data());
+        assert_eq!(r.as_ref(), &expected);
     }
 
     #[test]

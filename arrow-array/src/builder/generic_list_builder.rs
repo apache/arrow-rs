@@ -311,7 +311,6 @@ mod tests {
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Array, Int32Array};
-    use arrow_buffer::Buffer;
     use arrow_schema::DataType;
 
     fn _test_generic_list_array_builder<O: OffsetSizeTrait>() {
@@ -332,12 +331,9 @@ mod tests {
         builder.append(true);
         let list_array = builder.finish();
 
-        let values = list_array.values().data().buffers()[0].clone();
-        assert_eq!(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]), values);
-        assert_eq!(
-            Buffer::from_slice_ref([0, 3, 6, 8].map(|n| O::from_usize(n).unwrap())),
-            list_array.data().buffers()[0].clone()
-        );
+        let list_values = list_array.values().as_primitive::<Int32Type>();
+        assert_eq!(list_values.values(), &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(list_array.value_offsets(), [0, 3, 6, 8].map(O::usize_as));
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -469,28 +465,22 @@ mod tests {
         builder.values().append(true);
         builder.append(true);
 
-        let list_array = builder.finish();
+        let l1 = builder.finish();
 
-        assert_eq!(4, list_array.len());
-        assert_eq!(1, list_array.null_count());
-        assert_eq!(
-            Buffer::from_slice_ref([0, 2, 5, 5, 6]),
-            list_array.data().buffers()[0].clone()
-        );
+        assert_eq!(4, l1.len());
+        assert_eq!(1, l1.null_count());
 
-        assert_eq!(6, list_array.values().data().len());
-        assert_eq!(1, list_array.values().data().null_count());
-        assert_eq!(
-            Buffer::from_slice_ref([0, 2, 4, 7, 7, 8, 10]),
-            list_array.values().data().buffers()[0].clone()
-        );
+        assert_eq!(l1.value_offsets(), &[0, 2, 5, 5, 6]);
+        let l2 = l1.values().as_list::<i32>();
 
-        assert_eq!(10, list_array.values().data().child_data()[0].len());
-        assert_eq!(0, list_array.values().data().child_data()[0].null_count());
-        assert_eq!(
-            Buffer::from_slice_ref([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
-            list_array.values().data().child_data()[0].buffers()[0].clone()
-        );
+        assert_eq!(6, l2.len());
+        assert_eq!(1, l2.null_count());
+        assert_eq!(l2.value_offsets(), &[0, 2, 4, 7, 7, 8, 10]);
+
+        let i1 = l2.values().as_primitive::<Int32Type>();
+        assert_eq!(10, i1.len());
+        assert_eq!(0, i1.null_count());
+        assert_eq!(i1.values(), &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
 
     #[test]

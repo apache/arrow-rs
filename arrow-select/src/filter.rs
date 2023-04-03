@@ -23,7 +23,7 @@ use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::*;
-use arrow_buffer::bit_util;
+use arrow_buffer::{bit_util, BooleanBuffer, NullBuffer};
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
@@ -317,7 +317,7 @@ fn filter_array(
 
     match predicate.strategy {
         IterationStrategy::None => Ok(new_empty_array(values.data_type())),
-        IterationStrategy::All => Ok(make_array(values.data().slice(0, predicate.count))),
+        IterationStrategy::All => Ok(values.slice(0, predicate.count)),
         // actually filter
         _ => downcast_primitive_array! {
             values => Ok(Arc::new(filter_primitive(values, predicate))),
@@ -386,15 +386,15 @@ fn filter_array(
 /// in the filtered output, and `null_buffer` is the filtered null buffer
 ///
 fn filter_null_mask(
-    data: &ArrayData,
+    nulls: Option<&NullBuffer>,
     predicate: &FilterPredicate,
 ) -> Option<(usize, Buffer)> {
-    if data.null_count() == 0 {
+    let nulls = nulls?;
+    if nulls.null_count() == 0 {
         return None;
     }
 
-    let nulls = data.nulls()?;
-    let nulls = filter_bits(nulls.buffer(), nulls.offset(), predicate);
+    let nulls = filter_bits(nulls.inner(), predicate);
     // The filtered `nulls` has a length of `predicate.count` bits and
     // therefore the null count is this minus the number of valid bits
     let null_count = predicate.count - nulls.count_set_bits_offset(0, predicate.count);
@@ -407,8 +407,9 @@ fn filter_null_mask(
 }
 
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
-fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> Buffer {
-    let src = buffer.as_slice();
+fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
+    let src = buffer.values();
+    let offset = buffer.offset();
 
     match &predicate.strategy {
         IterationStrategy::IndexIterator => {
@@ -447,18 +448,14 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
 }
 
 /// `filter` implementation for boolean buffers
-fn filter_boolean(values: &BooleanArray, predicate: &FilterPredicate) -> BooleanArray {
-    let data = values.data();
-    assert_eq!(data.buffers().len(), 1);
-    assert_eq!(data.child_data().len(), 0);
-
-    let values = filter_bits(data.buffers()[0], data.offset(), predicate);
+fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanArray {
+    let values = filter_bits(array.values(), predicate);
 
     let mut builder = ArrayDataBuilder::new(DataType::Boolean)
         .len(predicate.count)
         .add_buffer(values);
 
-    if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
+    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
         builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
     }
 
@@ -468,17 +465,13 @@ fn filter_boolean(values: &BooleanArray, predicate: &FilterPredicate) -> Boolean
 
 /// `filter` implementation for primitive arrays
 fn filter_primitive<T>(
-    values: &PrimitiveArray<T>,
+    array: &PrimitiveArray<T>,
     predicate: &FilterPredicate,
 ) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
 {
-    let data = values.data();
-    assert_eq!(data.buffers().len(), 1);
-    assert_eq!(data.child_data().len(), 0);
-
-    let values = data.buffer::<T::Native>(0);
+    let values = array.values();
     assert!(values.len() >= predicate.filter.len());
 
     let buffer = match &predicate.strategy {
@@ -514,11 +507,11 @@ where
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
 
-    let mut builder = ArrayDataBuilder::new(data.data_type().clone())
+    let mut builder = ArrayDataBuilder::new(array.data_type().clone())
         .len(predicate.count)
         .add_buffer(buffer.into());
 
-    if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
+    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
         builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
     }
 
@@ -554,7 +547,7 @@ where
 
         Self {
             src_offsets: array.value_offsets(),
-            src_values: array.data().buffers()[1],
+            src_values: array.value_data(),
             dst_offsets,
             dst_values,
             cur_offset,
@@ -617,9 +610,6 @@ fn filter_bytes<T>(
 where
     T: ByteArrayType,
 {
-    let data = array.data();
-    assert_eq!(data.buffers().len(), 2);
-    assert_eq!(data.child_data().len(), 0);
     let mut filter = FilterBytes::new(predicate.count, array);
 
     match &predicate.strategy {
@@ -639,7 +629,7 @@ where
         .add_buffer(filter.dst_offsets.into())
         .add_buffer(filter.dst_values.into());
 
-    if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
+    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
         builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
     }
 
