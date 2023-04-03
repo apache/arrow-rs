@@ -68,6 +68,7 @@ pub fn set_bits(
 /// Combines the null bitmaps of multiple arrays using a bitwise `and` operation.
 ///
 /// This function is useful when implementing operations on higher level arrays.
+#[deprecated(note = "Use NullBuffer::union")]
 pub fn combine_option_bitmap(
     arrays: &[&ArrayData],
     len_in_bits: usize,
@@ -247,6 +248,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_combine_option_bitmap() {
         let none_bitmap = make_data_with_null_bit_buffer(8, 0, None);
         let some_bitmap =
@@ -298,6 +300,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_combine_option_bitmap_with_offsets() {
         let none_bitmap = make_data_with_null_bit_buffer(8, 0, None);
         let bitmap0 =
