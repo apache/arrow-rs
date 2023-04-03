@@ -233,7 +233,7 @@ impl StructBuilder {
         let mut child_data = Vec::with_capacity(self.field_builders.len());
         for f in &mut self.field_builders {
             let arr = f.finish();
-            child_data.push(arr.data().clone());
+            child_data.push(arr.to_data());
         }
         let length = self.len();
         let null_bit_buffer = self.null_buffer_builder.finish();
@@ -254,7 +254,7 @@ impl StructBuilder {
         let mut child_data = Vec::with_capacity(self.field_builders.len());
         for f in &self.field_builders {
             let arr = f.finish_cloned();
-            child_data.push(arr.data().clone());
+            child_data.push(arr.to_data());
         }
         let length = self.len();
         let null_bit_buffer = self
@@ -330,9 +330,8 @@ mod tests {
         builder.append_null();
         builder.append(true);
 
-        let arr = builder.finish();
+        let struct_data = builder.finish().into_data();
 
-        let struct_data = arr.data();
         assert_eq!(4, struct_data.len());
         assert_eq!(1, struct_data.null_count());
         assert_eq!(&[11_u8], struct_data.nulls().unwrap().validity());
@@ -352,8 +351,8 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(expected_string_data, *arr.column(0).data());
-        assert_eq!(expected_int_data, *arr.column(1).data());
+        assert_eq!(expected_string_data, struct_data.child_data()[0]);
+        assert_eq!(expected_int_data, struct_data.child_data()[1]);
     }
 
     #[test]

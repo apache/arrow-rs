@@ -22,7 +22,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::Decimal128Type;
+use arrow_array::types::{Decimal128Type, Int32Type, Int64Type, UInt32Type, UInt64Type};
 use arrow_array::{types, Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
@@ -33,11 +33,12 @@ use super::schema::{
 
 use crate::arrow::arrow_writer::byte_array::ByteArrayWriter;
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
+use crate::data_type::{ByteArray, DataType, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, RowGroupMetaDataPtr};
 use crate::file::properties::WriterProperties;
+use crate::file::writer::SerializedFileWriter;
 use crate::file::writer::SerializedRowGroupWriter;
-use crate::{data_type::*, file::writer::SerializedFileWriter};
 use levels::{calculate_array_levels, LevelInfo};
 
 mod byte_array;
@@ -292,13 +293,18 @@ fn write_leaves<W: Write>(
             }
             col_writer.close()
         }
-        ArrowDataType::List(_) | ArrowDataType::LargeList(_) => {
+        ArrowDataType::List(_) => {
             let arrays: Vec<_> = arrays.iter().map(|array|{
-                // write the child list
-                let data = array.data();
-                arrow_array::make_array(data.child_data()[0].clone())
+                array.as_list::<i32>().values().clone()
             }).collect();
 
+            write_leaves(row_group_writer, &arrays, levels)?;
+            Ok(())
+        }
+        ArrowDataType::LargeList(_) => {
+            let arrays: Vec<_> = arrays.iter().map(|array|{
+                array.as_list::<i64>().values().clone()
+            }).collect();
             write_leaves(row_group_writer, &arrays, levels)?;
             Ok(())
         }
@@ -384,19 +390,15 @@ fn write_leaf(
                     let array = arrow_cast::cast(column, &ArrowDataType::Date32)?;
                     let array = arrow_cast::cast(&array, &ArrowDataType::Int32)?;
 
-                    let array = array
-                        .as_any()
-                        .downcast_ref::<arrow_array::Int32Array>()
-                        .expect("Unable to get int32 array");
+                    let array = array.as_primitive::<Int32Type>();
                     write_primitive(typed, array.values(), levels)?
                 }
                 ArrowDataType::UInt32 => {
-                    let data = column.data();
-                    let offset = data.offset();
+                    let values = column.as_primitive::<UInt32Type>().values();
                     // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
                     // `(i32::MAX as u32)..u32::MAX` to `i32::MIN..0`
-                    let array: &[i32] = data.buffers()[0].typed_data();
-                    write_primitive(typed, &array[offset..offset + data.len()], levels)?
+                    let array = values.inner().typed_data::<i32>();
+                    write_primitive(typed, array, levels)?
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int32 to represent the decimal with low precision
@@ -407,19 +409,13 @@ fn write_leaf(
                 }
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
-                    let array = array
-                        .as_any()
-                        .downcast_ref::<arrow_array::Int32Array>()
-                        .expect("Unable to get i32 array");
+                    let array = array.as_primitive::<Int32Type>();
                     write_primitive(typed, array.values(), levels)?
                 }
             }
         }
         ColumnWriter::BoolColumnWriter(ref mut typed) => {
-            let array = column
-                .as_any()
-                .downcast_ref::<arrow_array::BooleanArray>()
-                .expect("Unable to get boolean array");
+            let array = column.as_boolean();
             typed.write_batch(
                 get_bool_array_slice(array, indices).as_slice(),
                 levels.def_levels(),
@@ -429,19 +425,15 @@ fn write_leaf(
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
             match column.data_type() {
                 ArrowDataType::Int64 => {
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::Int64Array>()
-                        .expect("Unable to get i64 array");
+                    let array = column.as_primitive::<Int64Type>();
                     write_primitive(typed, array.values(), levels)?
                 }
                 ArrowDataType::UInt64 => {
+                    let values = column.as_primitive::<UInt64Type>().values();
                     // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
                     // `(i64::MAX as u64)..u64::MAX` to `i64::MIN..0`
-                    let data = column.data();
-                    let offset = data.offset();
-                    let array: &[i64] = data.buffers()[0].typed_data();
-                    write_primitive(typed, &array[offset..offset + data.len()], levels)?
+                    let array = values.inner().typed_data::<i64>();
+                    write_primitive(typed, array, levels)?
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int64 to represent the decimal with low precision
@@ -452,10 +444,7 @@ fn write_leaf(
                 }
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
-                    let array = array
-                        .as_any()
-                        .downcast_ref::<arrow_array::Int64Array>()
-                        .expect("Unable to get i64 array");
+                    let array = array.as_primitive::<Int64Type>();
                     write_primitive(typed, array.values(), levels)?
                 }
             }
@@ -642,6 +631,7 @@ mod tests {
     use arrow_schema::Fields;
 
     use crate::basic::Encoding;
+    use crate::data_type::AsBytes;
     use crate::file::metadata::ParquetMetaData;
     use crate::file::page_index::index_reader::read_pages_locations;
     use crate::file::properties::{ReaderProperties, WriterVersion};
@@ -723,8 +713,8 @@ mod tests {
             assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
             assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
             for i in 0..expected_batch.num_columns() {
-                let expected_data = expected_batch.column(i).data().clone();
-                let actual_data = actual_batch.column(i).data().clone();
+                let expected_data = expected_batch.column(i).to_data();
+                let actual_data = actual_batch.column(i).to_data();
 
                 assert_eq!(expected_data, actual_data);
             }
@@ -779,7 +769,7 @@ mod tests {
         // build a record batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
-        assert_eq!(batch.column(0).data().null_count(), 1);
+        assert_eq!(batch.column(0).null_count(), 1);
 
         // This test fails if the max row group size is less than the batch's length
         // see https://github.com/apache/arrow-rs/issues/518
@@ -821,7 +811,7 @@ mod tests {
 
         // This test fails if the max row group size is less than the batch's length
         // see https://github.com/apache/arrow-rs/issues/518
-        assert_eq!(batch.column(0).data().null_count(), 0);
+        assert_eq!(batch.column(0).null_count(), 0);
 
         roundtrip(batch, None);
     }
@@ -928,7 +918,7 @@ mod tests {
         let g_list_data = ArrayData::builder(struct_field_g.data_type().clone())
             .len(5)
             .add_buffer(g_value_offsets.clone())
-            .add_child_data(g_value.data().clone())
+            .add_child_data(g_value.to_data())
             .build()
             .unwrap();
         let g = ListArray::from(g_list_data);
@@ -936,7 +926,7 @@ mod tests {
         let h_list_data = ArrayData::builder(struct_field_h.data_type().clone())
             .len(5)
             .add_buffer(g_value_offsets)
-            .add_child_data(g_value.data().clone())
+            .add_child_data(g_value.to_data())
             .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
             .build()
             .unwrap();
@@ -1251,9 +1241,9 @@ mod tests {
         assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
         assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
         for i in 0..expected_batch.num_columns() {
-            let expected_data = expected_batch.column(i).data();
-            let actual_data = actual_batch.column(i).data();
-            validate(expected_data, actual_data);
+            let expected_data = expected_batch.column(i).to_data();
+            let actual_data = actual_batch.column(i).to_data();
+            validate(&expected_data, &actual_data);
         }
 
         file

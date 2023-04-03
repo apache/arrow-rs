@@ -252,11 +252,11 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
 
         // Note: This use the ArrayDataBuilder::build_unchecked and afterwards
         // call the new function which only validates that the keys are in bounds.
-        let data = keys.data().clone();
+        let data = keys.to_data();
         let builder = data
             .into_builder()
             .data_type(dict_data_type)
-            .add_child_data(values.data().clone());
+            .add_child_data(values.to_data());
 
         // Safety: `validate` ensures key type is correct, and
         //  `validate_values` ensures all offsets are within range
@@ -397,7 +397,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
                 Box::new(K::DATA_TYPE),
                 Box::new(values.data_type().clone()),
             ))
-            .child_data(vec![values.data().clone()]);
+            .child_data(vec![values.to_data()]);
 
         // SAFETY:
         // Offsets were valid before and verified length is greater than or equal
@@ -789,7 +789,7 @@ mod tests {
         let dict_array = Int16DictionaryArray::from(dict_data);
 
         let values = dict_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int8, dict_array.value_type());
         assert_eq!(3, dict_array.len());
 
@@ -809,7 +809,7 @@ mod tests {
         let dict_array = Int16DictionaryArray::from(dict_data);
 
         let values = dict_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int8, dict_array.value_type());
         assert_eq!(2, dict_array.len());
         assert_eq!(dict_array.keys(), &Int16Array::from(vec![3_i16, 4]));
@@ -911,7 +911,7 @@ mod tests {
         let test = vec![None, None, None];
         let array: DictionaryArray<Int32Type> = test.into_iter().collect();
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }
@@ -987,7 +987,7 @@ mod tests {
         assert_eq!(array.keys().data_type(), &DataType::Int32);
         assert_eq!(array.values().data_type(), &DataType::Utf8);
 
-        assert_eq!(array.data().null_count(), 1);
+        assert_eq!(array.null_count(), 1);
 
         assert!(array.keys().is_valid(0));
         assert!(array.keys().is_valid(1));
@@ -1076,7 +1076,7 @@ mod tests {
         let boxed: ArrayRef = Arc::new(dict_array);
 
         let col: DictionaryArray<Int8Type> =
-            DictionaryArray::<Int8Type>::from(boxed.data().clone());
+            DictionaryArray::<Int8Type>::from(boxed.to_data());
         let err = col.into_primitive_dict_builder::<Int32Type>();
 
         let returned = err.unwrap_err();

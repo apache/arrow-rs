@@ -1192,7 +1192,7 @@ where
 {
     // TODO: Use take_boolean (#2967)
     let array = take(&dict_comparison, dict.keys(), None)?;
-    Ok(BooleanArray::from(array.data().clone()))
+    Ok(BooleanArray::from(array.to_data()))
 }
 
 /// Helper function to perform boolean lambda function on values from two arrays using
@@ -3382,10 +3382,7 @@ mod tests {
         let array_b: PrimitiveArray<Int8Type> = vec![2; item_count].into();
         let result_mask = gt_eq(&array_a, &array_b).unwrap();
 
-        assert_eq!(
-            result_mask.data().buffers()[0].len(),
-            select_mask.data().buffers()[0].len()
-        );
+        assert_eq!(result_mask.values().len(), select_mask.values().len());
     }
 
     // Expected behaviour:

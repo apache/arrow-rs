@@ -57,8 +57,8 @@ pub unsafe fn export_array_into_raw(
     out_array: *mut ffi::FFI_ArrowArray,
     out_schema: *mut ffi::FFI_ArrowSchema,
 ) -> Result<()> {
-    let data = src.data();
-    let array = ffi::FFI_ArrowArray::new(data);
+    let data = src.to_data();
+    let array = ffi::FFI_ArrowArray::new(&data);
     let schema = ffi::FFI_ArrowSchema::try_from(data.data_type())?;
 
     std::ptr::write_unaligned(out_array, array);
@@ -101,22 +101,22 @@ mod tests {
     #[test]
     fn test_u32() -> Result<()> {
         let array = UInt32Array::from(vec![Some(2), None, Some(1), None]);
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
     fn test_u64() -> Result<()> {
         let array = UInt64Array::from(vec![Some(2), None, Some(1), None]);
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
     fn test_i64() -> Result<()> {
         let array = Int64Array::from(vec![Some(2), None, Some(1), None]);
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -148,8 +148,8 @@ mod tests {
                 Arc::new(UInt32Array::from(vec![42, 28, 19, 31])),
             ),
         ]);
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -169,8 +169,8 @@ mod tests {
         ]);
         let array = DictionaryArray::try_new(&keys, &values)?;
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -178,8 +178,8 @@ mod tests {
         let values = vec![vec![10, 10, 10], vec![20, 20, 20], vec![30, 30, 30]];
         let array = FixedSizeBinaryArray::try_from_iter(values.into_iter())?;
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -195,8 +195,8 @@ mod tests {
         let array =
             FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -214,8 +214,8 @@ mod tests {
             .build()?;
         let array = FixedSizeListArray::from(list_data);
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -240,8 +240,8 @@ mod tests {
             .build()?;
         let array = FixedSizeListArray::from(list_data);
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]
@@ -278,7 +278,7 @@ mod tests {
 
         let array = FixedSizeListArray::from(list_data);
 
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 }

@@ -164,7 +164,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
 
     let child = converter.convert_raw(&mut child_rows, validate_utf8)?;
     assert_eq!(child.len(), 1);
-    let child_data = child[0].data().clone();
+    let child_data = child[0].to_data();
 
     let builder = ArrayDataBuilder::new(field.data_type.clone())
         .len(rows.len())

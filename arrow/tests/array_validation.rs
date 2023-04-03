@@ -606,7 +606,7 @@ fn test_validate_dictionary_index_too_large() {
         2,
         None,
         0,
-        vec![keys.data().buffers()[0].clone()],
+        vec![keys.into_data().buffers()[0].clone()],
         vec![values.into_data()],
     )
     .unwrap();
@@ -630,7 +630,7 @@ fn test_validate_dictionary_index_negative() {
         2,
         None,
         0,
-        vec![keys.data().buffers()[0].clone()],
+        vec![keys.into_data().buffers()[0].clone()],
         vec![values.into_data()],
     )
     .unwrap();
@@ -655,7 +655,7 @@ fn test_validate_dictionary_index_negative_but_not_referenced() {
         1,
         None,
         0,
-        vec![keys.data().buffers()[0].clone()],
+        vec![keys.into_data().buffers()[0].clone()],
         vec![values.into_data()],
     )
     .unwrap();
@@ -681,7 +681,7 @@ fn test_validate_dictionary_index_giant_negative() {
         2,
         None,
         0,
-        vec![keys.data().buffers()[0].clone()],
+        vec![keys.into_data().buffers()[0].clone()],
         vec![values.into_data()],
     )
     .unwrap();
@@ -1016,7 +1016,7 @@ fn test_decimal_validation() {
     builder.append_value(20000);
     let array = builder.finish();
 
-    array.data().validate_full().unwrap();
+    array.into_data().validate_full().unwrap();
 }
 
 #[test]

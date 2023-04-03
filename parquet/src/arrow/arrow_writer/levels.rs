@@ -41,10 +41,9 @@
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
 use crate::errors::{ParquetError, Result};
-use arrow_array::{
-    make_array, Array, ArrayRef, GenericListArray, MapArray, OffsetSizeTrait, StructArray,
-};
-use arrow_data::ArrayData;
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, ArrayRef, OffsetSizeTrait, StructArray};
+use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
 
@@ -183,29 +182,37 @@ impl LevelInfoBuilder {
                 self.write_leaf(array, range)
             }
             DataType::Struct(_) => {
-                let array = array.as_any().downcast_ref::<StructArray>().unwrap();
+                let array = array.as_struct();
                 self.write_struct(array, range)
             }
             DataType::List(_) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<GenericListArray<i32>>()
-                    .unwrap();
-                self.write_list(array.value_offsets(), array.data(), range)
+                let array = array.as_list::<i32>();
+                self.write_list(
+                    array.value_offsets(),
+                    array.nulls(),
+                    array.values(),
+                    range,
+                )
             }
             DataType::LargeList(_) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<GenericListArray<i64>>()
-                    .unwrap();
-
-                self.write_list(array.value_offsets(), array.data(), range)
+                let array = array.as_list::<i64>();
+                self.write_list(
+                    array.value_offsets(),
+                    array.nulls(),
+                    array.values(),
+                    range,
+                )
             }
             DataType::Map(_, _) => {
-                let array = array.as_any().downcast_ref::<MapArray>().unwrap();
+                let array = array.as_map();
                 // A Map is just as ListArray<i32> with a StructArray child, we therefore
                 // treat it as such to avoid code duplication
-                self.write_list(array.value_offsets(), array.data(), range)
+                self.write_list(
+                    array.value_offsets(),
+                    array.nulls(),
+                    array.entries(),
+                    range,
+                )
             }
             _ => unreachable!(),
         }
@@ -217,7 +224,8 @@ impl LevelInfoBuilder {
     fn write_list<O: OffsetSizeTrait>(
         &mut self,
         offsets: &[O],
-        list_data: &ArrayData,
+        nulls: Option<&NullBuffer>,
+        values: &ArrayRef,
         range: Range<usize>,
     ) {
         let (child, ctx) = match self {
@@ -226,11 +234,10 @@ impl LevelInfoBuilder {
         };
 
         let offsets = &offsets[range.start..range.end + 1];
-        let child_array = make_array(list_data.child_data()[0].clone());
 
         let write_non_null_slice =
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
-                child.write(&child_array, start_idx..end_idx);
+                child.write(values, start_idx..end_idx);
                 child.visit_leaves(|leaf| {
                     let rep_levels = leaf.rep_levels.as_mut().unwrap();
                     let mut rev = rep_levels.iter_mut().rev();
@@ -270,7 +277,7 @@ impl LevelInfoBuilder {
             })
         };
 
-        match list_data.nulls() {
+        match nulls {
             Some(nulls) => {
                 let null_offset = range.start;
                 // TODO: Faster bitmask iteration (#1757)
@@ -485,7 +492,7 @@ mod tests {
     use arrow_array::*;
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_cast::display::array_value_to_string;
-    use arrow_data::ArrayDataBuilder;
+    use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{Fields, Schema};
 
     #[test]
@@ -1243,7 +1250,7 @@ mod tests {
 
         let array = Arc::new(list_builder.finish());
 
-        let values_len = array.data().child_data()[0].len();
+        let values_len = array.values().len();
         assert_eq!(values_len, 5);
 
         let schema = Arc::new(Schema::new(vec![list_field]));
@@ -1278,7 +1285,7 @@ mod tests {
         ]);
 
         // This test assumes that nulls don't take up space
-        assert_eq!(inner.data().child_data()[0].len(), 7);
+        assert_eq!(inner.values().len(), 7);
 
         let field = Field::new("list", inner.data_type().clone(), true);
         let array = Arc::new(inner) as ArrayRef;

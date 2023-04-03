@@ -152,7 +152,7 @@ pub fn $fn_name(
                     let dict_comparison = $fn_name(left.values().as_ref(), right)?;
                     // TODO: Use take_boolean (#2967)
                     let array = take(&dict_comparison, left.keys(), None)?;
-                    Ok(BooleanArray::from(array.data().clone()))
+                    Ok(BooleanArray::from(array.to_data()))
                 }
                 t => Err(ArrowError::ComputeError(format!(
                     "Should be DictionaryArray but got: {}", t

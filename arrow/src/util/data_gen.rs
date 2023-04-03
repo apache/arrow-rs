@@ -289,8 +289,8 @@ mod tests {
         }
         // Test that the list's child values are non-null
         let b_array = batch.column(1);
-        let list_array = b_array.as_any().downcast_ref::<ListArray>().unwrap();
-        let child_array = make_array(list_array.data().child_data()[0].clone());
+        let list_array = b_array.as_list::<i32>();
+        let child_array = list_array.values();
         assert_eq!(child_array.null_count(), 0);
         // There should be more values than the list, to show that it's a list
         assert!(child_array.len() > list_array.len());

@@ -792,7 +792,7 @@ mod tests {
             FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.into_iter(), 0)
                 .unwrap();
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }

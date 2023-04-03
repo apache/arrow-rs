@@ -96,7 +96,7 @@ impl ArrayReader for MapArrayReader {
         // A MapArray is just a ListArray with a StructArray child
         // we can therefore just alter the ArrayData
         let array = self.reader.consume_batch().unwrap();
-        let data = array.data().clone();
+        let data = array.to_data();
         let builder = data.into_builder().data_type(self.data_type.clone());
 
         // SAFETY - we can assume that ListArrayReader produces valid ListArray

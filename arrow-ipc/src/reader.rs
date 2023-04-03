@@ -1608,7 +1608,7 @@ mod tests {
         let union1 = rb.column(0);
         let union2 = rb2.column(0);
 
-        assert_eq!(union1.data().buffers(), union2.data().buffers());
+        assert_eq!(union1, union2);
     }
 
     #[test]
@@ -1762,14 +1762,14 @@ mod tests {
         let values = StringArray::from(vec![Some("a"), None, Some("c"), None]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3]);
         let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
-        let dict_data = dict_array.data();
+        let dict_data = dict_array.to_data();
 
         let value_offsets = Buffer::from_slice_ref(offsets);
 
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .add_buffer(value_offsets)
-            .add_child_data(dict_data.clone())
+            .add_child_data(dict_data)
             .build()
             .unwrap();
         let list_array = GenericListArray::<OffsetSize>::from(list_data);
@@ -1825,7 +1825,7 @@ mod tests {
         let values = StringArray::from(vec![Some("a"), None, Some("c"), None]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3, 1, 2]);
         let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
-        let dict_data = dict_array.data();
+        let dict_data = dict_array.to_data();
 
         let list_data_type = DataType::FixedSizeList(
             Arc::new(Field::new_dict(
@@ -1839,7 +1839,7 @@ mod tests {
         );
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
-            .add_child_data(dict_data.clone())
+            .add_child_data(dict_data)
             .build()
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);

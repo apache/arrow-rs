@@ -2257,16 +2257,9 @@ mod tests {
             assert_eq!(10, bb.len());
             assert_eq!(4.0, bb.value(9));
 
-            let cc = batch
-                .column(c.0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap();
+            let cc = batch.column(c.0).as_list::<i32>();
             // test that the list offsets are correct
-            assert_eq!(
-                *cc.data().buffers()[0],
-                Buffer::from_slice_ref([0i32, 2, 2, 4, 5])
-            );
+            assert_eq!(cc.value_offsets(), &[0, 2, 2, 4, 5]);
             let cc = cc.values().as_boolean();
             let cc_expected = BooleanArray::from(vec![
                 Some(false),
@@ -2275,18 +2268,11 @@ mod tests {
                 None,
                 Some(false),
             ]);
-            assert_eq!(cc.data_ref(), cc_expected.data_ref());
+            assert_eq!(cc, &cc_expected);
 
-            let dd: &ListArray = batch
-                .column(d.0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap();
+            let dd = batch.column(d.0).as_list::<i32>();
             // test that the list offsets are correct
-            assert_eq!(
-                *dd.data().buffers()[0],
-                Buffer::from_slice_ref([0i32, 1, 1, 2, 6])
-            );
+            assert_eq!(dd.value_offsets(), &[0, 1, 1, 2, 6]);
 
             let dd = dd.values().as_string::<i32>();
             // values are 6 because a `d: null` is treated as a null slot
@@ -2342,12 +2328,7 @@ mod tests {
         // compare `a` with result from json reader
         let batch = reader.next().unwrap().unwrap();
         let read = batch.column(0);
-        assert!(
-            expected.data_ref() == read.data_ref(),
-            "{:?} != {:?}",
-            expected.data(),
-            read.data(),
-        );
+        assert_eq!(&expected, read);
     }
 
     #[test]
@@ -2425,12 +2406,9 @@ mod tests {
         let read = batch.column(0);
         assert_eq!(read.len(), 6);
         // compare the arrays the long way around, to better detect differences
-        let read: &ListArray = read.as_any().downcast_ref::<ListArray>().unwrap();
-        let expected = expected.as_any().downcast_ref::<ListArray>().unwrap();
-        assert_eq!(
-            *read.data().buffers()[0],
-            Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7])
-        );
+        let read: &ListArray = read.as_list::<i32>();
+        let expected = expected.as_list::<i32>();
+        assert_eq!(read.value_offsets(), &[0, 2, 3, 6, 6, 6, 7]);
         // compare list null buffers
         assert_eq!(read.nulls(), expected.nulls());
         // build struct from list
@@ -2525,10 +2503,10 @@ mod tests {
         assert_eq!(batch.num_rows(), 3);
         assert_eq!(batch.num_columns(), 2);
         let col1 = batch.column(0);
-        assert_eq!(col1.data(), expected_accounts.data());
+        assert_eq!(col1.as_ref(), &expected_accounts);
         // Compare the map
         let col2 = batch.column(1);
-        assert_eq!(col2.data(), expected_stocks.data());
+        assert_eq!(col2.as_ref(), &expected_stocks);
     }
 
     #[test]

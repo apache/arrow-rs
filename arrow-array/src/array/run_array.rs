@@ -104,8 +104,8 @@ impl<R: RunEndIndexType> RunArray<R> {
         let len = RunArray::logical_len(run_ends);
         let builder = ArrayDataBuilder::new(ree_array_type)
             .len(len)
-            .add_child_data(run_ends.data().clone())
-            .add_child_data(values.data().clone());
+            .add_child_data(run_ends.to_data())
+            .add_child_data(values.to_data());
 
         // `build_unchecked` is used to avoid recursive validation of child arrays.
         let array_data = unsafe { builder.build_unchecked() };
@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(ree_array.null_count(), 0);
 
         let values = ree_array.values();
-        assert_eq!(&value_data.into_data(), values.data());
+        assert_eq!(value_data.into_data(), values.to_data());
         assert_eq!(&DataType::Int8, values.data_type());
 
         let run_ends = ree_array.run_ends();

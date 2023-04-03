@@ -1761,7 +1761,7 @@ mod tests {
                 let b = Arc::clone(batch.column(0));
 
                 assert_eq!(a.data_type(), b.data_type());
-                assert_eq!(a.data(), b.data(), "{:#?} vs {:#?}", a.data(), b.data());
+                assert_eq!(a.to_data(), b.to_data());
                 assert_eq!(
                     a.as_any().type_id(),
                     b.as_any().type_id(),
@@ -1960,7 +1960,7 @@ mod tests {
         let batch = reader.into_iter().next().unwrap().unwrap();
         assert_eq!(batch.schema().as_ref(), &expected_schema);
         assert_eq!(batch.num_rows(), 4);
-        assert_eq!(batch.column(0).data().null_count(), 2);
+        assert_eq!(batch.column(0).null_count(), 2);
     }
 
     #[test]
@@ -2077,7 +2077,7 @@ mod tests {
         );
 
         let get_dict =
-            |batch: &RecordBatch| batch.column(0).data().child_data()[0].clone();
+            |batch: &RecordBatch| batch.column(0).to_data().child_data()[0].clone();
 
         // First and second batch in same row group -> same dictionary
         assert_eq!(get_dict(&batches[0]), get_dict(&batches[1]));

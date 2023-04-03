@@ -442,7 +442,7 @@ mod tests {
         let list_array = ListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -482,7 +482,7 @@ mod tests {
         let list_array = ListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(2, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -532,7 +532,7 @@ mod tests {
         let list_array = LargeListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -572,7 +572,7 @@ mod tests {
         let list_array = LargeListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(2, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -630,7 +630,7 @@ mod tests {
         let list_array = ListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(9, list_array.len());
         assert_eq!(4, list_array.null_count());
@@ -694,7 +694,7 @@ mod tests {
         let list_array = LargeListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(9, list_array.len());
         assert_eq!(4, list_array.null_count());
