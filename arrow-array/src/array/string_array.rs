@@ -263,6 +263,7 @@ mod tests {
     use crate::types::UInt8Type;
     use arrow_buffer::Buffer;
     use arrow_schema::Field;
+    use std::sync::Arc;
 
     #[test]
     fn test_string_array_from_u8_slice() {
@@ -455,7 +456,7 @@ mod tests {
         let data: Vec<Option<&str>> = vec![None];
         let array = StringArray::from(data);
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }
@@ -465,7 +466,7 @@ mod tests {
         let data: Vec<Option<&str>> = vec![None];
         let array = LargeStringArray::from(data);
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }
@@ -548,7 +549,7 @@ mod tests {
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
         let null_buffer = Buffer::from_slice_ref([0b101]);
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, false),
         ));
 
@@ -596,7 +597,7 @@ mod tests {
 
         // It is possible to create a null struct containing a non-nullable child
         // see https://github.com/apache/arrow-rs/pull/3244 for details
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, true),
         ));
 
@@ -613,7 +614,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "The child array cannot contain null values.")]
-    fn test_stirng_array_from_list_array_with_child_nulls_failed() {
+    fn test_string_array_from_list_array_with_child_nulls_failed() {
         _test_generic_string_array_from_list_array_with_child_nulls_failed::<i32>();
     }
 
@@ -632,7 +633,7 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 2, 3].map(|n| O::from_usize(n).unwrap());
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt16, false),
         ));
 

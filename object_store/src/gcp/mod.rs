@@ -196,6 +196,8 @@ struct Object {
     name: String,
     size: String,
     updated: DateTime<Utc>,
+    #[serde(rename = "etag")]
+    e_tag: Option<String>,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -209,7 +211,6 @@ struct InitiateMultipartUploadResult {
 struct MultipartPart {
     #[serde(rename = "PartNumber")]
     part_number: usize,
-    #[serde(rename = "ETag")]
     e_tag: String,
 }
 
@@ -1170,11 +1171,13 @@ fn convert_object_meta(object: &Object) -> Result<ObjectMeta> {
     let location = Path::parse(&object.name)?;
     let last_modified = object.updated;
     let size = object.size.parse().context(InvalidSizeSnafu)?;
+    let e_tag = object.e_tag.clone();
 
     Ok(ObjectMeta {
         location,
         last_modified,
         size,
+        e_tag,
     })
 }
 

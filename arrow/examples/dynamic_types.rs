@@ -27,6 +27,7 @@ use arrow::record_batch::*;
 
 #[cfg(feature = "prettyprint")]
 use arrow::util::pretty::print_batches;
+use arrow_schema::Fields;
 
 fn main() -> Result<()> {
     // define schema
@@ -34,11 +35,11 @@ fn main() -> Result<()> {
         Field::new("id", DataType::Int32, false),
         Field::new(
             "nested",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("a", DataType::Utf8, false),
                 Field::new("b", DataType::Float64, false),
                 Field::new("c", DataType::Float64, false),
-            ]),
+            ])),
             false,
         ),
     ]);

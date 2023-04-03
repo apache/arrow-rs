@@ -17,20 +17,16 @@
 
 [package]
 name = "arrow-cast"
-version = "36.0.0"
+version = { workspace = true }
 description = "Cast kernel and utilities for Apache Arrow"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = ["arrow"]
-include = [
-    "benches/*.rs",
-    "src/**/*.rs",
-    "Cargo.toml",
-]
-edition = "2021"
-rust-version = "1.62"
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+include = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "arrow_cast"
@@ -44,11 +40,11 @@ features = ["prettyprint"]
 prettyprint = ["comfy-table"]
 
 [dependencies]
-arrow-array = { version = "36.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "36.0.0", path = "../arrow-buffer" }
-arrow-data = { version = "36.0.0", path = "../arrow-data" }
-arrow-schema = { version = "36.0.0", path = "../arrow-schema" }
-arrow-select = { version = "36.0.0", path = "../arrow-select" }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-data = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-select = { workspace = true }
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
 lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }

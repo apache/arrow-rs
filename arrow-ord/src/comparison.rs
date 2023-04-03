@@ -1192,7 +1192,7 @@ where
 {
     // TODO: Use take_boolean (#2967)
     let array = take(&dict_comparison, dict.keys(), None)?;
-    Ok(BooleanArray::from(array.data().clone()))
+    Ok(BooleanArray::from(array.to_data()))
 }
 
 /// Helper function to perform boolean lambda function on values from two arrays using
@@ -2785,6 +2785,7 @@ mod tests {
     };
     use arrow_buffer::i256;
     use arrow_schema::Field;
+    use std::sync::Arc;
 
     /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
     /// `A_VEC` and `B_VEC` can be of type `Vec<T>` or `Vec<Option<T>>` where `T` is the native
@@ -3381,10 +3382,7 @@ mod tests {
         let array_b: PrimitiveArray<Int8Type> = vec![2; item_count].into();
         let result_mask = gt_eq(&array_a, &array_b).unwrap();
 
-        assert_eq!(
-            result_mask.data().buffers()[0].len(),
-            select_mask.data().buffers()[0].len()
-        );
+        assert_eq!(result_mask.values().len(), select_mask.values().len());
     }
 
     // Expected behaviour:
@@ -3408,7 +3406,7 @@ mod tests {
         .into_data();
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 6, 9]);
         let list_data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .add_buffer(value_offsets)

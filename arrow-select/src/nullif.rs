@@ -27,8 +27,8 @@ use arrow_schema::ArrowError;
 ///
 /// Typically used to implement NULLIF.
 pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowError> {
-    let left_data = left.data();
-    let right_data = right.data();
+    let left_data = left.to_data();
+    let right_data = right.to_data();
 
     if left_data.len() != right_data.len() {
         return Err(ArrowError::ComputeError(
@@ -40,7 +40,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     let l_offset = left_data.offset();
 
     if len == 0 {
-        return Ok(make_array(left_data.clone()));
+        return Ok(make_array(left_data));
     }
 
     // left=0 (null)   right=null       output bitmap=null
@@ -110,7 +110,6 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     };
 
     let data = left_data
-        .clone()
         .into_builder()
         .null_bit_buffer(Some(null_buffer))
         .null_count(null_count);
@@ -128,7 +127,7 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, StringArray, StructArray};
     use arrow_data::ArrayData;
-    use arrow_schema::{DataType, Field};
+    use arrow_schema::{DataType, Field, Fields};
     use rand::{thread_rng, Rng};
 
     #[test]
@@ -376,10 +375,10 @@ mod tests {
     /// also need the top level is_valid bits to be correct.
     fn create_foo_struct(values: Vec<Foo>) -> StructArray {
         let mut struct_array = StructBuilder::new(
-            vec![
+            Fields::from(vec![
                 Field::new("a", DataType::Int32, true),
                 Field::new("b", DataType::Boolean, true),
-            ],
+            ]),
             vec![
                 Box::new(Int32Builder::with_capacity(values.len())),
                 Box::new(BooleanBuilder::with_capacity(values.len())),
@@ -481,9 +480,10 @@ mod tests {
             .collect();
 
         let r = nullif(values, filter).unwrap();
-        r.data().validate().unwrap();
+        let r_data = r.to_data();
+        r_data.validate().unwrap();
 
-        assert_eq!(expected.data(), r.data());
+        assert_eq!(r.as_ref(), &expected);
     }
 
     #[test]

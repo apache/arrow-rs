@@ -25,10 +25,7 @@ fn test_export_csv_timestamps() {
     let schema = Schema::new(vec![
         Field::new(
             "c1",
-            DataType::Timestamp(
-                TimeUnit::Millisecond,
-                Some("Australia/Sydney".to_string()),
-            ),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("Australia/Sydney".into())),
             true,
         ),
         Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),
@@ -68,10 +65,7 @@ fn test_export_csv_timestamps_using_rfc3339() {
     let schema = Schema::new(vec![
         Field::new(
             "c1",
-            DataType::Timestamp(
-                TimeUnit::Millisecond,
-                Some("Australia/Sydney".to_string()),
-            ),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("Australia/Sydney".into())),
             true,
         ),
         Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),
@@ -85,7 +79,7 @@ fn test_export_csv_timestamps_using_rfc3339() {
         //
         vec![Some(1555584887378), Some(1635577147000)],
     )
-    .with_timezone("Australia/Sydney".to_string());
+    .with_timezone("Australia/Sydney");
     let c2 =
         TimestampMillisecondArray::from(vec![Some(1555584887378), Some(1635577147000)]);
     let batch =

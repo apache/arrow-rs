@@ -21,7 +21,6 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer};
-use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 
@@ -125,14 +124,9 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         )));
     }
 
-    let output_bitmap = combine_option_bitmap(
-        arrays
-            .iter()
-            .map(|a| a.data())
-            .collect::<Vec<_>>()
-            .as_slice(),
-        size,
-    );
+    let nulls = arrays
+        .iter()
+        .fold(None, |acc, a| NullBuffer::union(acc.as_ref(), a.nulls()));
 
     let data_values = arrays
         .iter()
@@ -170,7 +164,7 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         .len(size)
         .add_buffer(output_offsets.finish())
         .add_buffer(output_values.finish())
-        .null_bit_buffer(output_bitmap);
+        .nulls(nulls);
 
     // SAFETY - offsets valid by construction
     Ok(unsafe { builder.build_unchecked() }.into())

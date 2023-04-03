@@ -466,9 +466,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> O::Native,
     {
-        let data = self.data();
-
-        let nulls = data.nulls().cloned();
+        let nulls = self.nulls().cloned();
         let values = self.values().iter().map(|v| op(*v));
         // JUSTIFICATION
         //  Benefit
@@ -593,9 +591,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> Option<O::Native>,
     {
-        let data = self.data();
-        let len = data.len();
-        let (nulls, null_count, offset) = match data.nulls() {
+        let len = self.len();
+        let (nulls, null_count, offset) = match self.nulls() {
             Some(n) => (Some(n.validity()), n.null_count(), n.offset()),
             None => (None, 0, 0),
         };
@@ -1063,12 +1060,12 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     }
 
     /// Construct a timestamp array with an optional timezone
-    pub fn with_timezone_opt(&self, timezone: Option<String>) -> Self {
+    pub fn with_timezone_opt<S: Into<Arc<str>>>(&self, timezone: Option<S>) -> Self {
         let array_data = unsafe {
             self.data
                 .clone()
                 .into_builder()
-                .data_type(DataType::Timestamp(T::UNIT, timezone))
+                .data_type(DataType::Timestamp(T::UNIT, timezone.map(Into::into)))
                 .build_unchecked()
         };
         PrimitiveArray::from(array_data)
@@ -1185,7 +1182,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn precision(&self) -> u8 {
         match T::BYTE_LENGTH {
             16 => {
-                if let DataType::Decimal128(p, _) = self.data().data_type() {
+                if let DataType::Decimal128(p, _) = self.data_type() {
                     *p
                 } else {
                     unreachable!(
@@ -1195,7 +1192,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 }
             }
             32 => {
-                if let DataType::Decimal256(p, _) = self.data().data_type() {
+                if let DataType::Decimal256(p, _) = self.data_type() {
                     *p
                 } else {
                     unreachable!(
@@ -1212,7 +1209,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn scale(&self) -> i8 {
         match T::BYTE_LENGTH {
             16 => {
-                if let DataType::Decimal128(_, s) = self.data().data_type() {
+                if let DataType::Decimal128(_, s) = self.data_type() {
                     *s
                 } else {
                     unreachable!(
@@ -1222,7 +1219,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 }
             }
             32 => {
-                if let DataType::Decimal256(_, s) = self.data().data_type() {
+                if let DataType::Decimal256(_, s) = self.data_type() {
                     *s
                 } else {
                     unreachable!(
@@ -1874,7 +1871,7 @@ mod tests {
         let array = PrimitiveArray::<Decimal128Type>::from(values.clone());
         assert_eq!(array.values(), &values);
 
-        let array = PrimitiveArray::<Decimal128Type>::from(array.data().clone());
+        let array = PrimitiveArray::<Decimal128Type>::from(array.to_data());
         assert_eq!(array.values(), &values);
     }
 
@@ -1894,7 +1891,7 @@ mod tests {
         let array = PrimitiveArray::<Decimal256Type>::from(values.clone());
         assert_eq!(array.values(), &values);
 
-        let array = PrimitiveArray::<Decimal256Type>::from(array.data().clone());
+        let array = PrimitiveArray::<Decimal256Type>::from(array.to_data());
         assert_eq!(array.values(), &values);
     }
 
@@ -2190,7 +2187,7 @@ mod tests {
 
         let boxed: ArrayRef = Arc::new(array);
 
-        let col: Int32Array = PrimitiveArray::<Int32Type>::from(boxed.data().clone());
+        let col: Int32Array = PrimitiveArray::<Int32Type>::from(boxed.to_data());
         let err = col.into_builder();
 
         match err {

@@ -79,7 +79,7 @@ git commit -a -m 'Update version'
 export ARROW_GITHUB_API_TOKEN=<TOKEN>
 
 
-# manully edit ./dev/release/update_change_log.sh to reflect the release version
+# manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 ./dev/release/update_change_log.sh
 
@@ -94,7 +94,7 @@ python dev/release/label_issues.py
 git commit -a -m 'Create changelog'
 
 
-# Manully edit ./dev/release/update_change_log.sh to reflect the release version
+# Manually edit ./dev/release/update_change_log.sh to reflect the release version
 # Create the changelog
 CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
 # Review change log / edit issues and labels if needed, rerun
@@ -227,7 +227,7 @@ Rust Arrow Crates:
 ./object_store/dev/release/release-tarball.sh 4.1.0 2
 ```
 
-Congratulations! The release is now offical!
+Congratulations! The release is now official!
 
 ### Publish on Crates.io
 

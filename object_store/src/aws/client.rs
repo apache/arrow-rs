@@ -164,6 +164,8 @@ pub struct ListContents {
     pub key: String,
     pub size: usize,
     pub last_modified: DateTime<Utc>,
+    #[serde(rename = "ETag")]
+    pub e_tag: Option<String>,
 }
 
 impl TryFrom<ListContents> for ObjectMeta {
@@ -174,6 +176,7 @@ impl TryFrom<ListContents> for ObjectMeta {
             location: Path::parse(value.key)?,
             last_modified: value.last_modified,
             size: value.size,
+            e_tag: value.e_tag,
         })
     }
 }
@@ -382,6 +385,7 @@ impl S3Client {
         prefix: Option<&str>,
         delimiter: bool,
         token: Option<&str>,
+        offset: Option<&str>,
     ) -> Result<(ListResult, Option<String>)> {
         let credential = self.get_credential().await?;
         let url = self.config.bucket_endpoint.clone();
@@ -401,6 +405,10 @@ impl S3Client {
 
         if let Some(prefix) = prefix {
             query.push(("prefix", prefix))
+        }
+
+        if let Some(offset) = offset {
+            query.push(("start-after", offset))
         }
 
         let response = self
@@ -433,14 +441,24 @@ impl S3Client {
         &self,
         prefix: Option<&Path>,
         delimiter: bool,
+        offset: Option<&Path>,
     ) -> BoxStream<'_, Result<ListResult>> {
+        let offset = offset.map(|x| x.to_string());
         let prefix = format_prefix(prefix);
-        stream_paginated(prefix, move |prefix, token| async move {
-            let (r, next_token) = self
-                .list_request(prefix.as_deref(), delimiter, token.as_deref())
-                .await?;
-            Ok((r, prefix, next_token))
-        })
+        stream_paginated(
+            (prefix, offset),
+            move |(prefix, offset), token| async move {
+                let (r, next_token) = self
+                    .list_request(
+                        prefix.as_deref(),
+                        delimiter,
+                        token.as_deref(),
+                        offset.as_deref(),
+                    )
+                    .await?;
+                Ok((r, (prefix, offset), next_token))
+            },
+        )
         .boxed()
     }
 

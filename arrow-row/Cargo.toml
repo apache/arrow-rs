@@ -17,20 +17,16 @@
 
 [package]
 name = "arrow-row"
-version = "36.0.0"
+version = { workspace = true }
 description = "Arrow row format"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = ["arrow"]
-include = [
-    "benches/*.rs",
-    "src/**/*.rs",
-    "Cargo.toml",
-]
-edition = "2021"
-rust-version = "1.62"
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+include = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "arrow_row"
@@ -44,17 +40,17 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 
 [dependencies]
-arrow-array = { version = "36.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "36.0.0", path = "../arrow-buffer" }
-arrow-data = { version = "36.0.0", path = "../arrow-data" }
-arrow-schema = { version = "36.0.0", path = "../arrow-schema" }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-data = { workspace = true }
+arrow-schema = { workspace = true }
 
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.13", default-features = false }
 
 [dev-dependencies]
-arrow-cast = { version = "36.0.0", path = "../arrow-cast" }
-arrow-ord = { version = "36.0.0", path = "../arrow-ord" }
+arrow-cast = { workspace = true }
+arrow-ord = { workspace = true }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
 [features]

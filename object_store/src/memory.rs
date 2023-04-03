@@ -151,10 +151,12 @@ impl ObjectStore for InMemory {
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let entry = self.entry(location).await?;
+
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified: entry.1,
             size: entry.0.len(),
+            e_tag: None,
         })
     }
 
@@ -185,6 +187,7 @@ impl ObjectStore for InMemory {
                     location: key.clone(),
                     last_modified: value.1,
                     size: value.0.len(),
+                    e_tag: None,
                 })
             })
             .collect();
@@ -228,6 +231,7 @@ impl ObjectStore for InMemory {
                     location: k.clone(),
                     last_modified: v.1,
                     size: v.0.len(),
+                    e_tag: None,
                 };
                 objects.push(object);
             }

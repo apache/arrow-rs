@@ -298,10 +298,10 @@ impl IpcDataGenerator {
                     write_options,
                 )?;
             }
-            DataType::Union(fields, type_ids, _) => {
+            DataType::Union(fields, _) => {
                 let union = as_union_array(column);
-                for (field, type_id) in fields.iter().zip(type_ids) {
-                    let column = union.child(*type_id);
+                for (type_id, field) in fields.iter() {
+                    let column = union.child(type_id);
                     self.encode_dictionaries(
                         field,
                         column,
@@ -706,6 +706,8 @@ pub struct FileWriter<W: Write> {
     finished: bool,
     /// Keeps track of dictionaries that have been written
     dictionary_tracker: DictionaryTracker,
+    /// User level customized metadata
+    custom_metadata: HashMap<String, String>,
 
     data_gen: IpcDataGenerator,
 }
@@ -742,8 +744,13 @@ impl<W: Write> FileWriter<W> {
             record_blocks: vec![],
             finished: false,
             dictionary_tracker: DictionaryTracker::new(true),
+            custom_metadata: HashMap::new(),
             data_gen,
         })
+    }
+
+    pub fn write_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.custom_metadata.insert(key.into(), value.into());
     }
 
     /// Write a record batch to the file
@@ -798,6 +805,8 @@ impl<W: Write> FileWriter<W> {
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
         let record_batches = fbb.create_vector(&self.record_blocks);
         let schema = crate::convert::schema_to_fb_offset(&mut fbb, &self.schema);
+        let fb_custom_metadata = (!self.custom_metadata.is_empty())
+            .then(|| crate::convert::metadata_to_fb(&mut fbb, &self.custom_metadata));
 
         let root = {
             let mut footer_builder = crate::FooterBuilder::new(&mut fbb);
@@ -805,6 +814,9 @@ impl<W: Write> FileWriter<W> {
             footer_builder.add_schema(schema);
             footer_builder.add_dictionaries(dictionaries);
             footer_builder.add_recordBatches(record_batches);
+            if let Some(fb_custom_metadata) = fb_custom_metadata {
+                footer_builder.add_custom_metadata(fb_custom_metadata);
+            }
             footer_builder.finish()
         };
         fbb.finish(root, None);
@@ -937,7 +949,7 @@ impl<W: Write> StreamWriter<W> {
     ///     255, 255, 255, 255,   0,   0,   0,   0
     /// ];
     ///
-    /// let schema = Schema::new(vec![]);
+    /// let schema = Schema::empty();
     /// let buffer: Vec<u8> = Vec::new();
     /// let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
     /// let stream_writer = StreamWriter::try_new_with_options(buffer, &schema, options)?;
@@ -1069,7 +1081,7 @@ fn has_validity_bitmap(data_type: &DataType, write_options: &IpcWriteOptions) ->
     } else {
         !matches!(
             data_type,
-            DataType::Null | DataType::Union(_, _, _) | DataType::RunEndEncoded(_, _)
+            DataType::Null | DataType::Union(_, _) | DataType::RunEndEncoded(_, _)
         )
     }
 }
@@ -1778,17 +1790,14 @@ mod tests {
     }
 
     fn write_union_file(options: IpcWriteOptions) {
-        let schema = Schema::new(vec![Field::new(
+        let schema = Schema::new(vec![Field::new_union(
             "union",
-            DataType::Union(
-                vec![
-                    Field::new("a", DataType::Int32, false),
-                    Field::new("c", DataType::Float64, false),
-                ],
-                vec![0, 1],
-                UnionMode::Sparse,
-            ),
-            true,
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("c", DataType::Float64, false),
+            ],
+            UnionMode::Sparse,
         )]);
         let mut builder = UnionBuilder::with_capacity_sparse(5);
         builder.append::<Int32Type>("a", 1).unwrap();

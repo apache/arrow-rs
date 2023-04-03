@@ -19,8 +19,14 @@ use crate::error::ArrowError;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use crate::datatype::DataType;
+use crate::schema::SchemaBuilder;
+use crate::{Fields, UnionFields, UnionMode};
+
+/// A reference counted [`Field`]
+pub type FieldRef = Arc<Field>;
 
 /// Describes a single column in a [`Schema`](super::Schema).
 ///
@@ -141,6 +147,115 @@ impl Field {
         }
     }
 
+    /// Create a new [`Field`] with [`DataType::Dictionary`]
+    ///
+    /// Use [`Self::new_dict`] for more advanced dictionary options
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`!key.is_dictionary_key_type`][DataType::is_dictionary_key_type]
+    pub fn new_dictionary(
+        name: impl Into<String>,
+        key: DataType,
+        value: DataType,
+        nullable: bool,
+    ) -> Self {
+        assert!(
+            key.is_dictionary_key_type(),
+            "{key} is not a valid dictionary key"
+        );
+        let data_type = DataType::Dictionary(Box::new(key), Box::new(value));
+        Self::new(name, data_type, nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::Struct`]
+    ///
+    /// - `name`: the name of the [`DataType::List`] field
+    /// - `fields`: the description of each struct element
+    /// - `nullable`: if the [`DataType::Struct`] array is nullable
+    pub fn new_struct(
+        name: impl Into<String>,
+        fields: impl Into<Fields>,
+        nullable: bool,
+    ) -> Self {
+        Self::new(name, DataType::Struct(fields.into()), nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::List`]
+    ///
+    /// - `name`: the name of the [`DataType::List`] field
+    /// - `value`: the description of each list element
+    /// - `nullable`: if the [`DataType::List`] array is nullable
+    ///
+    /// Uses "item" as the name of the child field, this can be overridden with [`Self::new`]
+    pub fn new_list(
+        name: impl Into<String>,
+        value: impl Into<FieldRef>,
+        nullable: bool,
+    ) -> Self {
+        Self::new(name, DataType::List(value.into()), nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::LargeList`]
+    ///
+    /// - `name`: the name of the [`DataType::LargeList`] field
+    /// - `value`: the description of each list element
+    /// - `nullable`: if the [`DataType::LargeList`] array is nullable
+    pub fn new_large_list(
+        name: impl Into<String>,
+        value: impl Into<FieldRef>,
+        nullable: bool,
+    ) -> Self {
+        Self::new(name, DataType::LargeList(value.into()), nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::Map`]
+    ///
+    /// - `name`: the name of the [`DataType::Map`] field
+    /// - `entries`: the name of the inner [`DataType::Struct`] field
+    /// - `keys`: the map keys
+    /// - `values`: the map values
+    /// - `sorted`: if the [`DataType::Map`] array is sorted
+    /// - `nullable`: if the [`DataType::Map`] array is nullable
+    pub fn new_map(
+        name: impl Into<String>,
+        entries: impl Into<String>,
+        keys: impl Into<FieldRef>,
+        values: impl Into<FieldRef>,
+        sorted: bool,
+        nullable: bool,
+    ) -> Self {
+        let data_type = DataType::Map(
+            Arc::new(Field::new(
+                entries.into(),
+                DataType::Struct(Fields::from([keys.into(), values.into()])),
+                false, // The inner map field is always non-nullable (#1697),
+            )),
+            sorted,
+        );
+        Self::new(name, data_type, nullable)
+    }
+
+    /// Create a new [`Field`] with [`DataType::Union`]
+    ///
+    /// - `name`: the name of the [`DataType::Union`] field
+    /// - `type_ids`: the union type ids
+    /// - `fields`: the union fields
+    /// - `mode`: the union mode
+    pub fn new_union<S, F, T>(name: S, type_ids: T, fields: F, mode: UnionMode) -> Self
+    where
+        S: Into<String>,
+        F: IntoIterator,
+        F::Item: Into<FieldRef>,
+        T: IntoIterator<Item = i8>,
+    {
+        Self::new(
+            name,
+            DataType::Union(UnionFields::new(type_ids, fields), mode),
+            false, // Unions cannot be nullable
+        )
+    }
+
     /// Sets the `Field`'s optional custom metadata.
     #[inline]
     pub fn set_metadata(&mut self, metadata: HashMap<String, String>) {
@@ -230,8 +345,9 @@ impl Field {
 
     fn _fields(dt: &DataType) -> Vec<&Field> {
         match dt {
-            DataType::Struct(fields) | DataType::Union(fields, _, _) => {
-                fields.iter().flat_map(|f| f.fields()).collect()
+            DataType::Struct(fields) => fields.iter().flat_map(|f| f.fields()).collect(),
+            DataType::Union(fields, _) => {
+                fields.iter().flat_map(|(_, f)| f.fields()).collect()
             }
             DataType::List(field)
             | DataType::LargeList(field)
@@ -326,15 +442,9 @@ impl Field {
         match &mut self.data_type {
             DataType::Struct(nested_fields) => match &from.data_type {
                 DataType::Struct(from_nested_fields) => {
-                    for from_field in from_nested_fields {
-                        match nested_fields
-                            .iter_mut()
-                            .find(|self_field| self_field.name == from_field.name)
-                        {
-                            Some(self_field) => self_field.try_merge(from_field)?,
-                            None => nested_fields.push(from_field.clone()),
-                        }
-                    }
+                    let mut builder = SchemaBuilder::new();
+                    nested_fields.iter().chain(from_nested_fields).try_for_each(|f| builder.try_merge(f))?;
+                    *nested_fields = builder.finish().fields;
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(
@@ -342,36 +452,9 @@ impl Field {
                             self.name, from.data_type)
                 ))}
             },
-            DataType::Union(nested_fields, type_ids, _) => match &from.data_type {
-                DataType::Union(from_nested_fields, from_type_ids, _) => {
-                    for (idx, from_field) in from_nested_fields.iter().enumerate() {
-                        let mut is_new_field = true;
-                        let field_type_id = from_type_ids.get(idx).unwrap();
-
-                        for (self_idx, self_field) in nested_fields.iter_mut().enumerate()
-                        {
-                            if from_field == self_field {
-                                let self_type_id = type_ids.get(self_idx).unwrap();
-
-                                // If the nested fields in two unions are the same, they must have same
-                                // type id.
-                                if self_type_id != field_type_id {
-                                    return Err(ArrowError::SchemaError(
-                                        format!("Fail to merge schema field '{}' because the self_type_id = {} does not equal field_type_id = {}",
-                                            self.name, self_type_id, field_type_id)
-                                    ));
-                                }
-
-                                is_new_field = false;
-                                break;
-                            }
-                        }
-
-                        if is_new_field {
-                            nested_fields.push(from_field.clone());
-                            type_ids.push(*field_type_id);
-                        }
-                    }
+            DataType::Union(nested_fields, _) => match &from.data_type {
+                DataType::Union(from_nested_fields, _) => {
+                    nested_fields.try_merge(from_nested_fields)?
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(
@@ -479,8 +562,10 @@ impl std::fmt::Display for Field {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::Fields;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+    use std::sync::Arc;
 
     #[test]
     fn test_new_with_string() {
@@ -525,29 +610,29 @@ mod test {
 
         let field = Field::new(
             "struct<dict1, list[struct<dict2, list[struct<dict1]>]>",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 dict1.clone(),
                 Field::new(
                     "list[struct<dict1, list[struct<dict2>]>]",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "struct<dict1, list[struct<dict2>]>",
-                        DataType::Struct(vec![
+                        DataType::Struct(Fields::from(vec![
                             dict1.clone(),
                             Field::new(
                                 "list[struct<dict2>]",
-                                DataType::List(Box::new(Field::new(
+                                DataType::List(Arc::new(Field::new(
                                     "struct<dict2>",
-                                    DataType::Struct(vec![dict2.clone()]),
+                                    DataType::Struct(vec![dict2.clone()].into()),
                                     false,
                                 ))),
                                 false,
                             ),
-                        ]),
+                        ])),
                         false,
                     ))),
                     false,
                 ),
-            ]),
+            ])),
             false,
         );
 
@@ -632,14 +717,18 @@ mod test {
     fn test_contains_transitivity() {
         let child_field = Field::new("child1", DataType::Float16, false);
 
-        let mut field1 = Field::new("field1", DataType::Struct(vec![child_field]), false);
+        let mut field1 = Field::new(
+            "field1",
+            DataType::Struct(Fields::from(vec![child_field])),
+            false,
+        );
         field1.set_metadata(HashMap::from([(String::from("k1"), String::from("v1"))]));
 
-        let mut field2 = Field::new("field1", DataType::Struct(vec![]), true);
+        let mut field2 = Field::new("field1", DataType::Struct(Fields::default()), true);
         field2.set_metadata(HashMap::from([(String::from("k2"), String::from("v2"))]));
         field2.try_merge(&field1).unwrap();
 
-        let mut field3 = Field::new("field1", DataType::Struct(vec![]), false);
+        let mut field3 = Field::new("field1", DataType::Struct(Fields::default()), false);
         field3.set_metadata(HashMap::from([(String::from("k3"), String::from("v3"))]));
         field3.try_merge(&field2).unwrap();
 
@@ -665,11 +754,14 @@ mod test {
         let child_field1 = Field::new("child1", DataType::Float16, false);
         let child_field2 = Field::new("child2", DataType::Float16, false);
 
-        let field1 =
-            Field::new("field1", DataType::Struct(vec![child_field1.clone()]), true);
+        let field1 = Field::new(
+            "field1",
+            DataType::Struct(vec![child_field1.clone()].into()),
+            true,
+        );
         let field2 = Field::new(
             "field1",
-            DataType::Struct(vec![child_field1, child_field2]),
+            DataType::Struct(vec![child_field1, child_field2].into()),
             true,
         );
 

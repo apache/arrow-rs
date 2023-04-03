@@ -503,30 +503,26 @@ mod tests {
         "#;
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "list",
-                DataType::List(Box::new(Field::new("element", DataType::Int32, false))),
-                true,
-            ),
-            Field::new(
+            Field::new_list("list", Field::new("element", DataType::Int32, false), true),
+            Field::new_struct(
                 "nested",
-                DataType::Struct(vec![
+                vec![
                     Field::new("a", DataType::Int32, true),
                     Field::new("b", DataType::Int32, true),
-                ]),
+                ],
                 true,
             ),
-            Field::new(
+            Field::new_struct(
                 "nested_list",
-                DataType::Struct(vec![Field::new(
+                vec![Field::new_list(
                     "list2",
-                    DataType::List(Box::new(Field::new(
+                    Field::new_struct(
                         "element",
-                        DataType::Struct(vec![Field::new("c", DataType::Int32, false)]),
+                        vec![Field::new("c", DataType::Int32, false)],
                         false,
-                    ))),
+                    ),
                     true,
-                )]),
+                )],
                 true,
             ),
         ]));
@@ -580,22 +576,22 @@ mod tests {
         "#;
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
+            Field::new_struct(
                 "nested",
-                DataType::Struct(vec![Field::new("a", DataType::Int32, false)]),
+                vec![Field::new("a", DataType::Int32, false)],
                 true,
             ),
-            Field::new(
+            Field::new_struct(
                 "nested_list",
-                DataType::Struct(vec![Field::new(
+                vec![Field::new_list(
                     "list2",
-                    DataType::List(Box::new(Field::new(
+                    Field::new_struct(
                         "element",
-                        DataType::Struct(vec![Field::new("d", DataType::Int32, true)]),
+                        vec![Field::new("d", DataType::Int32, true)],
                         false,
-                    ))),
+                    ),
                     true,
-                )]),
+                )],
                 true,
             ),
         ]));
@@ -635,14 +631,16 @@ mod tests {
            {"map": {"a": [null], "b": []}}
            {"map": {"c": null, "a": ["baz"]}}
         "#;
-        let list = DataType::List(Box::new(Field::new("element", DataType::Utf8, true)));
-        let entries = DataType::Struct(vec![
+        let map = Field::new_map(
+            "map",
+            "entries",
             Field::new("key", DataType::Utf8, false),
-            Field::new("value", list, true),
-        ]);
+            Field::new_list("value", Field::new("element", DataType::Utf8, true), true),
+            false,
+            true,
+        );
 
-        let map = DataType::Map(Box::new(Field::new("entries", entries, true)), false);
-        let schema = Arc::new(Schema::new(vec![Field::new("map", map, true)]));
+        let schema = Arc::new(Schema::new(vec![map]));
 
         let batches = do_read(buf, 1024, false, schema);
         assert_eq!(batches.len(), 1);
@@ -843,7 +841,7 @@ mod tests {
         {"c": "1997-01-31T14:26:56.123-05:00", "d": "1997-01-31"}
         "#;
 
-        let with_timezone = DataType::Timestamp(T::UNIT, Some("+08:00".to_string()));
+        let with_timezone = DataType::Timestamp(T::UNIT, Some("+08:00".into()));
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", T::DATA_TYPE, true),
             Field::new("b", T::DATA_TYPE, true),
@@ -1006,31 +1004,24 @@ mod tests {
     fn test_delta_checkpoint() {
         let json = "{\"protocol\":{\"minReaderVersion\":1,\"minWriterVersion\":2}}";
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
+            Field::new_struct(
                 "protocol",
-                DataType::Struct(vec![
+                vec![
                     Field::new("minReaderVersion", DataType::Int32, true),
                     Field::new("minWriterVersion", DataType::Int32, true),
-                ]),
+                ],
                 true,
             ),
-            Field::new(
+            Field::new_struct(
                 "add",
-                DataType::Struct(vec![Field::new(
+                vec![Field::new_map(
                     "partitionValues",
-                    DataType::Map(
-                        Box::new(Field::new(
-                            "key_value",
-                            DataType::Struct(vec![
-                                Field::new("key", DataType::Utf8, false),
-                                Field::new("value", DataType::Utf8, true),
-                            ]),
-                            false,
-                        )),
-                        false,
-                    ),
+                    "key_value",
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Utf8, true),
                     false,
-                )]),
+                    false,
+                )],
                 true,
             ),
         ]));
@@ -1052,9 +1043,9 @@ mod tests {
         let do_test = |child: DataType| {
             // Test correctly enforced nullability
             let non_null = r#"{"foo": {}}"#;
-            let schema = Arc::new(Schema::new(vec![Field::new(
+            let schema = Arc::new(Schema::new(vec![Field::new_struct(
                 "foo",
-                DataType::Struct(vec![Field::new("bar", child, false)]),
+                vec![Field::new("bar", child, false)],
                 true,
             )]));
             let mut reader = RawReaderBuilder::new(schema.clone())
@@ -1092,7 +1083,7 @@ mod tests {
         do_test(DataType::Decimal128(2, 1));
         do_test(DataType::Timestamp(
             TimeUnit::Microsecond,
-            Some("+00:00".to_string()),
+            Some("+00:00".into()),
         ));
     }
 }

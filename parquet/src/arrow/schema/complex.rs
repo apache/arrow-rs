@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::arrow::schema::primitive::convert_primitive;
 use crate::arrow::ProjectionMask;
@@ -23,7 +24,7 @@ use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema, SchemaBuilder};
 
 fn get_repetition(t: &Type) -> Repetition {
     let info = t.get_basic_info();
@@ -61,7 +62,7 @@ impl ParquetField {
             rep_level: self.rep_level,
             def_level: self.def_level,
             nullable: false,
-            arrow_type: DataType::List(Box::new(Field::new(
+            arrow_type: DataType::List(Arc::new(Field::new(
                 name,
                 self.arrow_type.clone(),
                 false,
@@ -193,7 +194,7 @@ impl Visitor {
             None => None,
         };
 
-        let mut child_fields = Vec::with_capacity(parquet_fields.len());
+        let mut child_fields = SchemaBuilder::with_capacity(parquet_fields.len());
         let mut children = Vec::with_capacity(parquet_fields.len());
 
         // Perform a DFS of children
@@ -213,7 +214,7 @@ impl Visitor {
                 None => None,
             };
 
-            let arrow_field = arrow_fields.map(|x| &x[idx]);
+            let arrow_field = arrow_fields.map(|x| &*x[idx]);
             let child_ctx = VisitorContext {
                 rep_level,
                 def_level,
@@ -236,7 +237,7 @@ impl Visitor {
             rep_level,
             def_level,
             nullable,
-            arrow_type: DataType::Struct(child_fields),
+            arrow_type: DataType::Struct(child_fields.finish().fields),
             field_type: ParquetFieldType::Group { children },
         };
 
@@ -302,7 +303,7 @@ impl Visitor {
                         ));
                     }
 
-                    (Some(field), Some(&fields[0]), Some(&fields[1]), *sorted)
+                    (Some(field), Some(&*fields[0]), Some(&*fields[1]), *sorted)
                 }
                 d => {
                     return Err(arrow_err!(
@@ -343,16 +344,16 @@ impl Visitor {
         // Need both columns to be projected
         match (maybe_key, maybe_value) {
             (Some(key), Some(value)) => {
-                let key_field = convert_field(map_key, &key, arrow_key);
-                let value_field = convert_field(map_value, &value, arrow_value);
+                let key_field = Arc::new(convert_field(map_key, &key, arrow_key));
+                let value_field = Arc::new(convert_field(map_value, &value, arrow_value));
                 let field_metadata = match arrow_map {
                     Some(field) => field.metadata().clone(),
                     _ => HashMap::default(),
                 };
 
-                let map_field = Field::new(
+                let map_field = Field::new_struct(
                     map_key_value.name(),
-                    DataType::Struct(vec![key_field, value_field]),
+                    [key_field, value_field],
                     false, // The inner map field is always non-nullable (#1697)
                 )
                 .with_metadata(field_metadata);
@@ -361,7 +362,7 @@ impl Visitor {
                     rep_level,
                     def_level,
                     nullable,
-                    arrow_type: DataType::Map(Box::new(map_field), sorted),
+                    arrow_type: DataType::Map(Arc::new(map_field), sorted),
                     field_type: ParquetFieldType::Group {
                         children: vec![key, value],
                     },
@@ -478,7 +479,7 @@ impl Visitor {
 
         match self.dispatch(item_type, new_context) {
             Ok(Some(item)) => {
-                let item_field = Box::new(convert_field(item_type, &item, arrow_field));
+                let item_field = Arc::new(convert_field(item_type, &item, arrow_field));
 
                 // Use arrow type as hint for index size
                 let arrow_type = match context.data_type {

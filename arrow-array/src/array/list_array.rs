@@ -71,7 +71,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// The data type constructor of list array.
     /// The input is the schema of the child array and
     /// the output is the [`DataType`], List or LargeList.
-    pub const DATA_TYPE_CONSTRUCTOR: fn(Box<Field>) -> DataType = if OffsetSize::IS_LARGE
+    pub const DATA_TYPE_CONSTRUCTOR: fn(Arc<Field>) -> DataType = if OffsetSize::IS_LARGE
     {
         DataType::LargeList
     } else {
@@ -182,7 +182,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericListArray<OffsetSize> {
     fn from(data: ArrayData) -> Self {
         Self::try_new_from_array_data(data).expect(
-            "Expected infallable creation of GenericListArray from ArrayDataRef failed",
+            "Expected infallible creation of GenericListArray from ArrayDataRef failed",
         )
     }
 }
@@ -368,7 +368,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -405,7 +405,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(0)
             .add_buffer(value_offsets)
@@ -432,7 +432,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .add_buffer(value_offsets.clone())
@@ -442,7 +442,7 @@ mod tests {
         let list_array = ListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -482,7 +482,7 @@ mod tests {
         let list_array = ListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(2, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -522,7 +522,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .add_buffer(value_offsets.clone())
@@ -532,7 +532,7 @@ mod tests {
         let list_array = LargeListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -572,7 +572,7 @@ mod tests {
         let list_array = LargeListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(2, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -619,7 +619,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -630,7 +630,7 @@ mod tests {
         let list_array = ListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(9, list_array.len());
         assert_eq!(4, list_array.null_count());
@@ -683,7 +683,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -694,7 +694,7 @@ mod tests {
         let list_array = LargeListArray::from(list_data);
 
         let values = list_array.values();
-        assert_eq!(&value_data, values.data());
+        assert_eq!(value_data, values.to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(9, list_array.len());
         assert_eq!(4, list_array.null_count());
@@ -750,7 +750,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -778,7 +778,7 @@ mod tests {
                 .build_unchecked()
         };
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -798,7 +798,7 @@ mod tests {
     fn test_list_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref([0, 2, 5, 7]);
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -831,7 +831,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([2, 2, 5, 7]);
 
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -874,7 +874,7 @@ mod tests {
         };
 
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .add_buffer(buf2)
@@ -958,7 +958,7 @@ mod tests {
 
     #[test]
     fn test_empty_offsets() {
-        let f = Box::new(Field::new("element", DataType::Int32, true));
+        let f = Arc::new(Field::new("element", DataType::Int32, true));
         let string = ListArray::from(
             ArrayData::builder(DataType::List(f.clone()))
                 .buffers(vec![Buffer::from(&[])])

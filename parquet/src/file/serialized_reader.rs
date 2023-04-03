@@ -1327,7 +1327,7 @@ mod tests {
     // parquet-tools column-index ./data_index_bloom_encoding_stats.parquet
     // row group 0:
     // column index for column String:
-    // Boudary order: ASCENDING
+    // Boundary order: ASCENDING
     // page-0  :
     // null count                 min                                  max
     // 0                          Hello                                today

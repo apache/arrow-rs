@@ -347,11 +347,7 @@ mod tests {
             Field::new("c4", DataType::Boolean, true),
             Field::new("c5", DataType::Timestamp(TimeUnit::Millisecond, None), true),
             Field::new("c6", DataType::Time32(TimeUnit::Second), false),
-            Field::new(
-                "c7",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                false,
-            ),
+            Field::new_dictionary("c7", DataType::Int32, DataType::Utf8, false),
         ]);
 
         let c1 = StringArray::from(vec![
@@ -624,7 +620,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let schema = Schema::new(vec![
             Field::new(
                 "c1",
-                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".to_string())),
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
                 true,
             ),
             Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),

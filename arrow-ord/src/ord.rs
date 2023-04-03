@@ -17,6 +17,7 @@
 
 //! Contains functions and function factories to compare arrays.
 
+use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
@@ -33,24 +34,21 @@ fn compare_primitives<T: ArrowPrimitiveType>(
 where
     T::Native: ArrowNativeTypeOp,
 {
-    let left: PrimitiveArray<T> = PrimitiveArray::from(left.data().clone());
-    let right: PrimitiveArray<T> = PrimitiveArray::from(right.data().clone());
+    let left: PrimitiveArray<T> = PrimitiveArray::from(left.to_data());
+    let right: PrimitiveArray<T> = PrimitiveArray::from(right.to_data());
     Box::new(move |i, j| left.value(i).compare(right.value(j)))
 }
 
 fn compare_boolean(left: &dyn Array, right: &dyn Array) -> DynComparator {
-    let left: BooleanArray = BooleanArray::from(left.data().clone());
-    let right: BooleanArray = BooleanArray::from(right.data().clone());
+    let left: BooleanArray = BooleanArray::from(left.to_data());
+    let right: BooleanArray = BooleanArray::from(right.to_data());
 
     Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
 }
 
-fn compare_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
-where
-    T: OffsetSizeTrait,
-{
-    let left: StringArray = StringArray::from(left.data().clone());
-    let right: StringArray = StringArray::from(right.data().clone());
+fn compare_string(left: &dyn Array, right: &dyn Array) -> DynComparator {
+    let left: StringArray = StringArray::from(left.to_data());
+    let right: StringArray = StringArray::from(right.to_data());
 
     Box::new(move |i, j| left.value(i).cmp(right.value(j)))
 }
@@ -61,15 +59,13 @@ where
     V: ArrowPrimitiveType,
     V::Native: ArrowNativeTypeOp,
 {
-    let left = left.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
-    let right = right.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
+    let left = left.as_dictionary::<K>();
+    let right = right.as_dictionary::<K>();
 
-    let left_keys: PrimitiveArray<K> = PrimitiveArray::from(left.keys().data().clone());
-    let right_keys: PrimitiveArray<K> = PrimitiveArray::from(right.keys().data().clone());
-    let left_values: PrimitiveArray<V> =
-        PrimitiveArray::from(left.values().data().clone());
-    let right_values: PrimitiveArray<V> =
-        PrimitiveArray::from(right.values().data().clone());
+    let left_keys: PrimitiveArray<K> = PrimitiveArray::from(left.keys().to_data());
+    let right_keys: PrimitiveArray<K> = PrimitiveArray::from(right.keys().to_data());
+    let left_values: PrimitiveArray<V> = left.values().to_data().into();
+    let right_values: PrimitiveArray<V> = right.values().to_data().into();
 
     Box::new(move |i: usize, j: usize| {
         let key_left = left_keys.value(i).as_usize();
@@ -84,13 +80,13 @@ fn compare_dict_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
 where
     T: ArrowDictionaryKeyType,
 {
-    let left = left.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
-    let right = right.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
+    let left = left.as_dictionary::<T>();
+    let right = right.as_dictionary::<T>();
 
-    let left_keys: PrimitiveArray<T> = PrimitiveArray::from(left.keys().data().clone());
-    let right_keys: PrimitiveArray<T> = PrimitiveArray::from(right.keys().data().clone());
-    let left_values = StringArray::from(left.values().data().clone());
-    let right_values = StringArray::from(right.values().data().clone());
+    let left_keys: PrimitiveArray<T> = PrimitiveArray::from(left.keys().to_data());
+    let right_keys: PrimitiveArray<T> = PrimitiveArray::from(right.keys().to_data());
+    let left_values = StringArray::from(left.values().to_data());
+    let right_values = StringArray::from(right.values().to_data());
 
     Box::new(move |i: usize, j: usize| {
         let key_left = left_keys.value(i).as_usize();
@@ -229,8 +225,8 @@ pub fn build_compare(
         (Duration(Nanosecond), Duration(Nanosecond)) => {
             compare_primitives::<DurationNanosecondType>(left, right)
         }
-        (Utf8, Utf8) => compare_string::<i32>(left, right),
-        (LargeUtf8, LargeUtf8) => compare_string::<i64>(left, right),
+        (Utf8, Utf8) => compare_string(left, right),
+        (LargeUtf8, LargeUtf8) => compare_string(left, right),
         (
             Dictionary(key_type_lhs, value_type_lhs),
             Dictionary(key_type_rhs, value_type_rhs),
@@ -267,10 +263,8 @@ pub fn build_compare(
             }
         }
         (FixedSizeBinary(_), FixedSizeBinary(_)) => {
-            let left: FixedSizeBinaryArray =
-                FixedSizeBinaryArray::from(left.data().clone());
-            let right: FixedSizeBinaryArray =
-                FixedSizeBinaryArray::from(right.data().clone());
+            let left: FixedSizeBinaryArray = left.to_data().into();
+            let right: FixedSizeBinaryArray = right.to_data().into();
 
             Box::new(move |i, j| left.value(i).cmp(right.value(j)))
         }

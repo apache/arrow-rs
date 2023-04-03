@@ -174,15 +174,15 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
             )))
         }
         // type ids. UnionArray doesn't have null bitmap so buffer index begins with 0.
-        (DataType::Union(_, _, _), 0) => i8::BITS as _,
+        (DataType::Union(_, _), 0) => i8::BITS as _,
         // Only DenseUnion has 2nd buffer
-        (DataType::Union(_, _, UnionMode::Dense), 1) => i32::BITS as _,
-        (DataType::Union(_, _, UnionMode::Sparse), _) => {
+        (DataType::Union(_, UnionMode::Dense), 1) => i32::BITS as _,
+        (DataType::Union(_, UnionMode::Sparse), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type:?}\" expects 1 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
-        (DataType::Union(_, _, UnionMode::Dense), _) => {
+        (DataType::Union(_, UnionMode::Dense), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type:?}\" expects 2 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
@@ -496,8 +496,9 @@ mod tests {
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
     use arrow_array::builder::UnionBuilder;
+    use arrow_array::cast::AsArray;
     use arrow_array::types::{Float64Type, Int32Type};
-    use arrow_array::{Float64Array, StructArray, UnionArray};
+    use arrow_array::{StructArray, UnionArray};
     use std::collections::HashMap;
     use std::convert::TryFrom;
     use std::mem::ManuallyDrop;
@@ -661,7 +662,7 @@ mod tests {
             .collect::<Buffer>();
 
         // Construct a list array from the above two
-        let list_data_type = GenericListArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let list_data_type = GenericListArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::Int32, false),
         ));
 
@@ -920,7 +921,7 @@ mod tests {
             .build()?;
 
         let list_data_type =
-            DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int32, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new("f", DataType::Int32, false)), 3);
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .null_bit_buffer(Some(Buffer::from(validity_bits)))
@@ -1103,7 +1104,7 @@ mod tests {
         )]);
 
         // export it
-        let array = ArrowArray::try_from(struct_array.data().clone())?;
+        let array = ArrowArray::try_from(struct_array.to_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1127,7 +1128,7 @@ mod tests {
         let union = builder.build().unwrap();
 
         // export it
-        let array = ArrowArray::try_from(union.data().clone())?;
+        let array = ArrowArray::try_from(union.to_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1138,22 +1139,19 @@ mod tests {
         let expected_type_ids = vec![0_i8, 0, 1, 0];
 
         // Check type ids
-        assert_eq!(
-            Buffer::from_slice_ref(&expected_type_ids),
-            *array.data().buffers()[0]
-        );
+        assert_eq!(*array.type_ids(), expected_type_ids);
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &array.type_id(i));
         }
 
         // Check offsets, sparse union should only have a single buffer, i.e. no offsets
-        assert_eq!(array.data().buffers().len(), 1);
+        assert!(array.offsets().is_none());
 
         for i in 0..array.len() {
             let slot = array.value(i);
             match i {
                 0 => {
-                    let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+                    let slot = slot.as_primitive::<Int32Type>();
                     assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
@@ -1161,14 +1159,14 @@ mod tests {
                 }
                 1 => assert!(slot.is_null(0)),
                 2 => {
-                    let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
+                    let slot = slot.as_primitive::<Float64Type>();
                     assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(value, 3_f64);
                 }
                 3 => {
-                    let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+                    let slot = slot.as_primitive::<Int32Type>();
                     assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
@@ -1195,28 +1193,23 @@ mod tests {
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
-        let array = make_array(data);
-
-        let array = array.as_any().downcast_ref::<UnionArray>().unwrap();
+        let array = UnionArray::from(data);
 
         let expected_type_ids = vec![0_i8, 0, 1, 0];
 
         // Check type ids
-        assert_eq!(
-            Buffer::from_slice_ref(&expected_type_ids),
-            *array.data().buffers()[0]
-        );
+        assert_eq!(*array.type_ids(), expected_type_ids);
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &array.type_id(i));
         }
 
-        assert_eq!(array.data().buffers().len(), 2);
+        assert!(array.offsets().is_some());
 
         for i in 0..array.len() {
             let slot = array.value(i);
             match i {
                 0 => {
-                    let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+                    let slot = slot.as_primitive::<Int32Type>();
                     assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
@@ -1224,14 +1217,14 @@ mod tests {
                 }
                 1 => assert!(slot.is_null(0)),
                 2 => {
-                    let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
+                    let slot = slot.as_primitive::<Float64Type>();
                     assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(value, 3_f64);
                 }
                 3 => {
-                    let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+                    let slot = slot.as_primitive::<Int32Type>();
                     assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);

@@ -22,7 +22,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::Decimal128Type;
+use arrow_array::types::{Decimal128Type, Int32Type, Int64Type, UInt32Type, UInt64Type};
 use arrow_array::{types, Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
@@ -33,11 +33,12 @@ use super::schema::{
 
 use crate::arrow::arrow_writer::byte_array::ByteArrayWriter;
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
+use crate::data_type::{ByteArray, DataType, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, RowGroupMetaDataPtr};
 use crate::file::properties::WriterProperties;
+use crate::file::writer::SerializedFileWriter;
 use crate::file::writer::SerializedRowGroupWriter;
-use crate::{data_type::*, file::writer::SerializedFileWriter};
 use levels::{calculate_array_levels, LevelInfo};
 
 mod byte_array;
@@ -292,13 +293,18 @@ fn write_leaves<W: Write>(
             }
             col_writer.close()
         }
-        ArrowDataType::List(_) | ArrowDataType::LargeList(_) => {
+        ArrowDataType::List(_) => {
             let arrays: Vec<_> = arrays.iter().map(|array|{
-                // write the child list
-                let data = array.data();
-                arrow_array::make_array(data.child_data()[0].clone())
+                array.as_list::<i32>().values().clone()
             }).collect();
 
+            write_leaves(row_group_writer, &arrays, levels)?;
+            Ok(())
+        }
+        ArrowDataType::LargeList(_) => {
+            let arrays: Vec<_> = arrays.iter().map(|array|{
+                array.as_list::<i64>().values().clone()
+            }).collect();
             write_leaves(row_group_writer, &arrays, levels)?;
             Ok(())
         }
@@ -360,7 +366,7 @@ fn write_leaves<W: Write>(
         ArrowDataType::Float16 => Err(ParquetError::ArrowError(
             "Float16 arrays not supported".to_string(),
         )),
-        ArrowDataType::FixedSizeList(_, _) | ArrowDataType::Union(_, _, _) | ArrowDataType::RunEndEncoded(_, _) => {
+        ArrowDataType::FixedSizeList(_, _) | ArrowDataType::Union(_, _) | ArrowDataType::RunEndEncoded(_, _) => {
             Err(ParquetError::NYI(
                 format!(
                     "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
@@ -384,19 +390,15 @@ fn write_leaf(
                     let array = arrow_cast::cast(column, &ArrowDataType::Date32)?;
                     let array = arrow_cast::cast(&array, &ArrowDataType::Int32)?;
 
-                    let array = array
-                        .as_any()
-                        .downcast_ref::<arrow_array::Int32Array>()
-                        .expect("Unable to get int32 array");
+                    let array = array.as_primitive::<Int32Type>();
                     write_primitive(typed, array.values(), levels)?
                 }
                 ArrowDataType::UInt32 => {
-                    let data = column.data();
-                    let offset = data.offset();
+                    let values = column.as_primitive::<UInt32Type>().values();
                     // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
                     // `(i32::MAX as u32)..u32::MAX` to `i32::MIN..0`
-                    let array: &[i32] = data.buffers()[0].typed_data();
-                    write_primitive(typed, &array[offset..offset + data.len()], levels)?
+                    let array = values.inner().typed_data::<i32>();
+                    write_primitive(typed, array, levels)?
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int32 to represent the decimal with low precision
@@ -407,19 +409,13 @@ fn write_leaf(
                 }
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
-                    let array = array
-                        .as_any()
-                        .downcast_ref::<arrow_array::Int32Array>()
-                        .expect("Unable to get i32 array");
+                    let array = array.as_primitive::<Int32Type>();
                     write_primitive(typed, array.values(), levels)?
                 }
             }
         }
         ColumnWriter::BoolColumnWriter(ref mut typed) => {
-            let array = column
-                .as_any()
-                .downcast_ref::<arrow_array::BooleanArray>()
-                .expect("Unable to get boolean array");
+            let array = column.as_boolean();
             typed.write_batch(
                 get_bool_array_slice(array, indices).as_slice(),
                 levels.def_levels(),
@@ -429,19 +425,15 @@ fn write_leaf(
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
             match column.data_type() {
                 ArrowDataType::Int64 => {
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::Int64Array>()
-                        .expect("Unable to get i64 array");
+                    let array = column.as_primitive::<Int64Type>();
                     write_primitive(typed, array.values(), levels)?
                 }
                 ArrowDataType::UInt64 => {
+                    let values = column.as_primitive::<UInt64Type>().values();
                     // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
                     // `(i64::MAX as u64)..u64::MAX` to `i64::MIN..0`
-                    let data = column.data();
-                    let offset = data.offset();
-                    let array: &[i64] = data.buffers()[0].typed_data();
-                    write_primitive(typed, &array[offset..offset + data.len()], levels)?
+                    let array = values.inner().typed_data::<i64>();
+                    write_primitive(typed, array, levels)?
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int64 to represent the decimal with low precision
@@ -452,10 +444,7 @@ fn write_leaf(
                 }
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
-                    let array = array
-                        .as_any()
-                        .downcast_ref::<arrow_array::Int64Array>()
-                        .expect("Unable to get i64 array");
+                    let array = array.as_primitive::<Int64Type>();
                     write_primitive(typed, array.values(), levels)?
                 }
             }
@@ -639,8 +628,10 @@ mod tests {
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
     use arrow_array::RecordBatch;
+    use arrow_schema::Fields;
 
     use crate::basic::Encoding;
+    use crate::data_type::AsBytes;
     use crate::file::metadata::ParquetMetaData;
     use crate::file::page_index::index_reader::read_pages_locations;
     use crate::file::properties::{ReaderProperties, WriterVersion};
@@ -722,8 +713,8 @@ mod tests {
             assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
             assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
             for i in 0..expected_batch.num_columns() {
-                let expected_data = expected_batch.column(i).data().clone();
-                let actual_data = actual_batch.column(i).data().clone();
+                let expected_data = expected_batch.column(i).to_data();
+                let actual_data = actual_batch.column(i).to_data();
 
                 assert_eq!(expected_data, actual_data);
             }
@@ -749,7 +740,7 @@ mod tests {
         // define schema
         let schema = Schema::new(vec![Field::new(
             "a",
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
             true,
         )]);
 
@@ -762,7 +753,7 @@ mod tests {
             arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
             false,
@@ -778,7 +769,7 @@ mod tests {
         // build a record batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
-        assert_eq!(batch.column(0).data().null_count(), 1);
+        assert_eq!(batch.column(0).null_count(), 1);
 
         // This test fails if the max row group size is less than the batch's length
         // see https://github.com/apache/arrow-rs/issues/518
@@ -790,7 +781,7 @@ mod tests {
         // define schema
         let schema = Schema::new(vec![Field::new(
             "a",
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
             false,
         )]);
 
@@ -803,7 +794,7 @@ mod tests {
             arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
             false,
@@ -820,7 +811,7 @@ mod tests {
 
         // This test fails if the max row group size is less than the batch's length
         // see https://github.com/apache/arrow-rs/issues/518
-        assert_eq!(batch.column(0).data().null_count(), 0);
+        assert_eq!(batch.column(0).null_count(), 0);
 
         roundtrip(batch, None);
     }
@@ -887,31 +878,25 @@ mod tests {
         // define schema
         let struct_field_d = Field::new("d", DataType::Float64, true);
         let struct_field_f = Field::new("f", DataType::Float32, true);
-        let struct_field_g = Field::new(
-            "g",
-            DataType::List(Box::new(Field::new("item", DataType::Int16, true))),
-            false,
-        );
-        let struct_field_h = Field::new(
-            "h",
-            DataType::List(Box::new(Field::new("item", DataType::Int16, false))),
-            true,
-        );
-        let struct_field_e = Field::new(
+        let struct_field_g =
+            Field::new_list("g", Field::new("item", DataType::Int16, true), false);
+        let struct_field_h =
+            Field::new_list("h", Field::new("item", DataType::Int16, false), true);
+        let struct_field_e = Field::new_struct(
             "e",
-            DataType::Struct(vec![
+            vec![
                 struct_field_f.clone(),
                 struct_field_g.clone(),
                 struct_field_h.clone(),
-            ]),
+            ],
             false,
         );
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, true),
-            Field::new(
+            Field::new_struct(
                 "c",
-                DataType::Struct(vec![struct_field_d.clone(), struct_field_e.clone()]),
+                vec![struct_field_d.clone(), struct_field_e.clone()],
                 false,
             ),
         ]);
@@ -933,7 +918,7 @@ mod tests {
         let g_list_data = ArrayData::builder(struct_field_g.data_type().clone())
             .len(5)
             .add_buffer(g_value_offsets.clone())
-            .add_child_data(g_value.data().clone())
+            .add_child_data(g_value.to_data())
             .build()
             .unwrap();
         let g = ListArray::from(g_list_data);
@@ -941,7 +926,7 @@ mod tests {
         let h_list_data = ArrayData::builder(struct_field_h.data_type().clone())
             .len(5)
             .add_buffer(g_value_offsets)
-            .add_child_data(g_value.data().clone())
+            .add_child_data(g_value.to_data())
             .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
             .build()
             .unwrap();
@@ -980,11 +965,11 @@ mod tests {
         let topic_field = Field::new("topic", DataType::Utf8, true);
         let schema = Schema::new(vec![Field::new(
             "some_nested_object",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 offset_field.clone(),
                 partition_field.clone(),
                 topic_field.clone(),
-            ]),
+            ])),
             false,
         )]);
 
@@ -1015,14 +1000,14 @@ mod tests {
         {"stocks":{"long": null, "long": "$CCC", "short": null}}
         {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
         "#;
-        let entries_struct_type = DataType::Struct(vec![
+        let entries_struct_type = DataType::Struct(Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", DataType::Utf8, true),
-        ]);
+        ]));
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Box::new(Field::new("entries", entries_struct_type, false)),
+                Arc::new(Field::new("entries", entries_struct_type, false)),
                 false,
             ),
             true,
@@ -1039,8 +1024,9 @@ mod tests {
     fn arrow_writer_2_level_struct() {
         // tests writing <struct<struct<primitive>>
         let field_c = Field::new("c", DataType::Int32, true);
-        let field_b = Field::new("b", DataType::Struct(vec![field_c]), true);
-        let field_a = Field::new("a", DataType::Struct(vec![field_b.clone()]), true);
+        let field_b = Field::new("b", DataType::Struct(vec![field_c].into()), true);
+        let type_a = DataType::Struct(vec![field_b.clone()].into());
+        let field_a = Field::new("a", type_a, true);
         let schema = Schema::new(vec![field_a.clone()]);
 
         // create data
@@ -1073,19 +1059,21 @@ mod tests {
     fn arrow_writer_2_level_struct_non_null() {
         // tests writing <struct<struct<primitive>>
         let field_c = Field::new("c", DataType::Int32, false);
-        let field_b = Field::new("b", DataType::Struct(vec![field_c]), false);
-        let field_a = Field::new("a", DataType::Struct(vec![field_b.clone()]), false);
-        let schema = Schema::new(vec![field_a.clone()]);
+        let type_b = DataType::Struct(vec![field_c].into());
+        let field_b = Field::new("b", type_b.clone(), false);
+        let type_a = DataType::Struct(vec![field_b].into());
+        let field_a = Field::new("a", type_a.clone(), false);
+        let schema = Schema::new(vec![field_a]);
 
         // create data
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
-        let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
+        let b_data = ArrayDataBuilder::new(type_b)
             .len(6)
             .add_child_data(c.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
-        let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
+        let a_data = ArrayDataBuilder::new(type_a)
             .len(6)
             .add_child_data(b.into_data())
             .build()
@@ -1105,13 +1093,15 @@ mod tests {
     fn arrow_writer_2_level_struct_mixed_null() {
         // tests writing <struct<struct<primitive>>
         let field_c = Field::new("c", DataType::Int32, false);
-        let field_b = Field::new("b", DataType::Struct(vec![field_c]), true);
-        let field_a = Field::new("a", DataType::Struct(vec![field_b.clone()]), false);
-        let schema = Schema::new(vec![field_a.clone()]);
+        let type_b = DataType::Struct(vec![field_c].into());
+        let field_b = Field::new("b", type_b.clone(), true);
+        let type_a = DataType::Struct(vec![field_b].into());
+        let field_a = Field::new("a", type_a.clone(), false);
+        let schema = Schema::new(vec![field_a]);
 
         // create data
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
-        let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
+        let b_data = ArrayDataBuilder::new(type_b)
             .len(6)
             .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
             .add_child_data(c.into_data())
@@ -1119,7 +1109,7 @@ mod tests {
             .unwrap();
         let b = StructArray::from(b_data);
         // a intentionally has no null buffer, to test that this is handled correctly
-        let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
+        let a_data = ArrayDataBuilder::new(type_a)
             .len(6)
             .add_child_data(b.into_data())
             .build()
@@ -1251,9 +1241,9 @@ mod tests {
         assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
         assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
         for i in 0..expected_batch.num_columns() {
-            let expected_data = expected_batch.column(i).data();
-            let actual_data = actual_batch.column(i).data();
-            validate(expected_data, actual_data);
+            let expected_data = expected_batch.column(i).to_data();
+            let actual_data = actual_batch.column(i).to_data();
+            validate(&expected_data, &actual_data);
         }
 
         file
@@ -1758,14 +1748,14 @@ mod tests {
     fn null_list_single_column() {
         let null_field = Field::new("item", DataType::Null, true);
         let list_field =
-            Field::new("emptylist", DataType::List(Box::new(null_field)), true);
+            Field::new("emptylist", DataType::List(Arc::new(null_field)), true);
 
         let schema = Schema::new(vec![list_field]);
 
         // Build [[], null, [null, null]]
         let a_values = NullArray::new(2);
         let a_value_offsets = arrow::buffer::Buffer::from(&[0, 0, 0, 2].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Null,
             true,
@@ -1796,7 +1786,7 @@ mod tests {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets =
             arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
             false,
@@ -1821,7 +1811,7 @@ mod tests {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets =
             arrow::buffer::Buffer::from(&[0i64, 1, 3, 3, 6, 10].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::LargeList(Box::new(Field::new(
+        let a_list_data = ArrayData::builder(DataType::LargeList(Arc::new(Field::new(
             "large_item",
             DataType::Int32,
             true,
@@ -2244,13 +2234,16 @@ mod tests {
         let field_b = Field::new("leaf_b", DataType::Int32, true);
         let struct_a = Field::new(
             "struct_a",
-            DataType::Struct(vec![field_a.clone(), field_b.clone()]),
+            DataType::Struct(vec![field_a.clone(), field_b.clone()].into()),
             true,
         );
 
-        let list_a = Field::new("list", DataType::List(Box::new(struct_a)), true);
-        let struct_b =
-            Field::new("struct_b", DataType::Struct(vec![list_a.clone()]), false);
+        let list_a = Field::new("list", DataType::List(Arc::new(struct_a)), true);
+        let struct_b = Field::new(
+            "struct_b",
+            DataType::Struct(vec![list_a.clone()].into()),
+            false,
+        );
 
         let schema = Arc::new(Schema::new(vec![struct_b]));
 

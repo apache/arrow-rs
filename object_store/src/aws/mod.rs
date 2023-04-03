@@ -232,7 +232,7 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        use reqwest::header::{CONTENT_LENGTH, LAST_MODIFIED};
+        use reqwest::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 
         // Extract meta from headers
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html#API_HeadObject_ResponseSyntax
@@ -256,10 +256,15 @@ impl ObjectStore for AmazonS3 {
         let content_length = content_length
             .parse()
             .context(InvalidContentLengthSnafu { content_length })?;
+
+        let e_tag = headers.get(ETAG).context(MissingEtagSnafu)?;
+        let e_tag = e_tag.to_str().context(BadHeaderSnafu)?;
+
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified,
             size: content_length,
+            e_tag: Some(e_tag.to_string()),
         })
     }
 
@@ -273,7 +278,22 @@ impl ObjectStore for AmazonS3 {
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
         let stream = self
             .client
-            .list_paginated(prefix, false)
+            .list_paginated(prefix, false, None)
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .try_flatten()
+            .boxed();
+
+        Ok(stream)
+    }
+
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        let stream = self
+            .client
+            .list_paginated(prefix, false, Some(offset))
             .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
             .boxed();
@@ -282,7 +302,7 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.client.list_paginated(prefix, true);
+        let mut stream = self.client.list_paginated(prefix, true, None);
 
         let mut common_prefixes = BTreeSet::new();
         let mut objects = Vec::new();

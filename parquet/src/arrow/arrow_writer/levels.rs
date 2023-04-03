@@ -41,10 +41,9 @@
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
 use crate::errors::{ParquetError, Result};
-use arrow_array::{
-    make_array, Array, ArrayRef, GenericListArray, MapArray, OffsetSizeTrait, StructArray,
-};
-use arrow_data::ArrayData;
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, ArrayRef, OffsetSizeTrait, StructArray};
+use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
 
@@ -183,29 +182,37 @@ impl LevelInfoBuilder {
                 self.write_leaf(array, range)
             }
             DataType::Struct(_) => {
-                let array = array.as_any().downcast_ref::<StructArray>().unwrap();
+                let array = array.as_struct();
                 self.write_struct(array, range)
             }
             DataType::List(_) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<GenericListArray<i32>>()
-                    .unwrap();
-                self.write_list(array.value_offsets(), array.data(), range)
+                let array = array.as_list::<i32>();
+                self.write_list(
+                    array.value_offsets(),
+                    array.nulls(),
+                    array.values(),
+                    range,
+                )
             }
             DataType::LargeList(_) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<GenericListArray<i64>>()
-                    .unwrap();
-
-                self.write_list(array.value_offsets(), array.data(), range)
+                let array = array.as_list::<i64>();
+                self.write_list(
+                    array.value_offsets(),
+                    array.nulls(),
+                    array.values(),
+                    range,
+                )
             }
             DataType::Map(_, _) => {
-                let array = array.as_any().downcast_ref::<MapArray>().unwrap();
+                let array = array.as_map();
                 // A Map is just as ListArray<i32> with a StructArray child, we therefore
                 // treat it as such to avoid code duplication
-                self.write_list(array.value_offsets(), array.data(), range)
+                self.write_list(
+                    array.value_offsets(),
+                    array.nulls(),
+                    array.entries(),
+                    range,
+                )
             }
             _ => unreachable!(),
         }
@@ -217,7 +224,8 @@ impl LevelInfoBuilder {
     fn write_list<O: OffsetSizeTrait>(
         &mut self,
         offsets: &[O],
-        list_data: &ArrayData,
+        nulls: Option<&NullBuffer>,
+        values: &ArrayRef,
         range: Range<usize>,
     ) {
         let (child, ctx) = match self {
@@ -226,11 +234,10 @@ impl LevelInfoBuilder {
         };
 
         let offsets = &offsets[range.start..range.end + 1];
-        let child_array = make_array(list_data.child_data()[0].clone());
 
         let write_non_null_slice =
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
-                child.write(&child_array, start_idx..end_idx);
+                child.write(values, start_idx..end_idx);
                 child.visit_leaves(|leaf| {
                     let rep_levels = leaf.rep_levels.as_mut().unwrap();
                     let mut rev = rep_levels.iter_mut().rev();
@@ -270,7 +277,7 @@ impl LevelInfoBuilder {
             })
         };
 
-        match list_data.nulls() {
+        match nulls {
             Some(nulls) => {
                 let null_offset = range.start;
                 // TODO: Faster bitmask iteration (#1757)
@@ -485,8 +492,8 @@ mod tests {
     use arrow_array::*;
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_cast::display::array_value_to_string;
-    use arrow_data::ArrayDataBuilder;
-    use arrow_schema::Schema;
+    use arrow_data::{ArrayData, ArrayDataBuilder};
+    use arrow_schema::{Fields, Schema};
 
     #[test]
     fn test_calculate_array_levels_twitter_example() {
@@ -494,9 +501,9 @@ mod tests {
         // [[a, b, c], [d, e, f, g]], [[h], [i,j]]
 
         let leaf_type = Field::new("item", DataType::Int32, false);
-        let inner_type = DataType::List(Box::new(leaf_type));
+        let inner_type = DataType::List(Arc::new(leaf_type));
         let inner_field = Field::new("l2", inner_type.clone(), false);
-        let outer_type = DataType::List(Box::new(inner_field));
+        let outer_type = DataType::List(Arc::new(inner_field));
         let outer_field = Field::new("l1", outer_type.clone(), false);
 
         let primitives = Int32Array::from_iter(0..10);
@@ -579,7 +586,7 @@ mod tests {
     #[test]
     fn test_calculate_array_levels_1() {
         let leaf_field = Field::new("item", DataType::Int32, false);
-        let list_type = DataType::List(Box::new(leaf_field));
+        let list_type = DataType::List(Arc::new(leaf_field));
 
         // if all array values are defined (e.g. batch<list<_>>)
         // [[0], [1], [2], [3], [4]]
@@ -659,7 +666,7 @@ mod tests {
         let leaf = Int32Array::from_iter(0..11);
         let leaf_field = Field::new("leaf", DataType::Int32, false);
 
-        let list_type = DataType::List(Box::new(leaf_field));
+        let list_type = DataType::List(Arc::new(leaf_field));
         let list = ArrayData::builder(list_type.clone())
             .len(5)
             .add_child_data(leaf.into_data())
@@ -700,7 +707,7 @@ mod tests {
         let leaf = Int32Array::from_iter(100..122);
         let leaf_field = Field::new("leaf", DataType::Int32, true);
 
-        let l1_type = DataType::List(Box::new(leaf_field));
+        let l1_type = DataType::List(Arc::new(leaf_field));
         let offsets = Buffer::from_iter([0_i32, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]);
         let l1 = ArrayData::builder(l1_type.clone())
             .len(11)
@@ -710,7 +717,7 @@ mod tests {
             .unwrap();
 
         let l1_field = Field::new("l1", l1_type, true);
-        let l2_type = DataType::List(Box::new(l1_field));
+        let l2_type = DataType::List(Arc::new(l1_field));
         let l2 = ArrayData::builder(l2_type)
             .len(5)
             .add_child_data(l1)
@@ -742,7 +749,7 @@ mod tests {
     #[test]
     fn test_calculate_array_levels_nested_list() {
         let leaf_field = Field::new("leaf", DataType::Int32, false);
-        let list_type = DataType::List(Box::new(leaf_field));
+        let list_type = DataType::List(Arc::new(leaf_field));
 
         // if all array values are defined (e.g. batch<list<_>>)
         // The array at this level looks like:
@@ -813,7 +820,7 @@ mod tests {
 
         let leaf = Int32Array::from_iter(201..216);
         let leaf_field = Field::new("leaf", DataType::Int32, false);
-        let list_1_type = DataType::List(Box::new(leaf_field));
+        let list_1_type = DataType::List(Arc::new(leaf_field));
         let list_1 = ArrayData::builder(list_1_type.clone())
             .len(7)
             .add_buffer(Buffer::from_iter([0_i32, 1, 3, 3, 6, 10, 10, 15]))
@@ -822,7 +829,7 @@ mod tests {
             .unwrap();
 
         let list_1_field = Field::new("l1", list_1_type, true);
-        let list_2_type = DataType::List(Box::new(list_1_field));
+        let list_2_type = DataType::List(Arc::new(list_1_field));
         let list_2 = ArrayData::builder(list_2_type.clone())
             .len(4)
             .add_buffer(Buffer::from_iter([0_i32, 0, 3, 5, 7]))
@@ -899,7 +906,7 @@ mod tests {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets = arrow::buffer::Buffer::from_iter([0_i32, 1, 3, 3, 6, 10]);
         let a_list_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let a_list_data = ArrayData::builder(a_list_type.clone())
             .len(5)
             .add_buffer(a_value_offsets)
@@ -942,12 +949,12 @@ mod tests {
         let struct_field_f = Field::new("f", DataType::Float32, true);
         let struct_field_g = Field::new(
             "g",
-            DataType::List(Box::new(Field::new("items", DataType::Int16, false))),
+            DataType::List(Arc::new(Field::new("items", DataType::Int16, false))),
             false,
         );
         let struct_field_e = Field::new(
             "e",
-            DataType::Struct(vec![struct_field_f.clone(), struct_field_g.clone()]),
+            DataType::Struct(vec![struct_field_f.clone(), struct_field_g.clone()].into()),
             true,
         );
         let schema = Schema::new(vec![
@@ -955,7 +962,9 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new(
                 "c",
-                DataType::Struct(vec![struct_field_d.clone(), struct_field_e.clone()]),
+                DataType::Struct(
+                    vec![struct_field_d.clone(), struct_field_e.clone()].into(),
+                ),
                 true, // https://github.com/apache/arrow-rs/issues/245
             ),
         ]);
@@ -1067,7 +1076,7 @@ mod tests {
         let offset_field = Field::new("offset", DataType::Int32, true);
         let schema = Schema::new(vec![Field::new(
             "some_nested_object",
-            DataType::Struct(vec![offset_field.clone()]),
+            DataType::Struct(vec![offset_field.clone()].into()),
             false,
         )]);
 
@@ -1090,7 +1099,7 @@ mod tests {
         let offset_field = Field::new("offset", DataType::Int32, true);
         let schema = Schema::new(vec![Field::new(
             "some_nested_object",
-            DataType::Struct(vec![offset_field.clone()]),
+            DataType::Struct(vec![offset_field.clone()].into()),
             true,
         )]);
 
@@ -1122,14 +1131,14 @@ mod tests {
         {"stocks":{"long": "$CCC", "short": null}}
         {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
         "#;
-        let entries_struct_type = DataType::Struct(vec![
+        let entries_struct_type = DataType::Struct(Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", DataType::Utf8, true),
-        ]);
+        ]));
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Box::new(Field::new("entries", entries_struct_type, false)),
+                Arc::new(Field::new("entries", entries_struct_type, false)),
                 false,
             ),
             // not nullable, so the keys have max level = 1
@@ -1182,13 +1191,12 @@ mod tests {
     fn test_list_of_struct() {
         // define schema
         let int_field = Field::new("a", DataType::Int32, true);
-        let item_field =
-            Field::new("item", DataType::Struct(vec![int_field.clone()]), true);
-        let list_field = Field::new("list", DataType::List(Box::new(item_field)), true);
+        let fields = Fields::from([Arc::new(int_field)]);
+        let item_field = Field::new("item", DataType::Struct(fields.clone()), true);
+        let list_field = Field::new("list", DataType::List(Arc::new(item_field)), true);
 
         let int_builder = Int32Builder::with_capacity(10);
-        let struct_builder =
-            StructBuilder::new(vec![int_field], vec![Box::new(int_builder)]);
+        let struct_builder = StructBuilder::new(fields, vec![Box::new(int_builder)]);
         let mut list_builder = ListBuilder::new(struct_builder);
 
         // [{a: 1}], [], null, [null, null], [{a: null}], [{a: 2}]
@@ -1242,7 +1250,7 @@ mod tests {
 
         let array = Arc::new(list_builder.finish());
 
-        let values_len = array.data().child_data()[0].len();
+        let values_len = array.values().len();
         assert_eq!(values_len, 5);
 
         let schema = Arc::new(Schema::new(vec![list_field]));
@@ -1277,7 +1285,7 @@ mod tests {
         ]);
 
         // This test assumes that nulls don't take up space
-        assert_eq!(inner.data().child_data()[0].len(), 7);
+        assert_eq!(inner.values().len(), 7);
 
         let field = Field::new("list", inner.data_type().clone(), true);
         let array = Arc::new(inner) as ArrayRef;
@@ -1335,7 +1343,7 @@ mod tests {
         let offsets = Buffer::from_iter([0_i32, 0, 2, 2, 3, 5, 5]);
         let nulls = Buffer::from([0b00111100]);
 
-        let list_type = DataType::List(Box::new(Field::new(
+        let list_type = DataType::List(Arc::new(Field::new(
             "struct",
             struct_a.data_type().clone(),
             true,

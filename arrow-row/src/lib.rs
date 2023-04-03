@@ -1533,12 +1533,12 @@ mod tests {
         // Construct dictionary with a timezone
         let dict = a.finish();
         let values = TimestampNanosecondArray::from(dict.values().to_data());
-        let dict_with_tz = dict.with_values(&values.with_timezone("+02:00".to_string()));
+        let dict_with_tz = dict.with_values(&values.with_timezone("+02:00"));
         let d = DataType::Dictionary(
             Box::new(DataType::Int32),
             Box::new(DataType::Timestamp(
                 TimeUnit::Nanosecond,
-                Some("+02:00".to_string()),
+                Some("+02:00".into()),
             )),
         );
 
@@ -1651,9 +1651,9 @@ mod tests {
             DataType::Dictionary(_, v) if !exact => {
                 assert_eq!(a.data_type(), v.as_ref());
                 let b = arrow_cast::cast(b, v).unwrap();
-                assert_eq!(a.data(), b.data())
+                assert_eq!(a, b.as_ref())
             }
-            _ => assert_eq!(a.data(), b.data()),
+            _ => assert_eq!(a, b),
         }
     }
 
@@ -1767,8 +1767,7 @@ mod tests {
 
         // Test struct nullability
         let data = s1
-            .data()
-            .clone()
+            .to_data()
             .into_builder()
             .null_bit_buffer(Some(Buffer::from_slice_ref([0b00001010])))
             .null_count(2)
@@ -1786,7 +1785,7 @@ mod tests {
         assert_eq!(back.len(), 1);
         assert_eq!(&back[0], &s2);
 
-        back[0].data().validate_full().unwrap();
+        back[0].to_data().validate_full().unwrap();
     }
 
     #[test]
@@ -1910,7 +1909,7 @@ mod tests {
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
-        back[0].data().validate_full().unwrap();
+        back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
         let options = SortOptions {
@@ -1930,7 +1929,7 @@ mod tests {
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
-        back[0].data().validate_full().unwrap();
+        back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
         let options = SortOptions {
@@ -1950,7 +1949,7 @@ mod tests {
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
-        back[0].data().validate_full().unwrap();
+        back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
         let options = SortOptions {
@@ -1970,7 +1969,7 @@ mod tests {
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
-        back[0].data().validate_full().unwrap();
+        back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
     }
 
@@ -2033,7 +2032,7 @@ mod tests {
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
-        back[0].data().validate_full().unwrap();
+        back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
         let options = SortOptions {
@@ -2052,7 +2051,7 @@ mod tests {
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
-        back[0].data().validate_full().unwrap();
+        back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
 
         let options = SortOptions {
@@ -2071,7 +2070,7 @@ mod tests {
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
-        back[0].data().validate_full().unwrap();
+        back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
     }
 
@@ -2171,7 +2170,7 @@ mod tests {
             .into_data()
             .into_builder()
             .data_type(data_type)
-            .add_child_data(values.data().clone())
+            .add_child_data(values.to_data())
             .build()
             .unwrap();
 

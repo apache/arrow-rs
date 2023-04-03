@@ -133,7 +133,7 @@ pub trait RowAccessor {
     fn get_map(&self, i: usize) -> Result<&Map>;
 }
 
-/// Trait for formating fields within a Row.
+/// Trait for formatting fields within a Row.
 ///
 /// # Examples
 ///

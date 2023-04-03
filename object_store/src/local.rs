@@ -23,6 +23,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{stream::BoxStream, StreamExt};
@@ -887,7 +888,7 @@ fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
 }
 
 fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<ObjectMeta> {
-    let last_modified = metadata
+    let last_modified: DateTime<Utc> = metadata
         .modified()
         .expect("Modified file time should be supported on this platform")
         .into();
@@ -900,6 +901,7 @@ fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<Objec
         location,
         last_modified,
         size,
+        e_tag: None,
     })
 }
 

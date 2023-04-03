@@ -129,14 +129,14 @@ fn coerce_data_type(dt: Vec<&DataType>) -> DataType {
         (DataType::Float64, DataType::Float64)
         | (DataType::Float64, DataType::Int64)
         | (DataType::Int64, DataType::Float64) => DataType::Float64,
-        (DataType::List(l), DataType::List(r)) => DataType::List(Box::new(Field::new(
+        (DataType::List(l), DataType::List(r)) => DataType::List(Arc::new(Field::new(
             "item",
             coerce_data_type(vec![l.data_type(), r.data_type()]),
             true,
         ))),
         // coerce scalar and scalar array into scalar array
         (DataType::List(e), not_list) | (not_list, DataType::List(e)) => {
-            DataType::List(Box::new(Field::new(
+            DataType::List(Arc::new(Field::new(
                 "item",
                 coerce_data_type(vec![e.data_type(), &not_list]),
                 true,
@@ -150,7 +150,7 @@ fn generate_datatype(t: &InferredType) -> Result<DataType, ArrowError> {
     Ok(match t {
         InferredType::Scalar(hs) => coerce_data_type(hs.iter().collect()),
         InferredType::Object(spec) => DataType::Struct(generate_fields(spec)?),
-        InferredType::Array(ele_type) => DataType::List(Box::new(Field::new(
+        InferredType::Array(ele_type) => DataType::List(Arc::new(Field::new(
             "item",
             generate_datatype(ele_type)?,
             true,
@@ -159,9 +159,7 @@ fn generate_datatype(t: &InferredType) -> Result<DataType, ArrowError> {
     })
 }
 
-fn generate_fields(
-    spec: &HashMap<String, InferredType>,
-) -> Result<Vec<Field>, ArrowError> {
+fn generate_fields(spec: &HashMap<String, InferredType>) -> Result<Fields, ArrowError> {
     spec.iter()
         .map(|(k, types)| Ok(Field::new(k, generate_datatype(types)?, true)))
         .collect()
@@ -656,7 +654,7 @@ impl Decoder {
         match &self.options.projection {
             Some(projection) => {
                 let fields = self.schema.fields();
-                let projected_fields: Vec<Field> = fields
+                let projected_fields: Fields = fields
                     .iter()
                     .filter_map(|field| {
                         if projection.contains(field.name()) {
@@ -674,7 +672,7 @@ impl Decoder {
     }
 
     /// Read the next batch of [`serde_json::Value`] records from the
-    /// interator into a [`RecordBatch`].
+    /// iterator into a [`RecordBatch`].
     ///
     /// Returns `None` if the input iterator is exhausted.
     pub fn next_batch<I>(
@@ -708,17 +706,13 @@ impl Decoder {
         let arrays =
             self.build_struct_array(rows, self.schema.fields(), &self.options.projection);
 
-        let projected_fields = if let Some(projection) = self.options.projection.as_ref()
-        {
-            projection
+        let projected_fields: Fields = match self.options.projection.as_ref() {
+            Some(projection) => projection
                 .iter()
-                .filter_map(|name| self.schema.column_with_name(name))
-                .map(|(_, field)| field.clone())
-                .collect()
-        } else {
-            self.schema.fields().to_vec()
+                .filter_map(|name| Some(self.schema.fields.find(name)?.1.clone()))
+                .collect(),
+            None => self.schema.fields.clone(),
         };
-
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
         arrays.and_then(|arr| {
@@ -1093,7 +1087,7 @@ impl Decoder {
     fn build_nested_list_array<OffsetSize: OffsetSizeTrait>(
         &self,
         rows: &[Value],
-        list_field: &Field,
+        list_field: &FieldRef,
     ) -> Result<ArrayRef, ArrowError> {
         // build list offsets
         let mut cur_offset = OffsetSize::zero();
@@ -1219,8 +1213,7 @@ impl Decoder {
                         }
                     })
                     .collect();
-                let arrays =
-                    self.build_struct_array(rows.as_slice(), fields.as_slice(), &None)?;
+                let arrays = self.build_struct_array(rows.as_slice(), fields, &None)?;
                 let data_type = DataType::Struct(fields.clone());
                 let buf = null_buffer.into();
                 unsafe {
@@ -1238,7 +1231,7 @@ impl Decoder {
             }
         };
         // build list
-        let list_data = ArrayData::builder(DataType::List(Box::new(list_field.clone())))
+        let list_data = ArrayData::builder(DataType::List(list_field.clone()))
             .len(list_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(array_data)
@@ -1258,7 +1251,7 @@ impl Decoder {
     fn build_struct_array(
         &self,
         rows: &[Value],
-        struct_fields: &[Field],
+        struct_fields: &Fields,
         projection: &Option<Vec<String>>,
     ) -> Result<Vec<ArrayRef>, ArrowError> {
         let arrays: Result<Vec<ArrayRef>, ArrowError> = struct_fields
@@ -1529,7 +1522,7 @@ impl Decoder {
 
         let struct_children = self.build_struct_array(
             struct_rows.as_slice(),
-            &[key_field.clone(), value_field.clone()],
+            &Fields::from([key_field.clone(), value_field.clone()]),
             &None,
         )?;
 
@@ -2119,12 +2112,12 @@ mod tests {
         assert_eq!(&DataType::Int64, a.1.data_type());
         let b = schema.column_with_name("b").unwrap();
         assert_eq!(
-            &DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
             b.1.data_type()
         );
         let c = schema.column_with_name("c").unwrap();
         assert_eq!(
-            &DataType::List(Box::new(Field::new("item", DataType::Boolean, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
             c.1.data_type()
         );
         let d = schema.column_with_name("d").unwrap();
@@ -2167,7 +2160,7 @@ mod tests {
     fn test_invalid_json_read_record() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "a",
-            DataType::Struct(vec![Field::new("a", DataType::Utf8, true)]),
+            DataType::Struct(vec![Field::new("a", DataType::Utf8, true)].into()),
             true,
         )]));
         let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
@@ -2179,36 +2172,36 @@ mod tests {
     }
 
     #[test]
-    fn test_coersion_scalar_and_list() {
+    fn test_coercion_scalar_and_list() {
         use arrow_schema::DataType::*;
 
         assert_eq!(
-            List(Box::new(Field::new("item", Float64, true))),
+            List(Arc::new(Field::new("item", Float64, true))),
             coerce_data_type(vec![
                 &Float64,
-                &List(Box::new(Field::new("item", Float64, true)))
+                &List(Arc::new(Field::new("item", Float64, true)))
             ])
         );
         assert_eq!(
-            List(Box::new(Field::new("item", Float64, true))),
+            List(Arc::new(Field::new("item", Float64, true))),
             coerce_data_type(vec![
                 &Float64,
-                &List(Box::new(Field::new("item", Int64, true)))
+                &List(Arc::new(Field::new("item", Int64, true)))
             ])
         );
         assert_eq!(
-            List(Box::new(Field::new("item", Int64, true))),
+            List(Arc::new(Field::new("item", Int64, true))),
             coerce_data_type(vec![
                 &Int64,
-                &List(Box::new(Field::new("item", Int64, true)))
+                &List(Arc::new(Field::new("item", Int64, true)))
             ])
         );
         // boolean and number are incompatible, return utf8
         assert_eq!(
-            List(Box::new(Field::new("item", Utf8, true))),
+            List(Arc::new(Field::new("item", Utf8, true))),
             coerce_data_type(vec![
                 &Boolean,
-                &List(Box::new(Field::new("item", Float64, true)))
+                &List(Arc::new(Field::new("item", Float64, true)))
             ])
         );
     }
@@ -2241,17 +2234,17 @@ mod tests {
             assert_eq!(&DataType::Int64, a.1.data_type());
             let b = schema.column_with_name("b").unwrap();
             assert_eq!(
-                &DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+                &DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
                 b.1.data_type()
             );
             let c = schema.column_with_name("c").unwrap();
             assert_eq!(
-                &DataType::List(Box::new(Field::new("item", DataType::Boolean, true))),
+                &DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
                 c.1.data_type()
             );
             let d = schema.column_with_name("d").unwrap();
             assert_eq!(
-                &DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
+                &DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
                 d.1.data_type()
             );
 
@@ -2264,16 +2257,9 @@ mod tests {
             assert_eq!(10, bb.len());
             assert_eq!(4.0, bb.value(9));
 
-            let cc = batch
-                .column(c.0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap();
+            let cc = batch.column(c.0).as_list::<i32>();
             // test that the list offsets are correct
-            assert_eq!(
-                *cc.data().buffers()[0],
-                Buffer::from_slice_ref([0i32, 2, 2, 4, 5])
-            );
+            assert_eq!(cc.value_offsets(), &[0, 2, 2, 4, 5]);
             let cc = cc.values().as_boolean();
             let cc_expected = BooleanArray::from(vec![
                 Some(false),
@@ -2282,18 +2268,11 @@ mod tests {
                 None,
                 Some(false),
             ]);
-            assert_eq!(cc.data_ref(), cc_expected.data_ref());
+            assert_eq!(cc, &cc_expected);
 
-            let dd: &ListArray = batch
-                .column(d.0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap();
+            let dd = batch.column(d.0).as_list::<i32>();
             // test that the list offsets are correct
-            assert_eq!(
-                *dd.data().buffers()[0],
-                Buffer::from_slice_ref([0i32, 1, 1, 2, 6])
-            );
+            assert_eq!(dd.value_offsets(), &[0, 1, 1, 2, 6]);
 
             let dd = dd.values().as_string::<i32>();
             // values are 6 because a `d: null` is treated as a null slot
@@ -2311,15 +2290,15 @@ mod tests {
     fn test_nested_struct_json_arrays() {
         let c_field = Field::new(
             "c",
-            DataType::Struct(vec![Field::new("d", DataType::Utf8, true)]),
+            DataType::Struct(vec![Field::new("d", DataType::Utf8, true)].into()),
             true,
         );
         let a_field = Field::new(
             "a",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("b", DataType::Boolean, true),
                 c_field.clone(),
-            ]),
+            ])),
             true,
         );
         let schema = Arc::new(Schema::new(vec![a_field.clone()]));
@@ -2349,31 +2328,26 @@ mod tests {
         // compare `a` with result from json reader
         let batch = reader.next().unwrap().unwrap();
         let read = batch.column(0);
-        assert!(
-            expected.data_ref() == read.data_ref(),
-            "{:?} != {:?}",
-            expected.data(),
-            read.data(),
-        );
+        assert_eq!(&expected, read);
     }
 
     #[test]
     fn test_nested_list_json_arrays() {
         let c_field = Field::new(
             "c",
-            DataType::Struct(vec![Field::new("d", DataType::Utf8, true)]),
+            DataType::Struct(vec![Field::new("d", DataType::Utf8, true)].into()),
             true,
         );
         let a_struct_field = Field::new(
             "a",
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("b", DataType::Boolean, true),
                 c_field.clone(),
-            ]),
+            ])),
             true,
         );
         let a_field =
-            Field::new("a", DataType::List(Box::new(a_struct_field.clone())), true);
+            Field::new("a", DataType::List(Arc::new(a_struct_field.clone())), true);
         let schema = Arc::new(Schema::new(vec![a_field.clone()]));
         let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
         let json_content = r#"
@@ -2432,12 +2406,9 @@ mod tests {
         let read = batch.column(0);
         assert_eq!(read.len(), 6);
         // compare the arrays the long way around, to better detect differences
-        let read: &ListArray = read.as_any().downcast_ref::<ListArray>().unwrap();
-        let expected = expected.as_any().downcast_ref::<ListArray>().unwrap();
-        assert_eq!(
-            *read.data().buffers()[0],
-            Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7])
-        );
+        let read: &ListArray = read.as_list::<i32>();
+        let expected = expected.as_list::<i32>();
+        assert_eq!(read.value_offsets(), &[0, 2, 3, 6, 6, 6, 7]);
         // compare list null buffers
         assert_eq!(read.nulls(), expected.nulls());
         // build struct from list
@@ -2466,15 +2437,15 @@ mod tests {
     fn test_map_json_arrays() {
         let account_field = Field::new("account", DataType::UInt16, false);
         let value_list_type =
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, false)));
-        let entries_struct_type = DataType::Struct(vec![
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, false)));
+        let entries_struct_type = DataType::Struct(Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", value_list_type.clone(), true),
-        ]);
+        ]));
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Box::new(Field::new("entries", entries_struct_type.clone(), false)),
+                Arc::new(Field::new("entries", entries_struct_type.clone(), false)),
                 false,
             ),
             true,
@@ -2532,10 +2503,10 @@ mod tests {
         assert_eq!(batch.num_rows(), 3);
         assert_eq!(batch.num_columns(), 2);
         let col1 = batch.column(0);
-        assert_eq!(col1.data(), expected_accounts.data());
+        assert_eq!(col1.as_ref(), &expected_accounts);
         // Compare the map
         let col2 = batch.column(1);
-        assert_eq!(col2.data(), expected_stocks.data());
+        assert_eq!(col2.as_ref(), &expected_stocks);
     }
 
     #[test]
@@ -2719,7 +2690,7 @@ mod tests {
     fn test_list_of_string_dictionary_from_json() {
         let schema = Schema::new(vec![Field::new(
             "events",
-            List(Box::new(Field::new(
+            List(Arc::new(Field::new(
                 "item",
                 Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
                 true,
@@ -2743,7 +2714,7 @@ mod tests {
 
         let events = schema.column_with_name("events").unwrap();
         assert_eq!(
-            &List(Box::new(Field::new(
+            &List(Arc::new(Field::new(
                 "item",
                 Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
                 true
@@ -2773,7 +2744,7 @@ mod tests {
     fn test_list_of_string_dictionary_from_json_with_nulls() {
         let schema = Schema::new(vec![Field::new(
             "events",
-            List(Box::new(Field::new(
+            List(Arc::new(Field::new(
                 "item",
                 Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
                 true,
@@ -2799,7 +2770,7 @@ mod tests {
 
         let events = schema.column_with_name("events").unwrap();
         assert_eq!(
-            &List(Box::new(Field::new(
+            &List(Arc::new(Field::new(
                 "item",
                 Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
                 true
@@ -2937,17 +2908,17 @@ mod tests {
             Field::new("a", DataType::Int64, true),
             Field::new(
                 "b",
-                DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
                 true,
             ),
             Field::new(
                 "c",
-                DataType::List(Box::new(Field::new("item", DataType::Boolean, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
                 true,
             ),
             Field::new(
                 "d",
-                DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
                 true,
             ),
         ]);
@@ -2970,14 +2941,16 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new(
                 "c1",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("a", DataType::Boolean, true),
                     Field::new(
                         "b",
-                        DataType::Struct(vec![Field::new("c", DataType::Utf8, true)]),
+                        DataType::Struct(
+                            vec![Field::new("c", DataType::Utf8, true)].into(),
+                        ),
                         true,
                     ),
-                ]),
+                ])),
                 true,
             ),
             Field::new("c2", DataType::Int64, true),
@@ -3002,13 +2975,13 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new(
                 "c1",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "item",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("a", DataType::Utf8, true),
                         Field::new("b", DataType::Int64, true),
                         Field::new("c", DataType::Boolean, true),
-                    ]),
+                    ])),
                     true,
                 ))),
                 true,
@@ -3017,7 +2990,7 @@ mod tests {
             Field::new(
                 "c3",
                 // empty json array's inner types are inferred as null
-                DataType::List(Box::new(Field::new("item", DataType::Null, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Null, true))),
                 true,
             ),
         ]);
@@ -3044,9 +3017,9 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new(
                 "c1",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "item",
-                    DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
+                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
                     true,
                 ))),
                 true,
@@ -3268,9 +3241,9 @@ mod tests {
     fn test_json_read_nested_list() {
         let schema = Schema::new(vec![Field::new(
             "c1",
-            DataType::List(Box::new(Field::new(
+            DataType::List(Arc::new(Field::new(
                 "item",
-                DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
                 true,
             ))),
             true,
@@ -3303,9 +3276,9 @@ mod tests {
     fn test_json_read_list_of_structs() {
         let schema = Schema::new(vec![Field::new(
             "c1",
-            DataType::List(Box::new(Field::new(
+            DataType::List(Arc::new(Field::new(
                 "item",
-                DataType::Struct(vec![Field::new("a", DataType::Int64, true)]),
+                DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into()),
                 true,
             ))),
             true,

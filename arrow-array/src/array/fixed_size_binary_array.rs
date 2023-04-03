@@ -583,7 +583,7 @@ mod tests {
         // [null, [10, 11, 12, 13]]
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Box::new(Field::new("item", DataType::UInt8, false)),
+                Arc::new(Field::new("item", DataType::UInt8, false)),
                 4,
             ))
             .len(2)
@@ -619,7 +619,7 @@ mod tests {
 
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Box::new(Field::new("item", DataType::Binary, false)),
+                Arc::new(Field::new("item", DataType::Binary, false)),
                 4,
             ))
             .len(3)
@@ -643,7 +643,7 @@ mod tests {
 
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Box::new(Field::new("item", DataType::UInt8, false)),
+                Arc::new(Field::new("item", DataType::UInt8, false)),
                 4,
             ))
             .len(3)
@@ -792,7 +792,7 @@ mod tests {
             FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.into_iter(), 0)
                 .unwrap();
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }

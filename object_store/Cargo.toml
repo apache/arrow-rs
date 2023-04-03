@@ -17,13 +17,13 @@
 
 [package]
 name = "object_store"
-version = "0.5.5"
+version = "0.5.6"
 edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
 description = "A generic object store interface for uniformly interacting with AWS S3, Google Cloud Storage, Azure Blob Storage and local files."
 keywords = ["object", "storage", "cloud"]
-repository = "https://github.com/apache/arrow-rs"
+repository = "https://github.com/apache/arrow-rs/tree/master/object_store"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -52,9 +52,9 @@ ring = { version = "0.16", default-features = false, features = ["std"], optiona
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 
 # AWS Profile support
-aws-types = { version = "0.54", optional = true }
-aws-credential-types = { version = "0.54", optional = true }
-aws-config = { version = "0.54", optional = true }
+aws-types = { version = "0.55", optional = true }
+aws-credential-types = { version = "0.55", optional = true }
+aws-config = { version = "0.55", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util", "fs"] }

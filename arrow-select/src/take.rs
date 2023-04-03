@@ -23,7 +23,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
@@ -36,7 +36,7 @@ use num::{ToPrimitive, Zero};
 /// │        A        │      │    0    │                              │        A        │
 /// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
 /// │        D        │      │    2    │                              │        B        │
-/// ├─────────────────┤      ├─────────┤   take(values, indicies)     ├─────────────────┤
+/// ├─────────────────┤      ├─────────┤   take(values, indices)      ├─────────────────┤
 /// │        B        │      │    3    │ ─────────────────────────▶   │        C        │
 /// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
 /// │        C        │      │    1    │                              │        D        │
@@ -157,23 +157,21 @@ where
             Ok(Arc::new(MapArray::from(unsafe { builder.build_unchecked() })))
         }
         DataType::Struct(fields) => {
-            let struct_: &StructArray =
-                values.as_any().downcast_ref::<StructArray>().unwrap();
-            let arrays: Result<Vec<ArrayRef>, _> = struct_
+            let array: &StructArray = values.as_struct();
+            let arrays  = array
                 .columns()
                 .iter()
                 .map(|a| take_impl(a.as_ref(), indices, Some(options.clone())))
-                .collect();
-            let arrays = arrays?;
+                .collect::<Result<Vec<ArrayRef>, _>>()?;
             let fields: Vec<(Field, ArrayRef)> =
-                fields.clone().into_iter().zip(arrays).collect();
+                fields.iter().map(|f| f.as_ref().clone()).zip(arrays).collect();
 
             // Create the null bit buffer.
             let is_valid: Buffer = indices
                 .iter()
                 .map(|index| {
                     if let Some(index) = index {
-                        struct_.is_valid(index.to_usize().unwrap())
+                        array.is_valid(index.to_usize().unwrap())
                     } else {
                         false
                     }
@@ -254,19 +252,8 @@ where
 
 // take implementation when only values contain nulls
 fn take_values_nulls<T, I>(
-    values: &PrimitiveArray<T>,
-    indices: &[I],
-) -> Result<(Buffer, Option<Buffer>), ArrowError>
-where
-    T: ArrowPrimitiveType,
-    I: ArrowNativeType,
-{
-    take_values_nulls_inner(values.data(), values.values(), indices)
-}
-
-fn take_values_nulls_inner<T, I>(
-    values_data: &ArrayData,
     values: &[T],
+    values_nulls: &NullBuffer,
     indices: &[I],
 ) -> Result<(Buffer, Option<Buffer>), ArrowError>
 where
@@ -280,7 +267,7 @@ where
 
     let values = indices.iter().enumerate().map(|(i, index)| {
         let index = maybe_usize::<I>(*index)?;
-        if values_data.is_null(index) {
+        if values_nulls.is_null(index) {
             null_count += 1;
             bit_util::unset_bit(null_slice, i);
         }
@@ -302,20 +289,8 @@ where
 // take implementation when only indices contain nulls
 fn take_indices_nulls<T, I>(
     values: &[T],
-    indices: &PrimitiveArray<I>,
-) -> Result<(Buffer, Option<Buffer>), ArrowError>
-where
-    T: ArrowNativeType,
-    I: ArrowPrimitiveType,
-    I::Native: ToPrimitive,
-{
-    take_indices_nulls_inner(values, indices.values(), indices.data())
-}
-
-fn take_indices_nulls_inner<T, I>(
-    values: &[T],
     indices: &[I],
-    indices_data: &ArrayData,
+    indices_nulls: &NullBuffer,
 ) -> Result<(Buffer, Option<Buffer>), ArrowError>
 where
     T: ArrowNativeType,
@@ -326,7 +301,7 @@ where
         Result::<_, ArrowError>::Ok(match values.get(index) {
             Some(value) => *value,
             None => {
-                if indices_data.is_null(index) {
+                if indices_nulls.is_null(index) {
                     T::default()
                 } else {
                     panic!("Out-of-bounds index {index}")
@@ -337,33 +312,15 @@ where
 
     // Soundness: `slice.map` is `TrustedLen`.
     let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
-
-    Ok((buffer, indices_data.nulls().map(|b| b.inner().sliced())))
+    Ok((buffer, Some(indices_nulls.inner().sliced())))
 }
 
 // take implementation when both values and indices contain nulls
 fn take_values_indices_nulls<T, I>(
-    values: &PrimitiveArray<T>,
-    indices: &PrimitiveArray<I>,
-) -> Result<(Buffer, Option<Buffer>), ArrowError>
-where
-    T: ArrowPrimitiveType,
-    I: ArrowPrimitiveType,
-    I::Native: ToPrimitive,
-{
-    take_values_indices_nulls_inner(
-        values.values(),
-        values.data(),
-        indices.values(),
-        indices.data(),
-    )
-}
-
-fn take_values_indices_nulls_inner<T, I>(
     values: &[T],
-    values_data: &ArrayData,
+    values_nulls: &NullBuffer,
     indices: &[I],
-    indices_data: &ArrayData,
+    indices_nulls: &NullBuffer,
 ) -> Result<(Buffer, Option<Buffer>), ArrowError>
 where
     T: ArrowNativeType,
@@ -375,13 +332,13 @@ where
     let mut null_count = 0;
 
     let values = indices.iter().enumerate().map(|(i, &index)| {
-        if indices_data.is_null(i) {
+        if indices_nulls.is_null(i) {
             null_count += 1;
             bit_util::unset_bit(null_slice, i);
             Ok(T::default())
         } else {
             let index = maybe_usize::<I>(index)?;
-            if values_data.is_null(index) {
+            if values_nulls.is_null(index) {
                 null_count += 1;
                 bit_util::unset_bit(null_slice, i);
             }
@@ -419,31 +376,36 @@ where
     I: ArrowPrimitiveType,
     I::Native: ToPrimitive,
 {
-    let indices_has_nulls = indices.null_count() > 0;
-    let values_has_nulls = values.null_count() > 0;
+    let indices_nulls = indices.nulls().filter(|x| x.null_count() > 0);
+    let values_nulls = values.nulls().filter(|x| x.null_count() > 0);
+
     // note: this function should only panic when "an index is not null and out of bounds".
     // if the index is null, its value is undefined and therefore we should not read from it.
-
-    let (buffer, nulls) = match (values_has_nulls, indices_has_nulls) {
-        (false, false) => {
+    let (buffer, nulls) = match (values_nulls, indices_nulls) {
+        (None, None) => {
             // * no nulls
             // * all `indices.values()` are valid
-            take_no_nulls::<T::Native, I::Native>(values.values(), indices.values())?
+            take_no_nulls(values.values(), indices.values())?
         }
-        (true, false) => {
+        (Some(values_nulls), None) => {
             // * nulls come from `values` alone
             // * all `indices.values()` are valid
-            take_values_nulls::<T, I::Native>(values, indices.values())?
+            take_values_nulls(values.values(), values_nulls, indices.values())?
         }
-        (false, true) => {
+        (None, Some(indices_nulls)) => {
             // in this branch it is unsound to read and use `index.values()`,
             // as doing so is UB when they come from a null slot.
-            take_indices_nulls::<T::Native, I>(values.values(), indices)?
+            take_indices_nulls(values.values(), indices.values(), indices_nulls)?
         }
-        (true, true) => {
+        (Some(values_nulls), Some(indices_nulls)) => {
             // in this branch it is unsound to read and use `index.values()`,
             // as doing so is UB when they come from a null slot.
-            take_values_indices_nulls::<T, I>(values, indices)?
+            take_values_indices_nulls(
+                values.values(),
+                values_nulls,
+                indices.values(),
+                indices_nulls,
+            )?
         }
     };
 
@@ -962,7 +924,7 @@ where
 mod tests {
     use super::*;
     use arrow_array::builder::*;
-    use arrow_schema::TimeUnit;
+    use arrow_schema::{Fields, TimeUnit};
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,
@@ -1060,10 +1022,10 @@ mod tests {
         values: Vec<Option<(Option<bool>, Option<i32>)>>,
     ) -> StructArray {
         let mut struct_builder = StructBuilder::new(
-            vec![
+            Fields::from(vec![
                 Field::new("a", DataType::Boolean, true),
                 Field::new("b", DataType::Int32, true),
-            ],
+            ]),
             vec![
                 Box::new(BooleanBuilder::with_capacity(values.len())),
                 Box::new(Int32Builder::with_capacity(values.len())),
@@ -1364,7 +1326,7 @@ mod tests {
         let result = take_impl(&input, &index, None).unwrap();
         match result.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-                assert_eq!(tz.clone(), Some("UTC".to_owned()))
+                assert_eq!(tz.clone(), Some("UTC".into()))
             }
             _ => panic!(),
         }
@@ -1576,7 +1538,7 @@ mod tests {
             let value_offsets: [$offset_type; 5] = [0, 3, 6, 6, 8];
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
-            let list_data_type = DataType::$list_data_type(Box::new(Field::new(
+            let list_data_type = DataType::$list_data_type(Arc::new(Field::new(
                 "item",
                 DataType::Int32,
                 false,
@@ -1648,7 +1610,7 @@ mod tests {
             let value_offsets: [$offset_type; 5] = [0, 3, 6, 7, 9];
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
-            let list_data_type = DataType::$list_data_type(Box::new(Field::new(
+            let list_data_type = DataType::$list_data_type(Arc::new(Field::new(
                 "item",
                 DataType::Int32,
                 true,
@@ -1721,7 +1683,7 @@ mod tests {
             let value_offsets: [$offset_type; 5] = [0, 3, 6, 6, 8];
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
-            let list_data_type = DataType::$list_data_type(Box::new(Field::new(
+            let list_data_type = DataType::$list_data_type(Arc::new(Field::new(
                 "item",
                 DataType::Int32,
                 true,
@@ -1897,7 +1859,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -2088,7 +2050,7 @@ mod tests {
             .downcast_ref::<DictionaryArray<Int16Type>>()
             .unwrap();
 
-        let result_values: StringArray = result.values().data().clone().into();
+        let result_values: StringArray = result.values().to_data().into();
 
         // dictionary values should stay the same
         let expected_values = StringArray::from(vec!["foo", "bar", ""]);

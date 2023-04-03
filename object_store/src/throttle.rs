@@ -24,7 +24,7 @@ use crate::MultipartId;
 use crate::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{stream::BoxStream, StreamExt};
+use futures::{stream::BoxStream, FutureExt, StreamExt};
 use std::time::Duration;
 use tokio::io::AsyncWrite;
 
@@ -185,19 +185,10 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
                 GetResult::File(_, _) => unimplemented!(),
             };
 
-            GetResult::Stream(
-                s.then(move |bytes_result| async move {
-                    match bytes_result {
-                        Ok(bytes) => {
-                            let bytes_len: u32 = usize_to_u32_saturate(bytes.len());
-                            sleep(wait_get_per_byte * bytes_len).await;
-                            Ok(bytes)
-                        }
-                        Err(err) => Err(err),
-                    }
-                })
-                .boxed(),
-            )
+            GetResult::Stream(throttle_stream(s, move |bytes| {
+                let bytes_len: u32 = usize_to_u32_saturate(bytes.len());
+                wait_get_per_byte * bytes_len
+            }))
         })
     }
 
@@ -247,20 +238,21 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
 
         // need to copy to avoid moving / referencing `self`
         let wait_list_per_entry = self.config().wait_list_per_entry;
+        let stream = self.inner.list(prefix).await?;
+        Ok(throttle_stream(stream, move |_| wait_list_per_entry))
+    }
 
-        self.inner.list(prefix).await.map(|stream| {
-            stream
-                .then(move |result| async move {
-                    match result {
-                        Ok(entry) => {
-                            sleep(wait_list_per_entry).await;
-                            Ok(entry)
-                        }
-                        Err(err) => Err(err),
-                    }
-                })
-                .boxed()
-        })
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        sleep(self.config().wait_list_per_call).await;
+
+        // need to copy to avoid moving / referencing `self`
+        let wait_list_per_entry = self.config().wait_list_per_entry;
+        let stream = self.inner.list_with_offset(prefix, offset).await?;
+        Ok(throttle_stream(stream, move |_| wait_list_per_entry))
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -305,6 +297,21 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
 /// Saturated `usize` to `u32` cast.
 fn usize_to_u32_saturate(x: usize) -> u32 {
     x.try_into().unwrap_or(u32::MAX)
+}
+
+fn throttle_stream<T: Send + 'static, E: Send + 'static, F>(
+    stream: BoxStream<'_, Result<T, E>>,
+    delay: F,
+) -> BoxStream<'_, Result<T, E>>
+where
+    F: Fn(&T) -> Duration + Send + Sync + 'static,
+{
+    stream
+        .then(move |result| {
+            let delay = result.as_ref().ok().map(&delay).unwrap_or_default();
+            sleep(delay).then(|_| futures::future::ready(result))
+        })
+        .boxed()
 }
 
 #[cfg(test)]

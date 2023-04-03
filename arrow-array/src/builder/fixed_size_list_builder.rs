@@ -169,7 +169,7 @@ where
 
         let null_bit_buffer = self.null_buffer_builder.finish();
         let array_data = ArrayData::builder(DataType::FixedSizeList(
-            Box::new(Field::new("item", values_data.data_type().clone(), true)),
+            Arc::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
@@ -200,7 +200,7 @@ where
             .as_slice()
             .map(Buffer::from_slice_ref);
         let array_data = ArrayData::builder(DataType::FixedSizeList(
-            Box::new(Field::new("item", values_data.data_type().clone(), true)),
+            Arc::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)

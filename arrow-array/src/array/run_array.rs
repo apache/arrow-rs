@@ -98,14 +98,14 @@ impl<R: RunEndIndexType> RunArray<R> {
         let run_ends_type = run_ends.data_type().clone();
         let values_type = values.data_type().clone();
         let ree_array_type = DataType::RunEndEncoded(
-            Box::new(Field::new("run_ends", run_ends_type, false)),
-            Box::new(Field::new("values", values_type, true)),
+            Arc::new(Field::new("run_ends", run_ends_type, false)),
+            Arc::new(Field::new("values", values_type, true)),
         );
         let len = RunArray::logical_len(run_ends);
         let builder = ArrayDataBuilder::new(ree_array_type)
             .len(len)
-            .add_child_data(run_ends.data().clone())
-            .add_child_data(values.data().clone());
+            .add_child_data(run_ends.to_data())
+            .add_child_data(values.to_data());
 
         // `build_unchecked` is used to avoid recursive validation of child arrays.
         let array_data = unsafe { builder.build_unchecked() };
@@ -202,7 +202,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         // to iterate `logical_indices` in sorted order.
         let mut ordered_indices: Vec<usize> = (0..indices_len).collect();
 
-        // Instead of sorting `logical_idices` directly, sort the `ordered_indices`
+        // Instead of sorting `logical_indices` directly, sort the `ordered_indices`
         // whose values are index of `logical_indices`
         ordered_indices.sort_unstable_by(|lhs, rhs| {
             logical_indices[*lhs]
@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(ree_array.null_count(), 0);
 
         let values = ree_array.values();
-        assert_eq!(&value_data.into_data(), values.data());
+        assert_eq!(value_data.into_data(), values.to_data());
         assert_eq!(&DataType::Int8, values.data_type());
 
         let run_ends = ree_array.run_ends();

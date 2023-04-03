@@ -183,7 +183,7 @@ fn infer_file_schema_with_csv_options<R: Read + Seek>(
 /// `max_read_records` controlling the maximum number of records to read. If `max_read_records` is
 /// not set, all records are read to infer the schema.
 ///
-/// Return infered schema and number of records used for inference.
+/// Return inferred schema and number of records used for inference.
 pub fn infer_reader_schema<R: Read>(
     reader: R,
     delimiter: u8,
@@ -275,7 +275,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     }
 
     // build schema from inference results
-    let fields = column_types
+    let fields: Fields = column_types
         .iter()
         .zip(&headers)
         .map(|(inferred, field_name)| Field::new(field_name, inferred.get(), true))
@@ -287,7 +287,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
 /// Infer schema from a list of CSV files by reading through first n records
 /// with `max_read_records` controlling the maximum number of records to read.
 ///
-/// Files will be read in the given order untill n records have been reached.
+/// Files will be read in the given order until n records have been reached.
 ///
 /// If `max_read_records` is not set, all files will be read fully to infer the schema.
 pub fn infer_schema_from_files(
@@ -392,10 +392,8 @@ impl<R: Read> Reader<R> {
         match &self.decoder.projection {
             Some(projection) => {
                 let fields = self.decoder.schema.fields();
-                let projected_fields: Vec<Field> =
-                    projection.iter().map(|i| fields[*i].clone()).collect();
-
-                Arc::new(Schema::new(projected_fields))
+                let projected = projection.iter().map(|i| fields[*i].clone());
+                Arc::new(Schema::new(projected.collect::<Fields>()))
             }
             None => self.decoder.schema.clone(),
         }
@@ -586,7 +584,7 @@ impl Decoder {
 /// Parses a slice of [`StringRecords`] into a [RecordBatch]
 fn parse(
     rows: &StringRecords<'_>,
-    fields: &[Field],
+    fields: &Fields,
     metadata: Option<std::collections::HashMap<String, String>>,
     projection: Option<&Vec<usize>>,
     line_number: usize,
@@ -772,7 +770,7 @@ fn parse(
         })
         .collect();
 
-    let projected_fields: Vec<Field> =
+    let projected_fields: Fields =
         projection.iter().map(|i| fields[*i].clone()).collect();
 
     let projected_schema = Arc::new(match metadata {
@@ -1050,14 +1048,14 @@ impl ReaderBuilder {
     }
 
     /// Set the datetime regex used to parse the string to Date64Type
-    /// this regex is used while infering schema
+    /// this regex is used while inferring schema
     pub fn with_datetime_re(mut self, datetime_re: Regex) -> Self {
         self.datetime_re = Some(datetime_re);
         self
     }
 
-    /// Set the datetime fromat used to parse the string to Date64Type
-    /// this fromat is used while when the schema wants to parse Date64Type.
+    /// Set the datetime format used to parse the string to Date64Type
+    /// this format is used while when the schema wants to parse Date64Type.
     ///
     /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
     ///
@@ -1487,11 +1485,7 @@ mod tests {
     #[test]
     fn test_csv_with_dictionary() {
         let schema = Schema::new(vec![
-            Field::new(
-                "city",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                false,
-            ),
+            Field::new_dictionary("city", DataType::Int32, DataType::Utf8, false),
             Field::new("lat", DataType::Float64, false),
             Field::new("lng", DataType::Float64, false),
         ]);
@@ -1509,11 +1503,7 @@ mod tests {
             None,
         );
         let projected_schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "city",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                false,
-            ),
+            Field::new_dictionary("city", DataType::Int32, DataType::Utf8, false),
             Field::new("lat", DataType::Float64, false),
         ]));
         assert_eq!(projected_schema, csv.schema());
@@ -1739,7 +1729,7 @@ mod tests {
     }
 
     fn test_parse_timestamp_impl<T: ArrowTimestampType>(
-        timezone: Option<String>,
+        timezone: Option<Arc<str>>,
         expected: &[i64],
     ) {
         let csv = [
@@ -1775,23 +1765,23 @@ mod tests {
             &[0, 0, -7_200_000_000_000],
         );
         test_parse_timestamp_impl::<TimestampNanosecondType>(
-            Some("+00:00".to_string()),
+            Some("+00:00".into()),
             &[0, 0, -7_200_000_000_000],
         );
         test_parse_timestamp_impl::<TimestampNanosecondType>(
-            Some("-05:00".to_string()),
+            Some("-05:00".into()),
             &[18_000_000_000_000, 0, -7_200_000_000_000],
         );
         test_parse_timestamp_impl::<TimestampMicrosecondType>(
-            Some("-03".to_string()),
+            Some("-03".into()),
             &[10_800_000_000, 0, -7_200_000_000],
         );
         test_parse_timestamp_impl::<TimestampMillisecondType>(
-            Some("-03".to_string()),
+            Some("-03".into()),
             &[10_800_000, 0, -7_200_000],
         );
         test_parse_timestamp_impl::<TimestampSecondType>(
-            Some("-03".to_string()),
+            Some("-03".into()),
             &[10_800, 0, -7_200],
         );
     }

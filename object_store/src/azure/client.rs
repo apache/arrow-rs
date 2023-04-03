@@ -436,7 +436,7 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
         // Note: workaround for gen2 accounts with hierarchical namespaces. These accounts also
         // return path segments as "directories" and include blobs in list requests with prefix,
         // if the prefix mateches the blob. When we want directories, its always via
-        // the BlobPrefix mechanics, and during lists we state that prefixes are evaluated on path segement basis.
+        // the BlobPrefix mechanics, and during lists we state that prefixes are evaluated on path segment basis.
         .filter_map_ok(|obj| {
             if obj.size > 0 && obj.location.as_ref().len() > prefix.as_ref().len() {
                 Some(obj)
@@ -489,6 +489,7 @@ impl TryFrom<Blob> for ObjectMeta {
             location: Path::parse(value.name)?,
             last_modified: value.properties.last_modified,
             size: value.properties.content_length as usize,
+            e_tag: value.properties.e_tag,
         })
     }
 }
@@ -501,7 +502,6 @@ impl TryFrom<Blob> for ObjectMeta {
 struct BlobProperties {
     #[serde(deserialize_with = "deserialize_rfc1123", rename = "Last-Modified")]
     pub last_modified: DateTime<Utc>,
-    pub etag: String,
     #[serde(rename = "Content-Length")]
     pub content_length: u64,
     #[serde(rename = "Content-Type")]
@@ -510,6 +510,8 @@ struct BlobProperties {
     pub content_encoding: Option<String>,
     #[serde(rename = "Content-Language")]
     pub content_language: Option<String>,
+    #[serde(rename = "Etag")]
+    pub e_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

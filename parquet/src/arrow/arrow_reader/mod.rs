@@ -20,7 +20,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow_array::{Array, StructArray};
+use arrow_array::cast::AsArray;
+use arrow_array::Array;
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
@@ -559,12 +560,11 @@ impl Iterator for ParquetRecordBatchReader {
         match self.array_reader.consume_batch() {
             Err(error) => Some(Err(error.into())),
             Ok(array) => {
-                let struct_array =
-                    array.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-                        ArrowError::ParquetError(
-                            "Struct array reader should return struct array".to_string(),
-                        )
-                    });
+                let struct_array = array.as_struct_opt().ok_or_else(|| {
+                    ArrowError::ParquetError(
+                        "Struct array reader should return struct array".to_string(),
+                    )
+                });
 
                 match struct_array {
                     Err(err) => Some(Err(err)),
@@ -704,7 +704,7 @@ mod tests {
     use arrow_array::{RecordBatch, RecordBatchReader};
     use arrow_buffer::Buffer;
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::{DataType as ArrowDataType, Field, Schema};
+    use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema};
 
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReader,
@@ -1104,16 +1104,17 @@ mod tests {
     fn test_decimal_nullable_struct() {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 
-        let data = ArrayDataBuilder::new(ArrowDataType::Struct(vec![Field::new(
-            "decimals",
-            decimals.data_type().clone(),
-            false,
-        )]))
-        .len(8)
-        .null_bit_buffer(Some(Buffer::from(&[0b11101111])))
-        .child_data(vec![decimals.into_data()])
-        .build()
-        .unwrap();
+        let data =
+            ArrayDataBuilder::new(ArrowDataType::Struct(Fields::from(vec![Field::new(
+                "decimals",
+                decimals.data_type().clone(),
+                false,
+            )])))
+            .len(8)
+            .null_bit_buffer(Some(Buffer::from(&[0b11101111])))
+            .child_data(vec![decimals.into_data()])
+            .build()
+            .unwrap();
 
         let written = RecordBatch::try_from_iter([(
             "struct",
@@ -1140,16 +1141,17 @@ mod tests {
     #[test]
     fn test_int32_nullable_struct() {
         let int32 = Int32Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
-        let data = ArrayDataBuilder::new(ArrowDataType::Struct(vec![Field::new(
-            "int32",
-            int32.data_type().clone(),
-            false,
-        )]))
-        .len(8)
-        .null_bit_buffer(Some(Buffer::from(&[0b11101111])))
-        .child_data(vec![int32.into_data()])
-        .build()
-        .unwrap();
+        let data =
+            ArrayDataBuilder::new(ArrowDataType::Struct(Fields::from(vec![Field::new(
+                "int32",
+                int32.data_type().clone(),
+                false,
+            )])))
+            .len(8)
+            .null_bit_buffer(Some(Buffer::from(&[0b11101111])))
+            .child_data(vec![int32.into_data()])
+            .build()
+            .unwrap();
 
         let written = RecordBatch::try_from_iter([(
             "struct",
@@ -1179,7 +1181,7 @@ mod tests {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 
         // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
-        let data = ArrayDataBuilder::new(ArrowDataType::List(Box::new(Field::new(
+        let data = ArrayDataBuilder::new(ArrowDataType::List(Arc::new(Field::new(
             "item",
             decimals.data_type().clone(),
             false,
@@ -1759,7 +1761,7 @@ mod tests {
                 let b = Arc::clone(batch.column(0));
 
                 assert_eq!(a.data_type(), b.data_type());
-                assert_eq!(a.data(), b.data(), "{:#?} vs {:#?}", a.data(), b.data());
+                assert_eq!(a.to_data(), b.to_data());
                 assert_eq!(
                     a.as_any().type_id(),
                     b.as_any().type_id(),
@@ -1867,19 +1869,19 @@ mod tests {
         let expected_schema = Schema::new(vec![
             Field::new(
                 "roll_num",
-                ArrowDataType::Struct(vec![Field::new(
+                ArrowDataType::Struct(Fields::from(vec![Field::new(
                     "count",
                     ArrowDataType::UInt64,
                     false,
-                )]),
+                )])),
                 false,
             ),
             Field::new(
                 "PC_CUR",
-                ArrowDataType::Struct(vec![
+                ArrowDataType::Struct(Fields::from(vec![
                     Field::new("mean", ArrowDataType::Int64, false),
                     Field::new("sum", ArrowDataType::Int64, false),
-                ]),
+                ])),
                 false,
             ),
         ]);
@@ -1947,16 +1949,18 @@ mod tests {
 
         let reader = builder.with_projection(mask).build().unwrap();
 
-        let expected_schema = Schema::new(vec![Field::new(
+        let expected_schema = Schema::new(Fields::from(vec![Field::new(
             "group",
-            ArrowDataType::Struct(vec![Field::new("leaf", ArrowDataType::Int32, false)]),
+            ArrowDataType::Struct(
+                vec![Field::new("leaf", ArrowDataType::Int32, false)].into(),
+            ),
             true,
-        )]);
+        )]));
 
         let batch = reader.into_iter().next().unwrap().unwrap();
         assert_eq!(batch.schema().as_ref(), &expected_schema);
         assert_eq!(batch.num_rows(), 4);
-        assert_eq!(batch.column(0).data().null_count(), 2);
+        assert_eq!(batch.column(0).null_count(), 2);
     }
 
     #[test]
@@ -2073,7 +2077,7 @@ mod tests {
         );
 
         let get_dict =
-            |batch: &RecordBatch| batch.column(0).data().child_data()[0].clone();
+            |batch: &RecordBatch| batch.column(0).to_data().child_data()[0].clone();
 
         // First and second batch in same row group -> same dictionary
         assert_eq!(get_dict(&batches[0]), get_dict(&batches[1]));
@@ -2118,7 +2122,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "emptylist",
-            ArrowDataType::List(Box::new(Field::new("item", ArrowDataType::Null, true))),
+            ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Null, true))),
             true,
         );
 
@@ -2232,7 +2236,7 @@ mod tests {
     fn test_row_group_batch(row_group_size: usize, batch_size: usize) {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "list",
-            ArrowDataType::List(Box::new(Field::new("item", ArrowDataType::Int32, true))),
+            ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Int32, true))),
             true,
         )]));
 
@@ -2638,7 +2642,7 @@ mod tests {
     }
 
     #[test]
-    fn test_arbitary_decimal() {
+    fn test_arbitrary_decimal() {
         let values = [1, 2, 3, 4, 5, 6, 7, 8];
         let decimals_19_0 = Decimal128Array::from_iter_values(values)
             .with_precision_and_scale(19, 0)

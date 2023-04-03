@@ -19,6 +19,7 @@ use crate::{data_type_from_json, data_type_to_json};
 use arrow::datatypes::{DataType, Field};
 use arrow::error::{ArrowError, Result};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Parse a `Field` definition from a JSON representation.
 pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
@@ -125,13 +126,13 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                         }
                         match data_type {
                             DataType::List(_) => {
-                                DataType::List(Box::new(field_from_json(&values[0])?))
+                                DataType::List(Arc::new(field_from_json(&values[0])?))
                             }
-                            DataType::LargeList(_) => DataType::LargeList(Box::new(
+                            DataType::LargeList(_) => DataType::LargeList(Arc::new(
                                 field_from_json(&values[0])?,
                             )),
                             DataType::FixedSizeList(_, int) => DataType::FixedSizeList(
-                                Box::new(field_from_json(&values[0])?),
+                                Arc::new(field_from_json(&values[0])?),
                                 int,
                             ),
                             _ => unreachable!(
@@ -150,13 +151,10 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                         ));
                     }
                 },
-                DataType::Struct(mut fields) => match map.get("children") {
-                    Some(Value::Array(values)) => {
-                        let struct_fields: Result<Vec<Field>> =
-                            values.iter().map(field_from_json).collect();
-                        fields.append(&mut struct_fields?);
-                        DataType::Struct(fields)
-                    }
+                DataType::Struct(_) => match map.get("children") {
+                    Some(Value::Array(values)) => DataType::Struct(
+                        values.iter().map(field_from_json).collect::<Result<_>>()?,
+                    ),
                     Some(_) => {
                         return Err(ArrowError::ParseError(
                             "Field 'children' must be an array".to_string(),
@@ -175,7 +173,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                             // child must be a struct
                             match child.data_type() {
                                 DataType::Struct(map_fields) if map_fields.len() == 2 => {
-                                    DataType::Map(Box::new(child), keys_sorted)
+                                    DataType::Map(Arc::new(child), keys_sorted)
                                 }
                                 t  => {
                                     return Err(ArrowError::ParseError(
@@ -197,11 +195,17 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                         }
                     }
                 }
-                DataType::Union(_, type_ids, mode) => match map.get("children") {
+                DataType::Union(fields, mode) => match map.get("children") {
                     Some(Value::Array(values)) => {
-                        let union_fields: Vec<Field> =
-                            values.iter().map(field_from_json).collect::<Result<_>>()?;
-                        DataType::Union(union_fields, type_ids, mode)
+                        let fields = fields
+                            .iter()
+                            .zip(values)
+                            .map(|((id, _), value)| {
+                                Ok((id, Arc::new(field_from_json(value)?)))
+                            })
+                            .collect::<Result<_>>()?;
+
+                        DataType::Union(fields, mode)
                     }
                     Some(_) => {
                         return Err(ArrowError::ParseError(
@@ -265,7 +269,9 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
 /// Generate a JSON representation of the `Field`.
 pub fn field_to_json(field: &Field) -> serde_json::Value {
     let children: Vec<serde_json::Value> = match field.data_type() {
-        DataType::Struct(fields) => fields.iter().map(field_to_json).collect(),
+        DataType::Struct(fields) => {
+            fields.iter().map(|x| field_to_json(x.as_ref())).collect()
+        }
         DataType::List(field)
         | DataType::LargeList(field)
         | DataType::FixedSizeList(field, _)
@@ -302,12 +308,12 @@ mod tests {
 
     #[test]
     fn struct_field_to_json() {
-        let f = Field::new(
+        let f = Field::new_struct(
             "address",
-            DataType::Struct(vec![
+            vec![
                 Field::new("street", DataType::Utf8, false),
                 Field::new("zip", DataType::UInt16, false),
-            ]),
+            ],
             false,
         );
         let value: Value = serde_json::from_str(
@@ -345,19 +351,12 @@ mod tests {
 
     #[test]
     fn map_field_to_json() {
-        let f = Field::new(
+        let f = Field::new_map(
             "my_map",
-            DataType::Map(
-                Box::new(Field::new(
-                    "my_entries",
-                    DataType::Struct(vec![
-                        Field::new("my_keys", DataType::Utf8, false),
-                        Field::new("my_values", DataType::UInt16, true),
-                    ]),
-                    false,
-                )),
-                true,
-            ),
+            "my_entries",
+            Field::new("my_keys", DataType::Utf8, false),
+            Field::new("my_values", DataType::UInt16, true),
+            true,
             false,
         );
         let value: Value = serde_json::from_str(
@@ -453,12 +452,12 @@ mod tests {
         let value: Value = serde_json::from_str(json).unwrap();
         let dt = field_from_json(&value).unwrap();
 
-        let expected = Field::new(
+        let expected = Field::new_struct(
             "address",
-            DataType::Struct(vec![
+            vec![
                 Field::new("street", DataType::Utf8, false),
                 Field::new("zip", DataType::UInt16, false),
-            ]),
+            ],
             false,
         );
 
@@ -509,19 +508,12 @@ mod tests {
         let value: Value = serde_json::from_str(json).unwrap();
         let dt = field_from_json(&value).unwrap();
 
-        let expected = Field::new(
+        let expected = Field::new_map(
             "my_map",
-            DataType::Map(
-                Box::new(Field::new(
-                    "my_entries",
-                    DataType::Struct(vec![
-                        Field::new("my_keys", DataType::Utf8, false),
-                        Field::new("my_values", DataType::UInt16, true),
-                    ]),
-                    false,
-                )),
-                true,
-            ),
+            "my_entries",
+            Field::new("my_keys", DataType::Utf8, false),
+            Field::new("my_values", DataType::UInt16, true),
+            true,
             false,
         );
 
@@ -567,17 +559,14 @@ mod tests {
         let value: Value = serde_json::from_str(json).unwrap();
         let dt = field_from_json(&value).unwrap();
 
-        let expected = Field::new(
+        let expected = Field::new_union(
             "my_union",
-            DataType::Union(
-                vec![
-                    Field::new("f1", DataType::Int32, true),
-                    Field::new("f2", DataType::Utf8, true),
-                ],
-                vec![5, 7],
-                UnionMode::Sparse,
-            ),
-            false,
+            vec![5, 7],
+            vec![
+                Field::new("f1", DataType::Int32, true),
+                Field::new("f2", DataType::Utf8, true),
+            ],
+            UnionMode::Sparse,
         );
 
         assert_eq!(expected, dt);

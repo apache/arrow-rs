@@ -17,7 +17,7 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{builder::BooleanBufferBuilder, ArrayRef, StructArray};
+use arrow_array::{builder::BooleanBufferBuilder, ArrayRef, StructArray, Array};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
@@ -130,7 +130,7 @@ impl ArrayReader for StructArrayReader {
             .child_data(
                 children_array
                     .iter()
-                    .map(|x| x.data().clone())
+                    .map(|x| x.to_data())
                     .collect::<Vec<ArrayData>>(),
             );
 
@@ -217,7 +217,9 @@ mod tests {
     use crate::arrow::array_reader::ListArrayReader;
     use arrow::buffer::Buffer;
     use arrow::datatypes::Field;
+    use arrow_array::cast::AsArray;
     use arrow_array::{Array, Int32Array, ListArray};
+    use arrow_schema::Fields;
 
     #[test]
     fn test_struct_array_reader() {
@@ -237,10 +239,10 @@ mod tests {
             Some(vec![0, 1, 1, 1, 1]),
         );
 
-        let struct_type = ArrowType::Struct(vec![
+        let struct_type = ArrowType::Struct(Fields::from(vec![
             Field::new("f1", array_1.data_type().clone(), true),
             Field::new("f2", array_2.data_type().clone(), true),
-        ]);
+        ]));
 
         let mut struct_array_reader = StructArrayReader::new(
             struct_type,
@@ -251,7 +253,7 @@ mod tests {
         );
 
         let struct_array = struct_array_reader.next_batch(5).unwrap();
-        let struct_array = struct_array.as_any().downcast_ref::<StructArray>().unwrap();
+        let struct_array = struct_array.as_struct();
 
         assert_eq!(5, struct_array.len());
         assert_eq!(
@@ -327,7 +329,7 @@ mod tests {
         );
 
         let actual = struct_reader.next_batch(1024).unwrap();
-        let actual = actual.as_any().downcast_ref::<StructArray>().unwrap();
+        let actual = actual.as_struct();
         assert_eq!(actual, &expected)
     }
 }

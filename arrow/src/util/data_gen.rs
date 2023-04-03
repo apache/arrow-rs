@@ -78,7 +78,7 @@ pub fn create_random_array(
         UInt64 => Arc::new(create_primitive_array::<UInt64Type>(size, null_density)),
         Float16 => {
             return Err(ArrowError::NotYetImplemented(
-                "Float16 is not implememted".to_string(),
+                "Float16 is not implemented".to_string(),
             ))
         }
         Float32 => Arc::new(create_primitive_array::<Float32Type>(size, null_density)),
@@ -249,6 +249,7 @@ fn create_random_null_buffer(size: usize, null_density: f32) -> Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_schema::Fields;
 
     #[test]
     fn test_create_batch() {
@@ -272,7 +273,7 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new(
                 "b",
-                DataType::List(Box::new(Field::new("item", DataType::LargeUtf8, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::LargeUtf8, true))),
                 false,
             ),
             Field::new("a", DataType::Int32, false),
@@ -288,8 +289,8 @@ mod tests {
         }
         // Test that the list's child values are non-null
         let b_array = batch.column(1);
-        let list_array = b_array.as_any().downcast_ref::<ListArray>().unwrap();
-        let child_array = make_array(list_array.data().child_data()[0].clone());
+        let list_array = b_array.as_list::<i32>();
+        let child_array = list_array.values();
         assert_eq!(child_array.null_count(), 0);
         // There should be more values than the list, to show that it's a list
         assert!(child_array.len() > list_array.len());
@@ -298,13 +299,13 @@ mod tests {
     #[test]
     fn test_create_struct_array() {
         let size = 32;
-        let struct_fields = vec![
+        let struct_fields = Fields::from(vec![
             Field::new("b", DataType::Boolean, true),
             Field::new(
                 "c",
-                DataType::LargeList(Box::new(Field::new(
+                DataType::LargeList(Arc::new(Field::new(
                     "item",
-                    DataType::List(Box::new(Field::new(
+                    DataType::List(Arc::new(Field::new(
                         "item",
                         DataType::FixedSizeBinary(6),
                         true,
@@ -315,14 +316,14 @@ mod tests {
             ),
             Field::new(
                 "d",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("d_x", DataType::Int32, true),
                     Field::new("d_y", DataType::Float32, false),
                     Field::new("d_z", DataType::Binary, true),
-                ]),
+                ])),
                 true,
             ),
-        ];
+        ]);
         let field = Field::new("struct", DataType::Struct(struct_fields), true);
         let array = create_random_array(&field, size, 0.2, 0.5).unwrap();
 

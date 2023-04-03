@@ -110,7 +110,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -161,7 +161,7 @@ mod tests {
             Field::new("a", DataType::Boolean, true),
             Field::new("b", DataType::Int32, true),
         ];
-        let struct_array_data = ArrayData::builder(DataType::Struct(field_types))
+        let struct_array_data = ArrayData::builder(DataType::Struct(field_types.into()))
             .len(5)
             .add_child_data(boolean_data.clone())
             .add_child_data(int_data.clone())
@@ -172,8 +172,8 @@ mod tests {
 
         assert_eq!(5, struct_array.len());
         assert_eq!(1, struct_array.null_count());
-        assert_eq!(&boolean_data, struct_array.column(0).data());
-        assert_eq!(&int_data, struct_array.column(1).data());
+        assert_eq!(boolean_data, struct_array.column(0).to_data());
+        assert_eq!(int_data, struct_array.column(1).to_data());
 
         let array: ArrayRef = Arc::new(struct_array);
 

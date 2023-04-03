@@ -195,7 +195,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         let struct_array =
             StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);
 
-        let map_field = Box::new(Field::new(
+        let map_field = Arc::new(Field::new(
             self.field_names.entry.as_str(),
             struct_array.data_type().clone(),
             false, // always non-nullable
