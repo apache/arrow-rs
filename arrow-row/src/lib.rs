@@ -1651,7 +1651,7 @@ mod tests {
             DataType::Dictionary(_, v) if !exact => {
                 assert_eq!(a.data_type(), v.as_ref());
                 let b = arrow_cast::cast(b, v).unwrap();
-                assert_eq!(a, b)
+                assert_eq!(a, b.as_ref())
             }
             _ => assert_eq!(a, b),
         }
