@@ -27,7 +27,7 @@
 //! and [`FlightService::do_get`](crate::flight_service_server::FlightService::do_get)
 //!
 //! This module contains:
-//! 1. The [tonic] generated protobuf definitions for FlightSQL messages such as [`CommandStatementQuery`]
+//! 1. The [prost] generated structs for FlightSQL messages such as [`CommandStatementQuery`]
 //! 2. Helpers for for encoding and decoding such messages: [`Any`] and [`Command`]
 //! 3. A [`FlightSqlServiceClient`](client::FlightSqlServiceClient) for interacting with FlightSQL servers.
 //! 4. A [`FlightSqlService`](server::FlightSqlService) to help building FlightSQL servers from [`FlightService`](crate::flight_service_server::FlightService).
