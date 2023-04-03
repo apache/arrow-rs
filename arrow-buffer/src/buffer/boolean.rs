@@ -278,8 +278,8 @@ mod tests {
 
         let boolean_buf = BooleanBuffer::new(buf.clone(), offset, len);
         assert_eq!(bytes, boolean_buf.values());
-        assert_eq!(offset, boolean_buf.offset);
-        assert_eq!(len, boolean_buf.len);
+        assert_eq!(offset, boolean_buf.offset());
+        assert_eq!(len, boolean_buf.len());
 
         assert_eq!(2, boolean_buf.count_set_bits());
         assert_eq!(&buf, boolean_buf.inner());
