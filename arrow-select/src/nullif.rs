@@ -40,7 +40,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     let l_offset = left_data.offset();
 
     if len == 0 {
-        return Ok(make_array(left_data.clone()));
+        return Ok(make_array(left_data));
     }
 
     // left=0 (null)   right=null       output bitmap=null
@@ -110,7 +110,6 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     };
 
     let data = left_data
-        .clone()
         .into_builder()
         .null_bit_buffer(Some(null_buffer))
         .null_count(null_count);
