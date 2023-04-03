@@ -30,6 +30,11 @@
 //!
 //! 2. Low level [tonic] generated [`flight_service_client`] and
 //! [`flight_service_server`].
+//!
+//! 3. Experimental support for [Flight SQL]rec in [`sql`]. Requires the
+//! `flight-sql-experimental` feature of this crate to be activated.
+//!
+//! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 #![allow(rustdoc::invalid_html_tags)]
 
 use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};

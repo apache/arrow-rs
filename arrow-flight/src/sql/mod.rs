@@ -15,6 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Support for execute SQL queries using [Apache Arrow] [Flight SQL].
+//!
+//! [Flight SQL] is built on top of Arrow Flight RPC framework, by
+//! defining specific message, encoded using the protobuf format, sent
+//! in the
+//! [`FlightDescriptor::cmd`](crate::FlightDescriptor::cmd)
+//! field to [`FlightService`](crate::flight_service_server::FlightService) endpoints
+//! such as
+//! [`FlightService::get_flight_info`](crate::flight_service_server::FlightService::get_flight_info)
+//! and [`FlightService::do_get`](crate::flight_service_server::FlightService::do_get)
+//!
+//! This module contains:
+//! 1. The [tonic] generated protobuf definitions for FlightSQL messages such as [`CommandStatementQuery`]
+//! 2. Helpers for for encoding and decoding such messages: [`Any`] and [`Command`]
+//! 3. A [`FlightSqlServiceClient`](client::FlightSqlServiceClient) for interacting with FlightSQL servers.
+//! 4. A [`FlightSqlService`](server::FlightSqlService) to help building FlightSQL servers from [`FlightService`](crate::flight_service_server::FlightService).
+//!
+//! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
+//! [Apache Arrow]: https://arrow.apache.org
+
 use arrow_schema::ArrowError;
 use bytes::Bytes;
 use paste::paste;
@@ -90,8 +110,8 @@ macro_rules! prost_message_ext {
             )*
 
                 as_item! {
-                /// Helper to convert to/from protobuf [`Any`]
-                /// to a strongly typed enum.
+                /// Helper to convert to/from protobuf [`Any`] message
+                /// to a specific FlightSQL command message.
                 ///
                 /// # Example
                 /// ```rust
