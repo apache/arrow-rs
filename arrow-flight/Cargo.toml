@@ -34,7 +34,7 @@ arrow-cast = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
 base64 = { version = "0.21", default-features = false, features = ["std"] }
-tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost"] }
+tonic = { version = "0.9", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }
 prost = { version = "0.11", default-features = false }
 prost-derive = { version = "0.11", default-features = false }
