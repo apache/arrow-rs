@@ -355,7 +355,7 @@ where
 
                         assert_eq!(dict.data_type(), &self.value_type);
 
-                        let data = dict.data();
+                        let data = dict.to_data();
                         let dict_buffers = data.buffers();
                         let dict_offsets = dict_buffers[0].typed_data::<V>();
                         let dict_values = dict_buffers[1].as_slice();
