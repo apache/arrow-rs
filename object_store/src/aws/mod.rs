@@ -232,7 +232,7 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        use reqwest::header::{CONTENT_LENGTH, LAST_MODIFIED};
+        use reqwest::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 
         // Extract meta from headers
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html#API_HeadObject_ResponseSyntax
@@ -256,10 +256,15 @@ impl ObjectStore for AmazonS3 {
         let content_length = content_length
             .parse()
             .context(InvalidContentLengthSnafu { content_length })?;
+
+        let e_tag = headers.get(ETAG).context(MissingEtagSnafu)?;
+        let e_tag = e_tag.to_str().context(BadHeaderSnafu)?;
+
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified,
             size: content_length,
+            e_tag: Some(e_tag.to_string()),
         })
     }
 

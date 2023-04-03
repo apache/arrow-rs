@@ -140,6 +140,9 @@ enum Error {
 
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
+
+    #[snafu(display("ETag Header missing from response"))]
+    MissingEtag,
 }
 
 impl From<Error> for super::Error {
@@ -232,7 +235,7 @@ impl ObjectStore for MicrosoftAzure {
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        use reqwest::header::{CONTENT_LENGTH, LAST_MODIFIED};
+        use reqwest::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 
         // Extract meta from headers
         // https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
@@ -257,10 +260,17 @@ impl ObjectStore for MicrosoftAzure {
             .parse()
             .context(InvalidContentLengthSnafu { content_length })?;
 
+        let e_tag = headers
+            .get(ETAG)
+            .ok_or(Error::MissingEtag)?
+            .to_str()
+            .context(BadHeaderSnafu)?;
+
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified,
             size: content_length,
+            e_tag: Some(e_tag.to_string()),
         })
     }
 

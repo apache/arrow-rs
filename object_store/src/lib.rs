@@ -548,6 +548,8 @@ pub struct ObjectMeta {
     pub last_modified: DateTime<Utc>,
     /// The size in bytes of the object
     pub size: usize,
+    /// The unique identifier for the object
+    pub e_tag: Option<String>,
 }
 
 /// Result for a get request

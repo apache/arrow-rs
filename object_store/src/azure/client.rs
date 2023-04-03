@@ -489,6 +489,7 @@ impl TryFrom<Blob> for ObjectMeta {
             location: Path::parse(value.name)?,
             last_modified: value.properties.last_modified,
             size: value.properties.content_length as usize,
+            e_tag: value.properties.e_tag,
         })
     }
 }
@@ -501,7 +502,6 @@ impl TryFrom<Blob> for ObjectMeta {
 struct BlobProperties {
     #[serde(deserialize_with = "deserialize_rfc1123", rename = "Last-Modified")]
     pub last_modified: DateTime<Utc>,
-    pub etag: String,
     #[serde(rename = "Content-Length")]
     pub content_length: u64,
     #[serde(rename = "Content-Type")]
@@ -510,6 +510,8 @@ struct BlobProperties {
     pub content_encoding: Option<String>,
     #[serde(rename = "Content-Language")]
     pub content_language: Option<String>,
+    #[serde(rename = "Etag")]
+    pub e_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

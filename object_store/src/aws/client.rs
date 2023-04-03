@@ -164,6 +164,8 @@ pub struct ListContents {
     pub key: String,
     pub size: usize,
     pub last_modified: DateTime<Utc>,
+    #[serde(rename = "ETag")]
+    pub e_tag: Option<String>,
 }
 
 impl TryFrom<ListContents> for ObjectMeta {
@@ -174,6 +176,7 @@ impl TryFrom<ListContents> for ObjectMeta {
             location: Path::parse(value.key)?,
             last_modified: value.last_modified,
             size: value.size,
+            e_tag: value.e_tag,
         })
     }
 }
