@@ -219,7 +219,7 @@ impl UnionArray {
         let new_self = unsafe {
             Self::new_unchecked(field_type_ids, type_ids, value_offsets, child_arrays)
         };
-        new_self.data().validate()?;
+        new_self.to_data().validate()?;
 
         Ok(new_self)
     }

@@ -148,8 +148,8 @@ mod tests {
                 Arc::new(UInt32Array::from(vec![42, 28, 19, 31])),
             ),
         ]);
-        let data = array.data();
-        test_round_trip(data)
+        let data = array.into_data();
+        test_round_trip(&data)
     }
 
     #[test]

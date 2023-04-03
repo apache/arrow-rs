@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(ree_array.null_count(), 0);
 
         let values = ree_array.values();
-        assert_eq!(&value_data.into_data(), values.data());
+        assert_eq!(value_data.into_data(), values.to_data());
         assert_eq!(&DataType::Int8, values.data_type());
 
         let run_ends = ree_array.run_ends();

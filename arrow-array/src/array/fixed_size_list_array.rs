@@ -256,6 +256,8 @@ impl std::fmt::Debug for FixedSizeListArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cast::AsArray;
+    use crate::types::Int32Type;
     use crate::Int32Array;
     use arrow_buffer::{bit_util, Buffer};
     use arrow_schema::Field;
@@ -281,7 +283,7 @@ mod tests {
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
 
-        assert_eq!(&value_data, list_array.values().data());
+        assert_eq!(value_data, list_array.values().to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
@@ -310,19 +312,11 @@ mod tests {
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
 
-        assert_eq!(&value_data, list_array.values().data());
+        assert_eq!(value_data, list_array.values().to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
-        assert_eq!(
-            3,
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0)
-        );
+        assert_eq!(3, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(6, list_array.value_offset(1));
         assert_eq!(3, list_array.value_length());
     }
@@ -386,7 +380,7 @@ mod tests {
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
 
-        assert_eq!(&value_data, list_array.values().data());
+        assert_eq!(value_data, list_array.values().to_data());
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(5, list_array.len());
         assert_eq!(2, list_array.null_count());

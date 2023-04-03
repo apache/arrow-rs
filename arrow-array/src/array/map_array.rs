@@ -374,7 +374,7 @@ mod tests {
             .unwrap();
         let map_array = MapArray::from(map_data);
 
-        assert_eq!(&value_data, map_array.values().data());
+        assert_eq!(value_data, map_array.values().to_data());
         assert_eq!(&DataType::UInt32, map_array.value_type());
         assert_eq!(3, map_array.len());
         assert_eq!(0, map_array.null_count());
@@ -405,16 +405,9 @@ mod tests {
         }
 
         // Now test with a non-zero offset
-        let map_data = ArrayData::builder(map_array.data_type().clone())
-            .len(2)
-            .offset(1)
-            .add_buffer(map_array.data().buffers()[0].clone())
-            .add_child_data(map_array.data().child_data()[0].clone())
-            .build()
-            .unwrap();
-        let map_array = MapArray::from(map_data);
+        let map_array = map_array.slice(1, 2);
 
-        assert_eq!(&value_data, map_array.values().data());
+        assert_eq!(value_data, map_array.values().to_data());
         assert_eq!(&DataType::UInt32, map_array.value_type());
         assert_eq!(2, map_array.len());
         assert_eq!(0, map_array.null_count());
@@ -451,7 +444,7 @@ mod tests {
         let sliced_array = map_array.slice(1, 2);
         assert_eq!(2, sliced_array.len());
         assert_eq!(1, sliced_array.offset());
-        let sliced_array_data = sliced_array.data();
+        let sliced_array_data = sliced_array.to_data();
         for array_data in sliced_array_data.child_data() {
             assert_eq!(array_data.offset(), 1);
         }

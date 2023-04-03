@@ -464,7 +464,7 @@ mod tests {
             StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
                 .unwrap();
 
-        let struct_data = arr.data();
+        let struct_data = arr.into_data();
         assert_eq!(4, struct_data.len());
         assert_eq!(1, struct_data.null_count());
         assert_eq!(
@@ -488,8 +488,8 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(expected_string_data, *arr.column(0).data());
-        assert_eq!(expected_int_data, *arr.column(1).data());
+        assert_eq!(expected_string_data, struct_data.child_data()[0]);
+        assert_eq!(expected_int_data, struct_data.child_data()[1]);
     }
 
     #[test]
@@ -579,8 +579,8 @@ mod tests {
         assert!(struct_array.is_valid(2));
         assert!(struct_array.is_null(3));
         assert!(struct_array.is_valid(4));
-        assert_eq!(&boolean_data, struct_array.column(0).data());
-        assert_eq!(&int_data, struct_array.column(1).data());
+        assert_eq!(boolean_data, struct_array.column(0).to_data());
+        assert_eq!(int_data, struct_array.column(1).to_data());
 
         let c0 = struct_array.column(0);
         let c0 = c0.as_any().downcast_ref::<BooleanArray>().unwrap();

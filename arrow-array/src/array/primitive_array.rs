@@ -466,9 +466,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> O::Native,
     {
-        let data = self.data();
-
-        let nulls = data.nulls().cloned();
+        let nulls = self.nulls().cloned();
         let values = self.values().iter().map(|v| op(*v));
         // JUSTIFICATION
         //  Benefit
@@ -593,9 +591,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> Option<O::Native>,
     {
-        let data = self.data();
-        let len = data.len();
-        let (nulls, null_count, offset) = match data.nulls() {
+        let len = self.len();
+        let (nulls, null_count, offset) = match self.nulls() {
             Some(n) => (Some(n.validity()), n.null_count(), n.offset()),
             None => (None, 0, 0),
         };
