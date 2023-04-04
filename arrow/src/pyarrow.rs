@@ -187,7 +187,7 @@ impl PyArrowConvert for RecordBatch {
         let columns = self.columns().iter();
 
         for array in columns {
-            py_arrays.push(array.data().to_pyarrow(py)?);
+            py_arrays.push(array.to_data().to_pyarrow(py)?);
         }
 
         let py_schema = schema.to_pyarrow(py)?;

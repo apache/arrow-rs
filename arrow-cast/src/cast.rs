@@ -2217,9 +2217,9 @@ fn value_to_string<O: OffsetSizeTrait>(
     let mut builder = GenericStringBuilder::<O>::new();
     let options = FormatOptions::default();
     let formatter = ArrayFormatter::try_new(array, &options)?;
-    let data = array.data();
-    for i in 0..data.len() {
-        match data.is_null(i) {
+    let nulls = array.nulls();
+    for i in 0..array.len() {
+        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
             true => builder.append_null(),
             false => {
                 formatter.value(i).write(&mut builder)?;
@@ -3500,7 +3500,7 @@ where
     FROM::Offset: OffsetSizeTrait + ToPrimitive,
     TO::Offset: OffsetSizeTrait + NumCast,
 {
-    let data = array.data();
+    let data = array.to_data();
     assert_eq!(data.data_type(), &FROM::DATA_TYPE);
     let str_values_buf = data.buffers()[1].clone();
     let offsets = data.buffers()[0].typed_data::<FROM::Offset>();
@@ -4844,9 +4844,8 @@ mod tests {
 
     #[test]
     fn test_cast_list_i32_to_list_u16() {
-        let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 100000000])
-            .data()
-            .clone();
+        let value_data =
+            Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 100000000]).into_data();
 
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
@@ -4875,15 +4874,9 @@ mod tests {
         assert_eq!(0, cast_array.null_count());
 
         // offsets should be the same
-        assert_eq!(
-            list_array.data().buffers().to_vec(),
-            cast_array.data().buffers().to_vec()
-        );
-        let array = cast_array
-            .as_ref()
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap();
+        let array = cast_array.as_list::<i32>();
+        assert_eq!(list_array.value_offsets(), array.value_offsets());
+
         assert_eq!(DataType::UInt16, array.value_type());
         assert_eq!(3, array.value_length(0));
         assert_eq!(3, array.value_length(1));
@@ -4908,9 +4901,8 @@ mod tests {
     )]
     fn test_cast_list_i32_to_list_timestamp() {
         // Construct a value array
-        let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 8, 100000000])
-            .data()
-            .clone();
+        let value_data =
+            Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 8, 100000000]).into_data();
 
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 9]);
 
@@ -7355,11 +7347,7 @@ mod tests {
     fn test_list_to_string() {
         let str_array = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "g", "h"]);
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
-        let value_data = ArrayData::builder(DataType::Utf8)
-            .len(str_array.len())
-            .buffers(str_array.data().buffers().to_vec())
-            .build()
-            .unwrap();
+        let value_data = str_array.into_data();
 
         let list_data_type =
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
@@ -8123,7 +8111,7 @@ mod tests {
         let options = CastOptions { safe: true };
         let array = cast_with_options(&s, &DataType::Utf8, &options).unwrap();
         let a = array.as_string::<i32>();
-        a.data().validate_full().unwrap();
+        a.to_data().validate_full().unwrap();
 
         assert_eq!(a.null_count(), 1);
         assert_eq!(a.len(), 2);

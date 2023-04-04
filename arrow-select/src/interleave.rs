@@ -193,7 +193,8 @@ fn interleave_fallback(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
-    let arrays: Vec<_> = values.iter().map(|x| x.data()).collect();
+    let arrays: Vec<_> = values.iter().map(|x| x.to_data()).collect();
+    let arrays: Vec<_> = arrays.iter().collect();
     let mut array_data = MutableArrayData::new(arrays, false, indices.len());
 
     let mut cur_array = indices[0].0;

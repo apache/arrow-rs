@@ -220,7 +220,7 @@ impl ExportedArrayStream {
         let mut private_data = self.get_private_data();
         let reader = &mut private_data.batch_reader;
 
-        let ret_code = match reader.next() {
+        match reader.next() {
             None => {
                 // Marks ArrowArray released to indicate reaching the end of stream.
                 unsafe { std::ptr::write(out, FFI_ArrowArray::empty()) }
@@ -229,7 +229,7 @@ impl ExportedArrayStream {
             Some(next_batch) => {
                 if let Ok(batch) = next_batch {
                     let struct_array = StructArray::from(batch);
-                    let array = FFI_ArrowArray::new(struct_array.data());
+                    let array = FFI_ArrowArray::new(&struct_array.to_data());
 
                     unsafe { std::ptr::copy(addr_of!(array), out, 1) };
                     std::mem::forget(array);
@@ -240,9 +240,7 @@ impl ExportedArrayStream {
                     get_error_code(err)
                 }
             }
-        };
-
-        ret_code
+        }
     }
 
     pub fn get_last_error(&mut self) -> &String {

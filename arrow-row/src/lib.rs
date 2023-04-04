@@ -2308,7 +2308,7 @@ mod tests {
 
             let back = converter.convert_rows(&rows).unwrap();
             for ((actual, expected), preserve) in back.iter().zip(&arrays).zip(preserve) {
-                actual.data().validate_full().unwrap();
+                actual.to_data().validate_full().unwrap();
                 dictionary_eq(preserve, actual, expected)
             }
         }

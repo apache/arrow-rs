@@ -519,10 +519,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> Result<O::Native, E>,
     {
-        let data = self.data();
         let len = self.len();
 
-        let nulls = data.nulls().cloned();
+        let nulls = self.nulls().cloned();
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
         let slice = buffer.as_slice_mut();

@@ -467,9 +467,6 @@ mod tests {
         let list_array = GenericListArray::<O>::from(array_data2);
         let binary_array2 = GenericBinaryArray::<O>::from(list_array);
 
-        assert_eq!(2, binary_array2.data().buffers().len());
-        assert_eq!(0, binary_array2.data().child_data().len());
-
         assert_eq!(binary_array1.len(), binary_array2.len());
         assert_eq!(binary_array1.null_count(), binary_array2.null_count());
         assert_eq!(binary_array1.value_offsets(), binary_array2.value_offsets());

@@ -243,7 +243,7 @@ mod tests {
             let result = $kernel(&array).unwrap();
             let result = result.as_any().downcast_ref::<$result_ty>().unwrap();
             let expected: $result_ty = $expected.into();
-            assert_eq!(expected.data(), result.data());
+            assert_eq!(&expected, result);
         }};
     }
 
@@ -256,7 +256,7 @@ mod tests {
             let result = length(&array).unwrap();
             let result = result.as_any().downcast_ref::<$result_ty>().unwrap();
             let expected: $result_ty = $expected.into();
-            assert_eq!(expected.data(), result.data());
+            assert_eq!(&expected, result);
         }};
     }
 

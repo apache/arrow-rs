@@ -44,8 +44,8 @@ fn create_decimal_array(
 #[cfg(not(feature = "force_validate"))]
 fn test_decimal() {
     let decimal_array =
-        create_decimal_array(vec![Some(1), Some(2), None, Some(3)], 10, 3);
-    let arrays = vec![Array::data(&decimal_array)];
+        create_decimal_array(vec![Some(1), Some(2), None, Some(3)], 10, 3).into_data();
+    let arrays = vec![&decimal_array];
     let mut a = MutableArrayData::new(arrays, true, 3);
     a.extend(0, 0, 3);
     a.extend(0, 2, 3);

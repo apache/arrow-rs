@@ -200,8 +200,8 @@ fn validate(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()> {
 
             for i in 0..num_columns {
                 assert_eq!(
-                    arrow_batch.column(i).data(),
-                    json_batch.column(i).data(),
+                    arrow_batch.column(i).as_ref(),
+                    json_batch.column(i).as_ref(),
                     "Arrow and JSON batch columns not the same"
                 );
             }

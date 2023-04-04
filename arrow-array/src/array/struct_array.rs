@@ -174,7 +174,7 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
         // null: the null mask of the arrays.
         let mut null: Option<Buffer> = None;
         for (field_name, array) in values {
-            let child_datum = array.data();
+            let child_datum = array.to_data();
             let child_datum_len = child_datum.len();
             if let Some(len) = len {
                 if len != child_datum_len {
@@ -186,7 +186,6 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
             } else {
                 len = Some(child_datum_len)
             }
-            child_data.push(child_datum.clone());
             fields.push(Arc::new(Field::new(
                 field_name,
                 array.data_type().clone(),
@@ -209,6 +208,7 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
                 // when one of the fields has no nulls, then there is no null in the array
                 null = None;
             }
+            child_data.push(child_datum);
         }
         let len = len.unwrap();
 
@@ -385,10 +385,8 @@ mod tests {
 
     #[test]
     fn test_struct_array_builder() {
-        let array = BooleanArray::from(vec![false, false, true, true]);
-        let boolean_data = array.data();
-        let array = Int64Array::from(vec![42, 28, 19, 31]);
-        let int_data = array.data();
+        let boolean_array = BooleanArray::from(vec![false, false, true, true]);
+        let int_array = Int64Array::from(vec![42, 28, 19, 31]);
 
         let fields = vec![
             Field::new("a", DataType::Boolean, false),
@@ -396,14 +394,14 @@ mod tests {
         ];
         let struct_array_data = ArrayData::builder(DataType::Struct(fields.into()))
             .len(4)
-            .add_child_data(boolean_data.clone())
-            .add_child_data(int_data.clone())
+            .add_child_data(boolean_array.to_data())
+            .add_child_data(int_array.to_data())
             .build()
             .unwrap();
         let struct_array = StructArray::from(struct_array_data);
 
-        assert_eq!(boolean_data, struct_array.column(0).data());
-        assert_eq!(int_data, struct_array.column(1).data());
+        assert_eq!(struct_array.column(0).as_ref(), &boolean_array);
+        assert_eq!(struct_array.column(1).as_ref(), &int_array);
     }
 
     #[test]
