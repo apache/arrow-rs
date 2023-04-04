@@ -18,23 +18,24 @@
 //! Support for execute SQL queries using [Apache Arrow] [Flight SQL].
 //!
 //! [Flight SQL] is built on top of Arrow Flight RPC framework, by
-//! defining specific messages, encoded using the protobuf format, sent
-//! in the
-//! [`FlightDescriptor::cmd`](crate::FlightDescriptor::cmd)
-//! field to [`FlightService`](crate::flight_service_server::FlightService) endpoints
-//! such as
-//! [`FlightService::get_flight_info`](crate::flight_service_server::FlightService::get_flight_info)
-//! and [`FlightService::do_get`](crate::flight_service_server::FlightService::do_get)
+//! defining specific messages, encoded using the protobuf format,
+//! sent in the[`FlightDescriptor::cmd`] field to [`FlightService`]
+//! endpoints such as[`get_flight_info`] and [`do_get`].
 //!
 //! This module contains:
-//! 1. The [prost] generated structs for FlightSQL messages such as [`CommandStatementQuery`]
-//! 2. Helpers for for encoding and decoding such messages: [`Any`] and [`Command`]
-//! 3. A [`FlightSqlServiceClient`](client::FlightSqlServiceClient) for interacting with FlightSQL servers.
-//! 4. A [`FlightSqlService`](server::FlightSqlService) to help building FlightSQL servers from [`FlightService`](crate::flight_service_server::FlightService).
+//! 1. [prost] generated structs for FlightSQL messages such as [`CommandStatementQuery`]
+//! 2. Helpers for encoding and decoding FlightSQL messages: [`Any`] and [`Command`]
+//! 3. A [`FlightSqlServiceClient`] for interacting with FlightSQL servers.
+//! 4. A [`FlightSqlService`] to help building FlightSQL servers from [`FlightService`].
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 //! [Apache Arrow]: https://arrow.apache.org
-
+//! [`FlightDescriptor::cmd`]: crate::FlightDescriptor::cmd
+//! [`FlightService`]: crate::flight_service_server::FlightService
+//! [`get_flight_info`]: crate::flight_service_server::FlightService::get_flight_info
+//! [`do_get`]: crate::flight_service_server::FlightService::do_get
+//! [`FlightSqlServiceClient`]: client::FlightSqlServiceClient
+//! [`FlightSqlService`]: server::FlightSqlService
 use arrow_schema::ArrowError;
 use bytes::Bytes;
 use paste::paste;
