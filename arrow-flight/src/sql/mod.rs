@@ -18,7 +18,7 @@
 //! Support for execute SQL queries using [Apache Arrow] [Flight SQL].
 //!
 //! [Flight SQL] is built on top of Arrow Flight RPC framework, by
-//! defining specific message, encoded using the protobuf format, sent
+//! defining specific messages, encoded using the protobuf format, sent
 //! in the
 //! [`FlightDescriptor::cmd`](crate::FlightDescriptor::cmd)
 //! field to [`FlightService`](crate::flight_service_server::FlightService) endpoints
