@@ -81,3 +81,4 @@ tempfile = "3.1.0"
 futures-test = "0.3"
 rand = "0.8"
 hyper = { version = "0.14.24", features = ["server"] }
+tokio = { version = "1.25.0", features = ["rt-multi-thread"] }

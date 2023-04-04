@@ -228,6 +228,7 @@ pub mod aws;
 pub mod azure;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chunked;
+pub mod cross_runtime;
 pub mod delimited;
 #[cfg(feature = "gcp")]
 pub mod gcp;
