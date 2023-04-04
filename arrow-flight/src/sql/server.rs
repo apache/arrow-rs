@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Helper trait [`FlightSqlService`] for implementing a [`FlightService`] that implements FlightSQL.
+
 use std::pin::Pin;
 
 use crate::sql::{Any, Command};

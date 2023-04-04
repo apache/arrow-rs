@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! A FlightSQL Client [`FlightSqlServiceClient`]
+
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
