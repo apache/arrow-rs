@@ -303,6 +303,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
                 IntervalUnit::MonthDayNano => false,
             }
         }
+        (Duration(_), Interval(IntervalUnit::MonthDayNano)) => true,
+        (Interval(IntervalUnit::MonthDayNano), Duration(_)) => true,
         (_, _) => false,
     }
 }
