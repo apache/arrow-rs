@@ -938,7 +938,7 @@ pub fn dictionary_array_from_json(
             // convert key and value to dictionary data
             let dict_data = ArrayData::builder(field.data_type().clone())
                 .len(keys.len())
-                .add_buffer(keys.data().buffers()[0].clone())
+                .add_buffer(keys.to_data().buffers()[0].clone())
                 .null_bit_buffer(Some(null_buf))
                 .add_child_data(values.into_data())
                 .build()

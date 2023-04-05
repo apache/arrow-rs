@@ -95,8 +95,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 
     /// Returns a reference to the underlying data of this array
-    ///
-    /// This will be deprecated in a future release [(#3880)](https://github.com/apache/arrow-rs/issues/3880)
+    #[deprecated(note = "Use Array::to_data or Array::into_data")]
     fn data(&self) -> &ArrayData;
 
     /// Returns the underlying data of this array
@@ -108,9 +107,8 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     fn into_data(self) -> ArrayData;
 
     /// Returns a reference-counted pointer to the underlying data of this array.
-    ///
-    /// This will be deprecated in a future release [(#3880)](https://github.com/apache/arrow-rs/issues/3880)
     #[deprecated(note = "Use Array::to_data or Array::into_data")]
+    #[allow(deprecated)]
     fn data_ref(&self) -> &ArrayData {
         self.data()
     }
@@ -281,6 +279,7 @@ impl Array for ArrayRef {
         self.as_ref().as_any()
     }
 
+    #[allow(deprecated)]
     fn data(&self) -> &ArrayData {
         self.as_ref().data()
     }
@@ -348,6 +347,7 @@ impl<'a, T: Array> Array for &'a T {
         T::as_any(self)
     }
 
+    #[allow(deprecated)]
     fn data(&self) -> &ArrayData {
         T::data(self)
     }
@@ -435,78 +435,91 @@ pub trait ArrayAccessor: Array {
 }
 
 impl PartialEq for dyn Array + '_ {
+    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl<T: Array> PartialEq<T> for dyn Array + '_ {
+    #[allow(deprecated)]
     fn eq(&self, other: &T) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl PartialEq for NullArray {
+    #[allow(deprecated)]
     fn eq(&self, other: &NullArray) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl<T: ArrowPrimitiveType> PartialEq for PrimitiveArray<T> {
+    #[allow(deprecated)]
     fn eq(&self, other: &PrimitiveArray<T>) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl<K: ArrowDictionaryKeyType> PartialEq for DictionaryArray<K> {
+    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl PartialEq for BooleanArray {
+    #[allow(deprecated)]
     fn eq(&self, other: &BooleanArray) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericStringArray<OffsetSize> {
+    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericBinaryArray<OffsetSize> {
+    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl PartialEq for FixedSizeBinaryArray {
+    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListArray<OffsetSize> {
+    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl PartialEq for MapArray {
+    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl PartialEq for FixedSizeListArray {
+    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
 }
 
 impl PartialEq for StructArray {
+    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
         self.data().eq(other.data())
     }
@@ -865,8 +878,8 @@ mod tests {
         let null_array = new_null_array(array.data_type(), 9);
         assert_eq!(&array, &null_array);
         assert_eq!(
-            array.data().buffers()[0].len(),
-            null_array.data().buffers()[0].len()
+            array.to_data().buffers()[0].len(),
+            null_array.to_data().buffers()[0].len()
         );
     }
 

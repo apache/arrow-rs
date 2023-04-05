@@ -1531,9 +1531,8 @@ mod tests {
     macro_rules! test_take_list {
         ($offset_type:ty, $list_data_type:ident, $list_array_type:ident) => {{
             // Construct a value array, [[0,0,0], [-1,-2,-1], [], [2,3]]
-            let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3])
-                .data()
-                .clone();
+            let value_data =
+                Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3]).into_data();
             // Construct offsets
             let value_offsets: [$offset_type; 5] = [0, 3, 6, 6, 8];
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
@@ -1570,8 +1569,7 @@ mod tests {
                 Some(0),
                 Some(0),
             ])
-            .data()
-            .clone();
+            .into_data();
             // construct offsets
             let expected_offsets: [$offset_type; 6] = [0, 2, 2, 5, 5, 8];
             let expected_offsets = Buffer::from_slice_ref(&expected_offsets);
@@ -1604,8 +1602,7 @@ mod tests {
                 Some(5),
                 None,
             ])
-            .data()
-            .clone();
+            .into_data();
             // Construct offsets
             let value_offsets: [$offset_type; 5] = [0, 3, 6, 7, 9];
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
@@ -1644,8 +1641,7 @@ mod tests {
                 None,
                 Some(0),
             ])
-            .data()
-            .clone();
+            .into_data();
             // construct offsets
             let expected_offsets: [$offset_type; 6] = [0, 1, 1, 4, 6, 9];
             let expected_offsets = Buffer::from_slice_ref(&expected_offsets);
@@ -1677,8 +1673,7 @@ mod tests {
                 Some(5),
                 None,
             ])
-            .data()
-            .clone();
+            .into_data();
             // Construct offsets
             let value_offsets: [$offset_type; 5] = [0, 3, 6, 6, 8];
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
@@ -1716,8 +1711,7 @@ mod tests {
                 None,
                 Some(0),
             ])
-            .data()
-            .clone();
+            .into_data();
             // construct offsets
             let expected_offsets: [$offset_type; 6] = [0, 0, 0, 3, 5, 8];
             let expected_offsets = Buffer::from_slice_ref(&expected_offsets);
@@ -1852,9 +1846,7 @@ mod tests {
     #[should_panic(expected = "index out of bounds: the len is 4 but the index is 1000")]
     fn test_take_list_out_of_bounds() {
         // Construct a value array, [[0,0,0], [-1,-2,-1], [2,3]]
-        let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3])
-            .data()
-            .clone();
+        let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3]).into_data();
         // Construct offsets
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
         // Construct a list array from the above two

@@ -220,15 +220,16 @@ impl IpcDataGenerator {
                 }
             }
             DataType::RunEndEncoded(_, values) => {
-                if column.data().child_data().len() != 2 {
+                let data = column.to_data();
+                if data.child_data().len() != 2 {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "The run encoded array should have exactly two child arrays. Found {}",
-                        column.data().child_data().len()
+                        data.child_data().len()
                     )));
                 }
-                // The run_ends array is not expected to be dictionoary encoded. Hence encode dictionaries
+                // The run_ends array is not expected to be dictionary encoded. Hence encode dictionaries
                 // only for values array.
-                let values_array = make_array(column.data().child_data()[1].clone());
+                let values_array = make_array(data.child_data()[1].clone());
                 self.encode_dictionaries(
                     values,
                     &values_array,
@@ -330,7 +331,7 @@ impl IpcDataGenerator {
                 let dict_id = field
                     .dict_id()
                     .expect("All Dictionary types have `dict_id`");
-                let dict_data = column.data();
+                let dict_data = column.to_data();
                 let dict_values = &dict_data.child_data()[0];
 
                 let values = make_array(dict_data.child_data()[0].clone());
@@ -418,9 +419,9 @@ impl IpcDataGenerator {
             batch_compression_type.map(TryInto::try_into).transpose()?;
 
         for array in batch.columns() {
-            let array_data = array.data();
+            let array_data = array.to_data();
             offset = write_array_data(
-                array_data,
+                &array_data,
                 &mut buffers,
                 &mut arrow_data,
                 &mut nodes,
@@ -631,7 +632,7 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 /// multiple times. Can optionally error if an update to an existing dictionary is attempted, which
 /// isn't allowed in the `FileWriter`.
 pub struct DictionaryTracker {
-    written: HashMap<i64, ArrayRef>,
+    written: HashMap<i64, ArrayData>,
     error_on_replacement: bool,
 }
 
@@ -660,18 +661,18 @@ impl DictionaryTracker {
         dict_id: i64,
         column: &ArrayRef,
     ) -> Result<bool, ArrowError> {
-        let dict_data = column.data();
+        let dict_data = column.to_data();
         let dict_values = &dict_data.child_data()[0];
 
         // If a dictionary with this id was already emitted, check if it was the same.
         if let Some(last) = self.written.get(&dict_id) {
-            if ArrayData::ptr_eq(&last.data().child_data()[0], dict_values) {
+            if ArrayData::ptr_eq(&last.child_data()[0], dict_values) {
                 // Same dictionary values => no need to emit it again
                 return Ok(false);
             }
             if self.error_on_replacement {
                 // If error on replacement perform a logical comparison
-                if last.data().child_data()[0] == *dict_values {
+                if last.child_data()[0] == *dict_values {
                     // Same dictionary values => no need to emit it again
                     return Ok(false);
                 }
@@ -684,7 +685,7 @@ impl DictionaryTracker {
             }
         }
 
-        self.written.insert(dict_id, column.clone());
+        self.written.insert(dict_id, dict_data);
         Ok(true)
     }
 }

@@ -232,8 +232,8 @@ async fn consume_flight_location(
             let field = schema.field(i);
             let field_name = field.name();
 
-            let expected_data = expected_batch.column(i).data();
-            let actual_data = actual_batch.column(i).data();
+            let expected_data = expected_batch.column(i).as_ref();
+            let actual_data = actual_batch.column(i).as_ref();
 
             assert_eq!(expected_data, actual_data, "Data for field {field_name}");
         }

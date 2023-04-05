@@ -650,7 +650,7 @@ where
         .into_data()
         .into_builder()
         .data_type(array.data_type().clone())
-        .child_data(array.data().child_data().to_vec());
+        .child_data(vec![array.values().to_data()]);
 
     // SAFETY:
     // Keys were valid before, filtered subset is therefore still valid
@@ -1433,7 +1433,7 @@ mod tests {
         builder.append::<Int32Type>("A", 3).unwrap();
         let expected = builder.build().unwrap();
 
-        assert_eq!(filtered.data(), expected.data());
+        assert_eq!(filtered.to_data(), expected.to_data());
     }
 
     #[test]
