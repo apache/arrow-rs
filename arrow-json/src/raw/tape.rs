@@ -454,6 +454,7 @@ impl TapeDecoder {
         Ok(buf.len() - iter.len())
     }
 
+    /// Writes any type that implements [`Serialize`] into this [`TapeDecoder`]
     pub fn serialize<S: Serialize>(&mut self, rows: &[S]) -> Result<(), ArrowError> {
         if let Some(b) = self.stack.last() {
             return Err(ArrowError::JsonError(format!(

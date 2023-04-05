@@ -29,6 +29,7 @@ use crate::raw::struct_array::StructArrayDecoder;
 use crate::raw::tape::{Tape, TapeDecoder, TapeElement};
 use crate::raw::timestamp_array::TimestampArrayDecoder;
 use arrow_array::timezone::Tz;
+use arrow_array::types::Float32Type;
 use arrow_array::types::*;
 use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader};
 use arrow_data::ArrayData;
@@ -237,12 +238,14 @@ impl RawDecoder {
 
     /// Serialize `rows` to this [`RawDecoder`]
     ///
-    /// Whilst this provides a simple way to convert [`serde`]-compatible datastructures into arrow
-    /// [`RecordBatch`], performance-critical applications, especially where the schema is known at
-    /// compile-time, may benefit from instead implementing custom conversion logic as described
-    /// in [arrow_array::builder]
+    /// This provides a simple way to convert [serde]-compatible datastructures into arrow
+    /// [`RecordBatch`].
     ///
-    /// This can be used with [`serde_json::Value`]
+    /// Custom conversion logic as described in [arrow_array::builder] will likely outperform this,
+    /// especially where the schema is known at compile-time, however, this provides a mechanism
+    /// to get something up and running quickly
+    ///
+    /// It can be used with [`serde_json::Value`]
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -264,17 +267,56 @@ impl RawDecoder {
     /// assert_eq!(values, &[2.3, 5.7])
     /// ```
     ///
-    /// It can also be used with arbitrary [`Serialize`] types
+    /// Or with arbitrary [`Serialize`] types
     ///
     /// ```
-    /// use std::collections::BTreeMap;
-    /// use std::sync::Arc;
-    /// use arrow_array::StructArray;
-    /// use arrow_cast::display::{ArrayFormatter, FormatOptions};
-    /// use arrow_json::RawReaderBuilder;
-    /// use arrow_schema::{DataType, Field, Fields, Schema};
-    /// use serde::Serialize;
+    /// # use std::sync::Arc;
+    /// # use arrow_json::RawReaderBuilder;
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use serde::Serialize;
+    /// # use arrow_array::cast::AsArray;
+    /// # use arrow_array::types::{Float32Type, Int32Type};
+    /// #
+    /// #[derive(Serialize)]
+    /// struct MyStruct {
+    ///     int32: i32,
+    ///     float: f32,
+    /// }
     ///
+    /// let schema = Schema::new(vec![
+    ///     Field::new("int32", DataType::Int32, false),
+    ///     Field::new("float", DataType::Float32, false),
+    /// ]);
+    ///
+    /// let rows = vec![
+    ///     MyStruct{ int32: 0, float: 3. },
+    ///     MyStruct{ int32: 4, float: 67.53 },
+    /// ];
+    ///
+    /// let mut decoder = RawReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
+    /// decoder.serialize(&rows).unwrap();
+    ///
+    /// let batch = decoder.flush().unwrap().unwrap();
+    ///
+    /// // Expect batch containing two columns
+    /// let int32 = batch.column(0).as_primitive::<Int32Type>();
+    /// assert_eq!(int32.values(), &[0, 4]);
+    ///
+    /// let float = batch.column(1).as_primitive::<Float32Type>();
+    /// assert_eq!(float.values(), &[3., 67.53]);
+    /// ```
+    ///
+    /// Or even complex nested types
+    ///
+    /// ```
+    /// # use std::collections::BTreeMap;
+    /// # use std::sync::Arc;
+    /// # use arrow_array::StructArray;
+    /// # use arrow_cast::display::{ArrayFormatter, FormatOptions};
+    /// # use arrow_json::RawReaderBuilder;
+    /// # use arrow_schema::{DataType, Field, Fields, Schema};
+    /// # use serde::Serialize;
+    /// #
     /// #[derive(Serialize)]
     /// struct MyStruct {
     ///     int32: i32,

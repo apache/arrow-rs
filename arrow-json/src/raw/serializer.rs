@@ -70,9 +70,14 @@ impl<'a> TapeSerializer<'a> {
     }
 }
 
+/// The tape stores all values as strings, and so must serialize numeric types
+///
+/// Formatting to a string only to parse it back again is rather wasteful,
+/// it may be possible to tweak the tape representation to avoid this
+///
 /// Need to use macro as const generic expressions are unstable
 /// <https://github.com/rust-lang/rust/issues/76560>
-macro_rules! serialize_lexical {
+macro_rules! serialize_numeric {
     ($s:ident, $t:ty, $v:ident) => {{
         let mut buffer = [0_u8; <$t>::FORMATTED_SIZE];
         let s = lexical_core::write($v, &mut buffer);
@@ -102,43 +107,43 @@ impl<'a, 'b> Serializer for &'a mut TapeSerializer<'b> {
     }
 
     fn serialize_i8(self, v: i8) -> Result<(), SerializerError> {
-        serialize_lexical!(self, i8, v)
+        serialize_numeric!(self, i8, v)
     }
 
     fn serialize_i16(self, v: i16) -> Result<(), SerializerError> {
-        serialize_lexical!(self, i16, v)
+        serialize_numeric!(self, i16, v)
     }
 
     fn serialize_i32(self, v: i32) -> Result<(), SerializerError> {
-        serialize_lexical!(self, i32, v)
+        serialize_numeric!(self, i32, v)
     }
 
     fn serialize_i64(self, v: i64) -> Result<(), SerializerError> {
-        serialize_lexical!(self, i64, v)
+        serialize_numeric!(self, i64, v)
     }
 
     fn serialize_u8(self, v: u8) -> Result<(), SerializerError> {
-        serialize_lexical!(self, u8, v)
+        serialize_numeric!(self, u8, v)
     }
 
     fn serialize_u16(self, v: u16) -> Result<(), SerializerError> {
-        serialize_lexical!(self, u16, v)
+        serialize_numeric!(self, u16, v)
     }
 
     fn serialize_u32(self, v: u32) -> Result<(), SerializerError> {
-        serialize_lexical!(self, u32, v)
+        serialize_numeric!(self, u32, v)
     }
 
     fn serialize_u64(self, v: u64) -> Result<(), SerializerError> {
-        serialize_lexical!(self, u64, v)
+        serialize_numeric!(self, u64, v)
     }
 
     fn serialize_f32(self, v: f32) -> Result<(), SerializerError> {
-        serialize_lexical!(self, f32, v)
+        serialize_numeric!(self, f32, v)
     }
 
     fn serialize_f64(self, v: f64) -> Result<(), SerializerError> {
-        serialize_lexical!(self, f64, v)
+        serialize_numeric!(self, f64, v)
     }
 
     fn serialize_char(self, v: char) -> Result<(), SerializerError> {
@@ -238,14 +243,14 @@ impl<'a, 'b> Serializer for &'a mut TapeSerializer<'b> {
 
     fn serialize_tuple_variant(
         self,
-        _name: &'static str,
+        name: &'static str,
         _variant_index: u32,
-        _variant: &'static str,
+        variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant, SerializerError> {
-        Err(SerializerError(
-            "serializing tuple variants is not currently supported".to_string(),
-        ))
+        Err(SerializerError(format!(
+            "serializing tuple variants is not currently supported: {name}::{variant}"
+        )))
     }
 
     // Maps are represented in JSON as `{ K: V, K: V, ... }`.
@@ -266,14 +271,14 @@ impl<'a, 'b> Serializer for &'a mut TapeSerializer<'b> {
 
     fn serialize_struct_variant(
         self,
-        _name: &'static str,
+        name: &'static str,
         _variant_index: u32,
-        _variant: &'static str,
+        variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeStructVariant, SerializerError> {
-        Err(SerializerError(
-            "serializing struct variants is not currently supported".to_string(),
-        ))
+        Err(SerializerError(format!(
+            "serializing struct variants is not currently supported: {name}::{variant}"
+        )))
     }
 }
 

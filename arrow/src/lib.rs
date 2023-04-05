@@ -271,6 +271,52 @@
 //!
 //! Parquet is published as a [separate crate](https://crates.io/crates/parquet)
 //!
+//! # Serde Compatibility
+//!
+//! [`arrow_json::RawDecoder`] provides a mechanism to convert arbitrary, serde-compatible
+//! structures into [`RecordBatch`].
+//!
+//! Whilst likely less performant than implementing a custom builder, as described in
+//! [arrow_array::builder], this provides a simple mechanism to get up and running quickly
+//!
+//! ```
+//! # use std::sync::Arc;
+//! # use arrow_json::RawReaderBuilder;
+//! # use arrow_schema::{DataType, Field, Schema};
+//! # use serde::Serialize;
+//! # use arrow_array::cast::AsArray;
+//! # use arrow_array::types::{Float32Type, Int32Type};
+//! #
+//! #[derive(Serialize)]
+//! struct MyStruct {
+//!     int32: i32,
+//!     string: String,
+//! }
+//!
+//! let schema = Schema::new(vec![
+//!     Field::new("int32", DataType::Int32, false),
+//!     Field::new("string", DataType::Utf8, false),
+//! ]);
+//!
+//! let rows = vec![
+//!     MyStruct{ int32: 5, string: "bar".to_string() },
+//!     MyStruct{ int32: 8, string: "foo".to_string() },
+//! ];
+//!
+//! let mut decoder = RawReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
+//! decoder.serialize(&rows).unwrap();
+//!
+//! let batch = decoder.flush().unwrap().unwrap();
+//!
+//! // Expect batch containing two columns
+//! let int32 = batch.column(0).as_primitive::<Int32Type>();
+//! assert_eq!(int32.values(), &[5, 8]);
+//!
+//! let string = batch.column(1).as_string::<i32>();
+//! assert_eq!(string.value(0), "bar");
+//! assert_eq!(string.value(1), "foo");
+//! ```
+//!
 //! # Memory and Buffers
 //!
 //! Advanced users may wish to interact with the underlying buffers of an [`Array`], for example,
