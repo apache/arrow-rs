@@ -377,7 +377,7 @@ macro_rules! native_type_float_op {
     };
 }
 
-native_type_float_op!(f16, f16::ONE, f16::ZERO);
+native_type_float_op!(f16, f16::ZERO, f16::ONE);
 native_type_float_op!(f32, 0., 1.);
 native_type_float_op!(f64, 0., 1.);
 
