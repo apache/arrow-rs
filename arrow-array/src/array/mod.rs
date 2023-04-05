@@ -107,8 +107,6 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     fn into_data(self) -> ArrayData;
 
     /// Returns a reference-counted pointer to the underlying data of this array.
-    ///
-    /// This will be deprecated in a future release [(#3880)](https://github.com/apache/arrow-rs/issues/3880)
     #[deprecated(note = "Use Array::to_data or Array::into_data")]
     #[allow(deprecated)]
     fn data_ref(&self) -> &ArrayData {
