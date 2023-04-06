@@ -490,11 +490,11 @@ impl i256 {
     /// -1 if the number is negative
     pub const fn signum(self) -> Self {
         if self.is_positive() {
-            i256::from_i128(1)
+            i256::ONE
         } else if self.is_negative() {
-            i256::from_i128(-1)
+            i256::MINUS_ONE
         } else {
-            i256::from_i128(0)
+            i256::ZERO
         }
     }
 
@@ -940,18 +940,21 @@ mod tests {
     #[test]
     fn test_signed_ops() {
         // signum
-        assert_eq!(i256::from_i128(1).signum(), i256::from_i128(1));
-        assert_eq!(i256::from_i128(0).signum(), i256::from_i128(0));
-        assert_eq!(i256::from_i128(-1).signum(), i256::from_i128(-1));
+        assert_eq!(i256::from_i128(1).signum(), i256::ONE);
+        assert_eq!(i256::from_i128(0).signum(), i256::ZERO);
+        assert_eq!(i256::from_i128(-0).signum(), i256::ZERO);
+        assert_eq!(i256::from_i128(-1).signum(), i256::MINUS_ONE);
 
         // is_positive
         assert!(i256::from_i128(1).is_positive());
         assert!(!i256::from_i128(0).is_positive());
+        assert!(!i256::from_i128(-0).is_positive());
         assert!(!i256::from_i128(-1).is_positive());
 
         // is_negative
         assert!(!i256::from_i128(1).is_negative());
         assert!(!i256::from_i128(0).is_negative());
+        assert!(!i256::from_i128(-0).is_negative());
         assert!(i256::from_i128(-1).is_negative());
     }
 
