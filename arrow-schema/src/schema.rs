@@ -319,7 +319,7 @@ impl Schema {
     /// In particular returns true if `self.metadata` is a superset of `other.metadata`
     /// and [`Fields::contains`] for `self.fields` and `other.fields`
     ///
-    /// In other words, any record conforms to `other` should also conform to `self`.
+    /// In other words, any record that conforms to `other` should also conform to `self`.
     pub fn contains(&self, other: &Schema) -> bool {
         // make sure self.metadata is a superset of other.metadata
         self.fields.contains(&other.fields)

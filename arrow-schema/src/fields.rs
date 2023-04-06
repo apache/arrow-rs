@@ -72,7 +72,7 @@ impl Fields {
     /// In particular returns true if both have the same number of fields, and [`Field::contains`]
     /// for each field across self and other
     ///
-    /// In other words, any record the conforms to `other` should also conform to `self`
+    /// In other words, any record that conforms to `other` should also conform to `self`
     pub fn contains(&self, other: &Fields) -> bool {
         if Arc::ptr_eq(&self.0, &other.0) {
             return true;
