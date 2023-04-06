@@ -522,18 +522,9 @@ impl Field {
         // self need to be nullable or both of them are not nullable
         && (self.nullable || !other.nullable)
         // make sure self.metadata is a superset of other.metadata
-        && match (&self.metadata.is_empty(), &other.metadata.is_empty()) {
-            (_, true) => true,
-            (true, false) => false,
-            (false, false) => {
-                other.metadata().iter().all(|(k, v)| {
-                    match self.metadata().get(k) {
-                        Some(s) => s == v,
-                        None => false
-                    }
-                })
-            }
-        }
+        && other.metadata.iter().all(|(k, v1)| {
+            self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default()
+        })
     }
 
     /// Return size of this instance in bytes.
