@@ -468,7 +468,12 @@ fn cast_interval_to_duration<D: ArrowTemporalType<Native = i64>>(
     let array = array
         .as_any()
         .downcast_ref::<IntervalMonthDayNanoArray>()
-        .unwrap();
+        .ok_or_else(|| {
+            ArrowError::ComputeError(
+                "Internal Error: Cannot cast interval to IntervalArray of expected type"
+                    .to_string(),
+            )
+        })?;
 
     let mut builder = PrimitiveBuilder::<D>::new();
 
@@ -509,7 +514,15 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let array = array.as_any().downcast_ref::<PrimitiveArray<D>>().unwrap();
+    let array = array
+        .as_any()
+        .downcast_ref::<PrimitiveArray<D>>()
+        .ok_or_else(|| {
+            ArrowError::ComputeError(
+                "Internal Error: Cannot cast duration to DurationArray of expected type"
+                    .to_string(),
+            )
+        })?;
 
     let mut builder = IntervalMonthDayNanoBuilder::new();
 
@@ -525,22 +538,18 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
         if array.is_null(i) {
             builder.append_null();
         } else {
-            let v = array.value(i) as i128;
-            let v = v.mul_checked(scale);
-            match v {
-                Ok(v) => builder.append_value(v),
-                Err(e) => {
-                    if cast_options.safe {
-                        builder.append_null()
-                    } else {
-                        return Err(ArrowError::ComputeError(format!(
-                            "Cannot cast to {:?}. Overflowing on {:?}",
-                            D::DATA_TYPE,
-                            e
-                        )));
-                    }
-                }
-            };
+            let v = (array.value(i) as i128).checked_mul(scale);
+            if let Some(v) = v {
+                builder.append_value(v);
+            } else if cast_options.safe {
+                builder.append_null();
+            } else {
+                return Err(ArrowError::ComputeError(format!(
+                    "Cannot cast to {:?}. Overflowing on {:?}",
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    array.value(i)
+                )));
+            }
         }
     }
 
