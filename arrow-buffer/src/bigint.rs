@@ -322,7 +322,7 @@ impl i256 {
     #[inline]
     pub fn checked_add(self, other: Self) -> Option<Self> {
         let r = self.wrapping_add(other);
-        ((other.is_negative() && r < self) || (other.is_positive() && r >= self))
+        ((other.is_negative() && r < self) || (!other.is_negative() && r >= self))
             .then_some(r)
     }
 
@@ -338,7 +338,7 @@ impl i256 {
     #[inline]
     pub fn checked_sub(self, other: Self) -> Option<Self> {
         let r = self.wrapping_sub(other);
-        ((other.is_negative() && r > self) || (other.is_positive() && r <= self))
+        ((other.is_negative() && r > self) || (!other.is_negative() && r <= self))
             .then_some(r)
     }
 
