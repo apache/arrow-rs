@@ -538,7 +538,15 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
         if array.is_null(i) {
             builder.append_null();
         } else {
-            let v = (array.value(i) as i128).checked_mul(scale);
+            let v = array.value(i) as i128;
+
+            // If the scale is 1, we can skip the multiplication
+            if scale == 1 {
+                builder.append_value(v);
+                continue;
+            }
+
+            let v = v.checked_mul(scale);
             if let Some(v) = v {
                 builder.append_value(v);
             } else if cast_options.safe {
