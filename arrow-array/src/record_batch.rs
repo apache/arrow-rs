@@ -204,6 +204,25 @@ impl RecordBatch {
         })
     }
 
+    /// Override the schema of this [`RecordBatch`]
+    ///
+    /// Returns an error if `schema` is not a superset of the current schema
+    /// as determined by [`Schema::contains`]
+    pub fn with_schema(self, schema: SchemaRef) -> Result<Self, ArrowError> {
+        if !schema.contains(self.schema.as_ref()) {
+            return Err(ArrowError::SchemaError(format!(
+                "{schema} is not a superset of {}",
+                self.schema
+            )));
+        }
+
+        Ok(Self {
+            schema,
+            columns: self.columns,
+            row_count: self.row_count,
+        })
+    }
+
     /// Returns the [`Schema`](arrow_schema::Schema) of the record batch.
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -1061,5 +1080,35 @@ mod tests {
             2,
         ));
         let _ = RecordBatch::from(s);
+    }
+
+    #[test]
+    fn test_with_schema() {
+        let required_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let required_schema = Arc::new(required_schema);
+        let nullable_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let nullable_schema = Arc::new(nullable_schema);
+
+        let batch = RecordBatch::try_new(
+            required_schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as _],
+        )
+        .unwrap();
+
+        // Can add nullability
+        let batch = batch.with_schema(nullable_schema.clone()).unwrap();
+
+        // Cannot remove nullability
+        batch.clone().with_schema(required_schema).unwrap_err();
+
+        // Can add metadata
+        let metadata = vec![("foo".to_string(), "bar".to_string())]
+            .into_iter()
+            .collect();
+        let metadata_schema = nullable_schema.as_ref().clone().with_metadata(metadata);
+        let batch = batch.with_schema(Arc::new(metadata_schema)).unwrap();
+
+        // Cannot remove metadata
+        batch.with_schema(nullable_schema).unwrap_err();
     }
 }
