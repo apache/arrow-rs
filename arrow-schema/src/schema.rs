@@ -314,22 +314,18 @@ impl Schema {
         Some((idx, field.as_ref()))
     }
 
-    /// Check to see if `self` is a superset of `other` schema. Here are the comparison rules:
+    /// Check to see if `self` is a superset of `other` schema.
     ///
-    /// * `self` and `other` should contain the same number of fields
-    /// * for every field `f` in `other`, the field in `self` with corresponding index should be a
-    /// superset of `f`.
-    /// * self.metadata is a superset of other.metadata
+    /// In particular returns true if `self.metadata` is a superset of `other.metadata`
+    /// and [`Fields::contains`] for `self.fields` and `other.fields`
     ///
     /// In other words, any record conforms to `other` should also conform to `self`.
     pub fn contains(&self, other: &Schema) -> bool {
-        self.fields.len() == other.fields.len()
-        && self.fields.iter().zip(other.fields.iter()).all(|(f1, f2)| f1.contains(f2))
         // make sure self.metadata is a superset of other.metadata
-        && other.metadata.iter().all(|(k, v1)| match self.metadata.get(k) {
-            Some(v2) => v1 == v2,
-            _ => false,
-        })
+        self.fields.contains(&other.fields)
+            && other.metadata.iter().all(|(k, v1)| {
+                self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default()
+            })
     }
 }
 

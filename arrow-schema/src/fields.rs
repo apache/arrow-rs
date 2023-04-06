@@ -66,6 +66,23 @@ impl Fields {
     pub fn find(&self, name: &str) -> Option<(usize, &FieldRef)> {
         self.0.iter().enumerate().find(|(_, b)| b.name() == name)
     }
+
+    /// Check to see if `self` is a superset of `other`
+    ///
+    /// In particular returns true if both have the same number of fields, and [`Field::contains`]
+    /// for each field across self and other
+    ///
+    /// In other words, any record the conforms to `other` should also conform to `self`
+    pub fn contains(&self, other: &Fields) -> bool {
+        if Arc::ptr_eq(&self.0, &other.0) {
+            return true;
+        }
+        self.len() == other.len()
+            && self
+                .iter()
+                .zip(other.iter())
+                .all(|(a, b)| Arc::ptr_eq(a, b) || a.contains(b))
+    }
 }
 
 impl Default for Fields {
