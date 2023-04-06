@@ -483,6 +483,21 @@ impl i256 {
         acc.wrapping_mul(base)
     }
 
+    /// Returns a number [`i256`] representing sign of this [`i256`].
+    ///
+    /// 0 if the number is zero
+    /// 1 if the number is positive
+    /// -1 if the number is negative
+    pub const fn signum(self) -> Self {
+        if self.is_positive() {
+            i256::from_i128(1)
+        } else if self.is_negative() {
+            i256::from_i128(-1)
+        } else {
+            i256::from_i128(0)
+        }
+    }
+
     /// Returns `true` if this [`i256`] is negative
     #[inline]
     pub const fn is_negative(self) -> bool {
@@ -490,9 +505,8 @@ impl i256 {
     }
 
     /// Returns `true` if this [`i256`] is positive
-    #[inline]
     pub const fn is_positive(self) -> bool {
-        self.high.is_positive()
+        self.high.is_positive() || self.high == 0 && self.low != 0
     }
 }
 
@@ -921,6 +935,24 @@ mod tests {
                 test_ops(il, ir)
             }
         }
+    }
+
+    #[test]
+    fn test_signed_ops() {
+        // signum
+        assert_eq!(i256::from_i128(1).signum(), i256::from_i128(1));
+        assert_eq!(i256::from_i128(0).signum(), i256::from_i128(0));
+        assert_eq!(i256::from_i128(-1).signum(), i256::from_i128(-1));
+
+        // is_positive
+        assert!(i256::from_i128(1).is_positive());
+        assert!(!i256::from_i128(0).is_positive());
+        assert!(!i256::from_i128(-1).is_positive());
+
+        // is_negative
+        assert!(!i256::from_i128(1).is_negative());
+        assert!(!i256::from_i128(0).is_negative());
+        assert!(i256::from_i128(-1).is_negative());
     }
 
     #[test]
