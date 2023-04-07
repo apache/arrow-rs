@@ -35,31 +35,33 @@
 
 **Implemented enhancements:**
 
-- Support Decimals cast to Utf8/LargeUtf [\#3991](https://github.com/apache/arrow-rs/issues/3991)
+- Support Decimals cast to Utf8/LargeUtf [\#3991](https://github.com/apache/arrow-rs/issues/3991) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Support Date32/Date64 minus Interval [\#3962](https://github.com/apache/arrow-rs/issues/3962) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Reduce Cloning of Field [\#3955](https://github.com/apache/arrow-rs/issues/3955) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Consider renaming rather than removing Decoder [\#3949](https://github.com/apache/arrow-rs/issues/3949)
+- Reduce Cloning of Field [\#3955](https://github.com/apache/arrow-rs/issues/3955) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Support Deserializing Serde DataTypes to Arrow [\#3949](https://github.com/apache/arrow-rs/issues/3949) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add multiply\_fixed\_point [\#3946](https://github.com/apache/arrow-rs/issues/3946) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Strongly Typed Array Slicing [\#3929](https://github.com/apache/arrow-rs/issues/3929) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Make it easier to match FlightSQL messages [\#3874](https://github.com/apache/arrow-rs/issues/3874) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Strongly Typed Array Slicing [\#3929](https://github.com/apache/arrow-rs/issues/3929) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Make it easier to match FlightSQL messages [\#3874](https://github.com/apache/arrow-rs/issues/3874) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 - Support Casting Between Binary / LargeBinary and FixedSizeBinary [\#3826](https://github.com/apache/arrow-rs/issues/3826) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
-- f16::ZERO and f16::ONE are mixed up [\#4016](https://github.com/apache/arrow-rs/issues/4016)
-- Handle overflow precision when casting from integer to decimal [\#3995](https://github.com/apache/arrow-rs/issues/3995)
+- f16::ZERO and f16::ONE are mixed up [\#4016](https://github.com/apache/arrow-rs/issues/4016) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Handle overflow precision when casting from integer to decimal [\#3995](https://github.com/apache/arrow-rs/issues/3995) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - PrimitiveDictionaryBuilder.finish should use actual value type [\#3971](https://github.com/apache/arrow-rs/issues/3971) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- RecordBatch From StructArray Silently Discards Nulls [\#3952](https://github.com/apache/arrow-rs/issues/3952)
+- RecordBatch From StructArray Silently Discards Nulls [\#3952](https://github.com/apache/arrow-rs/issues/3952) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - I256 Checked Subtraction Overflows for i256::MINUS\_ONE [\#3942](https://github.com/apache/arrow-rs/issues/3942) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - I256 Checked Multiply Overflows for i256::MIN [\#3941](https://github.com/apache/arrow-rs/issues/3941) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Closed issues:**
 
-- Remove non-existent `js` feature from README [\#4000](https://github.com/apache/arrow-rs/issues/4000)
+- Remove non-existent `js` feature from README [\#4000](https://github.com/apache/arrow-rs/issues/4000) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Support take on MapArray [\#3875](https://github.com/apache/arrow-rs/issues/3875) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Merged pull requests:**
 
+- Prep for 37.0.0 [\#4031](https://github.com/apache/arrow-rs/pull/4031) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([iajoiner](https://github.com/iajoiner))
+- Add RecordBatch::with\_schema [\#4028](https://github.com/apache/arrow-rs/pull/4028) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Only require compatible batch schema in ArrowWriter [\#4027](https://github.com/apache/arrow-rs/pull/4027) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 - Add Fields::contains [\#4026](https://github.com/apache/arrow-rs/pull/4026) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Minor: add methods "is\_positive" and "signum" to i256 [\#4024](https://github.com/apache/arrow-rs/pull/4024) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([izveigor](https://github.com/izveigor))
