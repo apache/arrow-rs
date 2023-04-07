@@ -394,25 +394,44 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
 /// ```
 #[derive(Default, Clone)]
 pub struct MicrosoftAzureBuilder {
-    account_name: Option<String>,
-    access_key: Option<String>,
-    container_name: Option<String>,
-    bearer_token: Option<String>,
-    client_id: Option<String>,
-    client_secret: Option<String>,
-    tenant_id: Option<String>,
-    sas_query_pairs: Option<Vec<(String, String)>>,
-    sas_key: Option<String>,
-    authority_host: Option<String>,
-    url: Option<String>,
-    use_emulator: bool,
-    msi_endpoint: Option<String>,
-    object_id: Option<String>,
-    msi_resource_id: Option<String>,
-    federated_token_file: Option<String>,
-    use_azure_cli: bool,
-    retry_config: RetryConfig,
-    client_options: ClientOptions,
+    /// Account name
+    pub account_name: Option<String>,
+    /// Access key
+    pub access_key: Option<String>,
+    /// Container name
+    pub container_name: Option<String>,
+    /// Bearer token
+    pub bearer_token: Option<String>,
+    /// Client id
+    pub client_id: Option<String>,
+    /// Client secret
+    pub client_secret: Option<String>,
+    /// Tenant id
+    pub tenant_id: Option<String>,
+    /// Query pairs for shared access signature authorization
+    pub sas_query_pairs: Option<Vec<(String, String)>>,
+    /// Shared access signature
+    pub sas_key: Option<String>,
+    /// Authority host
+    pub authority_host: Option<String>,
+    /// Url
+    pub url: Option<String>,
+    /// When set to true, azurite storage emulator has to be used
+    pub use_emulator: bool,
+    /// Msi endpoint for acquiring managed identity token
+    pub msi_endpoint: Option<String>,
+    /// Object id for use with managed identity authentication
+    pub object_id: Option<String>,
+    /// Msi resource id for use with managed identity authentication
+    pub msi_resource_id: Option<String>,
+    /// File containing token for Azure AD workload identity federation
+    pub federated_token_file: Option<String>,
+    /// When set to true, azure cli has to be used for acquiring access token
+    pub use_azure_cli: bool,
+    /// Retry config
+    pub retry_config: RetryConfig,
+    /// Client options
+    pub client_options: ClientOptions,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]

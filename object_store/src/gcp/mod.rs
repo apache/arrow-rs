@@ -768,13 +768,20 @@ impl ObjectStore for GoogleCloudStorage {
 /// ```
 #[derive(Debug, Clone)]
 pub struct GoogleCloudStorageBuilder {
-    bucket_name: Option<String>,
-    url: Option<String>,
-    service_account_path: Option<String>,
-    service_account_key: Option<String>,
-    application_credentials_path: Option<String>,
-    retry_config: RetryConfig,
-    client_options: ClientOptions,
+    /// Bucket name
+    pub bucket_name: Option<String>,
+    /// Url
+    pub url: Option<String>,
+    /// Path to the service account file
+    pub service_account_path: Option<String>,
+    /// The serialized service account key
+    pub service_account_key: Option<String>,
+    /// Path to the application credentials file.
+    pub application_credentials_path: Option<String>,
+    /// Retry config
+    pub retry_config: RetryConfig,
+    /// Client options
+    pub client_options: ClientOptions,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]

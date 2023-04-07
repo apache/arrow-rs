@@ -400,21 +400,36 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
 /// ```
 #[derive(Debug, Default, Clone)]
 pub struct AmazonS3Builder {
-    access_key_id: Option<String>,
-    secret_access_key: Option<String>,
-    region: Option<String>,
-    bucket_name: Option<String>,
-    endpoint: Option<String>,
-    token: Option<String>,
-    url: Option<String>,
-    retry_config: RetryConfig,
-    imdsv1_fallback: bool,
-    virtual_hosted_style_request: bool,
-    unsigned_payload: bool,
-    checksum_algorithm: Option<Checksum>,
-    metadata_endpoint: Option<String>,
-    profile: Option<String>,
-    client_options: ClientOptions,
+    /// Access key id
+    pub access_key_id: Option<String>,
+    /// Secret access_key
+    pub secret_access_key: Option<String>,
+    /// Region
+    pub region: Option<String>,
+    /// Bucket name
+    pub bucket_name: Option<String>,
+    /// Endpoint for communicating with AWS S3
+    pub endpoint: Option<String>,
+    /// Token to use for requests
+    pub token: Option<String>,
+    /// Url
+    pub url: Option<String>,
+    /// Retry config
+    pub retry_config: RetryConfig,
+    /// When set to true, fallback to IMDSv1
+    pub imdsv1_fallback: bool,
+    /// When set to true, virtual hosted style request has to be used
+    pub virtual_hosted_style_request: bool,
+    /// When set to true, unsigned payload option has to be used
+    pub unsigned_payload: bool,
+    /// Checksum algorithm which has to be used for object integrity check during upload
+    pub checksum_algorithm: Option<Checksum>,
+    /// Metadata endpoint, see <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html>
+    pub metadata_endpoint: Option<String>,
+    /// Profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
+    pub profile: Option<String>,
+    /// Client options
+    pub client_options: ClientOptions,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
