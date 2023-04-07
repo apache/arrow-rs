@@ -26,7 +26,7 @@ use arrow_schema::{
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
     DECIMAL_DEFAULT_SCALE,
 };
-use chrono::{Duration, NaiveDate};
+use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
 use std::marker::PhantomData;
 use std::ops::{Add, Sub};
@@ -311,19 +311,43 @@ pub trait ArrowTimestampType: ArrowTemporalType<Native = i64> {
     fn get_time_unit() -> TimeUnit {
         Self::UNIT
     }
+
+    /// Creates a ArrowTimestampType::Native from the provided [`NaiveDateTime`]
+    ///
+    /// See [`DataType::Timestamp`] for more information on timezone handling
+    fn make_value(naive: NaiveDateTime) -> Option<i64>;
 }
 
 impl ArrowTimestampType for TimestampSecondType {
     const UNIT: TimeUnit = TimeUnit::Second;
+
+    fn make_value(naive: NaiveDateTime) -> Option<i64> {
+        Some(naive.timestamp())
+    }
 }
 impl ArrowTimestampType for TimestampMillisecondType {
     const UNIT: TimeUnit = TimeUnit::Millisecond;
+
+    fn make_value(naive: NaiveDateTime) -> Option<i64> {
+        let millis = naive.timestamp().checked_mul(1_000)?;
+        millis.checked_add(naive.timestamp_subsec_millis() as i64)
+    }
 }
 impl ArrowTimestampType for TimestampMicrosecondType {
     const UNIT: TimeUnit = TimeUnit::Microsecond;
+
+    fn make_value(naive: NaiveDateTime) -> Option<i64> {
+        let micros = naive.timestamp().checked_mul(1_000_000)?;
+        micros.checked_add(naive.timestamp_subsec_micros() as i64)
+    }
 }
 impl ArrowTimestampType for TimestampNanosecondType {
     const UNIT: TimeUnit = TimeUnit::Nanosecond;
+
+    fn make_value(naive: NaiveDateTime) -> Option<i64> {
+        let nanos = naive.timestamp().checked_mul(1_000_000_000)?;
+        nanos.checked_add(naive.timestamp_subsec_nanos() as i64)
+    }
 }
 
 impl IntervalYearMonthType {
