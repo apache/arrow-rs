@@ -39,6 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
+    defaults:
+      run:
+        working-directory: object_store
     steps:
       - uses: actions/checkout@v3
       - name: Setup Rust toolchain
@@ -50,19 +53,19 @@ jobs:
       # features that might be enabled by dev-dependencies of other
       # targets.
       - name: Run clippy with default features
-        run: cargo clippy -p object_store -- -D warnings
+        run: cargo clippy -- -D warnings
       - name: Run clippy with aws feature
-        run: cargo clippy -p object_store --features aws -- -D warnings
+        run: cargo clippy --features aws -- -D warnings
       - name: Run clippy with aws_profile feature
-        run: cargo clippy -p object_store --features aws_profile -- -D warnings
+        run: cargo clippy --features aws_profile -- -D warnings
       - name: Run clippy with gcp feature
-        run: cargo clippy -p object_store --features gcp -- -D warnings
+        run: cargo clippy --features gcp -- -D warnings
       - name: Run clippy with azure feature
-        run: cargo clippy -p object_store --features azure -- -D warnings
+        run: cargo clippy --features azure -- -D warnings
       - name: Run clippy with all features
-        run: cargo clippy -p object_store --all-features -- -D warnings
+        run: cargo clippy --all-features -- -D warnings
       - name: Run clippy with all features and all targets
-        run: cargo clippy -p object_store --all-features --all-targets -- -D warnings
+        run: cargo clippy --all-features --all-targets -- -D warnings
 
   # test the crate
   # This runs outside a container to workaround lack of support for passing arguments
@@ -70,6 +73,9 @@ jobs:
   linux-test:
     name: Emulator Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: object_store
     env:
       # Disable full debug symbol generation to speed up CI build and keep memory down
       # "1" means line tables only, which is useful for panic tracebacks.
@@ -128,7 +134,7 @@ jobs:
           OBJECT_STORE_AWS_ACCESS_KEY_ID: test
           OBJECT_STORE_AWS_SECRET_ACCESS_KEY: test
           OBJECT_STORE_AWS_ENDPOINT: http://localhost:4566
-        run: cargo test -p object_store --features=aws,azure,gcp,http
+        run: cargo test --features=aws,azure,gcp,http
 
   # test the object_store crate builds against wasm32 in stable rust
   wasm32-build:
@@ -136,6 +142,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
+    defaults:
+      run:
+        working-directory: object_store
     steps:
       - uses: actions/checkout@v3
         with:
@@ -145,6 +154,6 @@ jobs:
         with:
           target: wasm32-unknown-unknown,wasm32-wasi
       - name: Build wasm32-unknown-unknown
-        run: cargo build -p object_store --target wasm32-unknown-unknown
+        run: cargo build --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
-        run: cargo build -p object_store --target wasm32-wasi
+        run: cargo build --target wasm32-wasi
