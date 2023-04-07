@@ -16,6 +16,7 @@
 # under the License.
 
 [workspace]
+
 members = [
     "arrow",
     "arrow-arith",
@@ -35,7 +36,6 @@ members = [
     "arrow-schema",
     "arrow-select",
     "arrow-string",
-    "object_store",
     "parquet",
     "parquet_derive",
     "parquet_derive_test",
@@ -51,10 +51,14 @@ members = [
 #
 resolver = "2"
 
-# this package is excluded because it requires different compilation flags, thereby significantly changing
-# how it is compiled within the workspace, causing the whole workspace to be compiled from scratch
-# this way, this is a stand-alone package that compiles independently of the others.
-exclude = ["arrow-pyarrow-integration-testing"]
+exclude = [
+    # arrow-pyarrow-integration-testing is excluded because it requires different compilation flags, thereby
+    # significantly changing how it is compiled within the workspace, causing the whole workspace to be compiled from
+    # scratch this way, this is a stand-alone package that compiles independently of the others.
+    "arrow-pyarrow-integration-testing",
+    # object_store is excluded because it follows a separate release cycle from the other arrow crates
+    "object_store"
+]
 
 [workspace.package]
 version = "37.0.0"

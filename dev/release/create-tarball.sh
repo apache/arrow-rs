@@ -117,14 +117,11 @@ echo "---------------------------------------------------------"
 
 # create <tarball> containing the files in git at $release_hash
 # the files in the tarball are prefixed with {tag} (e.g. 4.0.1)
-# use --delete to filter out:
-# 1. `object_store` files
-# 2. Workspace `Cargo.toml` file (which refers to object_store)
+# use --delete to filter out `object_store` files
 mkdir -p ${distdir}
 (cd "${SOURCE_TOP_DIR}" && \
      git archive ${release_hash} --prefix ${release}/ \
          | $tar --delete ${release}/'object_store' \
-         | $tar --delete ${release}/'Cargo.toml' \
          | gzip > ${tarball})
 
 echo "Running rat license checker on ${tarball}"
