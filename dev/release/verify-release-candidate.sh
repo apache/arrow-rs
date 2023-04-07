@@ -105,10 +105,7 @@ test_source_distribution() {
 
   # raises on any formatting errors
   rustup component add rustfmt --toolchain stable
-  (cd arrow && cargo fmt --check)
-  (cd arrow-flight && cargo fmt --check)
-  (cd parquet && cargo fmt --check)
-  (cd parquet_derive && cargo fmt --check)
+  cargo fmt --all -- --check
 
   # Clone testing repositories if not cloned already
   git clone https://github.com/apache/arrow-testing.git arrow-testing-data
@@ -116,15 +113,7 @@ test_source_distribution() {
   export ARROW_TEST_DATA=$PWD/arrow-testing-data/data
   export PARQUET_TEST_DATA=$PWD/parquet-testing-data/data
 
-  (cd arrow && cargo build && cargo test)
-  (cd arrow-flight && cargo build && cargo test)
-  # To avoid https://github.com/apache/arrow-rs/issues/3410,
-  # remove path reference from parquet:
-  # object_store = { version = "0.5", path = "../object_store", default-features = false, optional = true }
-  # object_store = { version = "0.5", default-features = false, optional = true }
-  sed -i -e 's/\(^object_store.*\)\(path = ".*", \)/\1/g' parquet/Cargo.toml
-  (cd parquet && cargo build && cargo test)
-  (cd parquet_derive && cargo build && cargo test)
+  cargo test --all
 
   # verify that the leaf crates can be published to crates.io
   # we can't verify crates that depend on others
