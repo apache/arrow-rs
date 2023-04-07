@@ -25,6 +25,7 @@
 
 **Breaking changes:**
 
+- Fix timestamp handling in cast kernel \(\#1936\) \(\#4033\) [\#4034](https://github.com/apache/arrow-rs/pull/4034) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Update tonic 0.9.1 [\#4011](https://github.com/apache/arrow-rs/pull/4011) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([tustvold](https://github.com/tustvold))
 - Use FieldRef in DataType \(\#3955\) [\#3983](https://github.com/apache/arrow-rs/pull/3983) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Store Timezone as Arc\<str\> [\#3976](https://github.com/apache/arrow-rs/pull/3976) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
@@ -46,6 +47,7 @@
 
 **Fixed bugs:**
 
+- Incorrect Overflow Casting String to Timestamp [\#4033](https://github.com/apache/arrow-rs/issues/4033)
 - f16::ZERO and f16::ONE are mixed up [\#4016](https://github.com/apache/arrow-rs/issues/4016) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Handle overflow precision when casting from integer to decimal [\#3995](https://github.com/apache/arrow-rs/issues/3995) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - PrimitiveDictionaryBuilder.finish should use actual value type [\#3971](https://github.com/apache/arrow-rs/issues/3971) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
