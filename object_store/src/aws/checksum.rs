@@ -42,7 +42,7 @@ impl Checksum {
 impl std::fmt::Display for Checksum {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            Checksum::SHA256 => write!(f, "sha256"),
+            Self::SHA256 => write!(f, "sha256"),
         }
     }
 }
