@@ -475,8 +475,6 @@ fn cast_interval_to_duration<D: ArrowTemporalType<Native = i64>>(
             )
         })?;
 
-    let mut builder = PrimitiveBuilder::<D>::new();
-
     let scale = match D::DATA_TYPE {
         DataType::Duration(TimeUnit::Second) => 1_000_000_000,
         DataType::Duration(TimeUnit::Millisecond) => 1_000_000,
@@ -485,28 +483,43 @@ fn cast_interval_to_duration<D: ArrowTemporalType<Native = i64>>(
         _ => unreachable!(),
     };
 
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            builder.append_null();
-        } else {
-            let v = array.value(i) / scale;
-            if v > i64::MAX as i128 {
-                if cast_options.safe {
-                    builder.append_null();
+    if cast_options.safe {
+        let iter = array.iter().map(|v| {
+            v.and_then(|v| {
+                let v = v / scale;
+                if v > i64::MAX as i128 {
+                    None
                 } else {
-                    return Err(ArrowError::ComputeError(format!(
-                        "Cannot cast to {:?}. Overflowing on {:?}",
-                        D::DATA_TYPE,
-                        v
-                    )));
+                    Some(v as i64)
                 }
-            } else {
-                builder.append_value(v as i64);
-            }
-        }
+            })
+        });
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<D>::from_trusted_len_iter(iter)
+        }))
+    } else {
+        let vec = array
+            .iter()
+            .map(|v| {
+                v.map(|v| {
+                    let v = v / scale;
+                    if v > i64::MAX as i128 {
+                        Err(ArrowError::ComputeError(format!(
+                            "Cannot cast to {:?}. Overflowing on {:?}",
+                            D::DATA_TYPE,
+                            v
+                        )))
+                    } else {
+                        Ok(v as i64)
+                    }
+                })
+                .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<D>::from_trusted_len_iter(vec.iter())
+        }))
     }
-
-    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 /// Cast the array from duration and interval
@@ -524,8 +537,6 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
             )
         })?;
 
-    let mut builder = IntervalMonthDayNanoBuilder::new();
-
     let scale = match array.data_type() {
         DataType::Duration(TimeUnit::Second) => 1_000_000_000,
         DataType::Duration(TimeUnit::Millisecond) => 1_000_000,
@@ -534,34 +545,33 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
         _ => unreachable!(),
     };
 
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            builder.append_null();
-        } else {
-            let v = array.value(i) as i128;
-
-            // If the scale is 1, we can skip the multiplication
-            if scale == 1 {
-                builder.append_value(v);
-                continue;
-            }
-
-            let v = v.checked_mul(scale);
-            if let Some(v) = v {
-                builder.append_value(v);
-            } else if cast_options.safe {
-                builder.append_null();
-            } else {
-                return Err(ArrowError::ComputeError(format!(
-                    "Cannot cast to {:?}. Overflowing on {:?}",
-                    DataType::Interval(IntervalUnit::MonthDayNano),
-                    array.value(i)
-                )));
-            }
-        }
+    if cast_options.safe {
+        let iter = array
+            .iter()
+            .map(|v| v.and_then(|v| ((v as i128).checked_mul(scale))));
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(iter)
+        }))
+    } else {
+        let vec = array
+            .iter()
+            .map(|v| {
+                v.map(|v| {
+                    (v as i128).mul_checked(scale).map_err(|_| {
+                        ArrowError::ComputeError(format!(
+                            "Cannot cast to {:?}. Overflowing on {:?}",
+                            D::DATA_TYPE,
+                            v
+                        ))
+                    })
+                })
+                .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(vec.iter())
+        }))
     }
-
-    Ok(Arc::new(builder.finish()))
 }
 
 /// Cast the primitive array using [`PrimitiveArray::reinterpret_cast`]
