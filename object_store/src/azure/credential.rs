@@ -137,7 +137,8 @@ impl CredentialExt for RequestBuilder {
                     key.as_str(),
                 );
 
-                // "signature" is a base 64 encoded string so it should never contain illegal charact
+                // "signature" is a base 64 encoded string so it should never
+                // contain illegal characters
                 request.headers_mut().append(
                     AUTHORIZATION,
                     HeaderValue::from_str(signature.as_str()).unwrap(),
