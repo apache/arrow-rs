@@ -4028,11 +4028,11 @@ mod tests {
             .downcast_ref::<TimestampMillisecondArray>()
             .unwrap();
         let expected = TimestampMillisecondArray::from(vec![
-            1 + SECONDS_IN_DAY * 31 * 1000,
-            2 + SECONDS_IN_DAY * 31 * 1000,
-            3 + SECONDS_IN_DAY * 31 * 1000,
-            4 + SECONDS_IN_DAY * 31 * 1000,
-            5 + SECONDS_IN_DAY * 31 * 1000,
+            1 + SECONDS_IN_DAY * 31 * 1_000,
+            2 + SECONDS_IN_DAY * 31 * 1_000,
+            3 + SECONDS_IN_DAY * 31 * 1_000,
+            4 + SECONDS_IN_DAY * 31 * 1_000,
+            5 + SECONDS_IN_DAY * 31 * 1_000,
         ]);
         assert_eq!(result, &expected);
 
@@ -4051,11 +4051,11 @@ mod tests {
             .downcast_ref::<TimestampMillisecondArray>()
             .unwrap();
         let expected = TimestampMillisecondArray::from(vec![
-            1 + SECONDS_IN_DAY * 1000,
-            2 + SECONDS_IN_DAY * 1000,
-            3 + SECONDS_IN_DAY * 1000,
-            4 + SECONDS_IN_DAY * 1000,
-            5 + SECONDS_IN_DAY * 1000,
+            1 + SECONDS_IN_DAY * 1_000,
+            2 + SECONDS_IN_DAY * 1_000,
+            3 + SECONDS_IN_DAY * 1_000,
+            4 + SECONDS_IN_DAY * 1_000,
+            5 + SECONDS_IN_DAY * 1_000,
         ]);
         assert_eq!(&expected, result);
 
@@ -4074,11 +4074,11 @@ mod tests {
             .downcast_ref::<TimestampMillisecondArray>()
             .unwrap();
         let expected = TimestampMillisecondArray::from(vec![
-            1 + SECONDS_IN_DAY * 1000,
-            2 + SECONDS_IN_DAY * 1000,
-            3 + SECONDS_IN_DAY * 1000,
-            4 + SECONDS_IN_DAY * 1000,
-            5 + SECONDS_IN_DAY * 1000,
+            1 + SECONDS_IN_DAY * 1_000,
+            2 + SECONDS_IN_DAY * 1_000,
+            3 + SECONDS_IN_DAY * 1_000,
+            4 + SECONDS_IN_DAY * 1_000,
+            5 + SECONDS_IN_DAY * 1_000,
         ]);
         assert_eq!(&expected, result);
     }
@@ -4101,11 +4101,11 @@ mod tests {
             .downcast_ref::<TimestampMillisecondArray>()
             .unwrap();
         let expected = TimestampMillisecondArray::from(vec![
-            1 - SECONDS_IN_DAY * 31 * 1000,
-            2 - SECONDS_IN_DAY * 31 * 1000,
-            3 - SECONDS_IN_DAY * 31 * 1000,
-            4 - SECONDS_IN_DAY * 31 * 1000,
-            5 - SECONDS_IN_DAY * 31 * 1000,
+            1 - SECONDS_IN_DAY * 31 * 1_000,
+            2 - SECONDS_IN_DAY * 31 * 1_000,
+            3 - SECONDS_IN_DAY * 31 * 1_000,
+            4 - SECONDS_IN_DAY * 31 * 1_000,
+            5 - SECONDS_IN_DAY * 31 * 1_000,
         ]);
         assert_eq!(&expected, result);
 
@@ -4124,11 +4124,11 @@ mod tests {
             .downcast_ref::<TimestampMillisecondArray>()
             .unwrap();
         let expected = TimestampMillisecondArray::from(vec![
-            1 - SECONDS_IN_DAY * 1000,
-            2 - SECONDS_IN_DAY * 1000,
-            3 - SECONDS_IN_DAY * 1000,
-            4 - SECONDS_IN_DAY * 1000,
-            5 - SECONDS_IN_DAY * 1000,
+            1 - SECONDS_IN_DAY * 1_000,
+            2 - SECONDS_IN_DAY * 1_000,
+            3 - SECONDS_IN_DAY * 1_000,
+            4 - SECONDS_IN_DAY * 1_000,
+            5 - SECONDS_IN_DAY * 1_000,
         ]);
         assert_eq!(&expected, result);
 
@@ -4147,11 +4147,11 @@ mod tests {
             .downcast_ref::<TimestampMillisecondArray>()
             .unwrap();
         let expected = TimestampMillisecondArray::from(vec![
-            1 - SECONDS_IN_DAY * 1000,
-            2 - SECONDS_IN_DAY * 1000,
-            3 - SECONDS_IN_DAY * 1000,
-            4 - SECONDS_IN_DAY * 1000,
-            5 - SECONDS_IN_DAY * 1000,
+            1 - SECONDS_IN_DAY * 1_000,
+            2 - SECONDS_IN_DAY * 1_000,
+            3 - SECONDS_IN_DAY * 1_000,
+            4 - SECONDS_IN_DAY * 1_000,
+            5 - SECONDS_IN_DAY * 1_000,
         ]);
         assert_eq!(&expected, result);
     }
@@ -4174,11 +4174,11 @@ mod tests {
             .downcast_ref::<TimestampMicrosecondArray>()
             .unwrap();
         let expected = TimestampMicrosecondArray::from(vec![
-            1 + SECONDS_IN_DAY * 31 * 1000_000,
-            2 + SECONDS_IN_DAY * 31 * 1000_000,
-            3 + SECONDS_IN_DAY * 31 * 1000_000,
-            4 + SECONDS_IN_DAY * 31 * 1000_000,
-            5 + SECONDS_IN_DAY * 31 * 1000_000,
+            1 + SECONDS_IN_DAY * 31 * 1_000_000,
+            2 + SECONDS_IN_DAY * 31 * 1_000_000,
+            3 + SECONDS_IN_DAY * 31 * 1_000_000,
+            4 + SECONDS_IN_DAY * 31 * 1_000_000,
+            5 + SECONDS_IN_DAY * 31 * 1_000_000,
         ]);
         assert_eq!(result, &expected);
 
@@ -4197,11 +4197,11 @@ mod tests {
             .downcast_ref::<TimestampMicrosecondArray>()
             .unwrap();
         let expected = TimestampMicrosecondArray::from(vec![
-            1 + SECONDS_IN_DAY * 1000_000,
-            2 + SECONDS_IN_DAY * 1000_000,
-            3 + SECONDS_IN_DAY * 1000_000,
-            4 + SECONDS_IN_DAY * 1000_000,
-            5 + SECONDS_IN_DAY * 1000_000,
+            1 + SECONDS_IN_DAY * 1_000_000,
+            2 + SECONDS_IN_DAY * 1_000_000,
+            3 + SECONDS_IN_DAY * 1_000_000,
+            4 + SECONDS_IN_DAY * 1_000_000,
+            5 + SECONDS_IN_DAY * 1_000_000,
         ]);
         assert_eq!(&expected, result);
 
@@ -4220,11 +4220,11 @@ mod tests {
             .downcast_ref::<TimestampMicrosecondArray>()
             .unwrap();
         let expected = TimestampMicrosecondArray::from(vec![
-            1 + SECONDS_IN_DAY * 1000_000,
-            2 + SECONDS_IN_DAY * 1000_000,
-            3 + SECONDS_IN_DAY * 1000_000,
-            4 + SECONDS_IN_DAY * 1000_000,
-            5 + SECONDS_IN_DAY * 1000_000,
+            1 + SECONDS_IN_DAY * 1_000_000,
+            2 + SECONDS_IN_DAY * 1_000_000,
+            3 + SECONDS_IN_DAY * 1_000_000,
+            4 + SECONDS_IN_DAY * 1_000_000,
+            5 + SECONDS_IN_DAY * 1_000_000,
         ]);
         assert_eq!(&expected, result);
     }
@@ -4247,11 +4247,11 @@ mod tests {
             .downcast_ref::<TimestampMicrosecondArray>()
             .unwrap();
         let expected = TimestampMicrosecondArray::from(vec![
-            1 - SECONDS_IN_DAY * 31 * 1000_000,
-            2 - SECONDS_IN_DAY * 31 * 1000_000,
-            3 - SECONDS_IN_DAY * 31 * 1000_000,
-            4 - SECONDS_IN_DAY * 31 * 1000_000,
-            5 - SECONDS_IN_DAY * 31 * 1000_000,
+            1 - SECONDS_IN_DAY * 31 * 1_000_000,
+            2 - SECONDS_IN_DAY * 31 * 1_000_000,
+            3 - SECONDS_IN_DAY * 31 * 1_000_000,
+            4 - SECONDS_IN_DAY * 31 * 1_000_000,
+            5 - SECONDS_IN_DAY * 31 * 1_000_000,
         ]);
         assert_eq!(&expected, result);
 
@@ -4270,11 +4270,11 @@ mod tests {
             .downcast_ref::<TimestampMicrosecondArray>()
             .unwrap();
         let expected = TimestampMicrosecondArray::from(vec![
-            1 - SECONDS_IN_DAY * 1000_000,
-            2 - SECONDS_IN_DAY * 1000_000,
-            3 - SECONDS_IN_DAY * 1000_000,
-            4 - SECONDS_IN_DAY * 1000_000,
-            5 - SECONDS_IN_DAY * 1000_000,
+            1 - SECONDS_IN_DAY * 1_000_000,
+            2 - SECONDS_IN_DAY * 1_000_000,
+            3 - SECONDS_IN_DAY * 1_000_000,
+            4 - SECONDS_IN_DAY * 1_000_000,
+            5 - SECONDS_IN_DAY * 1_000_000,
         ]);
         assert_eq!(&expected, result);
 
@@ -4293,11 +4293,11 @@ mod tests {
             .downcast_ref::<TimestampMicrosecondArray>()
             .unwrap();
         let expected = TimestampMicrosecondArray::from(vec![
-            1 - SECONDS_IN_DAY * 1000_000,
-            2 - SECONDS_IN_DAY * 1000_000,
-            3 - SECONDS_IN_DAY * 1000_000,
-            4 - SECONDS_IN_DAY * 1000_000,
-            5 - SECONDS_IN_DAY * 1000_000,
+            1 - SECONDS_IN_DAY * 1_000_000,
+            2 - SECONDS_IN_DAY * 1_000_000,
+            3 - SECONDS_IN_DAY * 1_000_000,
+            4 - SECONDS_IN_DAY * 1_000_000,
+            5 - SECONDS_IN_DAY * 1_000_000,
         ]);
         assert_eq!(&expected, result);
     }
@@ -4320,11 +4320,11 @@ mod tests {
             .downcast_ref::<TimestampNanosecondArray>()
             .unwrap();
         let expected = TimestampNanosecondArray::from(vec![
-            1 + SECONDS_IN_DAY * 31 * 1000_000_000,
-            2 + SECONDS_IN_DAY * 31 * 1000_000_000,
-            3 + SECONDS_IN_DAY * 31 * 1000_000_000,
-            4 + SECONDS_IN_DAY * 31 * 1000_000_000,
-            5 + SECONDS_IN_DAY * 31 * 1000_000_000,
+            1 + SECONDS_IN_DAY * 31 * 1_000_000_000,
+            2 + SECONDS_IN_DAY * 31 * 1_000_000_000,
+            3 + SECONDS_IN_DAY * 31 * 1_000_000_000,
+            4 + SECONDS_IN_DAY * 31 * 1_000_000_000,
+            5 + SECONDS_IN_DAY * 31 * 1_000_000_000,
         ]);
         assert_eq!(result, &expected);
 
@@ -4343,11 +4343,11 @@ mod tests {
             .downcast_ref::<TimestampNanosecondArray>()
             .unwrap();
         let expected = TimestampNanosecondArray::from(vec![
-            1 + SECONDS_IN_DAY * 1000_000_000,
-            2 + SECONDS_IN_DAY * 1000_000_000,
-            3 + SECONDS_IN_DAY * 1000_000_000,
-            4 + SECONDS_IN_DAY * 1000_000_000,
-            5 + SECONDS_IN_DAY * 1000_000_000,
+            1 + SECONDS_IN_DAY * 1_000_000_000,
+            2 + SECONDS_IN_DAY * 1_000_000_000,
+            3 + SECONDS_IN_DAY * 1_000_000_000,
+            4 + SECONDS_IN_DAY * 1_000_000_000,
+            5 + SECONDS_IN_DAY * 1_000_000_000,
         ]);
         assert_eq!(&expected, result);
 
@@ -4366,11 +4366,11 @@ mod tests {
             .downcast_ref::<TimestampNanosecondArray>()
             .unwrap();
         let expected = TimestampNanosecondArray::from(vec![
-            1 + SECONDS_IN_DAY * 1000_000_000,
-            2 + SECONDS_IN_DAY * 1000_000_000,
-            3 + SECONDS_IN_DAY * 1000_000_000,
-            4 + SECONDS_IN_DAY * 1000_000_000,
-            5 + SECONDS_IN_DAY * 1000_000_000,
+            1 + SECONDS_IN_DAY * 1_000_000_000,
+            2 + SECONDS_IN_DAY * 1_000_000_000,
+            3 + SECONDS_IN_DAY * 1_000_000_000,
+            4 + SECONDS_IN_DAY * 1_000_000_000,
+            5 + SECONDS_IN_DAY * 1_000_000_000,
         ]);
         assert_eq!(&expected, result);
     }
@@ -4393,11 +4393,11 @@ mod tests {
             .downcast_ref::<TimestampNanosecondArray>()
             .unwrap();
         let expected = TimestampNanosecondArray::from(vec![
-            1 - SECONDS_IN_DAY * 31 * 1000_000_000,
-            2 - SECONDS_IN_DAY * 31 * 1000_000_000,
-            3 - SECONDS_IN_DAY * 31 * 1000_000_000,
-            4 - SECONDS_IN_DAY * 31 * 1000_000_000,
-            5 - SECONDS_IN_DAY * 31 * 1000_000_000,
+            1 - SECONDS_IN_DAY * 31 * 1_000_000_000,
+            2 - SECONDS_IN_DAY * 31 * 1_000_000_000,
+            3 - SECONDS_IN_DAY * 31 * 1_000_000_000,
+            4 - SECONDS_IN_DAY * 31 * 1_000_000_000,
+            5 - SECONDS_IN_DAY * 31 * 1_000_000_000,
         ]);
         assert_eq!(&expected, result);
 
@@ -4416,11 +4416,11 @@ mod tests {
             .downcast_ref::<TimestampNanosecondArray>()
             .unwrap();
         let expected = TimestampNanosecondArray::from(vec![
-            1 - SECONDS_IN_DAY * 1000_000_000,
-            2 - SECONDS_IN_DAY * 1000_000_000,
-            3 - SECONDS_IN_DAY * 1000_000_000,
-            4 - SECONDS_IN_DAY * 1000_000_000,
-            5 - SECONDS_IN_DAY * 1000_000_000,
+            1 - SECONDS_IN_DAY * 1_000_000_000,
+            2 - SECONDS_IN_DAY * 1_000_000_000,
+            3 - SECONDS_IN_DAY * 1_000_000_000,
+            4 - SECONDS_IN_DAY * 1_000_000_000,
+            5 - SECONDS_IN_DAY * 1_000_000_000,
         ]);
         assert_eq!(&expected, result);
 
@@ -4439,11 +4439,11 @@ mod tests {
             .downcast_ref::<TimestampNanosecondArray>()
             .unwrap();
         let expected = TimestampNanosecondArray::from(vec![
-            1 - SECONDS_IN_DAY * 1000_000_000,
-            2 - SECONDS_IN_DAY * 1000_000_000,
-            3 - SECONDS_IN_DAY * 1000_000_000,
-            4 - SECONDS_IN_DAY * 1000_000_000,
-            5 - SECONDS_IN_DAY * 1000_000_000,
+            1 - SECONDS_IN_DAY * 1_000_000_000,
+            2 - SECONDS_IN_DAY * 1_000_000_000,
+            3 - SECONDS_IN_DAY * 1_000_000_000,
+            4 - SECONDS_IN_DAY * 1_000_000_000,
+            5 - SECONDS_IN_DAY * 1_000_000_000,
         ]);
         assert_eq!(&expected, result);
     }
