@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::retry::RetryExt;
+use crate::client::retry::{ClientConfig, RetryExt};
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::util::hmac_sha256;
-use crate::RetryConfig;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -293,7 +292,7 @@ pub trait TokenCredential: std::fmt::Debug + Send + Sync + 'static {
     async fn fetch_token(
         &self,
         client: &Client,
-        retry: &RetryConfig,
+        config: &ClientConfig,
     ) -> Result<TemporaryToken<String>>;
 }
 
@@ -340,7 +339,7 @@ impl TokenCredential for ClientSecretOAuthProvider {
     async fn fetch_token(
         &self,
         client: &Client,
-        retry: &RetryConfig,
+        config: &ClientConfig,
     ) -> Result<TemporaryToken<String>> {
         let response: TokenResponse = client
             .request(Method::POST, &self.token_url)
@@ -351,7 +350,7 @@ impl TokenCredential for ClientSecretOAuthProvider {
                 ("scope", AZURE_STORAGE_SCOPE),
                 ("grant_type", "client_credentials"),
             ])
-            .send_retry(retry)
+            .send_retry(config)
             .await
             .context(TokenRequestSnafu)?
             .json()
@@ -426,7 +425,7 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
     async fn fetch_token(
         &self,
         _client: &Client,
-        retry: &RetryConfig,
+        config: &ClientConfig,
     ) -> Result<TemporaryToken<String>> {
         let mut query_items = vec![
             ("api-version", MSI_API_VERSION),
@@ -458,7 +457,7 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
         };
 
         let response: MsiTokenResponse = builder
-            .send_retry(retry)
+            .send_retry(config)
             .await
             .context(TokenRequestSnafu)?
             .json()
@@ -513,7 +512,7 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
     async fn fetch_token(
         &self,
         client: &Client,
-        retry: &RetryConfig,
+        config: &ClientConfig,
     ) -> Result<TemporaryToken<String>> {
         let token_str = std::fs::read_to_string(&self.federated_token_file)
             .map_err(|_| Error::FederatedTokenFile)?;
@@ -532,7 +531,7 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
                 ("scope", AZURE_STORAGE_SCOPE),
                 ("grant_type", "client_credentials"),
             ])
-            .send_retry(retry)
+            .send_retry(config)
             .await
             .context(TokenRequestSnafu)?
             .json()
@@ -597,7 +596,7 @@ impl TokenCredential for AzureCliCredential {
     async fn fetch_token(
         &self,
         _client: &Client,
-        _retry: &RetryConfig,
+        _config: &ClientConfig,
     ) -> Result<TemporaryToken<String>> {
         // on window az is a cmd and it should be called like this
         // see https://doc.rust-lang.org/nightly/std/process/struct.Command.html
@@ -684,7 +683,7 @@ mod tests {
 
         let endpoint = server.url();
         let client = Client::new();
-        let retry_config = RetryConfig::default();
+        let client_config = ClientConfig::default();
 
         // Test IMDS
         server.push_fn(|req| {
@@ -724,7 +723,7 @@ mod tests {
         );
 
         let token = credential
-            .fetch_token(&client, &retry_config)
+            .fetch_token(&client, &client_config)
             .await
             .unwrap();
 
@@ -740,7 +739,7 @@ mod tests {
 
         let endpoint = server.url();
         let client = Client::new();
-        let retry_config = RetryConfig::default();
+        let config = ClientConfig::default();
 
         // Test IMDS
         server.push_fn(move |req| {
@@ -771,10 +770,7 @@ mod tests {
             Some(endpoint.to_string()),
         );
 
-        let token = credential
-            .fetch_token(&client, &retry_config)
-            .await
-            .unwrap();
+        let token = credential.fetch_token(&client, &config).await.unwrap();
 
         assert_eq!(&token.token, "TOKEN");
     }

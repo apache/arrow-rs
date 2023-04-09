@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::retry::{self, RetryConfig, RetryExt};
+use crate::client::retry::{self, ClientConfig, RetryExt};
 use crate::path::{Path, DELIMITER};
 use crate::util::{deserialize_rfc1123, format_http_range};
 use crate::{ClientOptions, ObjectMeta, Result};
@@ -79,7 +79,7 @@ impl From<Error> for crate::Error {
 pub struct Client {
     url: Url,
     client: reqwest::Client,
-    retry_config: RetryConfig,
+    client_config: ClientConfig,
     client_options: ClientOptions,
 }
 
@@ -87,12 +87,12 @@ impl Client {
     pub fn new(
         url: Url,
         client_options: ClientOptions,
-        retry_config: RetryConfig,
+        client_config: ClientConfig,
     ) -> Result<Self> {
         let client = client_options.client()?;
         Ok(Self {
             url,
-            retry_config,
+            client_config,
             client_options,
             client,
         })
@@ -118,7 +118,7 @@ impl Client {
 
         self.client
             .request(method, url)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await
             .context(RequestSnafu)?;
 
@@ -163,7 +163,7 @@ impl Client {
                 builder = builder.header(CONTENT_TYPE, value);
             }
 
-            match builder.send_retry(&self.retry_config).await {
+            match builder.send_retry(&self.client_config).await {
                 Ok(_) => return Ok(()),
                 Err(source) => match source.status() {
                     // Some implementations return 404 instead of 409
@@ -191,7 +191,7 @@ impl Client {
             .client
             .request(method, url)
             .header("Depth", depth)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await;
 
         let response = match result {
@@ -223,7 +223,7 @@ impl Client {
         let url = self.path_url(path);
         self.client
             .delete(url)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await
             .context(RequestSnafu)?;
         Ok(())
@@ -242,7 +242,7 @@ impl Client {
         }
 
         builder
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await
             .map_err(|source| match source.status() {
                 Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
@@ -267,7 +267,7 @@ impl Client {
             builder = builder.header("Overwrite", "F");
         }
 
-        match builder.send_retry(&self.retry_config).await {
+        match builder.send_retry(&self.client_config).await {
             Ok(_) => Ok(()),
             Err(e)
                 if !overwrite

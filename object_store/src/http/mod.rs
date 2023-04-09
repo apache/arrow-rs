@@ -40,8 +40,10 @@ use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
+use tokio::runtime::Handle;
 use url::Url;
 
+use crate::client::retry::ClientConfig;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
@@ -227,7 +229,7 @@ impl ObjectStore for HttpStore {
 pub struct HttpBuilder {
     url: Option<String>,
     client_options: ClientOptions,
-    retry_config: RetryConfig,
+    client_config: ClientConfig,
 }
 
 impl HttpBuilder {
@@ -244,7 +246,17 @@ impl HttpBuilder {
 
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
+        self.client_config.retry = retry_config;
+        self
+    }
+
+    /// Set the tokio runtime to use to perform IO
+    ///
+    /// This allows isolating IO into a dedicated [`Runtime`](tokio::runtime::Runtime) either
+    /// to ensure acceptable scheduling jitter in the presence of CPU-bound tasks, or to allow
+    /// using `object_store` outside of a tokio context
+    pub fn with_tokio_runtime(mut self, runtime: Handle) -> Self {
+        self.client_config.runtime = Some(runtime);
         self
     }
 
@@ -260,7 +272,7 @@ impl HttpBuilder {
         let parsed = Url::parse(&url).context(UnableToParseUrlSnafu { url })?;
 
         Ok(HttpStore {
-            client: Client::new(parsed, self.client_options, self.retry_config)?,
+            client: Client::new(parsed, self.client_options, self.client_config)?,
         })
     }
 }
@@ -292,5 +304,34 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
+    }
+
+    #[test]
+    fn http_non_tokio() {
+        let (handle, shutdown) = dedicated_tokio();
+
+        dotenv::dotenv().ok();
+        let force = std::env::var("TEST_INTEGRATION");
+        if force.is_err() {
+            eprintln!("skipping HTTP integration test - set TEST_INTEGRATION to run");
+            return;
+        }
+        let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
+        let options = ClientOptions::new().with_allow_http(true);
+        let integration = HttpBuilder::new()
+            .with_url(url)
+            .with_client_options(options)
+            .with_tokio_runtime(handle)
+            .build()
+            .unwrap();
+
+        futures::executor::block_on(async move {
+            put_get_delete_list_opts(&integration, false).await;
+            list_uses_directories_correctly(&integration).await;
+            list_with_delimiter(&integration).await;
+            rename_and_copy(&integration).await;
+            copy_if_not_exists(&integration).await;
+        });
+        shutdown();
     }
 }

@@ -19,13 +19,13 @@ use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt, CredentialProvider};
 use crate::aws::STRICT_PATH_ENCODE_SET;
 use crate::client::pagination::stream_paginated;
-use crate::client::retry::RetryExt;
+use crate::client::retry::{ClientConfig, RetryExt};
 use crate::multipart::UploadPart;
 use crate::path::DELIMITER;
 use crate::util::{format_http_range, format_prefix};
 use crate::{
     BoxStream, ClientOptions, ListResult, MultipartId, ObjectMeta, Path, Result,
-    RetryConfig, StreamExt,
+    StreamExt,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -208,7 +208,7 @@ pub struct S3Config {
     pub bucket: String,
     pub bucket_endpoint: String,
     pub credentials: Box<dyn CredentialProvider>,
-    pub retry_config: RetryConfig,
+    pub client_config: ClientConfig,
     pub client_options: ClientOptions,
     pub sign_payload: bool,
     pub checksum: Option<Checksum>,
@@ -271,7 +271,7 @@ impl S3Client {
                 self.config.sign_payload,
                 None,
             )
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
@@ -317,7 +317,7 @@ impl S3Client {
                 self.config.sign_payload,
                 payload_sha256,
             )
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(PutRequestSnafu {
                 path: path.as_ref(),
@@ -345,7 +345,7 @@ impl S3Client {
                 self.config.sign_payload,
                 None,
             )
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(DeleteRequestSnafu {
                 path: path.as_ref(),
@@ -370,7 +370,7 @@ impl S3Client {
                 self.config.sign_payload,
                 None,
             )
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(CopyRequestSnafu {
                 path: from.as_ref(),
@@ -422,7 +422,7 @@ impl S3Client {
                 self.config.sign_payload,
                 None,
             )
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(ListRequestSnafu)?
             .bytes()
@@ -476,7 +476,7 @@ impl S3Client {
                 self.config.sign_payload,
                 None,
             )
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(CreateMultipartRequestSnafu)?
             .bytes()
@@ -521,7 +521,7 @@ impl S3Client {
                 self.config.sign_payload,
                 None,
             )
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(CompleteMultipartRequestSnafu)?;
 

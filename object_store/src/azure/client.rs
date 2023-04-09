@@ -18,11 +18,11 @@
 use super::credential::{AzureCredential, CredentialProvider};
 use crate::azure::credential::*;
 use crate::client::pagination::stream_paginated;
-use crate::client::retry::RetryExt;
+use crate::client::retry::{ClientConfig, RetryExt};
 use crate::path::DELIMITER;
 use crate::util::{deserialize_rfc1123, format_http_range, format_prefix};
 use crate::{
-    BoxStream, ClientOptions, ListResult, ObjectMeta, Path, Result, RetryConfig,
+    BoxStream, ClientOptions, ListResult, ObjectMeta, Path, Result,
     StreamExt,
 };
 use base64::prelude::BASE64_STANDARD;
@@ -126,7 +126,7 @@ pub struct AzureConfig {
     pub account: String,
     pub container: String,
     pub credentials: CredentialProvider,
-    pub retry_config: RetryConfig,
+    pub client_config: ClientConfig,
     pub service: Url,
     pub is_emulator: bool,
     pub client_options: ClientOptions,
@@ -184,7 +184,7 @@ impl AzureClient {
             CredentialProvider::TokenCredential(cache, cred) => {
                 let token = cache
                     .get_or_insert_with(|| {
-                        cred.fetch_token(&self.client, &self.config.retry_config)
+                        cred.fetch_token(&self.client, &self.config.client_config)
                     })
                     .await
                     .context(AuthorizationSnafu)?;
@@ -238,7 +238,7 @@ impl AzureClient {
 
         let response = builder
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(PutRequestSnafu {
                 path: path.as_ref(),
@@ -275,7 +275,7 @@ impl AzureClient {
 
         let response = builder
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
@@ -298,7 +298,7 @@ impl AzureClient {
             .query(query)
             .header(&DELETE_SNAPSHOTS, "include")
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(DeleteRequestSnafu {
                 path: path.as_ref(),
@@ -336,7 +336,7 @@ impl AzureClient {
 
         builder
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(CopyRequestSnafu {
                 path: from.as_ref(),
@@ -376,7 +376,7 @@ impl AzureClient {
             .request(Method::GET, url)
             .query(&query)
             .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
+            .send_retry(&self.config.client_config)
             .await
             .context(ListRequestSnafu)?
             .bytes()

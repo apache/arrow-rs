@@ -740,9 +740,32 @@ mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
     use tokio::io::AsyncWriteExt;
+    use tokio::runtime::Handle;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
         put_get_delete_list_opts(storage, false).await
+    }
+
+    /// Create a tokio pool in a dedicate thread, returning the [`Handle`] and a shutdown function
+    pub(crate) fn dedicated_tokio() -> (Handle, impl FnOnce()) {
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .enable_io()
+            .build()
+            .unwrap();
+        let handle = runtime.handle().clone();
+
+        let join = std::thread::spawn(move || {
+            runtime.block_on(async move { receiver.await.unwrap() })
+        });
+
+        let shutdown = move || {
+            let _ = sender.send(());
+            join.join().unwrap();
+        };
+
+        (handle, shutdown)
     }
 
     pub(crate) async fn put_get_delete_list_opts(

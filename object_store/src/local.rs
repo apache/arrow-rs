@@ -981,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn test_non_tokio() {
+    fn local_non_tokio() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
         futures::executor::block_on(async move {

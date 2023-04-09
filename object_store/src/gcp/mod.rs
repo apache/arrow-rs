@@ -45,10 +45,11 @@ use reqwest::{header, Client, Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
+use tokio::runtime::Handle;
 use url::Url;
 
 use crate::client::pagination::stream_paginated;
-use crate::client::retry::RetryExt;
+use crate::client::retry::{ClientConfig, RetryExt};
 use crate::{
     client::token::TokenCache,
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
@@ -244,7 +245,7 @@ struct GoogleCloudStorageClient {
     bucket_name: String,
     bucket_name_encoded: String,
 
-    retry_config: RetryConfig,
+    client_config: ClientConfig,
     client_options: ClientOptions,
 
     // TODO: Hook this up in tests
@@ -257,7 +258,7 @@ impl GoogleCloudStorageClient {
             Ok(self
                 .token_cache
                 .get_or_insert_with(|| {
-                    token_provider.fetch_token(&self.client, &self.retry_config)
+                    token_provider.fetch_token(&self.client, &self.client_config)
                 })
                 .await
                 .context(CredentialSnafu)?)
@@ -299,7 +300,7 @@ impl GoogleCloudStorageClient {
         let response = builder
             .bearer_auth(token)
             .query(&[("alt", alt)])
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
@@ -328,7 +329,7 @@ impl GoogleCloudStorageClient {
             .header(header::CONTENT_LENGTH, payload.len())
             .query(&[("uploadType", "media"), ("name", path.as_ref())])
             .body(payload)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await
             .context(PutRequestSnafu)?;
 
@@ -352,7 +353,7 @@ impl GoogleCloudStorageClient {
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, "0")
             .query(&[("uploads", "")])
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await
             .context(PutRequestSnafu)?;
 
@@ -384,7 +385,7 @@ impl GoogleCloudStorageClient {
             .header(header::CONTENT_TYPE, "application/octet-stream")
             .header(header::CONTENT_LENGTH, "0")
             .query(&[("uploadId", multipart_id)])
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await
             .context(PutRequestSnafu)?;
 
@@ -399,7 +400,7 @@ impl GoogleCloudStorageClient {
         let builder = self.client.request(Method::DELETE, url);
         builder
             .bearer_auth(token)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await
             .context(DeleteRequestSnafu {
                 path: path.as_ref(),
@@ -441,7 +442,7 @@ impl GoogleCloudStorageClient {
             // Needed if reqwest is compiled with native-tls instead of rustls-tls
             // See https://github.com/apache/arrow-rs/pull/3921
             .header(header::CONTENT_LENGTH, 0)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await
             .map_err(|err| {
                 if err
@@ -500,7 +501,7 @@ impl GoogleCloudStorageClient {
             .request(Method::GET, url)
             .query(&query)
             .bearer_auth(token)
-            .send_retry(&self.retry_config)
+            .send_retry(&self.client_config)
             .await
             .context(ListRequestSnafu)?
             .json()
@@ -566,7 +567,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             .header(header::CONTENT_TYPE, "application/octet-stream")
             .header(header::CONTENT_LENGTH, format!("{}", buf.len()))
             .body(buf)
-            .send_retry(&self.client.retry_config)
+            .send_retry(&self.client.client_config)
             .await?;
 
         let content_id = response
@@ -623,7 +624,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             .bearer_auth(token)
             .query(&[("uploadId", upload_id)])
             .body(data)
-            .send_retry(&self.client.retry_config)
+            .send_retry(&self.client.client_config)
             .await?;
 
         Ok(())
@@ -773,7 +774,7 @@ pub struct GoogleCloudStorageBuilder {
     service_account_path: Option<String>,
     service_account_key: Option<String>,
     application_credentials_path: Option<String>,
-    retry_config: RetryConfig,
+    client_config: ClientConfig,
     client_options: ClientOptions,
 }
 
@@ -875,7 +876,7 @@ impl Default for GoogleCloudStorageBuilder {
             service_account_path: None,
             service_account_key: None,
             application_credentials_path: None,
-            retry_config: Default::default(),
+            client_config: Default::default(),
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
         }
@@ -1060,7 +1061,17 @@ impl GoogleCloudStorageBuilder {
 
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
+        self.client_config.retry = retry_config;
+        self
+    }
+
+    /// Set the tokio runtime to use to perform IO
+    ///
+    /// This allows isolating IO into a dedicated [`Runtime`](tokio::runtime::Runtime) either
+    /// to ensure acceptable scheduling jitter in the presence of CPU-bound tasks, or to allow
+    /// using `object_store` outside of a tokio context
+    pub fn with_tokio_runtime(mut self, runtime: Handle) -> Self {
+        self.client_config.runtime = Some(runtime);
         self
     }
 
@@ -1159,7 +1170,7 @@ impl GoogleCloudStorageBuilder {
                 token_cache: Default::default(),
                 bucket_name,
                 bucket_name_encoded: encoded_bucket_name,
-                retry_config: self.retry_config,
+                client_config: self.client_config,
                 client_options: self.client_options,
                 max_list_results: None,
             }),
@@ -1189,6 +1200,7 @@ mod test {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    use crate::tests::dedicated_tokio;
     use crate::{
         tests::{
             copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
@@ -1247,6 +1259,20 @@ mod test {
                     )
             }
         }};
+    }
+
+    #[test]
+    fn gcs_non_tokio() {
+        let (handle, shutdown) = dedicated_tokio();
+        let config = maybe_skip_integration!();
+        let integration = config.with_tokio_runtime(handle).build().unwrap();
+        futures::executor::block_on(async move {
+            put_get_delete_list(&integration).await;
+            list_uses_directories_correctly(&integration).await;
+            list_with_delimiter(&integration).await;
+            rename_and_copy(&integration).await;
+        });
+        shutdown();
     }
 
     #[tokio::test]

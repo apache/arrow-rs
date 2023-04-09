@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::retry::RetryExt;
+use crate::client::retry::{ClientConfig, RetryExt};
 use crate::client::token::TemporaryToken;
 use crate::ClientOptions;
-use crate::RetryConfig;
 use async_trait::async_trait;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -129,7 +128,7 @@ pub trait TokenProvider: std::fmt::Debug + Send + Sync {
     async fn fetch_token(
         &self,
         client: &Client,
-        retry: &RetryConfig,
+        config: &ClientConfig,
     ) -> Result<TemporaryToken<String>>;
 }
 
@@ -175,7 +174,7 @@ impl TokenProvider for OAuthProvider {
     async fn fetch_token(
         &self,
         client: &Client,
-        retry: &RetryConfig,
+        config: &ClientConfig,
     ) -> Result<TemporaryToken<String>> {
         let now = seconds_since_epoch();
         let exp = now + 3600;
@@ -211,7 +210,7 @@ impl TokenProvider for OAuthProvider {
         let response: TokenResponse = client
             .request(Method::POST, &self.audience)
             .form(&body)
-            .send_retry(retry)
+            .send_retry(config)
             .await
             .context(TokenRequestSnafu)?
             .json()
@@ -348,7 +347,7 @@ impl InstanceCredentialProvider {
 async fn make_metadata_request(
     client: &Client,
     hostname: &str,
-    retry: &RetryConfig,
+    config: &ClientConfig,
     audience: &str,
 ) -> Result<TokenResponse> {
     let url = format!(
@@ -358,7 +357,7 @@ async fn make_metadata_request(
         .request(Method::GET, url)
         .header("Metadata-Flavor", "Google")
         .query(&[("audience", audience)])
-        .send_retry(retry)
+        .send_retry(config)
         .await
         .context(TokenRequestSnafu)?
         .json()
@@ -374,19 +373,19 @@ impl TokenProvider for InstanceCredentialProvider {
     async fn fetch_token(
         &self,
         _client: &Client,
-        retry: &RetryConfig,
+        config: &ClientConfig,
     ) -> Result<TemporaryToken<String>> {
         const METADATA_IP: &str = "169.254.169.254";
         const METADATA_HOST: &str = "metadata";
 
         info!("fetching token from metadata server");
         let response =
-            make_metadata_request(&self.client, METADATA_HOST, retry, &self.audience)
+            make_metadata_request(&self.client, METADATA_HOST, config, &self.audience)
                 .or_else(|_| {
                     make_metadata_request(
                         &self.client,
                         METADATA_IP,
-                        retry,
+                        config,
                         &self.audience,
                     )
                 })
@@ -473,7 +472,7 @@ impl TokenProvider for ApplicationDefaultCredentials {
     async fn fetch_token(
         &self,
         client: &Client,
-        retry: &RetryConfig,
+        config: &ClientConfig,
     ) -> Result<TemporaryToken<String>, Error> {
         let builder = client.request(Method::POST, DEFAULT_TOKEN_GCP_URI);
         let builder = match self {
@@ -493,7 +492,7 @@ impl TokenProvider for ApplicationDefaultCredentials {
         };
 
         let response = builder
-            .send_retry(retry)
+            .send_retry(config)
             .await
             .context(TokenRequestSnafu)?
             .json::<TokenResponse>()

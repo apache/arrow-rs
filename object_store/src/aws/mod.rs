@@ -44,6 +44,7 @@ use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
+use tokio::runtime::Handle;
 use tracing::info;
 use url::Url;
 
@@ -53,6 +54,7 @@ use crate::aws::credential::{
     AwsCredential, CredentialProvider, InstanceCredentialProvider,
     StaticCredentialProvider, WebIdentityProvider,
 };
+use crate::client::retry::ClientConfig;
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
 use crate::util::str_is_truthy;
 use crate::{
@@ -407,7 +409,7 @@ pub struct AmazonS3Builder {
     endpoint: Option<String>,
     token: Option<String>,
     url: Option<String>,
-    retry_config: RetryConfig,
+    client_config: ClientConfig,
     imdsv1_fallback: bool,
     virtual_hosted_style_request: bool,
     unsigned_payload: bool,
@@ -850,7 +852,17 @@ impl AmazonS3Builder {
 
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
+        self.client_config.retry = retry_config;
+        self
+    }
+
+    /// Set the tokio runtime to use to perform IO
+    ///
+    /// This allows isolating IO into a dedicated [`Runtime`](tokio::runtime::Runtime) either
+    /// to ensure acceptable scheduling jitter in the presence of CPU-bound tasks, or to allow
+    /// using `object_store` outside of a tokio context
+    pub fn with_tokio_runtime(mut self, runtime: Handle) -> Self {
+        self.client_config.runtime = Some(runtime);
         self
     }
 
@@ -978,7 +990,7 @@ impl AmazonS3Builder {
                         role_arn,
                         endpoint,
                         client,
-                        retry_config: self.retry_config.clone(),
+                        client_config: self.client_config.clone(),
                     }) as _
                 }
                 _ => match self.profile {
@@ -996,7 +1008,7 @@ impl AmazonS3Builder {
                         Box::new(InstanceCredentialProvider {
                             cache: Default::default(),
                             client: client_options.client()?,
-                            retry_config: self.retry_config.clone(),
+                            client_config: self.client_config.clone(),
                             imdsv1_fallback: self.imdsv1_fallback,
                             metadata_endpoint: self
                                 .metadata_endpoint
@@ -1031,7 +1043,7 @@ impl AmazonS3Builder {
             bucket,
             bucket_endpoint,
             credentials,
-            retry_config: self.retry_config,
+            client_config: self.client_config,
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload,
             checksum: self.checksum_algorithm,
@@ -1063,8 +1075,8 @@ fn profile_credentials(
 mod tests {
     use super::*;
     use crate::tests::{
-        get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list_opts, rename_and_copy, stream_get,
+        dedicated_tokio, get_nonexistent_object, list_uses_directories_correctly,
+        list_with_delimiter, put_get_delete_list_opts, rename_and_copy, stream_get,
     };
     use bytes::Bytes;
     use std::collections::HashMap;
@@ -1283,6 +1295,21 @@ mod tests {
 
         let builder = AmazonS3Builder::new().try_with_options(&options);
         assert!(builder.is_err());
+    }
+
+    #[test]
+    fn s3_test_non_tokio() {
+        let (handle, shutdown) = dedicated_tokio();
+        let config = maybe_skip_integration!();
+        let integration = config.with_tokio_runtime(handle).build().unwrap();
+        futures::executor::block_on(async move {
+            put_get_delete_list_opts(&integration, true).await;
+            list_uses_directories_correctly(&integration).await;
+            list_with_delimiter(&integration).await;
+            rename_and_copy(&integration).await;
+            stream_get(&integration).await;
+        });
+        shutdown();
     }
 
     #[tokio::test]

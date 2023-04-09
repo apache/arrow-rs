@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::aws::STRICT_ENCODE_SET;
-use crate::client::retry::RetryExt;
+use crate::client::retry::{ClientConfig, RetryExt};
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::util::hmac_sha256;
-use crate::{Result, RetryConfig};
+use crate::Result;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
@@ -328,7 +328,7 @@ impl CredentialProvider for StaticCredentialProvider {
 pub struct InstanceCredentialProvider {
     pub cache: TokenCache<Arc<AwsCredential>>,
     pub client: Client,
-    pub retry_config: RetryConfig,
+    pub client_config: ClientConfig,
     pub imdsv1_fallback: bool,
     pub metadata_endpoint: String,
 }
@@ -338,7 +338,7 @@ impl CredentialProvider for InstanceCredentialProvider {
         Box::pin(self.cache.get_or_insert_with(|| {
             instance_creds(
                 &self.client,
-                &self.retry_config,
+                &self.client_config,
                 &self.metadata_endpoint,
                 self.imdsv1_fallback,
             )
@@ -361,7 +361,7 @@ pub struct WebIdentityProvider {
     pub session_name: String,
     pub endpoint: String,
     pub client: Client,
-    pub retry_config: RetryConfig,
+    pub client_config: ClientConfig,
 }
 
 impl CredentialProvider for WebIdentityProvider {
@@ -369,7 +369,7 @@ impl CredentialProvider for WebIdentityProvider {
         Box::pin(self.cache.get_or_insert_with(|| {
             web_identity(
                 &self.client,
-                &self.retry_config,
+                &self.client_config,
                 &self.token_path,
                 &self.role_arn,
                 &self.session_name,
@@ -405,7 +405,7 @@ impl From<InstanceCredentials> for AwsCredential {
 /// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html#instance-metadata-security-credentials>
 async fn instance_creds(
     client: &Client,
-    retry_config: &RetryConfig,
+    config: &ClientConfig,
     endpoint: &str,
     imdsv1_fallback: bool,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
@@ -417,7 +417,7 @@ async fn instance_creds(
     let token_result = client
         .request(Method::PUT, token_url)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600") // 10 minute TTL
-        .send_retry(retry_config)
+        .send_retry(config)
         .await;
 
     let token = match token_result {
@@ -438,7 +438,7 @@ async fn instance_creds(
         role_request = role_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
     }
 
-    let role = role_request.send_retry(retry_config).await?.text().await?;
+    let role = role_request.send_retry(config).await?.text().await?;
 
     let creds_url = format!("{endpoint}/{CREDENTIALS_PATH}/{role}");
     let mut creds_request = client.request(Method::GET, creds_url);
@@ -447,7 +447,7 @@ async fn instance_creds(
     }
 
     let creds: InstanceCredentials =
-        creds_request.send_retry(retry_config).await?.json().await?;
+        creds_request.send_retry(config).await?.json().await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
@@ -491,7 +491,7 @@ impl From<AssumeRoleCredentials> for AwsCredential {
 /// <https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts-technical-overview.html>
 async fn web_identity(
     client: &Client,
-    retry_config: &RetryConfig,
+    config: &ClientConfig,
     token_path: &str,
     role_arn: &str,
     session_name: &str,
@@ -510,7 +510,7 @@ async fn web_identity(
             ("Version", "2011-06-15"),
             ("WebIdentityToken", &token),
         ])
-        .send_retry(retry_config)
+        .send_retry(config)
         .await?
         .bytes()
         .await?;
@@ -722,7 +722,7 @@ mod tests {
         // For example https://github.com/aws/amazon-ec2-metadata-mock
         let endpoint = env::var("EC2_METADATA_ENDPOINT").unwrap();
         let client = Client::new();
-        let retry_config = RetryConfig::default();
+        let config = ClientConfig::default();
 
         // Verify only allows IMDSv2
         let resp = client
@@ -737,7 +737,7 @@ mod tests {
             "Ensure metadata endpoint is set to only allow IMDSv2"
         );
 
-        let creds = instance_creds(&client, &retry_config, &endpoint, false)
+        let creds = instance_creds(&client, &config, &endpoint, false)
             .await
             .unwrap();
 
@@ -762,7 +762,7 @@ mod tests {
 
         let endpoint = server.url();
         let client = Client::new();
-        let retry_config = RetryConfig::default();
+        let config = ClientConfig::default();
 
         // Test IMDSv2
         server.push_fn(|req| {
@@ -788,7 +788,7 @@ mod tests {
             Response::new(Body::from(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#))
         });
 
-        let creds = instance_creds(&client, &retry_config, endpoint, true)
+        let creds = instance_creds(&client, &config, endpoint, true)
             .await
             .unwrap();
 
@@ -821,7 +821,7 @@ mod tests {
             Response::new(Body::from(r#"{"AccessKeyId":"KEYID","Code":"Success","Expiration":"2022-08-30T10:51:04Z","LastUpdated":"2022-08-30T10:21:04Z","SecretAccessKey":"SECRET","Token":"TOKEN","Type":"AWS-HMAC"}"#))
         });
 
-        let creds = instance_creds(&client, &retry_config, endpoint, true)
+        let creds = instance_creds(&client, &config, endpoint, true)
             .await
             .unwrap();
 
@@ -838,7 +838,7 @@ mod tests {
         );
 
         // Should fail
-        instance_creds(&client, &retry_config, endpoint, false)
+        instance_creds(&client, &config, endpoint, false)
             .await
             .unwrap_err();
     }

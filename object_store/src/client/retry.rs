@@ -23,17 +23,62 @@ use futures::FutureExt;
 use reqwest::header::LOCATION;
 use reqwest::{Response, StatusCode};
 use std::time::{Duration, Instant};
+use tokio::runtime::Handle;
+use tokio::task::JoinError;
 use tracing::info;
+
+#[derive(Debug)]
+pub enum Error {
+    Retry(RetryError),
+    Spawn(JoinError),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Retry(r) => r.fmt(f),
+            Self::Spawn(e) => write!(f, "failed to join spawned task: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Retry(retry) => retry.source(),
+            Self::Spawn(e) => Some(e),
+        }
+    }
+}
+
+impl Error {
+    /// Returns the status code associated with this error if any
+    pub fn status(&self) -> Option<StatusCode> {
+        match self {
+            Self::Retry(e) => e.status(),
+            Self::Spawn(_) => None,
+        }
+    }
+}
+
+impl From<Error> for std::io::Error {
+    fn from(err: Error) -> Self {
+        match err {
+            Error::Retry(e) => e.into(),
+            Error::Spawn(e) => Self::new(std::io::ErrorKind::Other, e),
+        }
+    }
+}
 
 /// Retry request error
 #[derive(Debug)]
-pub struct Error {
+pub struct RetryError {
     retries: usize,
     message: String,
     source: Option<reqwest::Error>,
 }
 
-impl std::fmt::Display for Error {
+impl std::fmt::Display for RetryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -47,21 +92,21 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {
+impl std::error::Error for RetryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.source.as_ref().map(|e| e as _)
     }
 }
 
-impl Error {
+impl RetryError {
     /// Returns the status code associated with this error if any
     pub fn status(&self) -> Option<StatusCode> {
         self.source.as_ref().and_then(|e| e.status())
     }
 }
 
-impl From<Error> for std::io::Error {
-    fn from(err: Error) -> Self {
+impl From<RetryError> for std::io::Error {
+    fn from(err: RetryError) -> Self {
         use std::io::ErrorKind;
         match (&err.source, err.status()) {
             (Some(source), _) if source.is_builder() || source.is_request() => {
@@ -121,22 +166,37 @@ impl Default for RetryConfig {
     }
 }
 
+/// Crate-private client configuration
+///
+/// Specifically this is the config passed to [`RetryExt::send_retry`]
+///
+/// This is unlike the public [`ClientOptions`](crate::ClientOptions) which contains just
+/// the properties used to construct [`Client`](reqwest::Client)
+#[derive(Debug, Clone, Default)]
+pub struct ClientConfig {
+    /// The retry configuration
+    pub retry: RetryConfig,
+
+    /// Optional tokio runtime to perform IO
+    pub runtime: Option<Handle>,
+}
+
 pub trait RetryExt {
-    /// Dispatch a request with the given retry configuration
+    /// Dispatch a request with the given [`ClientConfig`]
     ///
     /// # Panic
     ///
     /// This will panic if the request body is a stream
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>>;
+    fn send_retry(self, config: &ClientConfig) -> BoxFuture<'static, Result<Response>>;
 }
 
 impl RetryExt for reqwest::RequestBuilder {
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>> {
-        let mut backoff = Backoff::new(&config.backoff);
-        let max_retries = config.max_retries;
-        let retry_timeout = config.retry_timeout;
+    fn send_retry(self, config: &ClientConfig) -> BoxFuture<'static, Result<Response>> {
+        let mut backoff = Backoff::new(&config.retry.backoff);
+        let max_retries = config.retry.max_retries;
+        let retry_timeout = config.retry.retry_timeout;
 
-        async move {
+        let fut = async move {
             let mut retries = 0;
             let now = Instant::now();
 
@@ -146,42 +206,44 @@ impl RetryExt for reqwest::RequestBuilder {
                     Ok(r) => match r.error_for_status_ref() {
                         Ok(_) if r.status().is_success() => return Ok(r),
                         Ok(r) => {
-                            let is_bare_redirect = r.status().is_redirection() && !r.headers().contains_key(LOCATION);
+                            let is_bare_redirect = r.status().is_redirection()
+                                && !r.headers().contains_key(LOCATION);
                             let message = match is_bare_redirect {
                                 true => "Received redirect without LOCATION, this normally indicates an incorrectly configured region".to_string(),
                                 // Not actually sure if this is reachable, but here for completeness
                                 false => format!("request unsuccessful: {}", r.status()),
                             };
 
-                            return Err(Error{
+                            return Err(Error::Retry(RetryError {
                                 message,
                                 retries,
                                 source: None,
-                            })
+                            }));
                         }
                         Err(e) => {
                             let status = r.status();
 
                             if retries == max_retries
                                 || now.elapsed() > retry_timeout
-                                || !status.is_server_error() {
-
+                                || !status.is_server_error()
+                            {
                                 // Get the response message if returned a client error
                                 let message = match status.is_client_error() {
                                     true => match r.text().await {
                                         Ok(message) if !message.is_empty() => message,
                                         Ok(_) => "No Body".to_string(),
-                                        Err(e) => format!("error getting response body: {e}")
-                                    }
+                                        Err(e) => {
+                                            format!("error getting response body: {e}")
+                                        }
+                                    },
                                     false => status.to_string(),
                                 };
 
-                                return Err(Error{
+                                return Err(Error::Retry(RetryError {
                                     message,
                                     retries,
                                     source: Some(e),
-                                })
-
+                                }));
                             }
 
                             let sleep = backoff.next();
@@ -190,26 +252,36 @@ impl RetryExt for reqwest::RequestBuilder {
                             tokio::time::sleep(sleep).await;
                         }
                     },
-                    Err(e) =>
-                    {
-                        return Err(Error{
+                    Err(e) => {
+                        return Err(Error::Retry(RetryError {
                             retries,
                             message: "request error".to_string(),
-                            source: Some(e)
-                        })
+                            source: Some(e),
+                        }))
                     }
                 }
             }
+        };
+
+        match config.runtime.as_ref() {
+            Some(handle) => handle
+                .spawn(fut)
+                .map(|x| match x {
+                    Ok(r) => r,
+                    Err(e) => Err(Error::Spawn(e)),
+                })
+                .boxed(),
+            None => fut.boxed(),
         }
-        .boxed()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::client::mock_server::MockServer;
-    use crate::client::retry::RetryExt;
+    use crate::client::retry::{ClientConfig, Error, RetryExt};
     use crate::RetryConfig;
+    use futures::TryFutureExt;
     use hyper::header::LOCATION;
     use hyper::{Body, Response};
     use reqwest::{Client, Method, StatusCode};
@@ -224,9 +296,21 @@ mod tests {
             max_retries: 2,
             retry_timeout: Duration::from_secs(1000),
         };
+        let config = ClientConfig {
+            retry,
+            runtime: None,
+        };
 
         let client = Client::new();
-        let do_request = || client.request(Method::GET, mock.url()).send_retry(&retry);
+        let do_request = || {
+            client
+                .request(Method::GET, mock.url())
+                .send_retry(&config)
+                .map_err(|e| match e {
+                    Error::Retry(e) => e,
+                    Error::Spawn(e) => unreachable!("spawn error {e}"),
+                })
+        };
 
         // Simple request should work
         let r = do_request().await.unwrap();
@@ -332,7 +416,7 @@ mod tests {
         assert_eq!(e.message, "Received redirect without LOCATION, this normally indicates an incorrectly configured region");
 
         // Gives up after the retrying the specified number of times
-        for _ in 0..=retry.max_retries {
+        for _ in 0..=config.retry.max_retries {
             mock.push(
                 Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
@@ -342,7 +426,7 @@ mod tests {
         }
 
         let e = do_request().await.unwrap_err();
-        assert_eq!(e.retries, retry.max_retries);
+        assert_eq!(e.retries, config.retry.max_retries);
         assert_eq!(e.message, "502 Bad Gateway");
 
         // Shutdown

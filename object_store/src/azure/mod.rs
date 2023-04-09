@@ -49,8 +49,10 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::{collections::BTreeSet, str::FromStr};
 use tokio::io::AsyncWrite;
+use tokio::runtime::Handle;
 use url::Url;
 
+use crate::client::retry::ClientConfig;
 use crate::util::{str_is_truthy, RFC1123_FMT};
 pub use credential::authority_hosts;
 
@@ -411,7 +413,7 @@ pub struct MicrosoftAzureBuilder {
     msi_resource_id: Option<String>,
     federated_token_file: Option<String>,
     use_azure_cli: bool,
-    retry_config: RetryConfig,
+    client_config: ClientConfig,
     client_options: ClientOptions,
 }
 
@@ -877,7 +879,17 @@ impl MicrosoftAzureBuilder {
 
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
+        self.client_config.retry = retry_config;
+        self
+    }
+
+    /// Set the tokio runtime to use to perform IO
+    ///
+    /// This allows isolating IO into a dedicated [`Runtime`](tokio::runtime::Runtime) either
+    /// to ensure acceptable scheduling jitter in the presence of CPU-bound tasks, or to allow
+    /// using `object_store` outside of a tokio context
+    pub fn with_tokio_runtime(mut self, runtime: Handle) -> Self {
+        self.client_config.runtime = Some(runtime);
         self
     }
 
@@ -1006,7 +1018,7 @@ impl MicrosoftAzureBuilder {
             account,
             is_emulator,
             container,
-            retry_config: self.retry_config,
+            client_config: self.client_config,
             client_options: self.client_options,
             service: storage_url,
             credentials: auth,
@@ -1056,8 +1068,9 @@ fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
 mod tests {
     use super::*;
     use crate::tests::{
-        copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list, put_get_delete_list_opts, rename_and_copy, stream_get,
+        copy_if_not_exists, dedicated_tokio, list_uses_directories_correctly,
+        list_with_delimiter, put_get_delete_list, put_get_delete_list_opts,
+        rename_and_copy, stream_get,
     };
     use std::collections::HashMap;
     use std::env;
@@ -1122,6 +1135,21 @@ mod tests {
                 }
             }
         }};
+    }
+
+    #[test]
+    fn azure_blob_non_tokio() {
+        let (handle, shutdown) = dedicated_tokio();
+        let config = maybe_skip_integration!();
+        let integration = config.with_tokio_runtime(handle).build().unwrap();
+        futures::executor::block_on(async move {
+            put_get_delete_list_opts(&integration, false).await;
+            list_uses_directories_correctly(&integration).await;
+            list_with_delimiter(&integration).await;
+            rename_and_copy(&integration).await;
+            stream_get(&integration).await;
+        });
+        shutdown();
     }
 
     #[tokio::test]
