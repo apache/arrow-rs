@@ -283,6 +283,14 @@ mod tests {
 
     use super::*;
 
+    /// Deletes any directories left behind from previous tests
+    async fn cleanup_directories(integration: &HttpStore) {
+        let result = integration.list_with_delimiter(None).await.unwrap();
+        for r in result.common_prefixes {
+            integration.delete(&r).await.unwrap();
+        }
+    }
+
     #[test]
     fn http_test() {
         dotenv::dotenv().ok();
@@ -300,6 +308,7 @@ mod tests {
         let (handle, shutdown) = dedicated_tokio();
 
         let test = |integration| async move {
+            cleanup_directories(&integration).await;
             put_get_delete_list_opts(&integration, false).await;
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;
