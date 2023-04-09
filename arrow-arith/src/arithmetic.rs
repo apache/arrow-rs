@@ -745,17 +745,17 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
                 DataType::Interval(IntervalUnit::YearMonth) => {
                     let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_checked_op(l, r, TimestampSecondType::add_year_months)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
                     let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_checked_op(l, r, TimestampSecondType::add_day_time)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
                     let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_checked_op(l, r, TimestampSecondType::add_month_day_nano)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Cannot perform arithmetic operation between array of type {} and array of type {}",
@@ -770,17 +770,17 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
                 DataType::Interval(IntervalUnit::YearMonth) => {
                     let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_checked_op(l, r, TimestampMicrosecondType::add_year_months)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
                     let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_checked_op(l, r, TimestampMicrosecondType::add_day_time)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
                     let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_checked_op(l, r, TimestampMicrosecondType::add_month_day_nano)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Cannot perform arithmetic operation between array of type {} and array of type {}",
@@ -795,17 +795,17 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
                 DataType::Interval(IntervalUnit::YearMonth) => {
                     let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_checked_op(l, r, TimestampMillisecondType::add_year_months)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
                     let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_checked_op(l, r, TimestampMillisecondType::add_day_time)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
                     let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_checked_op(l, r, TimestampMillisecondType::add_month_day_nano)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Cannot perform arithmetic operation between array of type {} and array of type {}",
@@ -820,17 +820,17 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
                 DataType::Interval(IntervalUnit::YearMonth) => {
                     let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_checked_op(l, r, TimestampNanosecondType::add_year_months)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
                     let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_checked_op(l, r, TimestampNanosecondType::add_day_time)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
                     let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_checked_op(l, r, TimestampNanosecondType::add_month_day_nano)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Cannot perform arithmetic operation between array of type {} and array of type {}",
@@ -1076,17 +1076,17 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 DataType::Interval(IntervalUnit::YearMonth) => {
                     let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_checked_op(l, r, TimestampSecondType::subtract_year_months)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
                     let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_checked_op(l, r, TimestampSecondType::subtract_day_time)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
                     let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_checked_op(l, r, TimestampSecondType::subtract_month_day_nano)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Cannot perform arithmetic operation between array of type {} and array of type {}",
@@ -1101,17 +1101,17 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 DataType::Interval(IntervalUnit::YearMonth) => {
                     let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_checked_op(l, r, TimestampMicrosecondType::subtract_year_months)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
                     let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_checked_op(l, r, TimestampMicrosecondType::subtract_day_time)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
                     let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_checked_op(l, r, TimestampMicrosecondType::subtract_month_day_nano)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Cannot perform arithmetic operation between array of type {} and array of type {}",
@@ -1125,17 +1125,17 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 DataType::Interval(IntervalUnit::YearMonth) => {
                     let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_checked_op(l, r, TimestampMillisecondType::subtract_year_months)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
                     let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_checked_op(l, r, TimestampMillisecondType::subtract_day_time)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
                     let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_checked_op(l, r, TimestampMillisecondType::subtract_month_day_nano)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Cannot perform arithmetic operation between array of type {} and array of type {}",
@@ -1150,17 +1150,17 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 DataType::Interval(IntervalUnit::YearMonth) => {
                     let r = right.as_primitive::<IntervalYearMonthType>();
                     let res = math_checked_op(l, r, TimestampNanosecondType::subtract_year_months)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
                     let r = right.as_primitive::<IntervalDayTimeType>();
                     let res = math_checked_op(l, r, TimestampNanosecondType::subtract_day_time)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
                     let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_checked_op(l, r, TimestampNanosecondType::subtract_month_day_nano)?;
-                    Ok(Arc::new(res))
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Cannot perform arithmetic operation between array of type {} and array of type {}",
