@@ -715,7 +715,7 @@ impl TimestampMillisecondType {
             .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))
     }
 
-    /// Adds the given IntervalMonthDayNanoType to an arrow TimestaTimestampMillisecondTypempSecondType
+    /// Adds the given IntervalMonthDayNanoType to an arrow TimestampMillisecondType
     ///
     /// # Arguments
     ///

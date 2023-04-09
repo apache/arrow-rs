@@ -4012,7 +4012,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_millisecond_add_interval() {
-        // timestamp second + interval year month
+        // timestamp millisecond + interval year month
         let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalYearMonthArray::from(vec![
             Some(IntervalYearMonthType::make_value(0, 1)),
@@ -4036,7 +4036,7 @@ mod tests {
         ]);
         assert_eq!(result, &expected);
 
-        // timestamp second + interval day time
+        // timestamp millisecond + interval day time
         let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalDayTimeArray::from(vec![
             Some(IntervalDayTimeType::make_value(1, 0)),
@@ -4059,7 +4059,7 @@ mod tests {
         ]);
         assert_eq!(&expected, result);
 
-        // timestamp second + interval month day nanosecond
+        // timestamp millisecond + interval month day nanosecond
         let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalMonthDayNanoArray::from(vec![
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
@@ -4085,7 +4085,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_millisecond_subtract_interval() {
-        // timestamp second + interval year month
+        // timestamp millisecond + interval year month
         let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalYearMonthArray::from(vec![
             Some(IntervalYearMonthType::make_value(0, 1)),
@@ -4109,7 +4109,7 @@ mod tests {
         ]);
         assert_eq!(&expected, result);
 
-        // timestamp second + interval day time
+        // timestamp millisecond + interval day time
         let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalDayTimeArray::from(vec![
             Some(IntervalDayTimeType::make_value(1, 0)),
@@ -4132,7 +4132,7 @@ mod tests {
         ]);
         assert_eq!(&expected, result);
 
-        // timestamp second + interval month day nanosecond
+        // timestamp millisecond + interval month day nanosecond
         let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalMonthDayNanoArray::from(vec![
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
@@ -4158,7 +4158,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_microsecond_add_interval() {
-        // timestamp second + interval year month
+        // timestamp microsecond + interval year month
         let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalYearMonthArray::from(vec![
             Some(IntervalYearMonthType::make_value(0, 1)),
@@ -4182,7 +4182,7 @@ mod tests {
         ]);
         assert_eq!(result, &expected);
 
-        // timestamp second + interval day time
+        // timestamp microsecond + interval day time
         let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalDayTimeArray::from(vec![
             Some(IntervalDayTimeType::make_value(1, 0)),
@@ -4205,7 +4205,7 @@ mod tests {
         ]);
         assert_eq!(&expected, result);
 
-        // timestamp second + interval month day nanosecond
+        // timestamp microsecond + interval month day nanosecond
         let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalMonthDayNanoArray::from(vec![
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
@@ -4231,7 +4231,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_microsecond_subtract_interval() {
-        // timestamp second + interval year month
+        // timestamp microsecond + interval year month
         let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalYearMonthArray::from(vec![
             Some(IntervalYearMonthType::make_value(0, 1)),
@@ -4255,7 +4255,7 @@ mod tests {
         ]);
         assert_eq!(&expected, result);
 
-        // timestamp second + interval day time
+        // timestamp microsecond + interval day time
         let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalDayTimeArray::from(vec![
             Some(IntervalDayTimeType::make_value(1, 0)),
@@ -4278,7 +4278,7 @@ mod tests {
         ]);
         assert_eq!(&expected, result);
 
-        // timestamp second + interval month day nanosecond
+        // timestamp microsecond + interval month day nanosecond
         let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalMonthDayNanoArray::from(vec![
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
@@ -4304,7 +4304,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_nanosecond_add_interval() {
-        // timestamp second + interval year month
+        // timestamp nanosecond + interval year month
         let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalYearMonthArray::from(vec![
             Some(IntervalYearMonthType::make_value(0, 1)),
@@ -4328,7 +4328,7 @@ mod tests {
         ]);
         assert_eq!(result, &expected);
 
-        // timestamp second + interval day time
+        // timestamp nanosecond + interval day time
         let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalDayTimeArray::from(vec![
             Some(IntervalDayTimeType::make_value(1, 0)),
@@ -4351,7 +4351,7 @@ mod tests {
         ]);
         assert_eq!(&expected, result);
 
-        // timestamp second + interval month day nanosecond
+        // timestamp nanosecond + interval month day nanosecond
         let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalMonthDayNanoArray::from(vec![
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
@@ -4377,7 +4377,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_nanosecond_subtract_interval() {
-        // timestamp second + interval year month
+        // timestamp nanosecond + interval year month
         let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalYearMonthArray::from(vec![
             Some(IntervalYearMonthType::make_value(0, 1)),
@@ -4401,7 +4401,7 @@ mod tests {
         ]);
         assert_eq!(&expected, result);
 
-        // timestamp second + interval day time
+        // timestamp nanosecond + interval day time
         let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalDayTimeArray::from(vec![
             Some(IntervalDayTimeType::make_value(1, 0)),
@@ -4424,7 +4424,7 @@ mod tests {
         ]);
         assert_eq!(&expected, result);
 
-        // timestamp second + interval month day nanosecond
+        // timestamp nanosecond + interval month day nanosecond
         let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalMonthDayNanoArray::from(vec![
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
