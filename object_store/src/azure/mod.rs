@@ -1137,30 +1137,27 @@ mod tests {
         }};
     }
 
-    #[test]
-    fn azure_blob_non_tokio() {
-        let (handle, shutdown) = dedicated_tokio();
-        let config = maybe_skip_integration!();
-        let integration = config.with_tokio_runtime(handle).build().unwrap();
-        futures::executor::block_on(async move {
+    #[tokio::test]
+    async fn azure_blob_test() {
+        let builder = maybe_skip_integration!();
+        let test = |integration| async move {
             put_get_delete_list_opts(&integration, false).await;
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;
             rename_and_copy(&integration).await;
+            copy_if_not_exists(&integration).await;
             stream_get(&integration).await;
-        });
-        shutdown();
-    }
+        };
 
-    #[tokio::test]
-    async fn azure_blob_test() {
-        let integration = maybe_skip_integration!().build().unwrap();
-        put_get_delete_list_opts(&integration, false).await;
-        list_uses_directories_correctly(&integration).await;
-        list_with_delimiter(&integration).await;
-        rename_and_copy(&integration).await;
-        copy_if_not_exists(&integration).await;
-        stream_get(&integration).await;
+        let (handle, shutdown) = dedicated_tokio();
+
+        let integration = builder.clone().build().unwrap();
+        handle.block_on(test(integration));
+
+        let integration = builder.with_tokio_runtime(handle).build().unwrap();
+        futures::executor::block_on(test(integration));
+
+        shutdown();
     }
 
     // test for running integration test against actual blob service with service principal

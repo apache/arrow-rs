@@ -1297,45 +1297,42 @@ mod tests {
         assert!(builder.is_err());
     }
 
-    #[test]
-    fn s3_test_non_tokio() {
-        let (handle, shutdown) = dedicated_tokio();
-        let config = maybe_skip_integration!();
-        let integration = config.with_tokio_runtime(handle).build().unwrap();
-        futures::executor::block_on(async move {
-            put_get_delete_list_opts(&integration, true).await;
+    #[tokio::test]
+    async fn s3_test() {
+        let builder = maybe_skip_integration!();
+        let is_local = matches!(&builder.endpoint, Some(e) if e.starts_with("http://"));
+
+        let test = |integration| async move {
+            // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
+            put_get_delete_list_opts(&integration, is_local).await;
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;
             rename_and_copy(&integration).await;
             stream_get(&integration).await;
-        });
-        shutdown();
-    }
+        };
 
-    #[tokio::test]
-    async fn s3_test() {
-        let config = maybe_skip_integration!();
-        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
-        let integration = config.build().unwrap();
+        let (handle, shutdown) = dedicated_tokio();
 
-        // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
-        put_get_delete_list_opts(&integration, is_local).await;
-        list_uses_directories_correctly(&integration).await;
-        list_with_delimiter(&integration).await;
-        rename_and_copy(&integration).await;
-        stream_get(&integration).await;
+        let integration = builder.clone().build().unwrap();
+        handle.block_on(test(integration));
 
         // run integration test with unsigned payload enabled
-        let config = maybe_skip_integration!().with_unsigned_payload(true);
-        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
-        let integration = config.build().unwrap();
-        put_get_delete_list_opts(&integration, is_local).await;
+        let integration = builder.clone().with_unsigned_payload(true).build().unwrap();
+        handle.block_on(test(integration));
 
         // run integration test with checksum set to sha256
-        let config = maybe_skip_integration!().with_checksum_algorithm(Checksum::SHA256);
-        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
-        let integration = config.build().unwrap();
-        put_get_delete_list_opts(&integration, is_local).await;
+        let integration = builder
+            .clone()
+            .with_checksum_algorithm(Checksum::SHA256)
+            .build()
+            .unwrap();
+        handle.block_on(test(integration));
+
+        // run integration test without tokio runtime
+        let integration = builder.with_tokio_runtime(handle).build().unwrap();
+        futures::executor::block_on(test(integration));
+
+        shutdown();
     }
 
     #[tokio::test]

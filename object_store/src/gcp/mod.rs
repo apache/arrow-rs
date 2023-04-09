@@ -1262,35 +1262,32 @@ mod test {
     }
 
     #[test]
-    fn gcs_non_tokio() {
-        let (handle, shutdown) = dedicated_tokio();
-        let config = maybe_skip_integration!();
-        let integration = config.with_tokio_runtime(handle).build().unwrap();
-        futures::executor::block_on(async move {
+    fn gcs_test() {
+        let builder = maybe_skip_integration!();
+        let test = |integration: GoogleCloudStorage| async move {
             put_get_delete_list(&integration).await;
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;
             rename_and_copy(&integration).await;
-        });
+            if integration.client.base_url == default_gcs_base_url() {
+                // Fake GCS server doesn't currently honor ifGenerationMatch
+                // https://github.com/fsouza/fake-gcs-server/issues/994
+                copy_if_not_exists(&integration).await;
+                // Fake GCS server does not yet implement XML Multipart uploads
+                // https://github.com/fsouza/fake-gcs-server/issues/852
+                stream_get(&integration).await;
+            }
+        };
+
+        let (handle, shutdown) = dedicated_tokio();
+
+        let integration = builder.clone().build().unwrap();
+        handle.block_on(test(integration));
+
+        let integration = builder.with_tokio_runtime(handle).build().unwrap();
+        futures::executor::block_on(test(integration));
+
         shutdown();
-    }
-
-    #[tokio::test]
-    async fn gcs_test() {
-        let integration = maybe_skip_integration!().build().unwrap();
-
-        put_get_delete_list(&integration).await;
-        list_uses_directories_correctly(&integration).await;
-        list_with_delimiter(&integration).await;
-        rename_and_copy(&integration).await;
-        if integration.client.base_url == default_gcs_base_url() {
-            // Fake GCS server doesn't currently honor ifGenerationMatch
-            // https://github.com/fsouza/fake-gcs-server/issues/994
-            copy_if_not_exists(&integration).await;
-            // Fake GCS server does not yet implement XML Multipart uploads
-            // https://github.com/fsouza/fake-gcs-server/issues/852
-            stream_get(&integration).await;
-        }
     }
 
     #[tokio::test]

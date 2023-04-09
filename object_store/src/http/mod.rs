@@ -283,8 +283,8 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn http_test() {
+    #[test]
+    fn http_test() {
         dotenv::dotenv().ok();
         let force = std::env::var("TEST_INTEGRATION");
         if force.is_err() {
@@ -293,45 +293,26 @@ mod tests {
         }
         let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
         let options = ClientOptions::new().with_allow_http(true);
-        let integration = HttpBuilder::new()
+        let builder = HttpBuilder::new()
             .with_url(url)
-            .with_client_options(options)
-            .build()
-            .unwrap();
+            .with_client_options(options);
 
-        put_get_delete_list_opts(&integration, false).await;
-        list_uses_directories_correctly(&integration).await;
-        list_with_delimiter(&integration).await;
-        rename_and_copy(&integration).await;
-        copy_if_not_exists(&integration).await;
-    }
-
-    #[test]
-    fn http_non_tokio() {
         let (handle, shutdown) = dedicated_tokio();
 
-        dotenv::dotenv().ok();
-        let force = std::env::var("TEST_INTEGRATION");
-        if force.is_err() {
-            eprintln!("skipping HTTP integration test - set TEST_INTEGRATION to run");
-            return;
-        }
-        let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
-        let options = ClientOptions::new().with_allow_http(true);
-        let integration = HttpBuilder::new()
-            .with_url(url)
-            .with_client_options(options)
-            .with_tokio_runtime(handle)
-            .build()
-            .unwrap();
-
-        futures::executor::block_on(async move {
+        let test = |integration| async move {
             put_get_delete_list_opts(&integration, false).await;
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;
             rename_and_copy(&integration).await;
             copy_if_not_exists(&integration).await;
-        });
+        };
+
+        let integration = builder.clone().build().unwrap();
+        handle.block_on(test(integration));
+
+        let integration = builder.with_tokio_runtime(handle).build().unwrap();
+        futures::executor::block_on(test(integration));
+
         shutdown();
     }
 }

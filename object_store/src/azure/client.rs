@@ -21,10 +21,7 @@ use crate::client::pagination::stream_paginated;
 use crate::client::retry::{ClientConfig, RetryExt};
 use crate::path::DELIMITER;
 use crate::util::{deserialize_rfc1123, format_http_range, format_prefix};
-use crate::{
-    BoxStream, ClientOptions, ListResult, ObjectMeta, Path, Result,
-    StreamExt,
-};
+use crate::{BoxStream, ClientOptions, ListResult, ObjectMeta, Path, Result, StreamExt};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
