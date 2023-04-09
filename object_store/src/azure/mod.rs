@@ -1137,8 +1137,8 @@ mod tests {
         }};
     }
 
-    #[tokio::test]
-    async fn azure_blob_test() {
+    #[test]
+    fn azure_blob_test() {
         let builder = maybe_skip_integration!();
         let test = |integration| async move {
             put_get_delete_list_opts(&integration, false).await;

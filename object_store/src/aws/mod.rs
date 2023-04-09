@@ -1297,8 +1297,8 @@ mod tests {
         assert!(builder.is_err());
     }
 
-    #[tokio::test]
-    async fn s3_test() {
+    #[test]
+    fn s3_test() {
         let builder = maybe_skip_integration!();
         let is_local = matches!(&builder.endpoint, Some(e) if e.starts_with("http://"));
 
