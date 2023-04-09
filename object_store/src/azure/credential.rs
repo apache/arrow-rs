@@ -124,16 +124,11 @@ impl CredentialExt for RequestBuilder {
             .header(DATE, &date_val)
             .header(&VERSION, &AZURE_VERSION);
 
-        // Hack around lack of access to underlying request
-        // https://github.com/seanmonstar/reqwest/issues/1212
-        let request = self
-            .try_clone()
-            .expect("not stream")
-            .build()
-            .expect("request valid");
-
         match credential {
             AzureCredential::AccessKey(key) => {
+                let (client, request) = self.build_split();
+                let mut request = request.expect("request valid");
+
                 let signature = generate_authorization(
                     request.headers(),
                     request.url(),
@@ -141,22 +136,21 @@ impl CredentialExt for RequestBuilder {
                     account,
                     key.as_str(),
                 );
-                self = self
-                    // "signature" is a base 64 encoded string so it should never contain illegal characters.
-                    .header(
-                        AUTHORIZATION,
-                        HeaderValue::from_str(signature.as_str()).unwrap(),
-                    );
+
+                // "signature" is a base 64 encoded string so it should never
+                // contain illegal characters
+                request.headers_mut().append(
+                    AUTHORIZATION,
+                    HeaderValue::from_str(signature.as_str()).unwrap(),
+                );
+
+                Self::from_parts(client, request)
             }
             AzureCredential::AuthorizationToken(token) => {
-                self = self.header(AUTHORIZATION, token);
+                self.header(AUTHORIZATION, token)
             }
-            AzureCredential::SASToken(query_pairs) => {
-                self = self.query(&query_pairs);
-            }
-        };
-
-        self
+            AzureCredential::SASToken(query_pairs) => self.query(&query_pairs),
+        }
     }
 }
 

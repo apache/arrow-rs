@@ -81,8 +81,6 @@ const HASH_HEADER: &str = "x-amz-content-sha256";
 const TOKEN_HEADER: &str = "x-amz-security-token";
 const AUTH_HEADER: &str = "authorization";
 
-const ALL_HEADERS: &[&str; 4] = &[DATE_HEADER, HASH_HEADER, TOKEN_HEADER, AUTH_HEADER];
-
 impl<'a> RequestSigner<'a> {
     fn sign(&self, request: &mut Request, pre_calculated_digest: Option<Vec<u8>>) {
         if let Some(ref token) = self.credential.token {
@@ -175,20 +173,15 @@ pub trait CredentialExt {
 
 impl CredentialExt for RequestBuilder {
     fn with_aws_sigv4(
-        mut self,
+        self,
         credential: &AwsCredential,
         region: &str,
         service: &str,
         sign_payload: bool,
         payload_sha256: Option<Vec<u8>>,
     ) -> Self {
-        // Hack around lack of access to underlying request
-        // https://github.com/seanmonstar/reqwest/issues/1212
-        let mut request = self
-            .try_clone()
-            .expect("not stream")
-            .build()
-            .expect("request valid");
+        let (client, request) = self.build_split();
+        let mut request = request.expect("request valid");
 
         let date = Utc::now();
         let signer = RequestSigner {
@@ -200,13 +193,7 @@ impl CredentialExt for RequestBuilder {
         };
 
         signer.sign(&mut request, payload_sha256);
-
-        for header in ALL_HEADERS {
-            if let Some(val) = request.headers_mut().remove(*header) {
-                self = self.header(*header, val)
-            }
-        }
-        self
+        Self::from_parts(client, request)
     }
 }
 
