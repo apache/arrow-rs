@@ -498,6 +498,29 @@ impl DataType {
                 }
             }
     }
+
+    /// Check to see if `self` is a superset of `other`
+    ///
+    /// If DataType is a nested type, then it will check to see if the nested type is a superset of the other nested type
+    /// else it will check to see if the DataType is equal to the other DataType
+    pub fn contains(&self, other: &DataType) -> bool {
+        match self {
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::Map(field, _)
+            | DataType::FixedSizeList(field, _) => field.data_type().contains(other),
+            DataType::Struct(fields) => {
+                fields.iter().any(|field| field.data_type().contains(other))
+            }
+            DataType::Union(fields, _) => fields
+                .iter()
+                .any(|field| field.1.data_type().contains(other)),
+            DataType::Dictionary(key, value) => {
+                key.contains(other) || value.contains(other)
+            }
+            _ => self == other,
+        }
+    }
 }
 
 /// The maximum precision for [DataType::Decimal128] values
@@ -667,5 +690,69 @@ mod tests {
     #[test]
     fn size_should_not_regress() {
         assert_eq!(std::mem::size_of::<DataType>(), 24);
+    }
+
+    #[test]
+    fn test_contain() {
+        // test list
+        let list = DataType::List(Arc::new(Field::new("foo", DataType::Utf8, true)));
+        let utf = DataType::Utf8;
+        assert!(list.contains(&utf));
+
+        // test struct
+        let struct_ = DataType::Struct(Fields::from(vec![
+            Field::new("first_name", DataType::Utf8, false),
+            Field::new("last_name", DataType::Utf8, false),
+            Field::new(
+                "address",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("street", DataType::Utf8, false),
+                    Field::new("zip", DataType::UInt16, false),
+                ])),
+                false,
+            ),
+        ]));
+        assert!(struct_.contains(&utf));
+
+        // test dictionary
+        let dict =
+            DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Utf8));
+        assert!(dict.contains(&utf));
+
+        // test fixed size list
+        let fixed_size_list = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Utf8, false)),
+            3,
+        );
+        assert!(fixed_size_list.contains(&utf));
+
+        // test union
+        let union = DataType::Union(
+            UnionFields::new(
+                vec![1, 2, 3],
+                vec![
+                    Field::new("first_name", DataType::Utf8, false),
+                    Field::new("last_name", DataType::Utf8, false),
+                    Field::new(
+                        "address",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("street", DataType::Utf8, false),
+                            Field::new("zip", DataType::UInt16, false),
+                        ])),
+                        false,
+                    ),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+        assert!(union.contains(&utf));
+
+        // test map
+        let map = DataType::Map(Arc::new(Field::new("key", DataType::Utf8, false)), true);
+        assert!(map.contains(&utf));
+
+        // test int
+        let int = DataType::Int32;
+        assert!(!int.contains(&utf));
     }
 }
