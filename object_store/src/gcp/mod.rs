@@ -768,12 +768,19 @@ impl ObjectStore for GoogleCloudStorage {
 /// ```
 #[derive(Debug, Clone)]
 pub struct GoogleCloudStorageBuilder {
+    /// Bucket name
     bucket_name: Option<String>,
+    /// Url
     url: Option<String>,
+    /// Path to the service account file
     service_account_path: Option<String>,
+    /// The serialized service account key
     service_account_key: Option<String>,
+    /// Path to the application credentials file.
     application_credentials_path: Option<String>,
+    /// Retry config
     retry_config: RetryConfig,
+    /// Client options
     client_options: ClientOptions,
 }
 
@@ -981,6 +988,28 @@ impl GoogleCloudStorageBuilder {
             self = self.try_with_option(key, value)?;
         }
         Ok(self)
+    }
+
+    /// Get config value via a [`GoogleConfigKey`].
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+    ///
+    /// let builder = GoogleCloudStorageBuilder::from_env()
+    ///     .with_service_account_key("foo");
+    /// let service_account_key = builder.get_config_value(&GoogleConfigKey::ServiceAccountKey).unwrap_or_default();
+    /// assert_eq!("foo", &service_account_key);
+    /// ```
+    pub fn get_config_value(&self, key: &GoogleConfigKey) -> Option<String> {
+        match key {
+            GoogleConfigKey::ServiceAccount => self.service_account_path.clone(),
+            GoogleConfigKey::ServiceAccountKey => self.service_account_key.clone(),
+            GoogleConfigKey::Bucket => self.bucket_name.clone(),
+            GoogleConfigKey::ApplicationCredentials => {
+                self.application_credentials_path.clone()
+            }
+        }
     }
 
     /// Sets properties on this builder based on a URL
@@ -1450,6 +1479,33 @@ mod test {
             google_service_account.as_str()
         );
         assert_eq!(builder.bucket_name.unwrap(), google_bucket_name.as_str());
+    }
+
+    #[test]
+    fn gcs_test_config_get_value() {
+        let google_service_account = "object_store:fake_service_account".to_string();
+        let google_bucket_name = "object_store:fake_bucket".to_string();
+        let options = HashMap::from([
+            (
+                GoogleConfigKey::ServiceAccount,
+                google_service_account.clone(),
+            ),
+            (GoogleConfigKey::Bucket, google_bucket_name.clone()),
+        ]);
+
+        let builder = GoogleCloudStorageBuilder::new()
+            .try_with_options(&options)
+            .unwrap();
+        assert_eq!(
+            builder
+                .get_config_value(&GoogleConfigKey::ServiceAccount)
+                .unwrap(),
+            google_service_account
+        );
+        assert_eq!(
+            builder.get_config_value(&GoogleConfigKey::Bucket).unwrap(),
+            google_bucket_name
+        );
     }
 
     #[test]

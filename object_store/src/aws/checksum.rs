@@ -39,11 +39,19 @@ impl Checksum {
     }
 }
 
+impl std::fmt::Display for Checksum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            Self::SHA256 => write!(f, "sha256"),
+        }
+    }
+}
+
 impl TryFrom<&String> for Checksum {
     type Error = ();
 
     fn try_from(value: &String) -> Result<Self, Self::Error> {
-        match value.as_str() {
+        match value.to_lowercase().as_str() {
             "sha256" => Ok(Self::SHA256),
             _ => Err(()),
         }

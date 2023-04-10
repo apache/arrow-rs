@@ -394,24 +394,43 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
 /// ```
 #[derive(Default, Clone)]
 pub struct MicrosoftAzureBuilder {
+    /// Account name
     account_name: Option<String>,
+    /// Access key
     access_key: Option<String>,
+    /// Container name
     container_name: Option<String>,
+    /// Bearer token
     bearer_token: Option<String>,
+    /// Client id
     client_id: Option<String>,
+    /// Client secret
     client_secret: Option<String>,
+    /// Tenant id
     tenant_id: Option<String>,
+    /// Query pairs for shared access signature authorization
     sas_query_pairs: Option<Vec<(String, String)>>,
+    /// Shared access signature
     sas_key: Option<String>,
+    /// Authority host
     authority_host: Option<String>,
+    /// Url
     url: Option<String>,
+    /// When set to true, azurite storage emulator has to be used
     use_emulator: bool,
+    /// Msi endpoint for acquiring managed identity token
     msi_endpoint: Option<String>,
+    /// Object id for use with managed identity authentication
     object_id: Option<String>,
+    /// Msi resource id for use with managed identity authentication
     msi_resource_id: Option<String>,
+    /// File containing token for Azure AD workload identity federation
     federated_token_file: Option<String>,
+    /// When set to true, azure cli has to be used for acquiring access token
     use_azure_cli: bool,
+    /// Retry config
     retry_config: RetryConfig,
+    /// Client options
     client_options: ClientOptions,
 }
 
@@ -745,6 +764,35 @@ impl MicrosoftAzureBuilder {
             self = self.try_with_option(key, value)?;
         }
         Ok(self)
+    }
+
+    /// Get config value via a [`AzureConfigKey`].
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::azure::{MicrosoftAzureBuilder, AzureConfigKey};
+    ///
+    /// let builder = MicrosoftAzureBuilder::from_env()
+    ///     .with_account("foo");
+    /// let account_name = builder.get_config_value(&AzureConfigKey::AccountName).unwrap_or_default();
+    /// assert_eq!("foo", &account_name);
+    /// ```
+    pub fn get_config_value(&self, key: &AzureConfigKey) -> Option<String> {
+        match key {
+            AzureConfigKey::AccountName => self.account_name.clone(),
+            AzureConfigKey::AccessKey => self.access_key.clone(),
+            AzureConfigKey::ClientId => self.client_id.clone(),
+            AzureConfigKey::ClientSecret => self.client_secret.clone(),
+            AzureConfigKey::AuthorityId => self.tenant_id.clone(),
+            AzureConfigKey::SasKey => self.sas_key.clone(),
+            AzureConfigKey::Token => self.bearer_token.clone(),
+            AzureConfigKey::UseEmulator => Some(self.use_emulator.to_string()),
+            AzureConfigKey::MsiEndpoint => self.msi_endpoint.clone(),
+            AzureConfigKey::ObjectId => self.object_id.clone(),
+            AzureConfigKey::MsiResourceId => self.msi_resource_id.clone(),
+            AzureConfigKey::FederatedTokenFile => self.federated_token_file.clone(),
+            AzureConfigKey::UseAzureCli => Some(self.use_azure_cli.to_string()),
+        }
     }
 
     /// Sets properties on this builder based on a URL
@@ -1250,6 +1298,39 @@ mod tests {
         assert_eq!(builder.client_id.unwrap(), azure_client_id);
         assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
         assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
+    }
+
+    #[test]
+    fn azure_test_config_get_value() {
+        let azure_client_id = "object_store:fake_access_key_id".to_string();
+        let azure_storage_account_name = "object_store:fake_secret_key".to_string();
+        let azure_storage_token = "object_store:fake_default_region".to_string();
+        let options = HashMap::from([
+            (AzureConfigKey::ClientId, azure_client_id.clone()),
+            (
+                AzureConfigKey::AccountName,
+                azure_storage_account_name.clone(),
+            ),
+            (AzureConfigKey::Token, azure_storage_token.clone()),
+        ]);
+
+        let builder = MicrosoftAzureBuilder::new()
+            .try_with_options(&options)
+            .unwrap();
+        assert_eq!(
+            builder.get_config_value(&AzureConfigKey::ClientId).unwrap(),
+            azure_client_id
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AzureConfigKey::AccountName)
+                .unwrap(),
+            azure_storage_account_name
+        );
+        assert_eq!(
+            builder.get_config_value(&AzureConfigKey::Token).unwrap(),
+            azure_storage_token
+        );
     }
 
     #[test]

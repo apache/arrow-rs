@@ -400,20 +400,35 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
 /// ```
 #[derive(Debug, Default, Clone)]
 pub struct AmazonS3Builder {
+    /// Access key id
     access_key_id: Option<String>,
+    /// Secret access_key
     secret_access_key: Option<String>,
+    /// Region
     region: Option<String>,
+    /// Bucket name
     bucket_name: Option<String>,
+    /// Endpoint for communicating with AWS S3
     endpoint: Option<String>,
+    /// Token to use for requests
     token: Option<String>,
+    /// Url
     url: Option<String>,
+    /// Retry config
     retry_config: RetryConfig,
+    /// When set to true, fallback to IMDSv1
     imdsv1_fallback: bool,
+    /// When set to true, virtual hosted style request has to be used
     virtual_hosted_style_request: bool,
+    /// When set to true, unsigned payload option has to be used
     unsigned_payload: bool,
+    /// Checksum algorithm which has to be used for object integrity check during upload
     checksum_algorithm: Option<Checksum>,
+    /// Metadata endpoint, see <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html>
     metadata_endpoint: Option<String>,
+    /// Profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
     profile: Option<String>,
+    /// Client options
     client_options: ClientOptions,
 }
 
@@ -749,6 +764,38 @@ impl AmazonS3Builder {
             self = self.try_with_option(key, value)?;
         }
         Ok(self)
+    }
+
+    /// Get config value via a [`AmazonS3ConfigKey`].
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+    ///
+    /// let builder = AmazonS3Builder::from_env()
+    ///     .with_bucket_name("foo");
+    /// let bucket_name = builder.get_config_value(&AmazonS3ConfigKey::Bucket).unwrap_or_default();
+    /// assert_eq!("foo", &bucket_name);
+    /// ```
+    pub fn get_config_value(&self, key: &AmazonS3ConfigKey) -> Option<String> {
+        match key {
+            AmazonS3ConfigKey::AccessKeyId => self.access_key_id.clone(),
+            AmazonS3ConfigKey::SecretAccessKey => self.secret_access_key.clone(),
+            AmazonS3ConfigKey::Region | AmazonS3ConfigKey::DefaultRegion => {
+                self.region.clone()
+            }
+            AmazonS3ConfigKey::Bucket => self.bucket_name.clone(),
+            AmazonS3ConfigKey::Endpoint => self.endpoint.clone(),
+            AmazonS3ConfigKey::Token => self.token.clone(),
+            AmazonS3ConfigKey::ImdsV1Fallback => Some(self.imdsv1_fallback.to_string()),
+            AmazonS3ConfigKey::VirtualHostedStyleRequest => {
+                Some(self.virtual_hosted_style_request.to_string())
+            }
+            AmazonS3ConfigKey::MetadataEndpoint => self.metadata_endpoint.clone(),
+            AmazonS3ConfigKey::Profile => self.profile.clone(),
+            AmazonS3ConfigKey::UnsignedPayload => Some(self.unsigned_payload.to_string()),
+            AmazonS3ConfigKey::Checksum => self.checksum_algorithm.map(|v| v.to_string()),
+        }
     }
 
     /// Sets properties on this builder based on a URL
@@ -1270,6 +1317,62 @@ mod tests {
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
         assert!(builder.unsigned_payload);
+    }
+
+    #[test]
+    fn s3_test_config_get_value() {
+        let aws_access_key_id = "object_store:fake_access_key_id".to_string();
+        let aws_secret_access_key = "object_store:fake_secret_key".to_string();
+        let aws_default_region = "object_store:fake_default_region".to_string();
+        let aws_endpoint = "object_store:fake_endpoint".to_string();
+        let aws_session_token = "object_store:fake_session_token".to_string();
+        let options = HashMap::from([
+            (AmazonS3ConfigKey::AccessKeyId, aws_access_key_id.clone()),
+            (
+                AmazonS3ConfigKey::SecretAccessKey,
+                aws_secret_access_key.clone(),
+            ),
+            (AmazonS3ConfigKey::DefaultRegion, aws_default_region.clone()),
+            (AmazonS3ConfigKey::Endpoint, aws_endpoint.clone()),
+            (AmazonS3ConfigKey::Token, aws_session_token.clone()),
+            (AmazonS3ConfigKey::UnsignedPayload, "true".to_string()),
+        ]);
+
+        let builder = AmazonS3Builder::new().try_with_options(&options).unwrap();
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::AccessKeyId)
+                .unwrap(),
+            aws_access_key_id
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::SecretAccessKey)
+                .unwrap(),
+            aws_secret_access_key
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::DefaultRegion)
+                .unwrap(),
+            aws_default_region
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::Endpoint)
+                .unwrap(),
+            aws_endpoint
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Token).unwrap(),
+            aws_session_token
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::UnsignedPayload)
+                .unwrap(),
+            "true"
+        );
     }
 
     #[test]
