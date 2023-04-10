@@ -1156,6 +1156,22 @@ fn test_union_equal_sparse() {
 }
 
 #[test]
+fn test_union_equal_sparse_slice() {
+    let mut builder = UnionBuilder::new_sparse();
+    builder.append::<Int32Type>("a", 1).unwrap();
+    builder.append::<Int32Type>("a", 2).unwrap();
+    builder.append::<Int32Type>("b", 3).unwrap();
+    let a1 = builder.build().unwrap();
+
+    let mut builder = UnionBuilder::new_sparse();
+    builder.append::<Int32Type>("a", 2).unwrap();
+    builder.append::<Int32Type>("b", 3).unwrap();
+    let a2 = builder.build().unwrap();
+
+    test_equal(&a1.slice(1, 2), &a2, true)
+}
+
+#[test]
 fn test_boolean_slice() {
     let array = BooleanArray::from(vec![true; 32]);
     let slice = array.slice(4, 12);

@@ -70,7 +70,13 @@ fn equal_sparse(
         .iter()
         .zip(rhs.child_data())
         .all(|(lhs_values, rhs_values)| {
-            equal_range(lhs_values, rhs_values, lhs_start, rhs_start, len)
+            equal_range(
+                lhs_values,
+                rhs_values,
+                lhs_start + lhs.offset(),
+                rhs_start + rhs.offset(),
+                len,
+            )
         })
 }
 
