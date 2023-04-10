@@ -48,3 +48,6 @@ regex = { version = "1.7.0", default-features = false, features = ["std", "unico
 
 [dev-dependencies]
 tempfile = "3.3"
+futures = "0.3"
+tokio = { version = "1.27", default-features = false, features = ["io-util"] }
+bytes = "1.4"
