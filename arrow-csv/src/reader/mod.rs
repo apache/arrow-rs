@@ -44,7 +44,9 @@
 //!
 //! # Async Usage
 //!
-//! The lower-level [`Decoder`] can be integrated with various forms of async data streams.
+//! The lower-level [`Decoder`] can be integrated with various forms of async data streams,
+//! and is designed to be agnostic to the various different kinds of async IO primitives found
+//! within the Rust ecosystem.
 //!
 //! For example, see below for how it can be used with an arbitrary `Stream` of `Bytes`
 //!
