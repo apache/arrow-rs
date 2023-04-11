@@ -69,10 +69,11 @@
 //!                 if let Some(b) = ready!(input.poll_next_unpin(cx)) {
 //!                     buffered = b;
 //!                 }
+//!                 // Note: don't break on `None` as the decoder needs
+//!                 // to be called with an empty array to delimit the
+//!                 // final record
 //!             }
 //!             let decoded = match decoder.decode(buffered.as_ref()) {
-//!                 // Note: the decoder needs to be called with an empty
-//!                 // array to delimit the final record
 //!                 Ok(0) => break,
 //!                 Ok(decoded) => decoded,
 //!                 Err(e) => return Poll::Ready(Some(Err(e))),
