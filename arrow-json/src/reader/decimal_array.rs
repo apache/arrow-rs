@@ -24,8 +24,8 @@ use arrow_cast::parse::parse_decimal;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
-use crate::raw::tape::{Tape, TapeElement};
-use crate::raw::{tape_error, ArrayDecoder};
+use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{tape_error, ArrayDecoder};
 
 pub struct DecimalArrayDecoder<D: DecimalType> {
     precision: u8,

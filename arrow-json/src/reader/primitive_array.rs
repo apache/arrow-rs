@@ -15,42 +15,76 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use chrono::TimeZone;
 use num::NumCast;
 use std::marker::PhantomData;
 
 use arrow_array::builder::PrimitiveBuilder;
-use arrow_array::types::ArrowTimestampType;
-use arrow_array::Array;
-use arrow_cast::parse::string_to_datetime;
+use arrow_array::{Array, ArrowPrimitiveType};
+use arrow_cast::parse::Parser;
 use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, TimeUnit};
+use arrow_schema::{ArrowError, DataType};
 
-use crate::raw::tape::{Tape, TapeElement};
-use crate::raw::{tape_error, ArrayDecoder};
+use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{tape_error, ArrayDecoder};
 
-/// A specialized [`ArrayDecoder`] for timestamps
-pub struct TimestampArrayDecoder<P: ArrowTimestampType, Tz: TimeZone> {
+/// A trait for JSON-specific primitive parsing logic
+///
+/// According to the specification unquoted fields should be parsed as a double-precision
+/// floating point numbers, including scientific representation such as `2e3`
+///
+/// In practice, it is common to serialize numbers outside the range of an `f64` and expect
+/// them to round-trip correctly. As such when parsing integers we first parse as the integer
+/// and fallback to parsing as a floating point if this fails
+trait ParseJsonNumber: Sized {
+    fn parse(s: &[u8]) -> Option<Self>;
+}
+
+macro_rules! primitive_parse {
+    ($($t:ty),+) => {
+        $(impl ParseJsonNumber for $t {
+            fn parse(s: &[u8]) -> Option<Self> {
+                match lexical_core::parse::<Self>(s) {
+                    Ok(f) => Some(f),
+                    Err(_) => lexical_core::parse::<f64>(s).ok().and_then(NumCast::from),
+                }
+            }
+        })+
+    };
+}
+
+primitive_parse!(i8, i16, i32, i64, u8, u16, u32, u64);
+
+impl ParseJsonNumber for f32 {
+    fn parse(s: &[u8]) -> Option<Self> {
+        lexical_core::parse::<Self>(s).ok()
+    }
+}
+
+impl ParseJsonNumber for f64 {
+    fn parse(s: &[u8]) -> Option<Self> {
+        lexical_core::parse::<Self>(s).ok()
+    }
+}
+
+pub struct PrimitiveArrayDecoder<P: ArrowPrimitiveType> {
     data_type: DataType,
-    timezone: Tz,
     // Invariant and Send
     phantom: PhantomData<fn(P) -> P>,
 }
 
-impl<P: ArrowTimestampType, Tz: TimeZone> TimestampArrayDecoder<P, Tz> {
-    pub fn new(data_type: DataType, timezone: Tz) -> Self {
+impl<P: ArrowPrimitiveType> PrimitiveArrayDecoder<P> {
+    pub fn new(data_type: DataType) -> Self {
         Self {
             data_type,
-            timezone,
             phantom: Default::default(),
         }
     }
 }
 
-impl<P, Tz> ArrayDecoder for TimestampArrayDecoder<P, Tz>
+impl<P> ArrayDecoder for PrimitiveArrayDecoder<P>
 where
-    P: ArrowTimestampType,
-    Tz: TimeZone + Send,
+    P: ArrowPrimitiveType + Parser,
+    P::Native: ParseJsonNumber,
 {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let mut builder = PrimitiveBuilder::<P>::with_capacity(pos.len())
@@ -61,27 +95,19 @@ where
                 TapeElement::Null => builder.append_null(),
                 TapeElement::String(idx) => {
                     let s = tape.get_string(idx);
-                    let date = string_to_datetime(&self.timezone, s).map_err(|e| {
+                    let value = P::parse(s).ok_or_else(|| {
                         ArrowError::JsonError(format!(
-                            "failed to parse \"{s}\" as {}: {}",
-                            self.data_type, e
+                            "failed to parse \"{s}\" as {}",
+                            self.data_type
                         ))
                     })?;
 
-                    let value = match P::UNIT {
-                        TimeUnit::Second => date.timestamp(),
-                        TimeUnit::Millisecond => date.timestamp_millis(),
-                        TimeUnit::Microsecond => date.timestamp_micros(),
-                        TimeUnit::Nanosecond => date.timestamp_nanos(),
-                    };
                     builder.append_value(value)
                 }
                 TapeElement::Number(idx) => {
                     let s = tape.get_string(idx);
-                    let value = lexical_core::parse::<f64>(s.as_bytes())
-                        .ok()
-                        .and_then(NumCast::from)
-                        .ok_or_else(|| {
+                    let value =
+                        ParseJsonNumber::parse(s.as_bytes()).ok_or_else(|| {
                             ArrowError::JsonError(format!(
                                 "failed to parse {s} as {}",
                                 self.data_type

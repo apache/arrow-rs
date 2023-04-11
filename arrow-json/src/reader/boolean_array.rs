@@ -20,8 +20,8 @@ use arrow_array::Array;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
-use crate::raw::tape::{Tape, TapeElement};
-use crate::raw::{tape_error, ArrayDecoder};
+use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{tape_error, ArrayDecoder};
 
 #[derive(Default)]
 pub struct BooleanArrayDecoder {}

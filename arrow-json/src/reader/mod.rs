@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A faster JSON reader that will eventually replace [`Reader`]
+//! JSON reader
 //!
-//! [`Reader`]: crate::reader::Reader
+//! This JSON reader allows JSON line-delimited files to be read into the Arrow memory
+//! model. Records are loaded in batches and are then converted from row-based data to
+//! columnar data.
 //!
 //! # Basic Usage
 //!
-//! [`RawReader`] can be used directly with synchronous data sources, such as [`std::fs::File`]
+//! [`Reader`] can be used directly with synchronous data sources, such as [`std::fs::File`]
 //!
 //! ```
 //! # use arrow_schema::*;
@@ -37,13 +39,13 @@
 //!
 //! let file = File::open("test/data/basic.json").unwrap();
 //!
-//! let mut json = arrow_json::RawReaderBuilder::new(schema).build(BufReader::new(file)).unwrap();
+//! let mut json = arrow_json::ReaderBuilder::new(schema).build(BufReader::new(file)).unwrap();
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 //!
 //! # Async Usage
 //!
-//! The lower-level [`RawDecoder`] can be integrated with various forms of async data streams,
+//! The lower-level [`Decoder`] can be integrated with various forms of async data streams,
 //! and is designed to be agnostic to the various different kinds of async IO primitives found
 //! within the Rust ecosystem.
 //!
@@ -55,10 +57,10 @@
 //! # use arrow_schema::ArrowError;
 //! # use futures::stream::{Stream, StreamExt};
 //! # use arrow_array::RecordBatch;
-//! # use arrow_json::RawDecoder;
+//! # use arrow_json::reader::Decoder;
 //! #
 //! fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
-//!     mut decoder: RawDecoder,
+//!     mut decoder: Decoder,
 //!     mut input: S,
 //! ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
 //!     let mut buffered = Bytes::new();
@@ -97,10 +99,10 @@
 //! # use futures::{Stream, TryStreamExt};
 //! # use tokio::io::AsyncBufRead;
 //! # use arrow_array::RecordBatch;
-//! # use arrow_json::RawDecoder;
+//! # use arrow_json::reader::Decoder;
 //! # use arrow_schema::ArrowError;
 //! fn decode_stream<R: AsyncBufRead + Unpin>(
-//!     mut decoder: RawDecoder,
+//!     mut decoder: Decoder,
 //!     mut reader: R,
 //! ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
 //!     futures::stream::poll_fn(move |cx| {
@@ -127,15 +129,15 @@
 //! ```
 //!
 
-use crate::raw::boolean_array::BooleanArrayDecoder;
-use crate::raw::decimal_array::DecimalArrayDecoder;
-use crate::raw::list_array::ListArrayDecoder;
-use crate::raw::map_array::MapArrayDecoder;
-use crate::raw::primitive_array::PrimitiveArrayDecoder;
-use crate::raw::string_array::StringArrayDecoder;
-use crate::raw::struct_array::StructArrayDecoder;
-use crate::raw::tape::{Tape, TapeDecoder, TapeElement};
-use crate::raw::timestamp_array::TimestampArrayDecoder;
+use crate::reader::boolean_array::BooleanArrayDecoder;
+use crate::reader::decimal_array::DecimalArrayDecoder;
+use crate::reader::list_array::ListArrayDecoder;
+use crate::reader::map_array::MapArrayDecoder;
+use crate::reader::primitive_array::PrimitiveArrayDecoder;
+use crate::reader::string_array::StringArrayDecoder;
+use crate::reader::struct_array::StructArrayDecoder;
+use crate::reader::tape::{Tape, TapeDecoder, TapeElement};
+use crate::reader::timestamp_array::TimestampArrayDecoder;
 use arrow_array::timezone::Tz;
 use arrow_array::types::Float32Type;
 use arrow_array::types::*;
@@ -151,22 +153,25 @@ mod decimal_array;
 mod list_array;
 mod map_array;
 mod primitive_array;
+mod schema;
 mod serializer;
 mod string_array;
 mod struct_array;
 mod tape;
 mod timestamp_array;
 
-/// A builder for [`RawReader`] and [`RawDecoder`]
-pub struct RawReaderBuilder {
+pub use schema::*;
+
+/// A builder for [`Reader`] and [`Decoder`]
+pub struct ReaderBuilder {
     batch_size: usize,
     coerce_primitive: bool,
 
     schema: SchemaRef,
 }
 
-impl RawReaderBuilder {
-    /// Create a new [`RawReaderBuilder`] with the provided [`SchemaRef`]
+impl ReaderBuilder {
+    /// Create a new [`ReaderBuilder`] with the provided [`SchemaRef`]
     ///
     /// This could be obtained using [`infer_json_schema`] if not known
     ///
@@ -194,16 +199,16 @@ impl RawReaderBuilder {
         }
     }
 
-    /// Create a [`RawReader`] with the provided [`BufRead`]
-    pub fn build<R: BufRead>(self, reader: R) -> Result<RawReader<R>, ArrowError> {
-        Ok(RawReader {
+    /// Create a [`Reader`] with the provided [`BufRead`]
+    pub fn build<R: BufRead>(self, reader: R) -> Result<Reader<R>, ArrowError> {
+        Ok(Reader {
             reader,
             decoder: self.build_decoder()?,
         })
     }
 
-    /// Create a [`RawDecoder`]
-    pub fn build_decoder(self) -> Result<RawDecoder, ArrowError> {
+    /// Create a [`Decoder`]
+    pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
         let decoder = make_decoder(
             DataType::Struct(self.schema.fields.clone()),
             self.coerce_primitive,
@@ -211,7 +216,7 @@ impl RawReaderBuilder {
         )?;
         let num_fields = self.schema.all_fields().len();
 
-        Ok(RawDecoder {
+        Ok(Decoder {
             decoder,
             tape_decoder: TapeDecoder::new(self.batch_size, num_fields),
             batch_size: self.batch_size,
@@ -222,26 +227,21 @@ impl RawReaderBuilder {
 
 /// Reads JSON data with a known schema directly into arrow [`RecordBatch`]
 ///
-/// This is significantly faster than [`Reader`] and eventually intended
-/// to replace it ([#3610](https://github.com/apache/arrow-rs/issues/3610))
-///
 /// Lines consisting solely of ASCII whitespace are ignored
-///
-/// [`Reader`]: crate::reader::Reader
-pub struct RawReader<R> {
+pub struct Reader<R> {
     reader: R,
-    decoder: RawDecoder,
+    decoder: Decoder,
 }
 
-impl<R> std::fmt::Debug for RawReader<R> {
+impl<R> std::fmt::Debug for Reader<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RawReader")
+        f.debug_struct("Reader")
             .field("decoder", &self.decoder)
             .finish()
     }
 }
 
-impl<R: BufRead> RawReader<R> {
+impl<R: BufRead> Reader<R> {
     /// Reads the next [`RecordBatch`] returning `Ok(None)` if EOF
     fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         loop {
@@ -261,7 +261,7 @@ impl<R: BufRead> RawReader<R> {
     }
 }
 
-impl<R: BufRead> Iterator for RawReader<R> {
+impl<R: BufRead> Iterator for Reader<R> {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -269,7 +269,7 @@ impl<R: BufRead> Iterator for RawReader<R> {
     }
 }
 
-impl<R: BufRead> RecordBatchReader for RawReader<R> {
+impl<R: BufRead> RecordBatchReader for Reader<R> {
     fn schema(&self) -> SchemaRef {
         self.decoder.schema.clone()
     }
@@ -277,7 +277,7 @@ impl<R: BufRead> RecordBatchReader for RawReader<R> {
 
 /// A low-level interface for reading JSON data from a byte stream
 ///
-/// See [`RawReader`] for a higher-level interface for interface with [`BufRead`]
+/// See [`Reader`] for a higher-level interface for interface with [`BufRead`]
 ///
 /// The push-based interface facilitates integration with sources that yield arbitrarily
 /// delimited bytes ranges, such as [`BufRead`], or a chunked byte stream received from
@@ -286,17 +286,17 @@ impl<R: BufRead> RecordBatchReader for RawReader<R> {
 /// ```
 /// # use std::io::BufRead;
 /// # use arrow_array::RecordBatch;
-/// # use arrow_json::{RawDecoder, RawReaderBuilder};
+/// # use arrow_json::{Decoder, ReaderBuilder};
 /// # use arrow_schema::{ArrowError, SchemaRef};
 /// #
 /// fn read_from_json<R: BufRead>(
 ///     mut reader: R,
 ///     schema: SchemaRef,
 /// ) -> Result<impl Iterator<Item = Result<RecordBatch, ArrowError>>, ArrowError> {
-///     let mut decoder = RawReaderBuilder::new(schema).build_decoder()?;
+///     let mut decoder = ReaderBuilder::new(schema).build_decoder()?;
 ///     let mut next = move || {
 ///         loop {
-///             // RawDecoder is agnostic that buf doesn't contain whole records
+///             // Decoder is agnostic that buf doesn't contain whole records
 ///             let buf = reader.fill_buf()?;
 ///             if buf.is_empty() {
 ///                 break; // Input exhausted
@@ -315,23 +315,23 @@ impl<R: BufRead> RecordBatchReader for RawReader<R> {
 ///     Ok(std::iter::from_fn(move || next().transpose()))
 /// }
 /// ```
-pub struct RawDecoder {
+pub struct Decoder {
     tape_decoder: TapeDecoder,
     decoder: Box<dyn ArrayDecoder>,
     batch_size: usize,
     schema: SchemaRef,
 }
 
-impl std::fmt::Debug for RawDecoder {
+impl std::fmt::Debug for Decoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RawDecoder")
+        f.debug_struct("Decoder")
             .field("schema", &self.schema)
             .field("batch_size", &self.batch_size)
             .finish()
     }
 }
 
-impl RawDecoder {
+impl Decoder {
     /// Read JSON objects from `buf`, returning the number of bytes read
     ///
     /// This method returns once `batch_size` objects have been parsed since the
@@ -344,7 +344,7 @@ impl RawDecoder {
         self.tape_decoder.decode(buf)
     }
 
-    /// Serialize `rows` to this [`RawDecoder`]
+    /// Serialize `rows` to this [`Decoder`]
     ///
     /// This provides a simple way to convert [serde]-compatible datastructures into arrow
     /// [`RecordBatch`].
@@ -360,12 +360,12 @@ impl RawDecoder {
     /// # use serde_json::{Value, json};
     /// # use arrow_array::cast::AsArray;
     /// # use arrow_array::types::Float32Type;
-    /// # use arrow_json::RawReaderBuilder;
+    /// # use arrow_json::ReaderBuilder;
     /// # use arrow_schema::{DataType, Field, Schema};
     /// let json = vec![json!({"float": 2.3}), json!({"float": 5.7})];
     ///
     /// let schema = Schema::new(vec![Field::new("float", DataType::Float32, true)]);
-    /// let mut decoder = RawReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
+    /// let mut decoder = ReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
     ///
     /// decoder.serialize(&json).unwrap();
     /// let batch = decoder.flush().unwrap().unwrap();
@@ -379,7 +379,7 @@ impl RawDecoder {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_json::RawReaderBuilder;
+    /// # use arrow_json::ReaderBuilder;
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use serde::Serialize;
     /// # use arrow_array::cast::AsArray;
@@ -401,7 +401,7 @@ impl RawDecoder {
     ///     MyStruct{ int32: 4, float: 67.53 },
     /// ];
     ///
-    /// let mut decoder = RawReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
+    /// let mut decoder = ReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
     /// decoder.serialize(&rows).unwrap();
     ///
     /// let batch = decoder.flush().unwrap().unwrap();
@@ -421,7 +421,7 @@ impl RawDecoder {
     /// # use std::sync::Arc;
     /// # use arrow_array::StructArray;
     /// # use arrow_cast::display::{ArrayFormatter, FormatOptions};
-    /// # use arrow_json::RawReaderBuilder;
+    /// # use arrow_json::ReaderBuilder;
     /// # use arrow_schema::{DataType, Field, Fields, Schema};
     /// # use serde::Serialize;
     /// #
@@ -501,7 +501,7 @@ impl RawDecoder {
     /// ];
     ///
     /// let schema = Schema::new(MyStruct::fields());
-    /// let mut decoder = RawReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
+    /// let mut decoder = ReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
     /// decoder.serialize(&data).unwrap();
     /// let batch = decoder.flush().unwrap().unwrap();
     /// assert_eq!(batch.num_rows(), 3);
@@ -666,7 +666,7 @@ mod tests {
 
         // Test with different batch sizes to test for boundary conditions
         for batch_size in [1, 3, 100, batch_size] {
-            unbuffered = RawReaderBuilder::new(schema.clone())
+            unbuffered = ReaderBuilder::new(schema.clone())
                 .with_batch_size(batch_size)
                 .coerce_primitive(coerce_primitive)
                 .build(Cursor::new(buf.as_bytes()))
@@ -680,7 +680,7 @@ mod tests {
 
             // Test with different buffer sizes to test for boundary conditions
             for b in [1, 3, 5] {
-                let buffered = RawReaderBuilder::new(schema.clone())
+                let buffered = ReaderBuilder::new(schema.clone())
                     .with_batch_size(batch_size)
                     .coerce_primitive(coerce_primitive)
                     .build(BufReader::with_capacity(b, Cursor::new(buf.as_bytes())))
@@ -969,14 +969,11 @@ mod tests {
             let schema = Arc::new(infer_json_schema(&mut f, None).unwrap());
 
             f.rewind().unwrap();
-            let a = ReaderBuilder::new()
-                .with_schema(schema.clone())
-                .build(&mut f)
-                .unwrap();
+            let a = ReaderBuilder::new(schema.clone()).build(&mut f).unwrap();
             let a_result = a.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
 
             f.rewind().unwrap();
-            let b = RawReaderBuilder::new(schema).build(f).unwrap();
+            let b = ReaderBuilder::new(schema).build(f).unwrap();
             let b_result = b.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
 
             assert_eq!(a_result, b_result);
@@ -988,7 +985,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
 
         let buf = r#"{"a": 1}"#;
-        let result = RawReaderBuilder::new(schema.clone())
+        let result = ReaderBuilder::new(schema.clone())
             .with_batch_size(1024)
             .build(Cursor::new(buf.as_bytes()))
             .unwrap()
@@ -1001,7 +998,7 @@ mod tests {
         );
 
         let buf = r#"{"a": true}"#;
-        let result = RawReaderBuilder::new(schema)
+        let result = ReaderBuilder::new(schema)
             .with_batch_size(1024)
             .build(Cursor::new(buf.as_bytes()))
             .unwrap()
@@ -1337,20 +1334,20 @@ mod tests {
                 vec![Field::new("bar", child, false)],
                 true,
             )]));
-            let mut reader = RawReaderBuilder::new(schema.clone())
+            let mut reader = ReaderBuilder::new(schema.clone())
                 .build(Cursor::new(non_null.as_bytes()))
                 .unwrap();
             assert!(reader.next().unwrap().is_err()); // Should error as not nullable
 
             let null = r#"{"foo": {bar: null}}"#;
-            let mut reader = RawReaderBuilder::new(schema.clone())
+            let mut reader = ReaderBuilder::new(schema.clone())
                 .build(Cursor::new(null.as_bytes()))
                 .unwrap();
             assert!(reader.next().unwrap().is_err()); // Should error as not nullable
 
             // Test nulls in nullable parent can mask nulls in non-nullable child
             let null = r#"{"foo": null}"#;
-            let mut reader = RawReaderBuilder::new(schema)
+            let mut reader = ReaderBuilder::new(schema)
                 .build(Cursor::new(null.as_bytes()))
                 .unwrap();
             let batch = reader.next().unwrap().unwrap();
