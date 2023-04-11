@@ -187,17 +187,17 @@ fn generate_schema(spec: HashMap<String, InferredType>) -> Result<Schema, ArrowE
 /// }
 /// ```
 #[derive(Debug)]
-pub struct ValueIter<'a, R: Read> {
-    reader: &'a mut BufReader<R>,
+pub struct ValueIter<'a, R: BufRead> {
+    reader: &'a mut R,
     max_read_records: Option<usize>,
     record_count: usize,
     // reuse line buffer to avoid allocation on each record
     line_buf: String,
 }
 
-impl<'a, R: Read> ValueIter<'a, R> {
+impl<'a, R: BufRead> ValueIter<'a, R> {
     /// Creates a new `ValueIter`
-    pub fn new(reader: &'a mut BufReader<R>, max_read_records: Option<usize>) -> Self {
+    pub fn new(reader: &'a mut R, max_read_records: Option<usize>) -> Self {
         Self {
             reader,
             max_read_records,
@@ -207,7 +207,7 @@ impl<'a, R: Read> ValueIter<'a, R> {
     }
 }
 
-impl<'a, R: Read> Iterator for ValueIter<'a, R> {
+impl<'a, R: BufRead> Iterator for ValueIter<'a, R> {
     type Item = Result<Value, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -303,8 +303,8 @@ pub fn infer_json_schema_from_seekable<R: Read + Seek>(
 /// // seek back to start so that the original file is usable again
 /// file.seek(SeekFrom::Start(0)).unwrap();
 /// ```
-pub fn infer_json_schema<R: Read>(
-    reader: &mut BufReader<R>,
+pub fn infer_json_schema<R: BufRead>(
+    reader: &mut R,
     max_read_records: Option<usize>,
 ) -> Result<Schema, ArrowError> {
     infer_json_schema_from_iterator(ValueIter::new(reader, max_read_records))

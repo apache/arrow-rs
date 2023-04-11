@@ -18,6 +18,114 @@
 //! A faster JSON reader that will eventually replace [`Reader`]
 //!
 //! [`Reader`]: crate::reader::Reader
+//!
+//! # Basic Usage
+//!
+//! [`RawReader`] can be used directly with synchronous data sources, such as [`std::fs::File`]
+//!
+//! ```
+//! # use arrow_schema::*;
+//! # use std::fs::File;
+//! # use std::io::BufReader;
+//! # use std::sync::Arc;
+//!
+//! let schema = Arc::new(Schema::new(vec![
+//!     Field::new("a", DataType::Float64, false),
+//!     Field::new("b", DataType::Float64, false),
+//!     Field::new("c", DataType::Boolean, true),
+//! ]));
+//!
+//! let file = File::open("test/data/basic.json").unwrap();
+//!
+//! let mut json = arrow_json::RawReaderBuilder::new(schema).build(BufReader::new(file)).unwrap();
+//! let batch = json.next().unwrap().unwrap();
+//! ```
+//!
+//! # Async Usage
+//!
+//! The lower-level [`RawDecoder`] can be integrated with various forms of async data streams,
+//! and is designed to be agnostic to the various different kinds of async IO primitives found
+//! within the Rust ecosystem.
+//!
+//! For example, see below for how it can be used with an arbitrary `Stream` of `Bytes`
+//!
+//! ```
+//! # use std::task::{Poll, ready};
+//! # use bytes::{Buf, Bytes};
+//! # use arrow_schema::ArrowError;
+//! # use futures::stream::{Stream, StreamExt};
+//! # use arrow_array::RecordBatch;
+//! # use arrow_json::RawDecoder;
+//! #
+//! fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
+//!     mut decoder: RawDecoder,
+//!     mut input: S,
+//! ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
+//!     let mut buffered = Bytes::new();
+//!     futures::stream::poll_fn(move |cx| {
+//!         loop {
+//!             if buffered.is_empty() {
+//!                 buffered = match ready!(input.poll_next_unpin(cx)) {
+//!                     Some(b) => b,
+//!                     None => break,
+//!                 };
+//!             }
+//!             let decoded = match decoder.decode(buffered.as_ref()) {
+//!                 Ok(decoded) => decoded,
+//!                 Err(e) => return Poll::Ready(Some(Err(e))),
+//!             };
+//!             let read = buffered.len();
+//!             buffered.advance(decoded);
+//!             if decoded != read {
+//!                 break
+//!             }
+//!         }
+//!
+//!         Poll::Ready(decoder.flush().transpose())
+//!     })
+//! }
+//!
+//! ```
+//!
+//! In a similar vein, it can also be used with tokio-based IO primitives
+//!
+//! ```
+//! # use std::sync::Arc;
+//! # use arrow_schema::{DataType, Field, Schema};
+//! # use std::pin::Pin;
+//! # use std::task::{Poll, ready};
+//! # use futures::{Stream, TryStreamExt};
+//! # use tokio::io::AsyncBufRead;
+//! # use arrow_array::RecordBatch;
+//! # use arrow_json::RawDecoder;
+//! # use arrow_schema::ArrowError;
+//! fn decode_stream<R: AsyncBufRead + Unpin>(
+//!     mut decoder: RawDecoder,
+//!     mut reader: R,
+//! ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
+//!     futures::stream::poll_fn(move |cx| {
+//!         loop {
+//!             let b = match ready!(Pin::new(&mut reader).poll_fill_buf(cx)) {
+//!                 Ok(b) if b.is_empty() => break,
+//!                 Ok(b) => b,
+//!                 Err(e) => return Poll::Ready(Some(Err(e.into()))),
+//!             };
+//!             let read = b.len();
+//!             let decoded = match decoder.decode(b) {
+//!                 Ok(decoded) => decoded,
+//!                 Err(e) => return Poll::Ready(Some(Err(e))),
+//!             };
+//!             Pin::new(&mut reader).consume(decoded);
+//!             if decoded != read {
+//!                 break;
+//!             }
+//!         }
+//!
+//!         Poll::Ready(decoder.flush().transpose())
+//!     })
+//! }
+//! ```
+//!
 
 use crate::raw::boolean_array::BooleanArrayDecoder;
 use crate::raw::decimal_array::DecimalArrayDecoder;
@@ -1266,5 +1374,29 @@ mod tests {
             TimeUnit::Microsecond,
             Some("+00:00".into()),
         ));
+    }
+
+    #[test]
+    fn test_truncation() {
+        let buf = r#"
+        {"i64": 9223372036854775807, "u64": 18446744073709551615 }
+        {"i64": "9223372036854775807", "u64": "18446744073709551615" }
+        {"i64": -9223372036854775808, "u64": 0 }
+        {"i64": "-9223372036854775808", "u64": 0 }
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i64", DataType::Int64, true),
+            Field::new("u64", DataType::UInt64, true),
+        ]));
+
+        let batches = do_read(buf, 1024, true, schema);
+        assert_eq!(batches.len(), 1);
+
+        let i64 = batches[0].column(0).as_primitive::<Int64Type>();
+        assert_eq!(i64.values(), &[i64::MAX, i64::MAX, i64::MIN, i64::MIN]);
+
+        let u64 = batches[0].column(1).as_primitive::<UInt64Type>();
+        assert_eq!(u64.values(), &[u64::MAX, u64::MAX, u64::MIN, u64::MIN]);
     }
 }

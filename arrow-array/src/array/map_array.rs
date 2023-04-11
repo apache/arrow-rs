@@ -42,12 +42,21 @@ pub struct MapArray {
 }
 
 impl MapArray {
-    /// Returns a reference to the keys of this map.
+    /// Returns a reference to the offsets of this map
+    ///
+    /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
+    /// allowing for zero-copy cloning
+    #[inline]
+    pub fn offsets(&self) -> &OffsetBuffer<i32> {
+        &self.value_offsets
+    }
+
+    /// Returns a reference to the keys of this map
     pub fn keys(&self) -> &ArrayRef {
         &self.keys
     }
 
-    /// Returns a reference to the values of this map.
+    /// Returns a reference to the values of this map
     pub fn values(&self) -> &ArrayRef {
         &self.values
     }
