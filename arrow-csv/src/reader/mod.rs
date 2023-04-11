@@ -17,6 +17,8 @@
 
 //! CSV Reader
 //!
+//! # Basic Usage
+//!
 //! This CSV reader allows CSV files to be read into the Arrow memory model. Records are
 //! loaded in batches and are then converted from row-based data to columnar data.
 //!
@@ -39,6 +41,87 @@
 //! let mut csv = Reader::new(file, Arc::new(schema), false, None, 1024, None, None, None);
 //! let batch = csv.next().unwrap().unwrap();
 //! ```
+//!
+//! # Async Usage
+//!
+//! The lower-level [`Decoder`] can be integrated with various forms of async data streams,
+//! and is designed to be agnostic to the various different kinds of async IO primitives found
+//! within the Rust ecosystem.
+//!
+//! For example, see below for how it can be used with an arbitrary `Stream` of `Bytes`
+//!
+//! ```
+//! # use std::task::{Poll, ready};
+//! # use bytes::{Buf, Bytes};
+//! # use arrow_schema::ArrowError;
+//! # use futures::stream::{Stream, StreamExt};
+//! # use arrow_array::RecordBatch;
+//! # use arrow_csv::reader::Decoder;
+//! #
+//! fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
+//!     mut decoder: Decoder,
+//!     mut input: S,
+//! ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
+//!     let mut buffered = Bytes::new();
+//!     futures::stream::poll_fn(move |cx| {
+//!         loop {
+//!             if buffered.is_empty() {
+//!                 if let Some(b) = ready!(input.poll_next_unpin(cx)) {
+//!                     buffered = b;
+//!                 }
+//!                 // Note: don't break on `None` as the decoder needs
+//!                 // to be called with an empty array to delimit the
+//!                 // final record
+//!             }
+//!             let decoded = match decoder.decode(buffered.as_ref()) {
+//!                 Ok(0) => break,
+//!                 Ok(decoded) => decoded,
+//!                 Err(e) => return Poll::Ready(Some(Err(e))),
+//!             };
+//!             buffered.advance(decoded);
+//!         }
+//!
+//!         Poll::Ready(decoder.flush().transpose())
+//!     })
+//! }
+//!
+//! ```
+//!
+//! In a similar vein, it can also be used with tokio-based IO primitives
+//!
+//! ```
+//! # use std::pin::Pin;
+//! # use std::task::{Poll, ready};
+//! # use futures::Stream;
+//! # use tokio::io::AsyncBufRead;
+//! # use arrow_array::RecordBatch;
+//! # use arrow_csv::reader::Decoder;
+//! # use arrow_schema::ArrowError;
+//! fn decode_stream<R: AsyncBufRead + Unpin>(
+//!     mut decoder: Decoder,
+//!     mut reader: R,
+//! ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
+//!     futures::stream::poll_fn(move |cx| {
+//!         loop {
+//!             let b = match ready!(Pin::new(&mut reader).poll_fill_buf(cx)) {
+//!                 Ok(b) => b,
+//!                 Err(e) => return Poll::Ready(Some(Err(e.into()))),
+//!             };
+//!             let decoded = match decoder.decode(b) {
+//!                 // Note: the decoder needs to be called with an empty
+//!                 // array to delimit the final record
+//!                 Ok(0) => break,
+//!                 Ok(decoded) => decoded,
+//!                 Err(e) => return Poll::Ready(Some(Err(e))),
+//!             };
+//!             Pin::new(&mut reader).consume(decoded);
+//!         }
+//!
+//!         Poll::Ready(decoder.flush().transpose())
+//!     })
+//! }
+//! ```
+//!
 
 mod records;
 
