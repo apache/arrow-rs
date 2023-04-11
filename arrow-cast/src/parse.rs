@@ -452,7 +452,7 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                string.parse::<Self::Native>().ok()
+                lexical_core::parse::<Self::Native>(string.as_bytes()).ok()
             }
         }
     };
