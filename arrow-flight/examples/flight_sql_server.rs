@@ -44,9 +44,9 @@ use arrow_flight::{
         ActionCreatePreparedStatementRequest, CommandGetCatalogs,
         CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
         CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
-        CommandGetTableTypes, CommandGetTables, CommandPreparedStatementQuery,
-        CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementUpdate,
-        TicketStatementQuery,
+        CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
+        CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+        CommandStatementQuery, CommandStatementUpdate, TicketStatementQuery,
     },
     FlightDescriptor, FlightInfo,
 };
