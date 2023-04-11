@@ -67,6 +67,24 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         offsets[i + 1] - offsets[i]
     }
 
+    /// Returns a reference to the offsets of this array
+    ///
+    /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
+    /// allowing for zero-copy cloning
+    #[inline]
+    pub fn offsets(&self) -> &OffsetBuffer<T::Offset> {
+        &self.value_offsets
+    }
+
+    /// Returns the values of this array
+    ///
+    /// Unlike [`Self::value_data`] this returns the [`Buffer`]
+    /// allowing for zero-copy cloning
+    #[inline]
+    pub fn values(&self) -> &Buffer {
+        &self.value_data
+    }
+
     /// Returns the raw value data
     pub fn value_data(&self) -> &[u8] {
         self.value_data.as_slice()
