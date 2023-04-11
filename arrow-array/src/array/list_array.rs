@@ -79,6 +79,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     };
 
     /// Returns a reference to the offsets of this list
+    ///
+    /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
+    /// allowing for zero-copy cloning
     #[inline]
     pub fn offsets(&self) -> &OffsetBuffer<OffsetSize> {
         &self.value_offsets
