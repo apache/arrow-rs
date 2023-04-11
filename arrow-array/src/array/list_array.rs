@@ -78,7 +78,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         DataType::List
     };
 
-    /// Returns a reference to the values of this list.
+    /// Returns a reference to the offsets of this list
+    #[inline]
+    pub fn offsets(&self) -> &OffsetBuffer<OffsetSize> {
+        &self.value_offsets
+    }
+
+    /// Returns a reference to the values of this list
+    #[inline]
     pub fn values(&self) -> &ArrayRef {
         &self.values
     }
