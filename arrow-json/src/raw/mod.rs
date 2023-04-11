@@ -1267,4 +1267,28 @@ mod tests {
             Some("+00:00".into()),
         ));
     }
+
+    #[test]
+    fn test_truncation() {
+        let buf = r#"
+        {"i64": 9223372036854775807, "u64": 18446744073709551615 }
+        {"i64": "9223372036854775807", "u64": "18446744073709551615" }
+        {"i64": -9223372036854775808, "u64": 0 }
+        {"i64": "-9223372036854775808", "u64": 0 }
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i64", DataType::Int64, true),
+            Field::new("u64", DataType::UInt64, true),
+        ]));
+
+        let batches = do_read(buf, 1024, true, schema);
+        assert_eq!(batches.len(), 1);
+
+        let i64 = batches[0].column(0).as_primitive::<Int64Type>();
+        assert_eq!(i64.values(), &[i64::MAX, i64::MAX, i64::MIN, i64::MIN]);
+
+        let u64 = batches[0].column(1).as_primitive::<UInt64Type>();
+        assert_eq!(u64.values(), &[u64::MAX, u64::MAX, u64::MIN, u64::MIN]);
+    }
 }
