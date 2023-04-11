@@ -355,14 +355,33 @@ impl DataType {
         )
     }
 
+    /// Returns true if this type is floating: (Float*).
+    pub fn is_floating(&self) -> bool {
+        use DataType::*;
+        matches!(self, Float16 | Float32 | Float64)
+    }
+
+    /// Returns true if this type is integer: (Int*, UInt*).
+    pub fn is_integer(&self) -> bool {
+        self.is_signed_integer() || self.is_unsigned_integer()
+    }
+
+    /// Returns true if this type is signed integer: (Int*).
+    pub fn is_signed_integer(&self) -> bool {
+        use DataType::*;
+        matches!(self, Int8 | Int16 | Int32 | Int64)
+    }
+
+    /// Returns true if this type is unsigned integer: (UInt*).
+    pub fn is_unsigned_integer(&self) -> bool {
+        use DataType::*;
+        matches!(self, UInt8 | UInt16 | UInt32 | UInt64)
+    }
+
     /// Returns true if this type is valid as a dictionary key
     #[inline]
     pub fn is_dictionary_key_type(&self) -> bool {
-        use DataType::*;
-        matches!(
-            self,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64
-        )
+        self.is_integer()
     }
 
     /// Returns true if this type is valid for run-ends array in RunArray
@@ -662,6 +681,35 @@ mod tests {
             Box::new(DataType::Int32),
             Box::new(list)
         )));
+    }
+
+    #[test]
+    fn test_integer() {
+        // is_integer
+        assert!(DataType::is_integer(&DataType::Int32));
+        assert!(DataType::is_integer(&DataType::UInt64));
+        assert!(!DataType::is_integer(&DataType::Float16));
+
+        // is_signed_integer
+        assert!(DataType::is_signed_integer(&DataType::Int32));
+        assert!(!DataType::is_signed_integer(&DataType::UInt64));
+        assert!(!DataType::is_signed_integer(&DataType::Float16));
+
+        // is_unsigned_integer
+        assert!(!DataType::is_unsigned_integer(&DataType::Int32));
+        assert!(DataType::is_unsigned_integer(&DataType::UInt64));
+        assert!(!DataType::is_unsigned_integer(&DataType::Float16));
+
+        // is_dictionary_key_type
+        assert!(DataType::is_dictionary_key_type(&DataType::Int32));
+        assert!(DataType::is_dictionary_key_type(&DataType::UInt64));
+        assert!(!DataType::is_dictionary_key_type(&DataType::Float16));
+    }
+
+    #[test]
+    fn test_floating() {
+        assert!(DataType::is_floating(&DataType::Float16));
+        assert!(!DataType::is_floating(&DataType::Int32));
     }
 
     #[test]
