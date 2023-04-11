@@ -226,6 +226,8 @@ impl<'a, R: Read> Iterator for ValueIter<'a, R> {
 /// let inferred_schema = infer_json_schema_from_seekable(&mut reader, None).unwrap();
 /// // file's cursor's offset automatically set at 0
 /// ```
+///
+/// [`Reader`]: super::Reader
 pub fn infer_json_schema_from_seekable<R: Read + Seek>(
     reader: &mut BufReader<R>,
     max_read_records: Option<usize>,
