@@ -129,6 +129,19 @@
 //! ```
 //!
 
+use std::io::BufRead;
+
+use chrono::Utc;
+use serde::Serialize;
+
+use arrow_array::timezone::Tz;
+use arrow_array::types::Float32Type;
+use arrow_array::types::*;
+use arrow_array::{downcast_integer, RecordBatch, RecordBatchReader, StructArray};
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType, SchemaRef, TimeUnit};
+pub use schema::*;
+
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
 use crate::reader::list_array::ListArrayDecoder;
@@ -138,15 +151,6 @@ use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
 use crate::reader::tape::{Tape, TapeDecoder, TapeElement};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
-use arrow_array::timezone::Tz;
-use arrow_array::types::Float32Type;
-use arrow_array::types::*;
-use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader};
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, SchemaRef, TimeUnit};
-use chrono::Utc;
-use serde::Serialize;
-use std::io::BufRead;
 
 mod boolean_array;
 mod decimal_array;
@@ -159,8 +163,6 @@ mod string_array;
 mod struct_array;
 mod tape;
 mod timestamp_array;
-
-pub use schema::*;
 
 /// A builder for [`Reader`] and [`Decoder`]
 pub struct ReaderBuilder {
@@ -286,7 +288,7 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 /// ```
 /// # use std::io::BufRead;
 /// # use arrow_array::RecordBatch;
-/// # use arrow_json::{Decoder, ReaderBuilder};
+/// # use arrow_json::reader::{Decoder, ReaderBuilder};
 /// # use arrow_schema::{ArrowError, SchemaRef};
 /// #
 /// fn read_from_json<R: BufRead>(
@@ -554,14 +556,8 @@ impl Decoder {
         assert_eq!(decoded.null_count(), 0);
         assert_eq!(decoded.len(), pos.len());
 
-        // Clear out buffer
-        let columns = decoded
-            .child_data()
-            .iter()
-            .map(|x| make_array(x.clone()))
-            .collect();
-
-        let batch = RecordBatch::try_new(self.schema.clone(), columns)?;
+        let batch = RecordBatch::from(StructArray::from(decoded))
+            .with_schema(self.schema.clone())?;
         Ok(Some(batch))
     }
 }
@@ -641,20 +637,23 @@ fn tape_error(d: TapeElement, expected: &str) -> ArrowError {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
-    use super::*;
-    use crate::reader::infer_json_schema;
-    use crate::ReaderBuilder;
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::Int32Type;
-    use arrow_array::{Array, StructArray};
-    use arrow_buffer::ArrowNativeType;
-    use arrow_cast::display::{ArrayFormatter, FormatOptions};
-    use arrow_schema::{DataType, Field, Schema};
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
     use std::sync::Arc;
+
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
+    use arrow_array::{Array, BooleanArray, ListArray, StringArray, StructArray};
+    use arrow_buffer::{ArrowNativeType, Buffer};
+    use arrow_cast::display::{ArrayFormatter, FormatOptions};
+    use arrow_data::ArrayDataBuilder;
+    use arrow_schema::{DataType, Field, Schema};
+
+    use crate::reader::infer_json_schema;
+    use crate::ReaderBuilder;
+
+    use super::*;
 
     fn do_read(
         buf: &str,
@@ -954,30 +953,6 @@ mod tests {
         assert_eq!(formatter.value(0).to_string(), "{a: [foo, null]}");
         assert_eq!(formatter.value(1).to_string(), "{a: [null], b: []}");
         assert_eq!(formatter.value(2).to_string(), "{c: null, a: [baz]}");
-    }
-
-    #[test]
-    fn integration_test() {
-        let files = [
-            "test/data/basic.json",
-            "test/data/basic_nulls.json",
-            "test/data/list_string_dict_nested_nulls.json",
-        ];
-
-        for file in files {
-            let mut f = BufReader::new(File::open(file).unwrap());
-            let schema = Arc::new(infer_json_schema(&mut f, None).unwrap());
-
-            f.rewind().unwrap();
-            let a = ReaderBuilder::new(schema.clone()).build(&mut f).unwrap();
-            let a_result = a.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
-
-            f.rewind().unwrap();
-            let b = ReaderBuilder::new(schema).build(f).unwrap();
-            let b_result = b.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
-
-            assert_eq!(a_result, b_result);
-        }
     }
 
     #[test]
@@ -1395,5 +1370,498 @@ mod tests {
 
         let u64 = batches[0].column(1).as_primitive::<UInt64Type>();
         assert_eq!(u64.values(), &[u64::MAX, u64::MAX, u64::MIN, u64::MIN]);
+    }
+
+    fn read_file(path: &str, schema: Option<Schema>) -> Reader<BufReader<File>> {
+        let file = File::open(path).unwrap();
+        let mut reader = BufReader::new(file);
+        let schema = schema.unwrap_or_else(|| {
+            let schema = infer_json_schema(&mut reader, None).unwrap();
+            reader.rewind().unwrap();
+            schema
+        });
+        let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(64);
+        builder.build(reader).unwrap()
+    }
+
+    #[test]
+    fn test_json_basic() {
+        let mut reader = read_file("test/data/basic.json", None);
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(7, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
+
+        let schema = reader.schema();
+        let batch_schema = batch.schema();
+        assert_eq!(schema, batch_schema);
+
+        let a = schema.column_with_name("a").unwrap();
+        assert_eq!(0, a.0);
+        assert_eq!(&DataType::Int64, a.1.data_type());
+        let b = schema.column_with_name("b").unwrap();
+        assert_eq!(1, b.0);
+        assert_eq!(&DataType::Float64, b.1.data_type());
+        let c = schema.column_with_name("c").unwrap();
+        assert_eq!(2, c.0);
+        assert_eq!(&DataType::Boolean, c.1.data_type());
+        let d = schema.column_with_name("d").unwrap();
+        assert_eq!(3, d.0);
+        assert_eq!(&DataType::Utf8, d.1.data_type());
+
+        let aa = batch.column(a.0).as_primitive::<Int64Type>();
+        assert_eq!(1, aa.value(0));
+        assert_eq!(-10, aa.value(1));
+        let bb = batch.column(b.0).as_primitive::<Float64Type>();
+        assert_eq!(2.0, bb.value(0));
+        assert_eq!(-3.5, bb.value(1));
+        let cc = batch.column(c.0).as_boolean();
+        assert!(!cc.value(0));
+        assert!(cc.value(10));
+        let dd = batch.column(d.0).as_string::<i32>();
+        assert_eq!("4", dd.value(0));
+        assert_eq!("text", dd.value(8));
+    }
+
+    #[test]
+    fn test_json_empty_projection() {
+        let mut reader = read_file("test/data/basic.json", Some(Schema::empty()));
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(0, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
+    }
+
+    #[test]
+    fn test_json_basic_with_nulls() {
+        let mut reader = read_file("test/data/basic_nulls.json", None);
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(4, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
+
+        let schema = reader.schema();
+        let batch_schema = batch.schema();
+        assert_eq!(schema, batch_schema);
+
+        let a = schema.column_with_name("a").unwrap();
+        assert_eq!(&DataType::Int64, a.1.data_type());
+        let b = schema.column_with_name("b").unwrap();
+        assert_eq!(&DataType::Float64, b.1.data_type());
+        let c = schema.column_with_name("c").unwrap();
+        assert_eq!(&DataType::Boolean, c.1.data_type());
+        let d = schema.column_with_name("d").unwrap();
+        assert_eq!(&DataType::Utf8, d.1.data_type());
+
+        let aa = batch.column(a.0).as_primitive::<Int64Type>();
+        assert!(aa.is_valid(0));
+        assert!(!aa.is_valid(1));
+        assert!(!aa.is_valid(11));
+        let bb = batch.column(b.0).as_primitive::<Float64Type>();
+        assert!(bb.is_valid(0));
+        assert!(!bb.is_valid(2));
+        assert!(!bb.is_valid(11));
+        let cc = batch.column(c.0).as_boolean();
+        assert!(cc.is_valid(0));
+        assert!(!cc.is_valid(4));
+        assert!(!cc.is_valid(11));
+        let dd = batch.column(d.0).as_string::<i32>();
+        assert!(!dd.is_valid(0));
+        assert!(dd.is_valid(1));
+        assert!(!dd.is_valid(4));
+        assert!(!dd.is_valid(11));
+    }
+
+    #[test]
+    fn test_json_basic_schema() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Float32, false),
+            Field::new("c", DataType::Boolean, false),
+            Field::new("d", DataType::Utf8, false),
+        ]);
+
+        let mut reader = read_file("test/data/basic.json", Some(schema.clone()));
+        let reader_schema = reader.schema();
+        assert_eq!(reader_schema.as_ref(), &schema);
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(4, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
+
+        let schema = batch.schema();
+
+        let a = schema.column_with_name("a").unwrap();
+        assert_eq!(&DataType::Int64, a.1.data_type());
+        let b = schema.column_with_name("b").unwrap();
+        assert_eq!(&DataType::Float32, b.1.data_type());
+        let c = schema.column_with_name("c").unwrap();
+        assert_eq!(&DataType::Boolean, c.1.data_type());
+        let d = schema.column_with_name("d").unwrap();
+        assert_eq!(&DataType::Utf8, d.1.data_type());
+
+        let aa = batch.column(a.0).as_primitive::<Int64Type>();
+        assert_eq!(1, aa.value(0));
+        assert_eq!(100000000000000, aa.value(11));
+        let bb = batch.column(b.0).as_primitive::<Float32Type>();
+        assert_eq!(2.0, bb.value(0));
+        assert_eq!(-3.5, bb.value(1));
+    }
+
+    #[test]
+    fn test_json_basic_schema_projection() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("c", DataType::Boolean, false),
+        ]);
+
+        let mut reader = read_file("test/data/basic.json", Some(schema.clone()));
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(2, batch.num_columns());
+        assert_eq!(2, batch.schema().fields().len());
+        assert_eq!(12, batch.num_rows());
+
+        assert_eq!(batch.schema().as_ref(), &schema);
+
+        let a = schema.column_with_name("a").unwrap();
+        assert_eq!(0, a.0);
+        assert_eq!(&DataType::Int64, a.1.data_type());
+        let c = schema.column_with_name("c").unwrap();
+        assert_eq!(1, c.0);
+        assert_eq!(&DataType::Boolean, c.1.data_type());
+    }
+
+    #[test]
+    fn test_json_arrays() {
+        let mut reader = read_file("test/data/arrays.json", None);
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(4, batch.num_columns());
+        assert_eq!(3, batch.num_rows());
+
+        let schema = batch.schema();
+
+        let a = schema.column_with_name("a").unwrap();
+        assert_eq!(&DataType::Int64, a.1.data_type());
+        let b = schema.column_with_name("b").unwrap();
+        assert_eq!(
+            &DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+            b.1.data_type()
+        );
+        let c = schema.column_with_name("c").unwrap();
+        assert_eq!(
+            &DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
+            c.1.data_type()
+        );
+        let d = schema.column_with_name("d").unwrap();
+        assert_eq!(&DataType::Utf8, d.1.data_type());
+
+        let aa = batch.column(a.0).as_primitive::<Int64Type>();
+        assert_eq!(1, aa.value(0));
+        assert_eq!(-10, aa.value(1));
+        assert_eq!(1627668684594000000, aa.value(2));
+        let bb = batch.column(b.0).as_list::<i32>();
+        let bb = bb.values().as_primitive::<Float64Type>();
+        assert_eq!(9, bb.len());
+        assert_eq!(2.0, bb.value(0));
+        assert_eq!(-6.1, bb.value(5));
+        assert!(!bb.is_valid(7));
+
+        let cc = batch
+            .column(c.0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        let cc = cc.values().as_boolean();
+        assert_eq!(6, cc.len());
+        assert!(!cc.value(0));
+        assert!(!cc.value(4));
+        assert!(!cc.is_valid(5));
+    }
+
+    #[test]
+    fn test_nested_list_json_arrays() {
+        let c_field =
+            Field::new_struct("c", vec![Field::new("d", DataType::Utf8, true)], true);
+        let a_struct_field = Field::new_struct(
+            "a",
+            vec![Field::new("b", DataType::Boolean, true), c_field.clone()],
+            true,
+        );
+        let a_field =
+            Field::new("a", DataType::List(Arc::new(a_struct_field.clone())), true);
+        let schema = Arc::new(Schema::new(vec![a_field.clone()]));
+        let builder = ReaderBuilder::new(schema).with_batch_size(64);
+        let json_content = r#"
+        {"a": [{"b": true, "c": {"d": "a_text"}}, {"b": false, "c": {"d": "b_text"}}]}
+        {"a": [{"b": false, "c": null}]}
+        {"a": [{"b": true, "c": {"d": "c_text"}}, {"b": null, "c": {"d": "d_text"}}, {"b": true, "c": {"d": null}}]}
+        {"a": null}
+        {"a": []}
+        {"a": [null]}
+        "#;
+        let mut reader = builder.build(Cursor::new(json_content)).unwrap();
+
+        // build expected output
+        let d = StringArray::from(vec![
+            Some("a_text"),
+            Some("b_text"),
+            None,
+            Some("c_text"),
+            Some("d_text"),
+            None,
+            None,
+        ]);
+        let c = ArrayDataBuilder::new(c_field.data_type().clone())
+            .len(7)
+            .add_child_data(d.to_data())
+            .null_bit_buffer(Some(Buffer::from(vec![0b00111011])))
+            .build()
+            .unwrap();
+        let b = BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            None,
+            Some(true),
+            None,
+        ]);
+        let a = ArrayDataBuilder::new(a_struct_field.data_type().clone())
+            .len(7)
+            .add_child_data(b.to_data())
+            .add_child_data(c.clone())
+            .null_bit_buffer(Some(Buffer::from(vec![0b00111111])))
+            .build()
+            .unwrap();
+        let a_list = ArrayDataBuilder::new(a_field.data_type().clone())
+            .len(6)
+            .add_buffer(Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7]))
+            .add_child_data(a)
+            .null_bit_buffer(Some(Buffer::from(vec![0b00110111])))
+            .build()
+            .unwrap();
+        let expected = make_array(a_list);
+
+        // compare `a` with result from json reader
+        let batch = reader.next().unwrap().unwrap();
+        let read = batch.column(0);
+        assert_eq!(read.len(), 6);
+        // compare the arrays the long way around, to better detect differences
+        let read: &ListArray = read.as_list::<i32>();
+        let expected = expected.as_list::<i32>();
+        assert_eq!(read.value_offsets(), &[0, 2, 3, 6, 6, 6, 7]);
+        // compare list null buffers
+        assert_eq!(read.nulls(), expected.nulls());
+        // build struct from list
+        let struct_array = read.values().as_struct();
+        let expected_struct_array = expected.values().as_struct();
+
+        assert_eq!(7, struct_array.len());
+        assert_eq!(1, struct_array.null_count());
+        assert_eq!(7, expected_struct_array.len());
+        assert_eq!(1, expected_struct_array.null_count());
+        // test struct's nulls
+        assert_eq!(struct_array.nulls(), expected_struct_array.nulls());
+        // test struct's fields
+        let read_b = struct_array.column(0);
+        assert_eq!(read_b.as_ref(), &b);
+        let read_c = struct_array.column(1);
+        assert_eq!(read_c.to_data(), c);
+        let read_c = read_c.as_struct();
+        let read_d = read_c.column(0);
+        assert_eq!(read_d.as_ref(), &d);
+
+        assert_eq!(read, expected);
+    }
+
+    #[test]
+    fn test_skip_empty_lines() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(64);
+        let json_content = "
+        {\"a\": 1}
+        {\"a\": 2}
+        {\"a\": 3}";
+        let mut reader = builder.build(Cursor::new(json_content)).unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(3, batch.num_rows());
+
+        let schema = reader.schema();
+        let c = schema.column_with_name("a").unwrap();
+        assert_eq!(&DataType::Int64, c.1.data_type());
+    }
+
+    #[test]
+    fn test_with_multiple_batches() {
+        let file = File::open("test/data/basic_nulls.json").unwrap();
+        let mut reader = BufReader::new(file);
+        let schema = infer_json_schema(&mut reader, None).unwrap();
+        reader.rewind().unwrap();
+
+        let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(5);
+        let mut reader = builder.build(reader).unwrap();
+
+        let mut num_records = Vec::new();
+        while let Some(rb) = reader.next().transpose().unwrap() {
+            num_records.push(rb.num_rows());
+        }
+
+        assert_eq!(vec![5, 5, 2], num_records);
+    }
+
+    #[test]
+    fn test_timestamp_from_json_seconds() {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Timestamp(TimeUnit::Second, None),
+            true,
+        )]);
+
+        let mut reader = read_file("test/data/basic_nulls.json", Some(schema));
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
+
+        let schema = reader.schema();
+        let batch_schema = batch.schema();
+        assert_eq!(schema, batch_schema);
+
+        let a = schema.column_with_name("a").unwrap();
+        assert_eq!(
+            &DataType::Timestamp(TimeUnit::Second, None),
+            a.1.data_type()
+        );
+
+        let aa = batch.column(a.0).as_primitive::<TimestampSecondType>();
+        assert!(aa.is_valid(0));
+        assert!(!aa.is_valid(1));
+        assert!(!aa.is_valid(2));
+        assert_eq!(1, aa.value(0));
+        assert_eq!(1, aa.value(3));
+        assert_eq!(5, aa.value(7));
+    }
+
+    #[test]
+    fn test_timestamp_from_json_milliseconds() {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        )]);
+
+        let mut reader = read_file("test/data/basic_nulls.json", Some(schema));
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
+
+        let schema = reader.schema();
+        let batch_schema = batch.schema();
+        assert_eq!(schema, batch_schema);
+
+        let a = schema.column_with_name("a").unwrap();
+        assert_eq!(
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            a.1.data_type()
+        );
+
+        let aa = batch.column(a.0).as_primitive::<TimestampMillisecondType>();
+        assert!(aa.is_valid(0));
+        assert!(!aa.is_valid(1));
+        assert!(!aa.is_valid(2));
+        assert_eq!(1, aa.value(0));
+        assert_eq!(1, aa.value(3));
+        assert_eq!(5, aa.value(7));
+    }
+
+    #[test]
+    fn test_date_from_json_milliseconds() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Date64, true)]);
+
+        let mut reader = read_file("test/data/basic_nulls.json", Some(schema));
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
+
+        let schema = reader.schema();
+        let batch_schema = batch.schema();
+        assert_eq!(schema, batch_schema);
+
+        let a = schema.column_with_name("a").unwrap();
+        assert_eq!(&DataType::Date64, a.1.data_type());
+
+        let aa = batch.column(a.0).as_primitive::<Date64Type>();
+        assert!(aa.is_valid(0));
+        assert!(!aa.is_valid(1));
+        assert!(!aa.is_valid(2));
+        assert_eq!(1, aa.value(0));
+        assert_eq!(1, aa.value(3));
+        assert_eq!(5, aa.value(7));
+    }
+
+    #[test]
+    fn test_time_from_json_nanoseconds() {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Time64(TimeUnit::Nanosecond),
+            true,
+        )]);
+
+        let mut reader = read_file("test/data/basic_nulls.json", Some(schema));
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(12, batch.num_rows());
+
+        let schema = reader.schema();
+        let batch_schema = batch.schema();
+        assert_eq!(schema, batch_schema);
+
+        let a = schema.column_with_name("a").unwrap();
+        assert_eq!(&DataType::Time64(TimeUnit::Nanosecond), a.1.data_type());
+
+        let aa = batch.column(a.0).as_primitive::<Time64NanosecondType>();
+        assert!(aa.is_valid(0));
+        assert!(!aa.is_valid(1));
+        assert!(!aa.is_valid(2));
+        assert_eq!(1, aa.value(0));
+        assert_eq!(1, aa.value(3));
+        assert_eq!(5, aa.value(7));
+    }
+
+    #[test]
+    fn test_json_iterator() {
+        let file = File::open("test/data/basic.json").unwrap();
+        let mut reader = BufReader::new(file);
+        let schema = infer_json_schema(&mut reader, None).unwrap();
+        reader.rewind().unwrap();
+
+        let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(5);
+        let reader = builder.build(reader).unwrap();
+        let schema = reader.schema();
+        let (col_a_index, _) = schema.column_with_name("a").unwrap();
+
+        let mut sum_num_rows = 0;
+        let mut num_batches = 0;
+        let mut sum_a = 0;
+        for batch in reader {
+            let batch = batch.unwrap();
+            assert_eq!(7, batch.num_columns());
+            sum_num_rows += batch.num_rows();
+            num_batches += 1;
+            let batch_schema = batch.schema();
+            assert_eq!(schema, batch_schema);
+            let a_array = batch.column(col_a_index).as_primitive::<Int64Type>();
+            sum_a += (0..a_array.len()).map(|i| a_array.value(i)).sum::<i64>();
+        }
+        assert_eq!(12, sum_num_rows);
+        assert_eq!(3, num_batches);
+        assert_eq!(100000000000011, sum_a);
     }
 }

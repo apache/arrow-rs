@@ -513,6 +513,7 @@ mod tests {
     use super::*;
     use flate2::read::GzDecoder;
     use std::fs::File;
+    use std::io::Cursor;
 
     #[test]
     fn test_json_infer_schema() {
@@ -658,5 +659,50 @@ mod tests {
         .unwrap();
 
         assert_eq!(inferred_schema, schema);
+    }
+
+    #[test]
+    fn test_coercion_scalar_and_list() {
+        use arrow_schema::DataType::*;
+
+        assert_eq!(
+            List(Arc::new(Field::new("item", Float64, true))),
+            coerce_data_type(vec![
+                &Float64,
+                &List(Arc::new(Field::new("item", Float64, true)))
+            ])
+        );
+        assert_eq!(
+            List(Arc::new(Field::new("item", Float64, true))),
+            coerce_data_type(vec![
+                &Float64,
+                &List(Arc::new(Field::new("item", Int64, true)))
+            ])
+        );
+        assert_eq!(
+            List(Arc::new(Field::new("item", Int64, true))),
+            coerce_data_type(vec![
+                &Int64,
+                &List(Arc::new(Field::new("item", Int64, true)))
+            ])
+        );
+        // boolean and number are incompatible, return utf8
+        assert_eq!(
+            List(Arc::new(Field::new("item", Utf8, true))),
+            coerce_data_type(vec![
+                &Boolean,
+                &List(Arc::new(Field::new("item", Float64, true)))
+            ])
+        );
+    }
+
+    #[test]
+    fn test_invalid_json_infer_schema() {
+        let re =
+            infer_json_schema_from_seekable(&mut BufReader::new(Cursor::new(b"}")), None);
+        assert_eq!(
+            re.err().unwrap().to_string(),
+            "Json error: Not valid JSON: expected value at line 1 column 1",
+        );
     }
 }
