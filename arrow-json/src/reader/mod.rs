@@ -644,7 +644,9 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Array, BooleanArray, ListArray, StringArray, StructArray};
+    use arrow_array::{
+        make_array, Array, BooleanArray, ListArray, StringArray, StructArray,
+    };
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
