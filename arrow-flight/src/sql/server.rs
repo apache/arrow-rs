@@ -34,9 +34,9 @@ use super::{
     ActionCreatePreparedStatementResult, CommandGetCatalogs, CommandGetCrossReference,
     CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
     CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementUpdate, DoPutUpdateResult, ProstMessageExt, SqlInfo,
-    TicketStatementQuery,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
+    CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementUpdate,
+    DoPutUpdateResult, ProstMessageExt, SqlInfo, TicketStatementQuery,
 };
 
 pub(crate) static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
@@ -151,6 +151,13 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
+    /// Get a FlightInfo to extract information about the supported XDBC types.
+    async fn get_flight_info_xdbc_type_info(
+        &self,
+        query: CommandGetXdbcTypeInfo,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status>;
+
     // do_get
 
     /// Get a FlightDataStream containing the query results.
@@ -227,6 +234,13 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_get_cross_reference(
         &self,
         query: CommandGetCrossReference,
+        request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the data related to the supported XDBC types.
+    async fn do_get_xdbc_type_info(
+        &self,
+        query: CommandGetXdbcTypeInfo,
         request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
@@ -352,6 +366,9 @@ where
             Command::CommandGetCrossReference(token) => {
                 self.get_flight_info_cross_reference(token, request).await
             }
+            Command::CommandGetXdbcTypeInfo(token) => {
+                self.get_flight_info_xdbc_type_info(token, request).await
+            }
             cmd => Err(Status::unimplemented(format!(
                 "get_flight_info: The defined request is invalid: {}",
                 cmd.type_url()
@@ -406,6 +423,9 @@ where
             }
             Command::CommandGetCrossReference(command) => {
                 self.do_get_cross_reference(command, request).await
+            }
+            Command::CommandGetXdbcTypeInfo(command) => {
+                self.do_get_xdbc_type_info(command, request).await
             }
             cmd => self.do_get_fallback(request, cmd.into_any()).await,
         }

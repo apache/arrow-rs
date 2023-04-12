@@ -31,9 +31,9 @@ use crate::sql::{
     ActionCreatePreparedStatementResult, Any, CommandGetCatalogs,
     CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
     CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
-    CommandGetTableTypes, CommandGetTables, CommandPreparedStatementQuery,
-    CommandStatementQuery, CommandStatementUpdate, DoPutUpdateResult, ProstMessageExt,
-    SqlInfo,
+    CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
+    CommandPreparedStatementQuery, CommandStatementQuery, CommandStatementUpdate,
+    DoPutUpdateResult, ProstMessageExt, SqlInfo,
 };
 use crate::{
     Action, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest,
@@ -310,6 +310,14 @@ impl FlightSqlServiceClient<Channel> {
         let request = CommandGetSqlInfo {
             info: sql_infos.iter().map(|sql_info| *sql_info as u32).collect(),
         };
+        self.get_flight_info_for_command(request).await
+    }
+
+    /// Request XDBC SQL information.
+    pub async fn get_xdbc_type_info(
+        &mut self,
+        request: CommandGetXdbcTypeInfo,
+    ) -> Result<FlightInfo, ArrowError> {
         self.get_flight_info_for_command(request).await
     }
 
