@@ -759,6 +759,38 @@ mod test {
         assert!(!field1.contains(&field2));
         assert!(!field2.contains(&field1));
 
+        // UnionFields with different type ID
+        let field1 = Field::new(
+            "field1",
+            DataType::Union(
+                UnionFields::new(
+                    vec![1, 2],
+                    vec![
+                        Field::new("field1", DataType::UInt8, true),
+                        Field::new("field3", DataType::Utf8, false),
+                    ],
+                ),
+                UnionMode::Dense,
+            ),
+            true,
+        );
+        let field2 = Field::new(
+            "field1",
+            DataType::Union(
+                UnionFields::new(
+                    vec![1, 3],
+                    vec![
+                        Field::new("field1", DataType::UInt8, false),
+                        Field::new("field3", DataType::Utf8, false),
+                    ],
+                ),
+                UnionMode::Dense,
+            ),
+            true,
+        );
+        assert!(!field1.contains(&field2));
+
+        // UnionFields with same type ID
         let field1 = Field::new(
             "field1",
             DataType::Union(

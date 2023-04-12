@@ -513,7 +513,10 @@ impl DataType {
             (DataType::Map(f1, s1), DataType::Map(f2, s2)) => s1 == s2 && f1.contains(f2),
             (DataType::Struct(f1), DataType::Struct(f2)) => f1.contains(f2),
             (DataType::Union(f1, s1), DataType::Union(f2, s2)) => {
-                s1 == s2 && f1.iter().all(|f1| f2.iter().any(|f2| f1.1.contains(f2.1)))
+                s1 == s2
+                    && f1
+                        .iter()
+                        .all(|f1| f2.iter().any(|f2| f1.0 == f2.0 && f1.1.contains(f2.1)))
             }
             (DataType::Dictionary(k1, v1), DataType::Dictionary(k2, v2)) => {
                 k1.contains(k2) && v1.contains(v2)
