@@ -87,11 +87,11 @@ impl StructArray {
     ///
     /// Panics if
     ///
-    /// * fields.len() != arrays.len()
-    /// * fields[i].data_type() != arrays[i].data_type()
-    /// * arrays[i].len() != arrays[j].len()
-    /// * arrays[i].len() != nulls.len()
-    /// * !fields[i].is_nullable() && !nulls.contains(arrays[i].nulls())
+    /// * `fields.len() != arrays.len()`
+    /// * `fields[i].data_type() != arrays[i].data_type()`
+    /// * `arrays[i].len() != arrays[j].len()`
+    /// * `arrays[i].len() != nulls.len()`
+    /// * `!fields[i].is_nullable() && !nulls.contains(arrays[i].nulls())`
     ///
     pub fn new(fields: Fields, arrays: Vec<ArrayRef>, nulls: Option<NullBuffer>) -> Self {
         assert_eq!(fields.len(), arrays.len());
