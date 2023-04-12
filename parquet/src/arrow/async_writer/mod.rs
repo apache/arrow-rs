@@ -129,6 +129,7 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
 
         // Force to flush the remaining data.
         Self::try_flush(&mut self.shared_buffer, &mut self.async_writer, true).await?;
+        self.async_writer.shutdown().await?;
 
         Ok(metadata)
     }
