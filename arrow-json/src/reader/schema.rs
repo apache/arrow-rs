@@ -20,7 +20,7 @@ use indexmap::map::IndexMap as HashMap;
 use indexmap::set::IndexSet as HashSet;
 use serde_json::Value;
 use std::borrow::Borrow;
-use std::io::{BufRead, BufReader, Seek};
+use std::io::{BufRead, Seek};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -515,7 +515,7 @@ mod tests {
     use super::*;
     use flate2::read::GzDecoder;
     use std::fs::File;
-    use std::io::Cursor;
+    use std::io::{BufReader, Cursor};
 
     #[test]
     fn test_json_infer_schema() {
