@@ -273,7 +273,7 @@
 //!
 //! # Serde Compatibility
 //!
-//! [`arrow_json::RawDecoder`] provides a mechanism to convert arbitrary, serde-compatible
+//! [`arrow_json::reader::Decoder`] provides a mechanism to convert arbitrary, serde-compatible
 //! structures into [`RecordBatch`].
 //!
 //! Whilst likely less performant than implementing a custom builder, as described in
@@ -281,7 +281,7 @@
 //!
 //! ```
 //! # use std::sync::Arc;
-//! # use arrow_json::RawReaderBuilder;
+//! # use arrow_json::ReaderBuilder;
 //! # use arrow_schema::{DataType, Field, Schema};
 //! # use serde::Serialize;
 //! # use arrow_array::cast::AsArray;
@@ -303,7 +303,7 @@
 //!     MyStruct{ int32: 8, string: "foo".to_string() },
 //! ];
 //!
-//! let mut decoder = RawReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
+//! let mut decoder = ReaderBuilder::new(Arc::new(schema)).build_decoder().unwrap();
 //! decoder.serialize(&rows).unwrap();
 //!
 //! let batch = decoder.flush().unwrap().unwrap();

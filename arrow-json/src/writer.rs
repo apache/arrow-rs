@@ -589,11 +589,10 @@ where
 #[cfg(test)]
 mod tests {
     use std::fs::{read_to_string, File};
-    use std::io::BufReader;
+    use std::io::{BufReader, Seek};
     use std::sync::Arc;
 
     use crate::reader::*;
-    use crate::RawReaderBuilder;
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
     use serde_json::json;
@@ -1205,14 +1204,14 @@ mod tests {
         );
     }
 
-    #[allow(deprecated)]
     fn test_write_for_file(test_file: &str) {
-        let builder = ReaderBuilder::new()
-            .infer_schema(None)
-            .with_batch_size(1024);
-        let mut reader: Reader<File> = builder
-            .build::<File>(File::open(test_file).unwrap())
-            .unwrap();
+        let file = File::open(test_file).unwrap();
+        let mut reader = BufReader::new(file);
+        let schema = infer_json_schema(&mut reader, None).unwrap();
+        reader.rewind().unwrap();
+
+        let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(1024);
+        let mut reader = builder.build(reader).unwrap();
         let batch = reader.next().unwrap().unwrap();
 
         let mut buf = Vec::new();
@@ -1298,7 +1297,7 @@ mod tests {
         let list_type = DataType::List(Arc::new(Field::new("item", ints_struct, true)));
         let list_field = Field::new("list", list_type, true);
         let schema = Arc::new(Schema::new(vec![list_field]));
-        let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
+        let builder = ReaderBuilder::new(schema).with_batch_size(64);
         let mut reader = builder.build(std::io::Cursor::new(json_content)).unwrap();
 
         let batch = reader.next().unwrap().unwrap();
@@ -1395,15 +1394,15 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_write_single_batch() {
         let test_file = "test/data/basic.json";
-        let builder = ReaderBuilder::new()
-            .infer_schema(None)
-            .with_batch_size(1024);
-        let mut reader: Reader<File> = builder
-            .build::<File>(File::open(test_file).unwrap())
-            .unwrap();
+        let file = File::open(test_file).unwrap();
+        let mut reader = BufReader::new(file);
+        let schema = infer_json_schema(&mut reader, None).unwrap();
+        reader.rewind().unwrap();
+
+        let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(1024);
+        let mut reader = builder.build(reader).unwrap();
         let batch = reader.next().unwrap().unwrap();
 
         let mut buf = Vec::new();
@@ -1440,7 +1439,7 @@ mod tests {
             Field::new("g", DataType::Timestamp(TimeUnit::Millisecond, None), true),
         ]));
 
-        let mut reader = RawReaderBuilder::new(schema.clone())
+        let mut reader = ReaderBuilder::new(schema.clone())
             .build(BufReader::new(File::open(test_file).unwrap()))
             .unwrap();
         let batch = reader.next().unwrap().unwrap();

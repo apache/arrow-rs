@@ -21,8 +21,8 @@ use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 use std::marker::PhantomData;
 
-use crate::raw::tape::{Tape, TapeElement};
-use crate::raw::{tape_error, ArrayDecoder};
+use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{tape_error, ArrayDecoder};
 
 const TRUE: &str = "true";
 const FALSE: &str = "false";

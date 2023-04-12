@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::raw::tape::{Tape, TapeElement};
-use crate::raw::{make_decoder, tape_error, ArrayDecoder};
+use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{make_decoder, tape_error, ArrayDecoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::ArrowNativeType;

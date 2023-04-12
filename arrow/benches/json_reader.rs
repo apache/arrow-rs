@@ -22,31 +22,16 @@ use arrow::util::bench_util::{
     create_primitive_array, create_string_array, create_string_array_with_len,
 };
 use arrow_array::RecordBatch;
-use arrow_json::LineDelimitedWriter;
-use arrow_json::RawReaderBuilder;
+use arrow_json::{LineDelimitedWriter, ReaderBuilder};
 use std::io::Cursor;
 use std::sync::Arc;
 
 #[allow(deprecated)]
 fn do_bench(c: &mut Criterion, name: &str, json: &str, schema: SchemaRef) {
-    c.bench_function(&format!("{name} (basic)"), |b| {
+    c.bench_function(name, |b| {
         b.iter(|| {
             let cursor = Cursor::new(black_box(json));
-            let builder = arrow_json::ReaderBuilder::new()
-                .with_schema(schema.clone())
-                .with_batch_size(64);
-
-            let mut reader = builder.build(cursor).unwrap();
-            while let Some(next) = reader.next().transpose() {
-                next.unwrap();
-            }
-        })
-    });
-
-    c.bench_function(&format!("{name} (raw)"), |b| {
-        b.iter(|| {
-            let cursor = Cursor::new(black_box(json));
-            let builder = RawReaderBuilder::new(schema.clone()).with_batch_size(64);
+            let builder = ReaderBuilder::new(schema.clone()).with_batch_size(64);
             let reader = builder.build(cursor).unwrap();
             for next in reader {
                 next.unwrap();
