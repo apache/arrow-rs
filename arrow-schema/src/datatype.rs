@@ -744,22 +744,18 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "duplicate type id: 1")]
     fn test_union_with_duplicated_type_id() {
-        std::panic::set_hook(Box::new(|_info| {
-            // do nothing
-        }));
-        let result = std::panic::catch_unwind(|| {
-            DataType::Union(
-                UnionFields::new(
-                    vec![1, 1],
-                    vec![
-                        Field::new("f1", DataType::Int32, false),
-                        Field::new("f2", DataType::Utf8, false),
-                    ],
-                ),
-                UnionMode::Dense,
-            );
-        });
-        assert!(result.is_err());
+        let type_ids = vec![1, 1];
+        DataType::Union(
+            UnionFields::new(
+                type_ids,
+                vec![
+                    Field::new("f1", DataType::Int32, false),
+                    Field::new("f2", DataType::Utf8, false),
+                ],
+            ),
+            UnionMode::Dense,
+        );
     }
 }
