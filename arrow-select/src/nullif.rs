@@ -208,8 +208,7 @@ mod tests {
 
         let s = s.slice(2, 3);
         let select = select.slice(1, 3);
-        let select = select.as_boolean();
-        let a = nullif(&s, select).unwrap();
+        let a = nullif(&s, &select).unwrap();
         let r: Vec<_> = a.as_string::<i32>().iter().collect();
         assert_eq!(r, vec![None, Some("a"), None]);
     }
@@ -509,9 +508,8 @@ mod tests {
                         .map(|_| rng.gen_bool(0.5).then(|| rng.gen_bool(0.5)))
                         .collect();
                     let b = b.slice(b_start_offset, a_length);
-                    let b = b.as_boolean();
 
-                    test_nullif(&a, b);
+                    test_nullif(&a, &b);
                 }
             }
         }

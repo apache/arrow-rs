@@ -18,7 +18,7 @@
 use crate::{make_array, Array, ArrayRef};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{Buffer, ScalarBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, UnionFields, UnionMode};
 /// Contains the `UnionArray` type.
 ///
@@ -108,10 +108,10 @@ use std::sync::Arc;
 /// ```
 #[derive(Clone)]
 pub struct UnionArray {
-    data: ArrayData,
+    data_type: DataType,
     type_ids: ScalarBuffer<i8>,
     offsets: Option<ScalarBuffer<i32>>,
-    boxed_fields: Vec<Option<ArrayRef>>,
+    fields: Vec<Option<ArrayRef>>,
 }
 
 impl UnionArray {
@@ -231,7 +231,7 @@ impl UnionArray {
     /// Panics if the `type_id` provided is less than zero or greater than the number of types
     /// in the `Union`.
     pub fn child(&self, type_id: i8) -> &ArrayRef {
-        let boxed = &self.boxed_fields[type_id as usize];
+        let boxed = &self.fields[type_id as usize];
         boxed.as_ref().expect("invalid type id")
     }
 
@@ -279,7 +279,7 @@ impl UnionArray {
 
     /// Returns the names of the types in the union.
     pub fn type_names(&self) -> Vec<&str> {
-        match self.data.data_type() {
+        match self.data_type() {
             DataType::Union(fields, _) => fields
                 .iter()
                 .map(|(_, f)| f.name().as_str())
@@ -290,7 +290,7 @@ impl UnionArray {
 
     /// Returns whether the `UnionArray` is dense (or sparse if `false`).
     fn is_dense(&self) -> bool {
-        match self.data.data_type() {
+        match self.data_type() {
             DataType::Union(_, mode) => mode == &UnionMode::Dense,
             _ => unreachable!("Union array's data type is not a union!"),
         }
@@ -298,8 +298,24 @@ impl UnionArray {
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
-        // TODO: Slice buffers directly (#3880)
-        self.data.slice(offset, length).into()
+        let (offsets, fields) = match self.offsets.as_ref() {
+            Some(offsets) => (Some(offsets.slice(offset, length)), self.fields.clone()),
+            None => {
+                let fields = self
+                    .fields
+                    .iter()
+                    .map(|x| x.as_ref().map(|x| x.slice(offset, length)))
+                    .collect();
+                (None, fields)
+            }
+        };
+
+        Self {
+            data_type: self.data_type.clone(),
+            type_ids: self.type_ids.slice(offset, length),
+            offsets,
+            fields,
+        }
     }
 }
 
@@ -330,17 +346,36 @@ impl From<ArrayData> for UnionArray {
             boxed_fields[field_id as usize] = Some(make_array(cd.clone()));
         }
         Self {
-            data,
+            data_type: data.data_type().clone(),
             type_ids,
             offsets,
-            boxed_fields,
+            fields: boxed_fields,
         }
     }
 }
 
 impl From<UnionArray> for ArrayData {
     fn from(array: UnionArray) -> Self {
-        array.data
+        let len = array.len();
+        let f = match &array.data_type {
+            DataType::Union(f, _) => f,
+            _ => unreachable!(),
+        };
+        let buffers = match array.offsets {
+            Some(o) => vec![array.type_ids.into_inner(), o.into_inner()],
+            None => vec![array.type_ids.into_inner()],
+        };
+
+        let child = f
+            .iter()
+            .map(|(i, _)| array.fields[i as usize].as_ref().unwrap().to_data())
+            .collect();
+
+        let builder = ArrayDataBuilder::new(array.data_type)
+            .len(len)
+            .buffers(buffers)
+            .child_data(child);
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -349,20 +384,32 @@ impl Array for UnionArray {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
+    }
+
+    fn len(&self) -> usize {
+        self.type_ids.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.type_ids.is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
@@ -385,6 +432,32 @@ impl Array for UnionArray {
     /// To get null count correctly you must check the underlying vector.
     fn null_count(&self) -> usize {
         0
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        let mut sum = self.type_ids.inner().capacity();
+        if let Some(o) = self.offsets.as_ref() {
+            sum += o.inner().capacity()
+        }
+        self.fields
+            .iter()
+            .flat_map(|x| x.as_ref().map(|x| x.get_buffer_memory_size()))
+            .sum::<usize>()
+            + sum
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        let mut sum = self.type_ids.inner().capacity();
+        if let Some(o) = self.offsets.as_ref() {
+            sum += o.inner().capacity()
+        }
+        std::mem::size_of::<Self>()
+            + self
+                .fields
+                .iter()
+                .flat_map(|x| x.as_ref().map(|x| x.get_array_memory_size()))
+                .sum::<usize>()
+            + sum
     }
 }
 
