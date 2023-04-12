@@ -517,6 +517,32 @@ impl DataType {
                 }
             }
     }
+
+    /// Check to see if `self` is a superset of `other`
+    ///
+    /// If DataType is a nested type, then it will check to see if the nested type is a superset of the other nested type
+    /// else it will check to see if the DataType is equal to the other DataType
+    pub fn contains(&self, other: &DataType) -> bool {
+        match (self, other) {
+            (DataType::List(f1), DataType::List(f2))
+            | (DataType::LargeList(f1), DataType::LargeList(f2)) => f1.contains(f2),
+            (DataType::FixedSizeList(f1, s1), DataType::FixedSizeList(f2, s2)) => {
+                s1 == s2 && f1.contains(f2)
+            }
+            (DataType::Map(f1, s1), DataType::Map(f2, s2)) => s1 == s2 && f1.contains(f2),
+            (DataType::Struct(f1), DataType::Struct(f2)) => f1.contains(f2),
+            (DataType::Union(f1, s1), DataType::Union(f2, s2)) => {
+                s1 == s2
+                    && f1
+                        .iter()
+                        .all(|f1| f2.iter().any(|f2| f1.0 == f2.0 && f1.1.contains(f2.1)))
+            }
+            (DataType::Dictionary(k1, v1), DataType::Dictionary(k2, v2)) => {
+                k1.contains(k2) && v1.contains(v2)
+            }
+            _ => self == other,
+        }
+    }
 }
 
 /// The maximum precision for [DataType::Decimal128] values
