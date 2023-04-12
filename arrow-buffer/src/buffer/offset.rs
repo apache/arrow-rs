@@ -56,6 +56,12 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         Self(buffer.into_buffer().into())
     }
 
+    /// Create a new [`OffsetBuffer`] containing `len + 1` `0` values
+    pub fn new_zeroed(len: usize) -> Self {
+        let buffer = MutableBuffer::from_len_zeroed((len + 1) * std::mem::size_of::<O>());
+        Self(buffer.into_buffer().into())
+    }
+
     /// Returns the inner [`ScalarBuffer`]
     pub fn inner(&self) -> &ScalarBuffer<O> {
         &self.0

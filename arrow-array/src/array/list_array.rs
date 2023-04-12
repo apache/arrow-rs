@@ -18,11 +18,12 @@
 use crate::array::{get_offsets, make_array, print_long_array};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
-    iterator::GenericListArrayIter, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
+    iterator::GenericListArrayIter, new_empty_array, Array, ArrayAccessor, ArrayRef,
+    ArrowPrimitiveType,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, FieldRef};
 use num::Integer;
 use std::any::Any;
 use std::sync::Arc;
@@ -73,12 +74,68 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// The data type constructor of list array.
     /// The input is the schema of the child array and
     /// the output is the [`DataType`], List or LargeList.
-    pub const DATA_TYPE_CONSTRUCTOR: fn(Arc<Field>) -> DataType = if OffsetSize::IS_LARGE
-    {
+    pub const DATA_TYPE_CONSTRUCTOR: fn(FieldRef) -> DataType = if OffsetSize::IS_LARGE {
         DataType::LargeList
     } else {
         DataType::List
     };
+
+    /// Create a new [`GenericListArray`] from the provided parts
+    ///
+    /// # Panics
+    ///
+    /// Panics if
+    ///
+    /// * `offsets.len() - 1 != nulls.len()`
+    /// * `offsets.last() > values.len()`
+    /// * `!field.is_nullable() && values.null_count() != 0`
+    pub fn new(
+        field: FieldRef,
+        offsets: OffsetBuffer<OffsetSize>,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        let end_offset = offsets.last().unwrap().as_usize();
+        assert!(values.len() >= end_offset);
+        if let Some(n) = nulls.as_ref() {
+            assert_eq!(n.len(), offsets.len() - 1);
+        }
+        assert!(field.is_nullable() || values.null_count() == 0);
+
+        Self {
+            data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
+            nulls,
+            values,
+            value_offsets: offsets,
+        }
+    }
+
+    /// Create a new [`GenericListArray`] of length `len` where all values are null
+    pub fn new_null(field: FieldRef, len: usize) -> Self {
+        let values = new_empty_array(field.data_type());
+        Self {
+            data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
+            nulls: Some(NullBuffer::new_null(len)),
+            value_offsets: OffsetBuffer::new_zeroed(len),
+            values,
+        }
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(
+        self,
+    ) -> (
+        FieldRef,
+        OffsetBuffer<OffsetSize>,
+        ArrayRef,
+        Option<NullBuffer>,
+    ) {
+        let f = match self.data_type {
+            DataType::List(f) | DataType::LargeList(f) => f,
+            _ => unreachable!(),
+        };
+        (f, self.value_offsets, self.values, self.nulls)
+    }
 
     /// Returns a reference to the offsets of this list
     ///
@@ -407,6 +464,7 @@ mod tests {
     use crate::types::Int32Type;
     use crate::Int32Array;
     use arrow_buffer::{bit_util, Buffer, ToByteSlice};
+    use arrow_schema::Field;
 
     fn create_from_buffers() -> ListArray {
         // Construct a value array
