@@ -269,24 +269,55 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     ///
     /// # Panics
     ///
-    /// Panics if:
-    /// - `values.len() != nulls.len()`
-    /// - `!Self::is_compatible(data_type)`
+    /// Panics if [`Self::try_new`] returns an error
     pub fn new(
         data_type: DataType,
         values: ScalarBuffer<T::Native>,
         nulls: Option<NullBuffer>,
     ) -> Self {
-        Self::assert_compatible(&data_type);
-        if let Some(n) = nulls.as_ref() {
-            assert_eq!(values.len(), n.len());
+        Self::try_new(data_type, values, nulls).unwrap()
+    }
+
+    /// Create a new [`PrimitiveArray`] from the provided data_type, values, nulls
+    ///
+    /// # Errors
+    ///
+    /// Errors if:
+    /// - `values.len() != nulls.len()`
+    /// - `!Self::is_compatible(data_type)`
+    pub fn try_new(
+        data_type: DataType,
+        values: ScalarBuffer<T::Native>,
+        nulls: Option<NullBuffer>,
+    ) -> Result<Self, ArrowError> {
+        if !Self::is_compatible(&data_type) {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "PrimitiveArray expected data type {} got {}",
+                T::DATA_TYPE,
+                data_type
+            )));
         }
 
-        Self {
+        if let Some(n) = nulls.as_ref() {
+            if n.len() != values.len() {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect number of nulls for PrimitiveArray, expected {} got {}",
+                    values.len(),
+                    n.len(),
+                )));
+            }
+        }
+
+        Ok(Self {
             data_type,
             values,
             nulls,
-        }
+        })
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(self) -> (DataType, ScalarBuffer<T::Native>, Option<NullBuffer>) {
+        (self.data_type, self.values, self.nulls)
     }
 
     /// Asserts that `data_type` is compatible with `Self`
