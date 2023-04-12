@@ -18,7 +18,7 @@
 use crate::array::{get_offsets, print_long_array};
 use crate::{make_array, Array, ArrayRef, ListArray, StringArray, StructArray};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
@@ -30,7 +30,8 @@ use std::sync::Arc;
 /// [StructArray] with 2 child fields.
 #[derive(Clone)]
 pub struct MapArray {
-    data: ArrayData,
+    data_type: DataType,
+    nulls: Option<NullBuffer>,
     /// The [`StructArray`] that is the direct child of this array
     entries: ArrayRef,
     /// The first child of `entries`, the "keys" of this MapArray
@@ -112,8 +113,14 @@ impl MapArray {
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
-        // TODO: Slice buffers directly (#3880)
-        self.data.slice(offset, length).into()
+        Self {
+            data_type: self.data_type.clone(),
+            nulls: self.nulls.as_ref().map(|n| n.slice(offset, length)),
+            entries: self.entries.clone(),
+            keys: self.keys.clone(),
+            values: self.values.clone(),
+            value_offsets: self.value_offsets.slice(offset, length),
+        }
     }
 }
 
@@ -126,7 +133,14 @@ impl From<ArrayData> for MapArray {
 
 impl From<MapArray> for ArrayData {
     fn from(array: MapArray) -> Self {
-        array.data
+        let len = array.len();
+        let builder = ArrayDataBuilder::new(array.data_type)
+            .len(len)
+            .nulls(array.nulls)
+            .buffers(vec![array.value_offsets.into_inner().into_inner()])
+            .child_data(vec![array.entries.to_data()]);
+
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -177,7 +191,8 @@ impl MapArray {
         let value_offsets = unsafe { get_offsets(&data) };
 
         Ok(Self {
-            data,
+            data_type: data.data_type().clone(),
+            nulls: data.nulls().cloned(),
             entries,
             keys,
             values,
@@ -229,34 +244,54 @@ impl Array for MapArray {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into_data()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
     }
 
+    fn len(&self) -> usize {
+        self.value_offsets.len() - 1
+    }
+
+    fn is_empty(&self) -> bool {
+        self.value_offsets.len() <= 1
+    }
+
+    fn offset(&self) -> usize {
+        0
+    }
+
     fn nulls(&self) -> Option<&NullBuffer> {
-        self.data.nulls()
+        self.nulls.as_ref()
     }
 
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [MapArray].
     fn get_buffer_memory_size(&self) -> usize {
-        self.data.get_buffer_memory_size()
+        let mut size = self.entries.get_buffer_memory_size();
+        size += self.value_offsets.inner().inner().capacity();
+        if let Some(n) = self.nulls.as_ref() {
+            size += n.buffer().capacity();
+        }
+        size
     }
 
-    /// Returns the total number of bytes of memory occupied physically by this [MapArray].
     fn get_array_memory_size(&self) -> usize {
-        self.data.get_array_memory_size() + std::mem::size_of_val(self)
+        let mut size = std::mem::size_of::<Self>() + self.entries.get_array_memory_size();
+        size += self.value_offsets.inner().inner().capacity();
+        if let Some(n) = self.nulls.as_ref() {
+            size += n.buffer().capacity();
+        }
+        size
     }
 }
 

@@ -24,11 +24,11 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 
-use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use flatbuffers::FlatBufferBuilder;
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
+use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
 use arrow_buffer::bit_util;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
@@ -1107,94 +1107,33 @@ fn get_buffer_element_width(spec: &BufferSpec) -> usize {
     }
 }
 
-/// Returns byte width for binary value_offset buffer spec.
-#[inline]
-fn get_value_offset_byte_width(data_type: &DataType) -> usize {
-    match data_type {
-        DataType::Binary | DataType::Utf8 => 4,
-        DataType::LargeBinary | DataType::LargeUtf8 => 8,
-        _ => unreachable!(),
+/// Returns the values and offsets [`Buffer`] for a ByteArray with offset type `O`
+///
+/// In particular, this handles re-encoding the offsets if they don't start at `0`,
+/// slicing the values buffer as appropriate. This helps reduce the encoded
+/// size of sliced arrays, as values that have been sliced away are not encoded
+fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
+    if data.is_empty() {
+        return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
     }
-}
 
-/// Returns the number of total bytes in base binary arrays.
-fn get_binary_buffer_len(array_data: &ArrayData) -> usize {
-    if array_data.is_empty() {
-        return 0;
-    }
-    match array_data.data_type() {
-        DataType::Binary => {
-            let array: BinaryArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-            (offsets[array_data.len()] - offsets[0]) as usize
-        }
-        DataType::LargeBinary => {
-            let array: LargeBinaryArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-            (offsets[array_data.len()] - offsets[0]) as usize
-        }
-        DataType::Utf8 => {
-            let array: StringArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-            (offsets[array_data.len()] - offsets[0]) as usize
-        }
-        DataType::LargeUtf8 => {
-            let array: LargeStringArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-            (offsets[array_data.len()] - offsets[0]) as usize
-        }
-        _ => unreachable!(),
-    }
-}
+    let buffers = data.buffers();
+    let offsets: &[O] = buffers[0].typed_data::<O>();
+    let offset_slice = &offsets[data.offset()..data.offset() + data.len() + 1];
 
-/// Rebase value offsets for given ArrayData to zero-based.
-fn get_zero_based_value_offsets<OffsetSize: OffsetSizeTrait>(
-    array_data: &ArrayData,
-) -> Buffer {
-    match array_data.data_type() {
-        DataType::Binary | DataType::LargeBinary => {
-            let array: GenericBinaryArray<OffsetSize> = array_data.clone().into();
-            let offsets = array.value_offsets();
-            let start_offset = offsets[0];
+    let start_offset = offset_slice.first().unwrap();
+    let end_offset = offset_slice.last().unwrap();
 
-            let mut builder = BufferBuilder::<OffsetSize>::new(array_data.len() + 1);
-            for x in offsets {
-                builder.append(*x - start_offset);
-            }
+    let offsets = match start_offset.as_usize() {
+        0 => buffers[0].clone(),
+        _ => offset_slice.iter().map(|x| *x - *start_offset).collect(),
+    };
 
-            builder.finish()
-        }
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let array: GenericStringArray<OffsetSize> = array_data.clone().into();
-            let offsets = array.value_offsets();
-            let start_offset = offsets[0];
-
-            let mut builder = BufferBuilder::<OffsetSize>::new(array_data.len() + 1);
-            for x in offsets {
-                builder.append(*x - start_offset);
-            }
-
-            builder.finish()
-        }
-        _ => unreachable!(),
-    }
-}
-
-/// Returns the start offset of base binary array.
-fn get_buffer_offset<OffsetSize: OffsetSizeTrait>(array_data: &ArrayData) -> OffsetSize {
-    match array_data.data_type() {
-        DataType::Binary | DataType::LargeBinary => {
-            let array: GenericBinaryArray<OffsetSize> = array_data.clone().into();
-            let offsets = array.value_offsets();
-            offsets[0]
-        }
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let array: GenericStringArray<OffsetSize> = array_data.clone().into();
-            let offsets = array.value_offsets();
-            offsets[0]
-        }
-        _ => unreachable!(),
-    }
+    let values = buffers[1].slice_with_length(
+        start_offset.as_usize(),
+        end_offset.as_usize() - start_offset.as_usize(),
+    );
+    (offsets, values)
 }
 
 /// Write array data to a vector of bytes
@@ -1241,65 +1180,27 @@ fn write_array_data(
     }
 
     let data_type = array_data.data_type();
-    if matches!(
-        data_type,
-        DataType::Binary | DataType::LargeBinary | DataType::Utf8 | DataType::LargeUtf8
-    ) {
-        let offset_buffer = &array_data.buffers()[0];
-        let value_offset_byte_width = get_value_offset_byte_width(data_type);
-        let min_length = (array_data.len() + 1) * value_offset_byte_width;
-        if buffer_need_truncate(
-            array_data.offset(),
-            offset_buffer,
-            &BufferSpec::FixedWidth {
-                byte_width: value_offset_byte_width,
-            },
-            min_length,
-        ) {
-            // Rebase offsets and truncate values
-            let (new_offsets, byte_offset) =
-                if matches!(data_type, DataType::Binary | DataType::Utf8) {
-                    (
-                        get_zero_based_value_offsets::<i32>(array_data),
-                        get_buffer_offset::<i32>(array_data) as usize,
-                    )
-                } else {
-                    (
-                        get_zero_based_value_offsets::<i64>(array_data),
-                        get_buffer_offset::<i64>(array_data) as usize,
-                    )
-                };
-
+    if matches!(data_type, DataType::Binary | DataType::Utf8) {
+        let (offsets, values) = get_byte_array_buffers::<i32>(array_data);
+        for buffer in [offsets, values] {
             offset = write_buffer(
-                new_offsets.as_slice(),
+                buffer.as_slice(),
                 buffers,
                 arrow_data,
                 offset,
                 compression_codec,
             )?;
-
-            let total_bytes = get_binary_buffer_len(array_data);
-            let value_buffer = &array_data.buffers()[1];
-            let buffer_length = min(total_bytes, value_buffer.len() - byte_offset);
-            let buffer_slice =
-                &value_buffer.as_slice()[byte_offset..(byte_offset + buffer_length)];
+        }
+    } else if matches!(data_type, DataType::LargeBinary | DataType::LargeUtf8) {
+        let (offsets, values) = get_byte_array_buffers::<i64>(array_data);
+        for buffer in [offsets, values] {
             offset = write_buffer(
-                buffer_slice,
+                buffer.as_slice(),
                 buffers,
                 arrow_data,
                 offset,
                 compression_codec,
             )?;
-        } else {
-            for buffer in array_data.buffers() {
-                offset = write_buffer(
-                    buffer.as_slice(),
-                    buffers,
-                    arrow_data,
-                    offset,
-                    compression_codec,
-                )?;
-            }
         }
     } else if DataType::is_numeric(data_type)
         || DataType::is_temporal(data_type)
@@ -1445,19 +1346,19 @@ fn pad_to_8(len: u32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::io::Cursor;
     use std::io::Seek;
     use std::sync::Arc;
 
-    use crate::MetadataVersion;
-
-    use crate::reader::*;
     use arrow_array::builder::PrimitiveRunBuilder;
     use arrow_array::builder::UnionBuilder;
     use arrow_array::types::*;
     use arrow_schema::DataType;
+
+    use crate::reader::*;
+    use crate::MetadataVersion;
+
+    use super::*;
 
     #[test]
     #[cfg(feature = "lz4")]

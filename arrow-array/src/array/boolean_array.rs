@@ -20,7 +20,7 @@ use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef};
 use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer, NullBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
 use std::sync::Arc;
@@ -66,8 +66,8 @@ use std::sync::Arc;
 /// ```
 #[derive(Clone)]
 pub struct BooleanArray {
-    data: ArrayData,
     values: BooleanBuffer,
+    nulls: Option<NullBuffer>,
 }
 
 impl std::fmt::Debug for BooleanArray {
@@ -90,27 +90,25 @@ impl BooleanArray {
         if let Some(n) = nulls.as_ref() {
             assert_eq!(values.len(), n.len());
         }
-
-        // TODO: Don't store ArrayData inside arrays (#3880)
-        let data = unsafe {
-            ArrayData::builder(DataType::Boolean)
-                .len(values.len())
-                .offset(values.offset())
-                .nulls(nulls)
-                .buffers(vec![values.inner().clone()])
-                .build_unchecked()
-        };
-        Self { data, values }
+        Self { values, nulls }
     }
 
     /// Returns the length of this array.
     pub fn len(&self) -> usize {
-        self.data.len()
+        self.values.len()
     }
 
     /// Returns whether this array is empty.
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.values.is_empty()
+    }
+
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        Self {
+            values: self.values.slice(offset, length),
+            nulls: self.nulls.as_ref().map(|n| n.slice(offset, length)),
+        }
     }
 
     /// Returns a new boolean array builder
@@ -125,7 +123,7 @@ impl BooleanArray {
 
     /// Returns the number of non null, true values within this array
     pub fn true_count(&self) -> usize {
-        match self.data.nulls() {
+        match self.nulls() {
             Some(nulls) => {
                 let null_chunks = nulls.inner().bit_chunks().iter_padded();
                 let value_chunks = self.values().bit_chunks().iter_padded();
@@ -247,25 +245,48 @@ impl Array for BooleanArray {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &DataType::Boolean
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        // TODO: Slice buffers directly (#3880)
-        Arc::new(Self::from(self.data.slice(offset, length)))
+        Arc::new(self.slice(offset, length))
+    }
+
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        self.values.offset()
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
-        self.data.nulls()
+        self.nulls.as_ref()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        let mut sum = self.values.inner().capacity();
+        if let Some(x) = &self.nulls {
+            sum += x.buffer().capacity()
+        }
+        sum
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.get_buffer_memory_size()
     }
 }
 
@@ -324,13 +345,22 @@ impl From<ArrayData> for BooleanArray {
         let values =
             BooleanBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
 
-        Self { data, values }
+        Self {
+            values,
+            nulls: data.nulls().cloned(),
+        }
     }
 }
 
 impl From<BooleanArray> for ArrayData {
     fn from(array: BooleanArray) -> Self {
-        array.data
+        let builder = ArrayDataBuilder::new(DataType::Boolean)
+            .len(array.values.len())
+            .offset(array.values.offset())
+            .nulls(array.nulls)
+            .buffers(vec![array.values.into_inner()]);
+
+        unsafe { builder.build_unchecked() }
     }
 }
 

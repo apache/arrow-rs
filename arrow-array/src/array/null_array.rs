@@ -19,7 +19,7 @@
 
 use crate::{Array, ArrayRef};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
 use std::sync::Arc;
@@ -40,7 +40,7 @@ use std::sync::Arc;
 /// ```
 #[derive(Clone)]
 pub struct NullArray {
-    data: ArrayData,
+    len: usize,
 }
 
 impl NullArray {
@@ -50,15 +50,17 @@ impl NullArray {
     /// other [`DataType`].
     ///
     pub fn new(length: usize) -> Self {
-        let array_data = ArrayData::builder(DataType::Null).len(length);
-        let array_data = unsafe { array_data.build_unchecked() };
-        NullArray::from(array_data)
+        Self { len: length }
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
-    pub fn slice(&self, offset: usize, length: usize) -> Self {
-        // TODO: Slice buffers directly (#3880)
-        self.data.slice(offset, length).into()
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        assert!(
+            offset.saturating_add(len) <= self.len,
+            "the length + offset of the sliced BooleanBuffer cannot exceed the existing length"
+        );
+
+        Self { len }
     }
 }
 
@@ -67,20 +69,32 @@ impl Array for NullArray {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &DataType::Null
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn offset(&self) -> usize {
+        0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
@@ -104,6 +118,14 @@ impl Array for NullArray {
     fn null_count(&self) -> usize {
         self.len()
     }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        0
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
 }
 
 impl From<ArrayData> for NullArray {
@@ -122,13 +144,14 @@ impl From<ArrayData> for NullArray {
             data.nulls().is_none(),
             "NullArray data should not contain a null buffer, as no buffers are required"
         );
-        Self { data }
+        Self { len: data.len() }
     }
 }
 
 impl From<NullArray> for ArrayData {
     fn from(array: NullArray) -> Self {
-        array.data
+        let builder = ArrayDataBuilder::new(DataType::Null).len(array.len);
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -158,7 +181,6 @@ mod tests {
         let array2 = array1.slice(8, 16);
         assert_eq!(array2.len(), 16);
         assert_eq!(array2.null_count(), 16);
-        assert_eq!(array2.offset(), 8);
     }
 
     #[test]

@@ -322,7 +322,7 @@
 //! Advanced users may wish to interact with the underlying buffers of an [`Array`], for example,
 //! for FFI or high-performance conversion from other formats. This interface is provided by
 //! [`ArrayData`] which stores the [`Buffer`] comprising an [`Array`], and can be accessed
-//! with [`Array::data`](array::Array::data)
+//! with [`Array::to_data`](array::Array::to_data)
 //!
 //! The APIs for constructing [`ArrayData`] come in safe, and unsafe variants, with the former
 //! performing extensive, but potentially expensive validation to ensure the buffers are well-formed.
