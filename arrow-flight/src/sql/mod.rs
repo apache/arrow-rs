@@ -58,6 +58,7 @@ pub use gen::CommandGetPrimaryKeys;
 pub use gen::CommandGetSqlInfo;
 pub use gen::CommandGetTableTypes;
 pub use gen::CommandGetTables;
+pub use gen::CommandGetXdbcTypeInfo;
 pub use gen::CommandPreparedStatementQuery;
 pub use gen::CommandPreparedStatementUpdate;
 pub use gen::CommandStatementQuery;
@@ -214,6 +215,7 @@ prost_message_ext!(
     CommandGetSqlInfo,
     CommandGetTableTypes,
     CommandGetTables,
+    CommandGetXdbcTypeInfo,
     CommandPreparedStatementQuery,
     CommandPreparedStatementUpdate,
     CommandStatementQuery,

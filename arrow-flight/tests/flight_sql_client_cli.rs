@@ -26,9 +26,9 @@ use arrow_flight::{
         CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas,
         CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
         CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
-        CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-        CommandStatementQuery, CommandStatementUpdate, ProstMessageExt, SqlInfo,
-        TicketStatementQuery,
+        CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
+        CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementUpdate,
+        ProstMessageExt, SqlInfo, TicketStatementQuery,
     },
     utils::batches_to_flight_data,
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
@@ -302,6 +302,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
+    async fn get_flight_info_xdbc_type_info(
+        &self,
+        _query: CommandGetXdbcTypeInfo,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_xdbc_type_info not implemented",
+        ))
+    }
+
     // do_get
     async fn do_get_statement(
         &self,
@@ -396,6 +406,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented(
             "do_get_cross_reference not implemented",
+        ))
+    }
+
+    async fn do_get_xdbc_type_info(
+        &self,
+        _query: CommandGetXdbcTypeInfo,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_xdbc_type_info not implemented",
         ))
     }
 
