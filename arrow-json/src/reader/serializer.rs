@@ -68,6 +68,13 @@ impl<'a> TapeSerializer<'a> {
             offsets,
         }
     }
+
+    fn serialize_number(&mut self, v: &[u8]) {
+        self.bytes.extend_from_slice(v);
+        let idx = self.offsets.len() - 1;
+        self.elements.push(TapeElement::Number(idx as _));
+        self.offsets.push(self.bytes.len());
+    }
 }
 
 /// The tape stores all values as strings, and so must serialize numeric types
@@ -81,7 +88,8 @@ macro_rules! serialize_numeric {
     ($s:ident, $t:ty, $v:ident) => {{
         let mut buffer = [0_u8; <$t>::FORMATTED_SIZE];
         let s = lexical_core::write($v, &mut buffer);
-        $s.serialize_bytes(s)
+        $s.serialize_number(s);
+        Ok(())
     }};
 }
 
