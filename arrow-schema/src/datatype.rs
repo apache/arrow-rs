@@ -747,7 +747,7 @@ mod tests {
     #[should_panic(expected = "duplicate type id: 1")]
     fn test_union_with_duplicated_type_id() {
         let type_ids = vec![1, 1];
-        DataType::Union(
+        let _union = DataType::Union(
             UnionFields::new(
                 type_ids,
                 vec![
