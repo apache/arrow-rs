@@ -282,15 +282,6 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             assert_eq!(values.len(), n.len());
         }
 
-        // TODO: Don't store ArrayData inside arrays (#3880)
-        // let data = unsafe {
-        //     ArrayData::builder(data_type)
-        //         .len(values.len())
-        //         .nulls(nulls)
-        //         .buffers(vec![values.inner().clone()])
-        //         .build_unchecked()
-        // };
-
         Self {
             data_type,
             values,
@@ -372,18 +363,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Creates a PrimitiveArray based on an iterator of values without nulls
     pub fn from_iter_values<I: IntoIterator<Item = T::Native>>(iter: I) -> Self {
         let val_buf: Buffer = iter.into_iter().collect();
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                T::DATA_TYPE,
-                val_buf.len() / std::mem::size_of::<<T as ArrowPrimitiveType>::Native>(),
-                None,
-                None,
-                0,
-                vec![val_buf],
-                vec![],
-            )
-        };
-        PrimitiveArray::from(data)
+        let len = val_buf.len() / std::mem::size_of::<T::Native>();
+        Self {
+            data_type: T::DATA_TYPE,
+            values: ScalarBuffer::new(val_buf, 0, len),
+            nulls: None,
+        }
     }
 
     /// Creates a PrimitiveArray based on a constant value with `count` elements
