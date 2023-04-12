@@ -67,6 +67,13 @@ impl NullBuffer {
         }
     }
 
+    /// Returns true if all nulls in `other` also exist in self
+    pub fn contains(&self, other: &NullBuffer) -> bool {
+        let lhs = self.inner().bit_chunks().iter_padded();
+        let rhs = other.inner().bit_chunks().iter_padded();
+        lhs.zip(rhs).all(|(l, r)| (l & !r) == 0)
+    }
+
     /// Returns the length of this [`NullBuffer`]
     #[inline]
     pub fn len(&self) -> usize {
