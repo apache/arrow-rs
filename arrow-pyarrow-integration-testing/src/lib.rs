@@ -52,7 +52,7 @@ fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
     let array = kernels::arithmetic::add(array, array).map_err(to_py_err)?;
 
     // export
-    array.data().to_pyarrow(py)
+    array.to_data().to_pyarrow(py)
 }
 
 /// calls a lambda function that receives and returns an array
@@ -64,7 +64,7 @@ fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
     let expected = Arc::new(Int64Array::from(vec![Some(2), None, Some(6)])) as ArrayRef;
 
     // to py
-    let pyarray = array.data().to_pyarrow(py)?;
+    let pyarray = array.to_data().to_pyarrow(py)?;
     let pyarray = lambda.call1((pyarray,))?;
     let array = make_array(ArrayData::from_pyarrow(pyarray)?);
 
@@ -75,7 +75,7 @@ fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
 fn make_empty_array(datatype: PyArrowType<DataType>, py: Python) -> PyResult<PyObject> {
     let array = new_empty_array(&datatype.0);
 
-    array.data().to_pyarrow(py)
+    array.to_data().to_pyarrow(py)
 }
 
 /// Returns the substring
@@ -90,7 +90,7 @@ fn substring(
     // substring
     let array = kernels::substring::substring(array.as_ref(), start, None).map_err(to_py_err)?;
 
-    Ok(array.data().to_owned().into())
+    Ok(array.to_data().into())
 }
 
 /// Returns the concatenate
@@ -101,7 +101,7 @@ fn concatenate(array: PyArrowType<ArrayData>, py: Python) -> PyResult<PyObject> 
     // concat
     let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).map_err(to_py_err)?;
 
-    array.data().to_pyarrow(py)
+    array.to_data().to_pyarrow(py)
 }
 
 #[pyfunction]
