@@ -61,7 +61,11 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
 
     /// Create a new [`OffsetBuffer`] containing `len + 1` `0` values
     pub fn new_zeroed(len: usize) -> Self {
-        let buffer = MutableBuffer::from_len_zeroed((len + 1) * std::mem::size_of::<O>());
+        let len_bytes = len
+            .checked_add(1)
+            .and_then(|o| o.checked_mul(std::mem::size_of::<O>()))
+            .expect("overflow");
+        let buffer = MutableBuffer::from_len_zeroed(len_bytes);
         Self(buffer.into_buffer().into())
     }
 
@@ -116,6 +120,18 @@ mod tests {
     #[test]
     fn offsets() {
         OffsetBuffer::new(vec![0, 1, 2, 3].into());
+
+        let offsets = OffsetBuffer::<i32>::new_zeroed(3);
+        assert_eq!(offsets.as_ref(), &[0; 4]);
+
+        let offsets = OffsetBuffer::<i32>::new_zeroed(0);
+        assert_eq!(offsets.as_ref(), &[0; 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "overflow")]
+    fn offsets_new_zeroed_overflow() {
+        OffsetBuffer::<i32>::new_zeroed(usize::MAX);
     }
 
     #[test]
