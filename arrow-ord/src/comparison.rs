@@ -4616,11 +4616,12 @@ mod tests {
     fn test_eq_dyn_neq_dyn_dictionary_i8_array() {
         // Construct a value array
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let values = Arc::new(values) as ArrayRef;
 
         let keys1 = Int8Array::from_iter_values([2_i8, 3, 4]);
         let keys2 = Int8Array::from_iter_values([2_i8, 4, 4]);
-        let dict_array1 = DictionaryArray::try_new(&keys1, &values).unwrap();
-        let dict_array2 = DictionaryArray::try_new(&keys2, &values).unwrap();
+        let dict_array1 = DictionaryArray::new(keys1, values.clone());
+        let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
@@ -4636,13 +4637,12 @@ mod tests {
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_u64_array() {
         let values = UInt64Array::from_iter_values([10_u64, 11, 12, 13, 14, 15, 16, 17]);
+        let values = Arc::new(values) as ArrayRef;
 
         let keys1 = UInt64Array::from_iter_values([1_u64, 3, 4]);
         let keys2 = UInt64Array::from_iter_values([2_u64, 3, 5]);
-        let dict_array1 =
-            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
-        let dict_array2 =
-            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
+        let dict_array1 = DictionaryArray::new(keys1, values.clone());
+        let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert_eq!(
@@ -4689,13 +4689,12 @@ mod tests {
             .into_iter()
             .map(|b| Some(b.as_bytes()))
             .collect();
+        let values = Arc::new(values) as ArrayRef;
 
         let keys1 = UInt64Array::from_iter_values([0_u64, 1, 2]);
         let keys2 = UInt64Array::from_iter_values([0_u64, 2, 1]);
-        let dict_array1 =
-            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
-        let dict_array2 =
-            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
+        let dict_array1 = DictionaryArray::new(keys1, values.clone());
+        let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert_eq!(
@@ -4711,13 +4710,12 @@ mod tests {
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_interval_array() {
         let values = IntervalDayTimeArray::from(vec![1, 6, 10, 2, 3, 5]);
+        let values = Arc::new(values) as ArrayRef;
 
         let keys1 = UInt64Array::from_iter_values([1_u64, 0, 3]);
         let keys2 = UInt64Array::from_iter_values([2_u64, 0, 3]);
-        let dict_array1 =
-            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
-        let dict_array2 =
-            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
+        let dict_array1 = DictionaryArray::new(keys1, values.clone());
+        let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
@@ -4733,13 +4731,12 @@ mod tests {
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_date_array() {
         let values = Date32Array::from(vec![1, 6, 10, 2, 3, 5]);
+        let values = Arc::new(values) as ArrayRef;
 
         let keys1 = UInt64Array::from_iter_values([1_u64, 0, 3]);
         let keys2 = UInt64Array::from_iter_values([2_u64, 0, 3]);
-        let dict_array1 =
-            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
-        let dict_array2 =
-            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
+        let dict_array1 = DictionaryArray::new(keys1, values.clone());
+        let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
@@ -4755,13 +4752,12 @@ mod tests {
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_eq_dyn_neq_dyn_dictionary_bool_array() {
         let values = BooleanArray::from(vec![true, false]);
+        let values = Arc::new(values) as ArrayRef;
 
         let keys1 = UInt64Array::from_iter_values([1_u64, 1, 1]);
         let keys2 = UInt64Array::from_iter_values([0_u64, 1, 0]);
-        let dict_array1 =
-            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
-        let dict_array2 =
-            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
+        let dict_array1 = DictionaryArray::new(keys1, values.clone());
+        let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert_eq!(
@@ -4778,11 +4774,12 @@ mod tests {
     fn test_lt_dyn_gt_dyn_dictionary_i8_array() {
         // Construct a value array
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let values = Arc::new(values) as ArrayRef;
 
         let keys1 = Int8Array::from_iter_values([3_i8, 4, 4]);
         let keys2 = Int8Array::from_iter_values([4_i8, 3, 4]);
-        let dict_array1 = DictionaryArray::try_new(&keys1, &values).unwrap();
-        let dict_array2 = DictionaryArray::try_new(&keys2, &values).unwrap();
+        let dict_array1 = DictionaryArray::new(keys1, values.clone());
+        let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
         let result = lt_dyn(&dict_array1, &dict_array2);
         assert_eq!(
@@ -4807,13 +4804,12 @@ mod tests {
     #[cfg(feature = "dyn_cmp_dict")]
     fn test_lt_dyn_gt_dyn_dictionary_bool_array() {
         let values = BooleanArray::from(vec![true, false]);
+        let values = Arc::new(values) as ArrayRef;
 
         let keys1 = UInt64Array::from_iter_values([1_u64, 1, 0]);
         let keys2 = UInt64Array::from_iter_values([0_u64, 1, 1]);
-        let dict_array1 =
-            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
-        let dict_array2 =
-            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
+        let dict_array1 = DictionaryArray::new(keys1, values.clone());
+        let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
         let result = lt_dyn(&dict_array1, &dict_array2);
         assert_eq!(
@@ -4852,7 +4848,7 @@ mod tests {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
 
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
         let array = Int8Array::from_iter([Some(12_i8), None, Some(14)]);
 
@@ -4887,7 +4883,7 @@ mod tests {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
 
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
         let array = Int8Array::from_iter([Some(12_i8), None, Some(11)]);
 
@@ -5497,7 +5493,7 @@ mod tests {
             .collect();
 
         let keys = UInt64Array::from(vec![Some(0_u64), None, Some(2), Some(2)]);
-        let dict_array = DictionaryArray::<UInt64Type>::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
         let array: BinaryArray = ["hello", "", "parquet", "test"]
             .into_iter()
@@ -5538,7 +5534,7 @@ mod tests {
             .collect();
 
         let keys = UInt64Array::from(vec![Some(0_u64), None, Some(2), Some(2)]);
-        let dict_array = DictionaryArray::<UInt64Type>::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
         let array: BinaryArray = ["hello", "", "parquet", "test"]
             .into_iter()
@@ -5604,7 +5600,7 @@ mod tests {
         let values =
             Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(10.0)]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
@@ -5622,7 +5618,7 @@ mod tests {
             .collect();
         let values = Float32Array::from(vec![f32::NAN, 8.0, 10.0]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
@@ -5640,7 +5636,7 @@ mod tests {
             .collect();
         let values = Float64Array::from(vec![f64::NAN, 8.0, 10.0]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 1, 2]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
@@ -5662,7 +5658,7 @@ mod tests {
             .collect();
         let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
@@ -5680,7 +5676,7 @@ mod tests {
             .collect();
         let values = Float32Array::from(vec![f32::NAN, 8.0, 9.0, 10.0, 1.0]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
@@ -5698,7 +5694,7 @@ mod tests {
             .collect();
         let values = Float64Array::from(vec![f64::NAN, 8.0, 9.0, 10.0, 1.0]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
@@ -5720,7 +5716,7 @@ mod tests {
             .collect();
         let values = Float16Array::from(vec![f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
@@ -5738,7 +5734,7 @@ mod tests {
             .collect();
         let values = Float32Array::from(vec![f32::NAN, 8.0, 9.0, 10.0, 1.0]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
@@ -5756,7 +5752,7 @@ mod tests {
             .collect();
         let values = Float64Array::from(vec![f64::NAN, 8.0, 9.0, 10.0, 1.0]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
@@ -5777,7 +5773,7 @@ mod tests {
 
         let values = BooleanArray::from(test1);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2]);
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
         let array: BooleanArray = test2.iter().collect();
 
@@ -5814,7 +5810,7 @@ mod tests {
 
         let values = BooleanArray::from(test1);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2]);
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
         let array: BooleanArray = test2.iter().collect();
 
@@ -5872,11 +5868,11 @@ mod tests {
     fn test_cmp_dict_decimal128() {
         let values = Decimal128Array::from_iter_values([0, 1, 2, 3, 4, 5]);
         let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
-        let array1 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = Decimal128Array::from_iter_values([7, -3, 4, 3, 5]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
@@ -5912,7 +5908,7 @@ mod tests {
 
         let values = Decimal128Array::from_iter_values([7, -3, 4, 3, 5]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
@@ -5947,13 +5943,13 @@ mod tests {
             [0, 1, 2, 3, 4, 5].into_iter().map(i256::from_i128),
         );
         let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
-        let array1 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = Decimal256Array::from_iter_values(
             [7, -3, 4, 3, 5].into_iter().map(i256::from_i128),
         );
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
@@ -5992,7 +5988,7 @@ mod tests {
             [7, -3, 4, 3, 5].into_iter().map(i256::from_i128),
         );
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],

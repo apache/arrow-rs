@@ -759,6 +759,7 @@ mod tests {
     use super::*;
     use crate::arithmetic::add;
     use arrow_array::types::*;
+    use std::sync::Arc;
 
     #[test]
     fn test_primitive_array_sum() {
@@ -1142,9 +1143,10 @@ mod tests {
     #[test]
     fn test_sum_dyn() {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let values = Arc::new(values) as ArrayRef;
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
 
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert_eq!(39, sum_array::<Int8Type, _>(array).unwrap());
 
@@ -1152,12 +1154,12 @@ mod tests {
         assert_eq!(15, sum_array::<Int32Type, _>(&a).unwrap());
 
         let keys = Int8Array::from(vec![Some(2_i8), None, Some(4)]);
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert_eq!(26, sum_array::<Int8Type, _>(array).unwrap());
 
         let keys = Int8Array::from(vec![None, None, None]);
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert!(sum_array::<Int8Type, _>(array).is_none());
     }
@@ -1166,8 +1168,9 @@ mod tests {
     fn test_max_min_dyn() {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
+        let values = Arc::new(values) as ArrayRef;
 
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert_eq!(14, max_array::<Int8Type, _>(array).unwrap());
 
@@ -1179,14 +1182,14 @@ mod tests {
         assert_eq!(1, min_array::<Int32Type, _>(&a).unwrap());
 
         let keys = Int8Array::from(vec![Some(2_i8), None, Some(7)]);
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert_eq!(17, max_array::<Int8Type, _>(array).unwrap());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert_eq!(12, min_array::<Int8Type, _>(array).unwrap());
 
         let keys = Int8Array::from(vec![None, None, None]);
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert!(max_array::<Int8Type, _>(array).is_none());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
@@ -1198,7 +1201,7 @@ mod tests {
         let values = Float32Array::from(vec![5.0_f32, 2.0_f32, f32::NAN]);
         let keys = Int8Array::from_iter_values([0_i8, 1, 2]);
 
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
         let array = dict_array.downcast_dict::<Float32Array>().unwrap();
         assert!(max_array::<Float32Type, _>(array).unwrap().is_nan());
 

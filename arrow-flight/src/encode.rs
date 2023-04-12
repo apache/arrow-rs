@@ -719,7 +719,7 @@ mod tests {
         // large dictionary (1024 distinct values) that are used throughout the array
         let values = StringArray::from_iter_values((0..1024).map(|i| "******".repeat(i)));
         let keys = Int32Array::from_iter_values((0..3000).map(|i| (3000 - i) % 1024));
-        let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+        let array = DictionaryArray::new(keys, Arc::new(values));
 
         let batch =
             RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
