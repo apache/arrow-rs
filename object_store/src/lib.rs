@@ -264,7 +264,9 @@ use std::fmt::{Debug, Formatter};
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
+use std::str::FromStr;
 use tokio::io::AsyncWrite;
+use url::Url;
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp", feature = "http"))]
 pub use client::ClientOptions;
@@ -705,6 +707,13 @@ pub enum Error {
         store
     ))]
     UnknownConfigurationKey { store: &'static str, key: String },
+
+    #[snafu(display(
+        "object_store must be built with feature '{}' to support loading from '{}'.",
+        feature,
+        url
+    ))]
+    MissingFeature { feature: &'static str, url: String },
 }
 
 impl From<Error> for std::io::Error {
@@ -714,6 +723,131 @@ impl From<Error> for std::io::Error {
             _ => std::io::ErrorKind::Other,
         };
         Self::new(kind, e)
+    }
+}
+
+/// Creates object store from provided url and options
+///
+/// The scheme of the provided url is used to instantiate the store. If the url
+/// scheme is cannot be mapped to a store, [`NotImplemented`] is raised. For invalid
+/// input, e.g. url with no scheme the default behaviour is to return
+/// [`local::LocalFileSystem`].
+///
+/// # Examples
+///
+/// ```
+///
+/// ```
+pub fn parse_url<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String> + Clone)>>(
+    url: impl AsRef<str>,
+    options: I,
+) -> Result<Box<DynObjectStore>> {
+    let storage_url = url.as_ref();
+
+    if let Ok(url) = Url::parse(storage_url) {
+        let opts = options
+            .into_iter()
+            .map(|(key, value)| (key.as_ref().to_ascii_lowercase(), value));
+
+        match url.scheme() {
+            #[cfg(any(feature = "aws", feature = "aws_profile"))]
+            "s3" | "s3a" => {
+                let opts = opts
+                    .filter_map(|(key, value)| {
+                        let conf_key = aws::AmazonS3ConfigKey::from_str(&key).ok()?;
+                        Some((conf_key, value))
+                    })
+                    .collect::<Vec<_>>();
+
+                let store = aws::AmazonS3Builder::default()
+                    .with_url(storage_url)
+                    .try_with_options(opts)
+                    .and_then(|builder| builder.build())?;
+
+                Ok(Box::from(store))
+            }
+
+            #[cfg(not(any(feature = "aws", feature = "aws_profile")))]
+            "s3" | "s3a" => Err(Error::MissingFeature {
+                feature: "aws",
+                url: storage_url.into(),
+            }),
+
+            #[cfg(feature = "gcp")]
+            "gs" => {
+                let opts = opts
+                    .filter_map(|(key, value)| {
+                        let conf_key = gcp::GoogleConfigKey::from_str(&key).ok()?;
+                        Some((conf_key, value))
+                    })
+                    .collect::<Vec<_>>();
+
+                let store = gcp::GoogleCloudStorageBuilder::default()
+                    .with_url(storage_url)
+                    .try_with_options(opts)
+                    .and_then(|builder| builder.build())?;
+
+                Ok(Box::from(store))
+            }
+
+            #[cfg(not(feature = "gcp"))]
+            "gs" => Err(Error::MissingFeature {
+                feature: "gcp",
+                url: storage_url.into(),
+            }),
+
+            #[cfg(feature = "azure")]
+            "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => {
+                let opts = opts
+                    .filter_map(|(key, value)| {
+                        let conf_key = azure::AzureConfigKey::from_str(&key).ok()?;
+                        Some((conf_key, value))
+                    })
+                    .collect::<Vec<_>>();
+
+                let store = azure::MicrosoftAzureBuilder::default()
+                    .with_url(storage_url)
+                    .try_with_options(opts)
+                    .and_then(|builder| builder.build())?;
+
+                Ok(Box::from(store))
+            }
+
+            #[cfg(not(feature = "azure"))]
+            "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => {
+                Err(Error::MissingFeature {
+                    feature: "azure",
+                    url: storage_url.into(),
+                })
+            }
+
+            #[cfg(feature = "http")]
+            "http" | "https" => {
+                let store = http::HttpBuilder::default()
+                    .with_url(url.as_ref())
+                    .with_client_options(ClientOptions::default())
+                    .build()?;
+
+                Ok(Box::from(store))
+            }
+
+            #[cfg(not(feature = "http"))]
+            "http" | "https" => Err(Error::MissingFeature {
+                feature: "http",
+                url: storage_url.into(),
+            }),
+
+            "memory" => Ok(Box::from(memory::InMemory::default())),
+
+            "file" => Ok(Box::from(local::LocalFileSystem::default())),
+
+            _ => Err(Error::NotImplemented),
+        }
+    } else {
+        match storage_url {
+            "memory" => Ok(Box::from(local::LocalFileSystem::default())),
+            _ => Ok(Box::from(local::LocalFileSystem::default())),
+        }
     }
 }
 
@@ -739,6 +873,7 @@ mod test_util {
 mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
+    use std::collections::HashMap;
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
@@ -1310,6 +1445,37 @@ mod tests {
         let store = memory::InMemory::new();
         let mut stream = list_store(&store, "path").await.unwrap();
         assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn parse_url_test() {
+        let opts: HashMap<&str, &str> = HashMap::new();
+        let mem_store = parse_url("memory://", opts.clone());
+        assert!(mem_store.is_ok());
+
+        let local_store = parse_url("file:///", opts.clone());
+        assert!(local_store.is_ok());
+
+        let s3_store = parse_url(
+            "s3://abc/",
+            HashMap::from([
+                ("AWS_REGION", "eu-central-1"),
+                ("aws_access_key_id", "abc"),
+                ("aws_secret_access_key", "xyz"),
+            ]),
+        );
+
+        for store in vec![mem_store, local_store, s3_store] {
+            let store = store.unwrap();
+
+            let prefix: Path = "/tmp/".try_into().unwrap();
+            let content_list = flatten_list_stream(store.as_ref(), Some(&prefix))
+                .await
+                .unwrap();
+            for x in content_list {
+                println!("{}", x)
+            }
+        }
     }
 
     // Tests TODO:
