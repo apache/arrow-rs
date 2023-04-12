@@ -81,43 +81,87 @@ pub struct StructArray {
 }
 
 impl StructArray {
-    /// Create a new [`StructArray`] from the provided parts
+    /// Create a new [`StructArray`] from the provided parts, panicking on failure
     ///
     /// # Panics
     ///
-    /// Panics if
+    /// Panics if [`Self::try_new`] returns an error
+    pub fn new(fields: Fields, arrays: Vec<ArrayRef>, nulls: Option<NullBuffer>) -> Self {
+        Self::try_new(fields, arrays, nulls).unwrap()
+    }
+
+    /// Create a new [`StructArray`] from the provided parts, returning an error on failure
+    ///
+    /// # Errors
+    ///
+    /// Errors if
     ///
     /// * `fields.len() != arrays.len()`
     /// * `fields[i].data_type() != arrays[i].data_type()`
     /// * `arrays[i].len() != arrays[j].len()`
     /// * `arrays[i].len() != nulls.len()`
     /// * `!fields[i].is_nullable() && !nulls.contains(arrays[i].nulls())`
-    ///
-    pub fn new(fields: Fields, arrays: Vec<ArrayRef>, nulls: Option<NullBuffer>) -> Self {
-        assert_eq!(fields.len(), arrays.len());
+    pub fn try_new(
+        fields: Fields,
+        arrays: Vec<ArrayRef>,
+        nulls: Option<NullBuffer>,
+    ) -> Result<Self, ArrowError> {
+        if fields.len() != arrays.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect number of arrays for StructArray fields, expected {} got {}",
+                fields.len(),
+                arrays.len()
+            )));
+        }
         let len = arrays.first().map(|x| x.len()).unwrap_or_default();
 
         if let Some(n) = nulls.as_ref() {
-            assert_eq!(n.len(), len);
+            if n.len() != len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect number of nulls for StructArray, expected {len} got {}",
+                    n.len(),
+                )));
+            }
         }
 
         for (f, a) in fields.iter().zip(&arrays) {
-            assert_eq!(f.data_type(), a.data_type(), "{f}");
-            assert_eq!(a.len(), len, "{f}");
+            if f.data_type() != a.data_type() {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect datatype for StructArray field {:?}, expected {} got {}",
+                    f.name(),
+                    f.data_type(),
+                    a.data_type()
+                )));
+            }
+
+            if a.len() != len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect array length for StructArray field {:?}, expected {} got {}",
+                    f.name(),
+                    len,
+                    a.len()
+                )));
+            }
 
             if let Some(a) = a.nulls() {
                 let nulls_valid = f.is_nullable()
                     || nulls.as_ref().map(|n| n.contains(a)).unwrap_or_default();
-                assert!(nulls_valid, "{f}");
+
+                if !nulls_valid {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Found unmasked nulls for non-nullable StructArray field {:?}",
+                        f.name()
+                    )));
+                }
             }
         }
 
-        Self {
+        Ok(Self {
             len,
             data_type: DataType::Struct(fields),
             nulls: nulls.filter(|n| n.null_count() > 0),
             fields: arrays,
-        }
+        })
     }
 
     /// Create a new [`StructArray`] of length `len` where all values are null
