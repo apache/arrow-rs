@@ -742,4 +742,24 @@ mod tests {
     fn size_should_not_regress() {
         assert_eq!(std::mem::size_of::<DataType>(), 24);
     }
+
+    #[test]
+    fn test_union_with_duplicated_type_id() {
+        std::panic::set_hook(Box::new(|_info| {
+            // do nothing
+        }));
+        let result = std::panic::catch_unwind(|| {
+            DataType::Union(
+                UnionFields::new(
+                    vec![1, 1],
+                    vec![
+                        Field::new("f1", DataType::Int32, false),
+                        Field::new("f2", DataType::Utf8, false),
+                    ],
+                ),
+                UnionMode::Dense,
+            );
+        });
+        assert!(result.is_err());
+    }
 }
