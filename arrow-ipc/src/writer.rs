@@ -1108,6 +1108,10 @@ fn get_buffer_element_width(spec: &BufferSpec) -> usize {
 }
 
 /// Returns the values and offsets [`Buffer`] for a ByteArray with offset type `O`
+///
+/// In particular, this handles re-encoding the offsets if they don't start at `0`,
+/// slicing the values buffer as appropriate. This helps reduce the encoded
+/// size of sliced arrays, as values that have been sliced away are not encoded
 fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
     if data.is_empty() {
         return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
