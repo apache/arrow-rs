@@ -29,10 +29,13 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// # Panics
     ///
     /// Panics if `buffer` is not a non-empty buffer containing
-    /// monotonically increasing values greater than zero
+    /// monotonically increasing values greater than or equal to zero
     pub fn new(buffer: ScalarBuffer<O>) -> Self {
         assert!(!buffer.is_empty(), "offsets cannot be empty");
-        assert!(buffer[0] > O::usize_as(0), "offsets must be greater than 0");
+        assert!(
+            buffer[0] >= O::usize_as(0),
+            "offsets must be greater than 0"
+        );
         assert!(
             buffer.windows(2).all(|w| w[0] <= w[1]),
             "offsets must be monotonically increasing"
@@ -45,7 +48,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// # Safety
     ///
     /// `buffer` must be a non-empty buffer containing monotonically increasing
-    /// values greater than zero
+    /// values greater than or equal to zero
     pub unsafe fn new_unchecked(buffer: ScalarBuffer<O>) -> Self {
         Self(buffer)
     }
@@ -108,6 +111,11 @@ mod tests {
     #[should_panic(expected = "offsets must be greater than 0")]
     fn negative_offsets() {
         OffsetBuffer::new(vec![-1, 0, 1].into());
+    }
+
+    #[test]
+    fn offsets() {
+        OffsetBuffer::new(vec![0, 1, 2, 3].into());
     }
 
     #[test]

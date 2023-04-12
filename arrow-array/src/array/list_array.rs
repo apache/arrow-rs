@@ -463,31 +463,15 @@ mod tests {
     use crate::builder::{Int32Builder, ListBuilder};
     use crate::types::Int32Type;
     use crate::Int32Array;
-    use arrow_buffer::{bit_util, Buffer, ToByteSlice};
+    use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
     use arrow_schema::Field;
 
     fn create_from_buffers() -> ListArray {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
-            .build()
-            .unwrap();
-
-        // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
-
-        // Construct a list array from the above two
-        let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        ListArray::from(list_data)
+        let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 6, 8]));
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        ListArray::new(field, offsets, Arc::new(values), None)
     }
 
     #[test]
