@@ -762,8 +762,8 @@ impl AmazonS3Builder {
         match parsed.scheme() {
             "s3" | "s3a" => self.bucket_name = Some(host.to_string()),
             "https" => match host.splitn(4, '.').collect_tuple() {
-                Some(("s3", bucket, "amazonaws", "com")) => {
-                    self.bucket_name = Some(bucket.to_string());
+                Some(("s3", region, "amazonaws", "com")) => {
+                    self.region = Some(region.to_string());
                 }
                 Some((bucket, "s3", region, "amazonaws.com")) => {
                     self.bucket_name = Some(bucket.to_string());
