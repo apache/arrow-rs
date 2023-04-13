@@ -21,7 +21,7 @@ use crate::{
     iterator::GenericListArrayIter, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 use num::Integer;
 use std::any::Any;
@@ -52,7 +52,8 @@ impl OffsetSizeTrait for i64 {
 ///
 /// For non generic lists, you may wish to consider using [`ListArray`] or [`LargeListArray`]`
 pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
-    data: ArrayData,
+    data_type: DataType,
+    nulls: Option<NullBuffer>,
     values: ArrayRef,
     value_offsets: OffsetBuffer<OffsetSize>,
 }
@@ -60,7 +61,8 @@ pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
 impl<OffsetSize: OffsetSizeTrait> Clone for GenericListArray<OffsetSize> {
     fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),
+            data_type: self.data_type.clone(),
+            nulls: self.nulls.clone(),
             values: self.values.clone(),
             value_offsets: self.value_offsets.clone(),
         }
@@ -144,8 +146,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
-        // TODO: Slice buffers directly (#3880)
-        self.data.slice(offset, length).into()
+        Self {
+            data_type: self.data_type.clone(),
+            nulls: self.nulls.as_ref().map(|n| n.slice(offset, length)),
+            values: self.values.clone(),
+            value_offsets: self.value_offsets.slice(offset, length),
+        }
     }
 
     /// Creates a [`GenericListArray`] from an iterator of primitive values
@@ -201,7 +207,14 @@ impl<OffsetSize: 'static + OffsetSizeTrait> From<GenericListArray<OffsetSize>>
     for ArrayData
 {
     fn from(array: GenericListArray<OffsetSize>) -> Self {
-        array.data
+        let len = array.len();
+        let builder = ArrayDataBuilder::new(array.data_type)
+            .len(len)
+            .nulls(array.nulls)
+            .buffers(vec![array.value_offsets.into_inner().into_inner()])
+            .child_data(vec![array.values.to_data()]);
+
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -244,7 +257,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         let value_offsets = unsafe { get_offsets(&data) };
 
         Ok(Self {
-            data,
+            data_type: data.data_type().clone(),
+            nulls: data.nulls().cloned(),
             values,
             value_offsets,
         })
@@ -256,24 +270,54 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
     }
 
+    fn len(&self) -> usize {
+        self.value_offsets.len() - 1
+    }
+
+    fn is_empty(&self) -> bool {
+        self.value_offsets.len() <= 1
+    }
+
+    fn offset(&self) -> usize {
+        0
+    }
+
     fn nulls(&self) -> Option<&NullBuffer> {
-        self.data.nulls()
+        self.nulls.as_ref()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        let mut size = self.values.get_buffer_memory_size();
+        size += self.value_offsets.inner().inner().capacity();
+        if let Some(n) = self.nulls.as_ref() {
+            size += n.buffer().capacity();
+        }
+        size
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        let mut size = std::mem::size_of::<Self>() + self.values.get_array_memory_size();
+        size += self.value_offsets.inner().inner().capacity();
+        if let Some(n) = self.nulls.as_ref() {
+            size += n.buffer().capacity();
+        }
+        size
     }
 }
 
@@ -649,11 +693,10 @@ mod tests {
 
         let sliced_array = list_array.slice(1, 6);
         assert_eq!(6, sliced_array.len());
-        assert_eq!(1, sliced_array.offset());
         assert_eq!(3, sliced_array.null_count());
 
         for i in 0..sliced_array.len() {
-            if bit_util::get_bit(&null_bits, sliced_array.offset() + i) {
+            if bit_util::get_bit(&null_bits, 1 + i) {
                 assert!(sliced_array.is_valid(i));
             } else {
                 assert!(sliced_array.is_null(i));
@@ -713,11 +756,10 @@ mod tests {
 
         let sliced_array = list_array.slice(1, 6);
         assert_eq!(6, sliced_array.len());
-        assert_eq!(1, sliced_array.offset());
         assert_eq!(3, sliced_array.null_count());
 
         for i in 0..sliced_array.len() {
-            if bit_util::get_bit(&null_bits, sliced_array.offset() + i) {
+            if bit_util::get_bit(&null_bits, 1 + i) {
                 assert!(sliced_array.is_valid(i));
             } else {
                 assert!(sliced_array.is_null(i));

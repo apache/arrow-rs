@@ -4667,10 +4667,8 @@ mod tests {
         let array = Int32Array::from(vec![-5, 6, -7, 8, 100000000]);
         assert_eq!(0, array.offset());
         let array = array.slice(2, 3);
-        assert_eq!(2, array.offset());
         let b = cast(&array, &DataType::UInt8).unwrap();
         assert_eq!(3, b.len());
-        assert_eq!(0, b.offset());
         let c = b.as_any().downcast_ref::<UInt8Array>().unwrap();
         assert!(!c.is_valid(0));
         assert_eq!(8, c.value(1));

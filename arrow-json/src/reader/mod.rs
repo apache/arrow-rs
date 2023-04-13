@@ -632,10 +632,6 @@ fn make_decoder(
     }
 }
 
-fn tape_error(d: TapeElement, expected: &str) -> ArrowError {
-    ArrowError::JsonError(format!("expected {expected} got {d}"))
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -963,29 +959,29 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
 
         let buf = r#"{"a": 1}"#;
-        let result = ReaderBuilder::new(schema.clone())
+        let err = ReaderBuilder::new(schema.clone())
             .with_batch_size(1024)
             .build(Cursor::new(buf.as_bytes()))
             .unwrap()
-            .read();
+            .read()
+            .unwrap_err();
 
-        assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().to_string(),
-            "Json error: expected string got number".to_string()
+            err.to_string(),
+            "Json error: whilst decoding field 'a': expected string got 1"
         );
 
         let buf = r#"{"a": true}"#;
-        let result = ReaderBuilder::new(schema)
+        let err = ReaderBuilder::new(schema)
             .with_batch_size(1024)
             .build(Cursor::new(buf.as_bytes()))
             .unwrap()
-            .read();
+            .read()
+            .unwrap_err();
 
-        assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().to_string(),
-            "Json error: expected string got true".to_string()
+            err.to_string(),
+            "Json error: whilst decoding field 'a': expected string got true"
         );
     }
 
@@ -1866,6 +1862,97 @@ mod tests {
         assert_eq!(12, sum_num_rows);
         assert_eq!(3, num_batches);
         assert_eq!(100000000000011, sum_a);
+    }
+
+    #[test]
+    fn test_decoder_error() {
+        let schema = Arc::new(Schema::new(vec![Field::new_struct(
+            "a",
+            vec![Field::new("child", DataType::Int32, false)],
+            true,
+        )]));
+
+        let parse_err = |s: &str| {
+            ReaderBuilder::new(schema.clone())
+                .build(Cursor::new(s.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+        };
+
+        let err = parse_err(r#"{"a": 123}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': expected { got 123"
+        );
+
+        let err = parse_err(r#"{"a": ["bar"]}"#);
+        assert_eq!(
+            err,
+            r#"Json error: whilst decoding field 'a': expected { got ["bar"]"#
+        );
+
+        let err = parse_err(r#"{"a": []}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': expected { got []"
+        );
+
+        let err = parse_err(r#"{"a": [{"child": 234}]}"#);
+        assert_eq!(
+            err,
+            r#"Json error: whilst decoding field 'a': expected { got [{"child": 234}]"#
+        );
+
+        let err = parse_err(r#"{"a": [{"child": {"foo": [{"foo": ["bar"]}]}}]}"#);
+        assert_eq!(
+            err,
+            r#"Json error: whilst decoding field 'a': expected { got [{"child": {"foo": [{"foo": ["bar"]}]}}]"#
+        );
+
+        let err = parse_err(r#"{"a": true}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': expected { got true"
+        );
+
+        let err = parse_err(r#"{"a": false}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': expected { got false"
+        );
+
+        let err = parse_err(r#"{"a": "foo"}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': expected { got \"foo\""
+        );
+
+        let err = parse_err(r#"{"a": {"child": false}}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got false"
+        );
+
+        let err = parse_err(r#"{"a": {"child": []}}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got []"
+        );
+
+        let err = parse_err(r#"{"a": {"child": [123]}}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got [123]"
+        );
+
+        let err = parse_err(r#"{"a": {"child": [123, 3465346]}}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got [123, 3465346]"
+        );
     }
 
     #[test]
