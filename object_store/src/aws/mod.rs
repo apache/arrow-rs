@@ -805,12 +805,16 @@ impl AmazonS3Builder {
     fn parse_url(&mut self, url: &str) -> Result<()> {
         let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
         let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
-
         match parsed.scheme() {
             "s3" | "s3a" => self.bucket_name = Some(host.to_string()),
             "https" => match host.splitn(4, '.').collect_tuple() {
-                Some(("s3", bucket, "amazonaws", "com")) => {
-                    self.bucket_name = Some(bucket.to_string());
+                Some(("s3", region, "amazonaws", "com")) => {
+                    self.region = Some(region.to_string());
+                    if let Some(bucket) =
+                        parsed.path_segments().and_then(|mut path| path.next())
+                    {
+                        self.bucket_name = Some(bucket.into());
+                    }
                 }
                 Some((bucket, "s3", region, "amazonaws.com")) => {
                     self.bucket_name = Some(bucket.to_string());
@@ -1519,9 +1523,23 @@ mod tests {
 
         let mut builder = AmazonS3Builder::new();
         builder
-            .parse_url("https://s3.bucket.amazonaws.com")
+            .parse_url("https://s3.region.amazonaws.com")
             .unwrap();
+        assert_eq!(builder.region, Some("region".to_string()));
+
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://s3.region.amazonaws.com/bucket")
+            .unwrap();
+        assert_eq!(builder.region, Some("region".to_string()));
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://s3.region.amazonaws.com/bucket.with.dot/path")
+            .unwrap();
+        assert_eq!(builder.region, Some("region".to_string()));
+        assert_eq!(builder.bucket_name, Some("bucket.with.dot".to_string()));
 
         let mut builder = AmazonS3Builder::new();
         builder
