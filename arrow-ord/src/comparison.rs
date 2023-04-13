@@ -26,6 +26,7 @@
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_buffer::i256;
 use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
@@ -516,6 +517,11 @@ macro_rules! dyn_compare_scalar {
                 let right = try_to_type!($RIGHT, to_i128)?;
                 let left = as_primitive_array::<Decimal128Type>($LEFT);
                 $OP::<Decimal128Type>(left, right)
+            }
+            DataType::Decimal256(_, _) => {
+                let right = try_to_type!($RIGHT, to_i128)?;
+                let left = as_primitive_array::<Decimal256Type>($LEFT);
+                $OP::<Decimal256Type>(left, i256::from_i128(right))
             }
             DataType::Date32 => {
                 let right = try_to_type!($RIGHT, to_i32)?;
@@ -6162,6 +6168,67 @@ mod tests {
         assert_eq!(e, r);
 
         let r = gt_eq_dyn(&a, &b).unwrap();
+        assert_eq!(e, r);
+    }
+
+    #[test]
+    fn test_decimal256_scalar() {
+        let a = Decimal256Array::from_iter_values(
+            [1, 2, 3, 4, 5].into_iter().map(i256::from_i128),
+        );
+        let b = i256::from_i128(3);
+        // array eq scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(false), Some(false)],
+        );
+        let r = eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = eq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array neq scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(true), Some(true)],
+        );
+        let r = neq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = neq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array lt scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
+        );
+        let r = lt_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = lt_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array lt_eq scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(false), Some(false)],
+        );
+        let r = lt_eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = lt_eq_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array gt scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(true), Some(true)],
+        );
+        let r = gt_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = gt_dyn_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+
+        // array gt_eq scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
+        );
+        let r = gt_eq_scalar(&a, b).unwrap();
+        assert_eq!(e, r);
+        let r = gt_eq_dyn_scalar(&a, b).unwrap();
         assert_eq!(e, r);
     }
 
