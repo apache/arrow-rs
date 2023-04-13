@@ -963,8 +963,7 @@ mod tests {
             .build(Cursor::new(buf.as_bytes()))
             .unwrap()
             .read()
-            .unwrap_err()
-            .to_string();
+            .unwrap_err();
 
         assert_eq!(
             err.to_string(),
