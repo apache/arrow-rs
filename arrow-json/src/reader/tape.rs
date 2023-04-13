@@ -97,8 +97,7 @@ impl<'a> Tape<'a> {
 
     /// Returns the index of the next field at the same level as `cur_idx`
     ///
-    /// Return an error containing the [`TapeElement`] at `cur_idx` if it
-    /// is not the start of a field
+    /// Return an error if `cur_idx` is not the start of a field
     pub fn next(&self, cur_idx: u32, expected: &str) -> Result<u32, ArrowError> {
         match self.get(cur_idx) {
             TapeElement::String(_)
