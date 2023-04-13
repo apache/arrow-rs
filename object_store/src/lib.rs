@@ -738,7 +738,9 @@ impl From<Error> for std::io::Error {
 /// ```
 ///
 /// ```
-pub fn parse_url<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String> + Clone)>>(
+pub fn parse_url<
+    I: IntoIterator<Item = (impl AsRef<str>, impl Into<String> + Clone)> + Clone,
+>(
     url: impl AsRef<str>,
     options: I,
 ) -> Result<Box<DynObjectStore>> {
@@ -746,8 +748,14 @@ pub fn parse_url<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String> + Cl
 
     if let Ok(url) = Url::parse(storage_url) {
         let opts = options
+            .clone()
             .into_iter()
             .map(|(key, value)| (key.as_ref().to_ascii_lowercase(), value));
+
+        let allow_http: bool = options.into_iter().any(|(key, value)| {
+            key.as_ref().to_ascii_lowercase().contains("allow_http")
+                & value.into().eq_ignore_ascii_case("true")
+        });
 
         match url.scheme() {
             #[cfg(any(feature = "aws", feature = "aws_profile"))]
@@ -762,7 +770,7 @@ pub fn parse_url<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String> + Cl
                 let store = aws::AmazonS3Builder::default()
                     .with_url(storage_url)
                     .try_with_options(opts)
-                    .and_then(|builder| builder.build())?;
+                    .and_then(|builder| builder.with_allow_http(allow_http).build())?;
 
                 Ok(Box::from(store))
             }
@@ -808,7 +816,7 @@ pub fn parse_url<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String> + Cl
                 let store = azure::MicrosoftAzureBuilder::default()
                     .with_url(storage_url)
                     .try_with_options(opts)
-                    .and_then(|builder| builder.build())?;
+                    .and_then(|builder| builder.with_allow_http(allow_http).build())?;
 
                 Ok(Box::from(store))
             }
@@ -1462,6 +1470,7 @@ mod tests {
                 ("AWS_REGION", "eu-central-1"),
                 ("aws_access_key_id", "abc"),
                 ("aws_secret_access_key", "xyz"),
+                ("allow_http", "true"),
             ]),
         );
 
