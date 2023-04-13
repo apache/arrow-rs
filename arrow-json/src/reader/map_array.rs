@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{make_decoder, tape_error, ArrayDecoder};
+use crate::reader::{make_decoder, ArrayDecoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::ArrowNativeType;
@@ -104,14 +104,14 @@ impl ArrayDecoder for MapArrayDecoder {
                     nulls.append(false);
                     p + 1
                 }
-                (d, _) => return Err(tape_error(d, "{")),
+                _ => return Err(tape.error(p, "{")),
             };
 
             let mut cur_idx = p + 1;
             while cur_idx < end_idx {
                 let key = cur_idx;
-                let value = tape.next(key).map_err(|d| tape_error(d, "map key"))?;
-                cur_idx = tape.next(value).map_err(|d| tape_error(d, "map value"))?;
+                let value = tape.next(key, "map key")?;
+                cur_idx = tape.next(value, "map value")?;
 
                 key_pos.push(key);
                 value_pos.push(value);
