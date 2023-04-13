@@ -758,12 +758,16 @@ impl AmazonS3Builder {
     fn parse_url(&mut self, url: &str) -> Result<()> {
         let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
         let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
-
         match parsed.scheme() {
             "s3" | "s3a" => self.bucket_name = Some(host.to_string()),
             "https" => match host.splitn(4, '.').collect_tuple() {
                 Some(("s3", region, "amazonaws", "com")) => {
                     self.region = Some(region.to_string());
+                    if let Some(bucket) =
+                        parsed.path_segments().and_then(|mut path| path.next())
+                    {
+                        self.bucket_name = Some(bucket.into());
+                    }
                 }
                 Some((bucket, "s3", region, "amazonaws.com")) => {
                     self.bucket_name = Some(bucket.to_string());
