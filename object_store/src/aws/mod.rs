@@ -1426,6 +1426,20 @@ mod tests {
 
         let mut builder = AmazonS3Builder::new();
         builder
+            .parse_url("https://s3.region.amazonaws.com/bucket")
+            .unwrap();
+        assert_eq!(builder.region, Some("region".to_string()));
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://s3.region.amazonaws.com/bucket.with.dot/path")
+            .unwrap();
+        assert_eq!(builder.region, Some("region".to_string()));
+        assert_eq!(builder.bucket_name, Some("bucket.with.dot".to_string()));
+
+        let mut builder = AmazonS3Builder::new();
+        builder
             .parse_url("https://bucket.s3.region.amazonaws.com")
             .unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
