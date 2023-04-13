@@ -18,7 +18,6 @@
 use crate::reader::serializer::TapeSerializer;
 use arrow_schema::ArrowError;
 use serde::Serialize;
-use std::fmt::{Display, Formatter};
 
 /// We decode JSON to a flattened tape representation,
 /// allowing for efficient traversal of the JSON data
@@ -63,22 +62,6 @@ pub enum TapeElement {
     Null,
 }
 
-impl Display for TapeElement {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TapeElement::StartObject(_) => write!(f, "{{"),
-            TapeElement::EndObject(_) => write!(f, "}}"),
-            TapeElement::StartList(_) => write!(f, "["),
-            TapeElement::EndList(_) => write!(f, "]"),
-            TapeElement::String(_) => write!(f, "string"),
-            TapeElement::Number(_) => write!(f, "number"),
-            TapeElement::True => write!(f, "true"),
-            TapeElement::False => write!(f, "false"),
-            TapeElement::Null => write!(f, "null"),
-        }
-    }
-}
-
 /// A decoded JSON tape
 ///
 /// String and numeric data is stored alongside an array of [`TapeElement`]
@@ -114,9 +97,8 @@ impl<'a> Tape<'a> {
 
     /// Returns the index of the next field at the same level as `cur_idx`
     ///
-    /// Return an error containing the [`TapeElement`] at `cur_idx` if it
-    /// is not the start of a field
-    pub fn next(&self, cur_idx: u32) -> Result<u32, TapeElement> {
+    /// Return an error if `cur_idx` is not the start of a field
+    pub fn next(&self, cur_idx: u32, expected: &str) -> Result<u32, ArrowError> {
         match self.get(cur_idx) {
             TapeElement::String(_)
             | TapeElement::Number(_)
@@ -125,13 +107,61 @@ impl<'a> Tape<'a> {
             | TapeElement::Null => Ok(cur_idx + 1),
             TapeElement::StartList(end_idx) => Ok(end_idx + 1),
             TapeElement::StartObject(end_idx) => Ok(end_idx + 1),
-            d => Err(d),
+            _ => Err(self.error(cur_idx, expected)),
         }
     }
 
     /// Returns the number of rows
     pub fn num_rows(&self) -> usize {
         self.num_rows
+    }
+
+    /// Serialize the tape element at index `idx` to `out` returning the next field index
+    fn serialize(&self, out: &mut String, idx: u32) -> u32 {
+        match self.get(idx) {
+            TapeElement::StartObject(end) => {
+                out.push('{');
+                let mut cur_idx = idx + 1;
+                while cur_idx < end {
+                    cur_idx = self.serialize(out, cur_idx);
+                    out.push_str(": ");
+                    cur_idx = self.serialize(out, cur_idx);
+                }
+                out.push('}');
+                return end + 1;
+            }
+            TapeElement::EndObject(_) => out.push('}'),
+            TapeElement::StartList(end) => {
+                out.push('[');
+                let mut cur_idx = idx + 1;
+                while cur_idx < end {
+                    cur_idx = self.serialize(out, cur_idx);
+                    if cur_idx < end {
+                        out.push_str(", ");
+                    }
+                }
+                out.push(']');
+                return end + 1;
+            }
+            TapeElement::EndList(_) => out.push(']'),
+            TapeElement::String(s) => {
+                out.push('"');
+                out.push_str(self.get_string(s));
+                out.push('"')
+            }
+            TapeElement::Number(n) => out.push_str(self.get_string(n)),
+            TapeElement::True => out.push_str("true"),
+            TapeElement::False => out.push_str("false"),
+            TapeElement::Null => out.push_str("null"),
+        }
+        idx + 1
+    }
+
+    /// Returns an error reading index `idx`
+    pub fn error(&self, idx: u32, expected: &str) -> ArrowError {
+        let mut out = String::with_capacity(64);
+        self.serialize(&mut out, idx);
+        ArrowError::JsonError(format!("expected {expected} got {out}"))
     }
 }
 

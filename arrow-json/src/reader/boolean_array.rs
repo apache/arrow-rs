@@ -21,7 +21,7 @@ use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{tape_error, ArrayDecoder};
+use crate::reader::ArrayDecoder;
 
 #[derive(Default)]
 pub struct BooleanArrayDecoder {}
@@ -34,7 +34,7 @@ impl ArrayDecoder for BooleanArrayDecoder {
                 TapeElement::Null => builder.append_null(),
                 TapeElement::True => builder.append_value(true),
                 TapeElement::False => builder.append_value(false),
-                d => return Err(tape_error(d, "boolean")),
+                _ => return Err(tape.error(*p, "boolean")),
             }
         }
 
