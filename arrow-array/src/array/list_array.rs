@@ -82,32 +82,65 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
     /// Create a new [`GenericListArray`] from the provided parts
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if
+    /// Errors if
     ///
     /// * `offsets.len() - 1 != nulls.len()`
     /// * `offsets.last() > values.len()`
     /// * `!field.is_nullable() && values.null_count() != 0`
+    pub fn try_new(
+        field: FieldRef,
+        offsets: OffsetBuffer<OffsetSize>,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Result<Self, ArrowError> {
+        let len = offsets.len() - 1; // Offsets guaranteed to not be empty
+        let end_offset = offsets.last().unwrap().as_usize();
+        if end_offset > values.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Max offset of {end_offset} exceeds length of values {}",
+                values.len()
+            )));
+        }
+
+        if let Some(n) = nulls.as_ref() {
+            if n.len() != len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect number of nulls for {}ListArray, expected {len} got {}",
+                    OffsetSize::PREFIX,
+                    n.len(),
+                )));
+            }
+        }
+        if !field.is_nullable() && values.null_count() != 0 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Non-nullable field of {}ListArray {:?} cannot contain nulls",
+                OffsetSize::PREFIX,
+                field.name()
+            )));
+        }
+
+        Ok(Self {
+            data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
+            nulls,
+            values,
+            value_offsets: offsets,
+        })
+    }
+
+    /// Create a new [`GenericListArray`] from the provided parts
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`Self::try_new`] returns an error
     pub fn new(
         field: FieldRef,
         offsets: OffsetBuffer<OffsetSize>,
         values: ArrayRef,
         nulls: Option<NullBuffer>,
     ) -> Self {
-        let end_offset = offsets.last().unwrap().as_usize();
-        assert!(values.len() >= end_offset);
-        if let Some(n) = nulls.as_ref() {
-            assert_eq!(n.len(), offsets.len() - 1);
-        }
-        assert!(field.is_nullable() || values.null_count() == 0);
-
-        Self {
-            data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
-            nulls,
-            values,
-            value_offsets: offsets,
-        }
+        Self::try_new(field, offsets, values, nulls).unwrap()
     }
 
     /// Create a new [`GenericListArray`] of length `len` where all values are null
