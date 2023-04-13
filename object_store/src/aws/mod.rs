@@ -1416,9 +1416,9 @@ mod tests {
 
         let mut builder = AmazonS3Builder::new();
         builder
-            .parse_url("https://s3.bucket.amazonaws.com")
+            .parse_url("https://s3.region.amazonaws.com")
             .unwrap();
-        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+        assert_eq!(builder.region, Some("region".to_string()));
 
         let mut builder = AmazonS3Builder::new();
         builder
