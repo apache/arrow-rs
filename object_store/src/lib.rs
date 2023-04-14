@@ -745,90 +745,92 @@ pub fn parse_url(
 ) -> Result<Box<DynObjectStore>> {
     let storage_url = url.as_ref();
 
-    if let Ok(url) = Url::parse(storage_url) {
-        let _store_options = store_options.unwrap_or(StoreOptions::default());
+    match Url::parse(storage_url) {
+        Ok(url) => {
+            let _store_options = store_options.unwrap_or(StoreOptions::default());
 
-        match url.scheme() {
-            #[cfg(any(feature = "aws", feature = "aws_profile"))]
-            "s3" | "s3a" => {
-                let store = aws::AmazonS3Builder::default()
-                    .with_url(storage_url)
-                    .with_client_options(_store_options.get_client_options())
-                    .try_with_options(_store_options.get_s3_options())
-                    .and_then(|builder| builder.build())?;
+            match url.scheme() {
+                #[cfg(any(feature = "aws", feature = "aws_profile"))]
+                "s3" | "s3a" => {
+                    let store = aws::AmazonS3Builder::default()
+                        .with_url(storage_url)
+                        .with_client_options(_store_options.get_client_options())
+                        .try_with_options(_store_options.get_s3_options())
+                        .and_then(|builder| builder.build())?;
 
-                Ok(Box::from(store))
-            }
+                    Ok(Box::from(store))
+                }
 
-            #[cfg(not(any(feature = "aws", feature = "aws_profile")))]
-            "s3" | "s3a" => Err(Error::MissingFeature {
-                feature: "aws",
-                url: storage_url.into(),
-            }),
-
-            #[cfg(feature = "gcp")]
-            "gs" => {
-                let store = gcp::GoogleCloudStorageBuilder::default()
-                    .with_url(storage_url)
-                    .with_client_options(_store_options.get_client_options())
-                    .try_with_options(_store_options.get_gcs_options())
-                    .and_then(|builder| builder.build())?;
-
-                Ok(Box::from(store))
-            }
-
-            #[cfg(not(feature = "gcp"))]
-            "gs" => Err(Error::MissingFeature {
-                feature: "gcp",
-                url: storage_url.into(),
-            }),
-
-            #[cfg(feature = "azure")]
-            "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => {
-                let store = azure::MicrosoftAzureBuilder::default()
-                    .with_url(storage_url)
-                    .with_client_options(_store_options.get_client_options())
-                    .try_with_options(_store_options.get_azure_options())
-                    .and_then(|builder| builder.build())?;
-
-                Ok(Box::from(store))
-            }
-
-            #[cfg(not(feature = "azure"))]
-            "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => {
-                Err(Error::MissingFeature {
-                    feature: "azure",
+                #[cfg(not(any(feature = "aws", feature = "aws_profile")))]
+                "s3" | "s3a" => Err(Error::MissingFeature {
+                    feature: "aws",
                     url: storage_url.into(),
-                })
+                }),
+
+                #[cfg(feature = "gcp")]
+                "gs" => {
+                    let store = gcp::GoogleCloudStorageBuilder::default()
+                        .with_url(storage_url)
+                        .with_client_options(_store_options.get_client_options())
+                        .try_with_options(_store_options.get_gcs_options())
+                        .and_then(|builder| builder.build())?;
+
+                    Ok(Box::from(store))
+                }
+
+                #[cfg(not(feature = "gcp"))]
+                "gs" => Err(Error::MissingFeature {
+                    feature: "gcp",
+                    url: storage_url.into(),
+                }),
+
+                #[cfg(feature = "azure")]
+                "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => {
+                    let store = azure::MicrosoftAzureBuilder::default()
+                        .with_url(storage_url)
+                        .with_client_options(_store_options.get_client_options())
+                        .try_with_options(_store_options.get_azure_options())
+                        .and_then(|builder| builder.build())?;
+
+                    Ok(Box::from(store))
+                }
+
+                #[cfg(not(feature = "azure"))]
+                "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => {
+                    Err(Error::MissingFeature {
+                        feature: "azure",
+                        url: storage_url.into(),
+                    })
+                }
+
+                #[cfg(feature = "http")]
+                "http" | "https" => {
+                    let store = http::HttpBuilder::default()
+                        .with_url(url.as_ref())
+                        .with_client_options(_store_options.client_options)
+                        .build()?;
+
+                    Ok(Box::from(store))
+                }
+
+                #[cfg(not(feature = "http"))]
+                "http" | "https" => Err(Error::MissingFeature {
+                    feature: "http",
+                    url: storage_url.into(),
+                }),
+
+                "memory" => Ok(Box::from(memory::InMemory::default())),
+
+                #[cfg(not(target_arch = "wasm32"))]
+                "file" => Ok(Box::from(local::LocalFileSystem::default())),
+
+                _ => Err(Error::NotImplemented),
             }
-
-            #[cfg(feature = "http")]
-            "http" | "https" => {
-                let store = http::HttpBuilder::default()
-                    .with_url(url.as_ref())
-                    .with_client_options(_store_options.client_options)
-                    .build()?;
-
-                Ok(Box::from(store))
-            }
-
-            #[cfg(not(feature = "http"))]
-            "http" | "https" => Err(Error::MissingFeature {
-                feature: "http",
-                url: storage_url.into(),
-            }),
-
-            "memory" => Ok(Box::from(memory::InMemory::default())),
-
-            "file" => Ok(Box::from(local::LocalFileSystem::default())),
-
-            _ => Err(Error::NotImplemented),
         }
-    } else {
-        match storage_url {
-            "memory" => Ok(Box::from(local::LocalFileSystem::default())),
-            _ => Ok(Box::from(local::LocalFileSystem::default())),
-        }
+
+        Err(e) => Err(Error::NotSupported {
+            source: Box::new(e),
+        }),
     }
 }
 
@@ -854,7 +856,6 @@ mod test_util {
 mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
-    use std::collections::HashMap;
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
