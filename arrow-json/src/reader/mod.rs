@@ -1370,6 +1370,29 @@ mod tests {
         assert_eq!(u64.values(), &[u64::MAX, u64::MAX, u64::MIN, u64::MIN]);
     }
 
+    #[test]
+    fn test_timestamp_truncation() {
+        let buf = r#"
+        {"time": 9223372036854775807 }
+        {"time": -9223372036854775808 }
+        {"time": 9e5 }
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]));
+
+        let batches = do_read(buf, 1024, true, schema);
+        assert_eq!(batches.len(), 1);
+
+        let i64 = batches[0]
+            .column(0)
+            .as_primitive::<TimestampNanosecondType>();
+        assert_eq!(i64.values(), &[i64::MAX, i64::MIN, 900000]);
+    }
+
     fn read_file(path: &str, schema: Option<Schema>) -> Reader<BufReader<File>> {
         let file = File::open(path).unwrap();
         let mut reader = BufReader::new(file);
