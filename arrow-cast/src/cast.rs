@@ -8386,136 +8386,219 @@ mod tests {
         assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal256 of precision 7. Max is 9999999", err.unwrap_err().to_string());
     }
 
+    /// helper function to test casting from duration to interval
+    fn cast_from_duration_to_interval<T: ArrowTemporalType>(
+        array: Vec<i64>,
+        cast_options: &CastOptions,
+    ) -> Result<PrimitiveArray<IntervalMonthDayNanoType>, ArrowError>
+    where
+        arrow_array::PrimitiveArray<T>: From<Vec<i64>>,
+    {
+        let array = PrimitiveArray::<T>::from(array);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Interval(IntervalUnit::MonthDayNano),
+            cast_options,
+        )?;
+        casted_array
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .ok_or_else(|| {
+                ArrowError::ComputeError(
+                    "Failed to downcast to IntervalMonthDayNanoArray".to_string(),
+                )
+            })
+            .cloned()
+    }
+
     #[test]
     fn test_cast_from_duration_to_interval() {
         // from duration second to interval month day nano
         let array = vec![1234567];
-        let array = DurationSecondArray::from(array);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array =
-            cast(&array, &DataType::Interval(IntervalUnit::MonthDayNano)).unwrap();
-        let casted_array = casted_array
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .unwrap();
+        let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
         assert_eq!(
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
         assert_eq!(casted_array.value(0), 1234567000000000);
 
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
+            array,
+            &CastOptions { safe: false },
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 9223372036854775807000000000);
+
         // from duration millisecond to interval month day nano
         let array = vec![1234567];
-        let array = DurationMillisecondArray::from(array);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array =
-            cast(&array, &DataType::Interval(IntervalUnit::MonthDayNano)).unwrap();
-        let casted_array = casted_array
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .unwrap();
+        let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
         assert_eq!(
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
         assert_eq!(casted_array.value(0), 1234567000000);
 
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
+            array,
+            &CastOptions { safe: false },
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 9223372036854775807000000);
+
         // from duration microsecond to interval month day nano
         let array = vec![1234567];
-        let array = DurationMicrosecondArray::from(array);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array =
-            cast(&array, &DataType::Interval(IntervalUnit::MonthDayNano)).unwrap();
-        let casted_array = casted_array
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .unwrap();
+        let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
         assert_eq!(
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
         assert_eq!(casted_array.value(0), 1234567000);
 
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
+            array,
+            &CastOptions { safe: false },
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 9223372036854775807000);
+
         // from duration nanosecond to interval month day nano
         let array = vec![1234567];
-        let array = DurationNanosecondArray::from(array);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array =
-            cast(&array, &DataType::Interval(IntervalUnit::MonthDayNano)).unwrap();
-        let casted_array = casted_array
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .unwrap();
+        let casted_array = cast_from_duration_to_interval::<DurationNanosecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
         assert_eq!(
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
         assert_eq!(casted_array.value(0), 1234567);
+
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationNanosecondType>(
+            array,
+            &CastOptions { safe: false },
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 9223372036854775807);
+    }
+
+    // helper function to test casting from interval to duration
+    fn cast_from_interval_to_duration<T: ArrowTemporalType>(
+        array: Vec<i128>,
+        cast_options: &CastOptions,
+    ) -> Result<PrimitiveArray<T>, ArrowError> {
+        let array = IntervalMonthDayNanoArray::from(array);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(&array, &T::DATA_TYPE, cast_options)?;
+        casted_array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .ok_or_else(|| {
+                ArrowError::ComputeError(format!(
+                    "Failed to downcast to {}",
+                    T::DATA_TYPE
+                ))
+            })
+            .cloned()
     }
 
     #[test]
     fn test_cast_from_interval_to_duration() {
         // from interval month day nano to duration second
         let array = vec![1234567];
-        let array = IntervalMonthDayNanoArray::from(array);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array = cast(&array, &DataType::Duration(TimeUnit::Second)).unwrap();
-        let casted_array = casted_array
-            .as_any()
-            .downcast_ref::<DurationSecondArray>()
-            .unwrap();
-
+        let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
         assert_eq!(
             casted_array.data_type(),
             &DataType::Duration(TimeUnit::Second)
         );
         assert_eq!(casted_array.value(0), 0);
 
+        let array = vec![i128::MAX];
+        let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
+
         // from interval month day nano to duration millisecond
         let array = vec![1234567];
-        let array = IntervalMonthDayNanoArray::from(array);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array =
-            cast(&array, &DataType::Duration(TimeUnit::Millisecond)).unwrap();
-        let casted_array = casted_array
-            .as_any()
-            .downcast_ref::<DurationMillisecondArray>()
-            .unwrap();
-        assert_eq!(
-            casted_array.data_type(),
-            &DataType::Duration(TimeUnit::Millisecond)
-        );
+        let casted_array = cast_from_interval_to_duration::<DurationMillisecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
         assert_eq!(casted_array.value(0), 1);
+
+        let array = vec![i128::MAX];
+        let casted_array = cast_from_interval_to_duration::<DurationMillisecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
 
         // from interval month day nano to duration microsecond
         let array = vec![1234567];
-        let array = IntervalMonthDayNanoArray::from(array);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array =
-            cast(&array, &DataType::Duration(TimeUnit::Microsecond)).unwrap();
-        let casted_array = casted_array
-            .as_any()
-            .downcast_ref::<DurationMicrosecondArray>()
-            .unwrap();
+        let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
         assert_eq!(
             casted_array.data_type(),
             &DataType::Duration(TimeUnit::Microsecond)
         );
         assert_eq!(casted_array.value(0), 1234);
+
+        let array = vec![i128::MAX];
+        let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
         // from interval month day nano to duration nanosecond
         let array = vec![1234567];
-        let array = IntervalMonthDayNanoArray::from(array);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array =
-            cast(&array, &DataType::Duration(TimeUnit::Nanosecond)).unwrap();
-        let casted_array = casted_array
-            .as_any()
-            .downcast_ref::<DurationNanosecondArray>()
-            .unwrap();
+        let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
         assert_eq!(
             casted_array.data_type(),
             &DataType::Duration(TimeUnit::Nanosecond)
         );
         assert_eq!(casted_array.value(0), 1234567);
+
+        let array = vec![i128::MAX];
+        let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Duration(TimeUnit::Nanosecond)
+        );
+        assert_eq!(casted_array.value(0), 0);
     }
 }
