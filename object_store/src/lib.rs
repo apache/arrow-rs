@@ -249,6 +249,7 @@ pub use client::{backoff::BackoffConfig, retry::RetryConfig};
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
 mod multipart;
+mod options;
 mod util;
 
 use crate::path::Path;
@@ -264,12 +265,12 @@ use std::fmt::{Debug, Formatter};
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
-use std::str::FromStr;
 use tokio::io::AsyncWrite;
 use url::Url;
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp", feature = "http"))]
 pub use client::ClientOptions;
+use options::StoreOptions;
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
@@ -738,39 +739,23 @@ impl From<Error> for std::io::Error {
 /// ```
 ///
 /// ```
-pub fn parse_url<
-    I: IntoIterator<Item = (impl AsRef<str>, impl Into<String> + Clone)> + Clone,
->(
+pub fn parse_url(
     url: impl AsRef<str>,
-    options: I,
+    store_options: Option<StoreOptions>,
 ) -> Result<Box<DynObjectStore>> {
     let storage_url = url.as_ref();
 
     if let Ok(url) = Url::parse(storage_url) {
-        let opts = options
-            .clone()
-            .into_iter()
-            .map(|(key, value)| (key.as_ref().to_ascii_lowercase(), value));
-
-        let allow_http: bool = options.into_iter().any(|(key, value)| {
-            key.as_ref().to_ascii_lowercase().contains("allow_http")
-                & value.into().eq_ignore_ascii_case("true")
-        });
+        let _store_options = store_options.unwrap_or(StoreOptions::default());
 
         match url.scheme() {
             #[cfg(any(feature = "aws", feature = "aws_profile"))]
             "s3" | "s3a" => {
-                let opts = opts
-                    .filter_map(|(key, value)| {
-                        let conf_key = aws::AmazonS3ConfigKey::from_str(&key).ok()?;
-                        Some((conf_key, value))
-                    })
-                    .collect::<Vec<_>>();
-
                 let store = aws::AmazonS3Builder::default()
                     .with_url(storage_url)
-                    .try_with_options(opts)
-                    .and_then(|builder| builder.with_allow_http(allow_http).build())?;
+                    .with_client_options(_store_options.get_client_options())
+                    .try_with_options(_store_options.get_s3_options())
+                    .and_then(|builder| builder.build())?;
 
                 Ok(Box::from(store))
             }
@@ -783,16 +768,10 @@ pub fn parse_url<
 
             #[cfg(feature = "gcp")]
             "gs" => {
-                let opts = opts
-                    .filter_map(|(key, value)| {
-                        let conf_key = gcp::GoogleConfigKey::from_str(&key).ok()?;
-                        Some((conf_key, value))
-                    })
-                    .collect::<Vec<_>>();
-
                 let store = gcp::GoogleCloudStorageBuilder::default()
                     .with_url(storage_url)
-                    .try_with_options(opts)
+                    .with_client_options(_store_options.get_client_options())
+                    .try_with_options(_store_options.get_gcs_options())
                     .and_then(|builder| builder.build())?;
 
                 Ok(Box::from(store))
@@ -806,17 +785,11 @@ pub fn parse_url<
 
             #[cfg(feature = "azure")]
             "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => {
-                let opts = opts
-                    .filter_map(|(key, value)| {
-                        let conf_key = azure::AzureConfigKey::from_str(&key).ok()?;
-                        Some((conf_key, value))
-                    })
-                    .collect::<Vec<_>>();
-
                 let store = azure::MicrosoftAzureBuilder::default()
                     .with_url(storage_url)
-                    .try_with_options(opts)
-                    .and_then(|builder| builder.with_allow_http(allow_http).build())?;
+                    .with_client_options(_store_options.get_client_options())
+                    .try_with_options(_store_options.get_azure_options())
+                    .and_then(|builder| builder.build())?;
 
                 Ok(Box::from(store))
             }
@@ -833,7 +806,7 @@ pub fn parse_url<
             "http" | "https" => {
                 let store = http::HttpBuilder::default()
                     .with_url(url.as_ref())
-                    .with_client_options(ClientOptions::default())
+                    .with_client_options(_store_options.client_options)
                     .build()?;
 
                 Ok(Box::from(store))
@@ -1457,21 +1430,19 @@ mod tests {
 
     #[tokio::test]
     async fn parse_url_test() {
-        let opts: HashMap<&str, &str> = HashMap::new();
-        let mem_store = parse_url("memory://", opts.clone());
+        let mem_store = parse_url("memory://", None);
         assert!(mem_store.is_ok());
 
-        let local_store = parse_url("file:///", opts.clone());
+        let local_store = parse_url("file:///", None);
         assert!(local_store.is_ok());
 
         let s3_store = parse_url(
             "s3://abc/",
-            HashMap::from([
-                ("AWS_REGION", "eu-central-1"),
-                ("aws_access_key_id", "abc"),
-                ("aws_secret_access_key", "xyz"),
-                ("allow_http", "true"),
-            ]),
+            Some(StoreOptions::from(HashMap::<String, String>::from([
+                ("AWS_REGION".to_string(), "eu-central-1".to_string()),
+                ("aws_access_key_id".to_string(), "abc".to_string()),
+                ("aws_secret_access_key".to_string(), "xyz".to_string()),
+            ]))),
         );
 
         for store in vec![mem_store, local_store, s3_store] {
