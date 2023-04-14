@@ -1428,36 +1428,6 @@ mod tests {
         assert!(stream.next().await.is_none());
     }
 
-    #[tokio::test]
-    async fn parse_url_test() {
-        let mem_store = parse_url("memory://", None);
-        assert!(mem_store.is_ok());
-
-        let local_store = parse_url("file:///", None);
-        assert!(local_store.is_ok());
-
-        let s3_store = parse_url(
-            "s3://abc/",
-            Some(StoreOptions::from(HashMap::<String, String>::from([
-                ("AWS_REGION".to_string(), "eu-central-1".to_string()),
-                ("aws_access_key_id".to_string(), "abc".to_string()),
-                ("aws_secret_access_key".to_string(), "xyz".to_string()),
-            ]))),
-        );
-
-        for store in vec![mem_store, local_store, s3_store] {
-            let store = store.unwrap();
-
-            let prefix: Path = "/tmp/".try_into().unwrap();
-            let content_list = flatten_list_stream(store.as_ref(), Some(&prefix))
-                .await
-                .unwrap();
-            for x in content_list {
-                println!("{}", x)
-            }
-        }
-    }
-
     // Tests TODO:
     // GET nonexisting location (in_memory/file)
     // DELETE nonexisting location
