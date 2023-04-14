@@ -33,11 +33,7 @@ pub struct MapArray {
     data_type: DataType,
     nulls: Option<NullBuffer>,
     /// The [`StructArray`] that is the direct child of this array
-    entries: ArrayRef,
-    /// The first child of `entries`, the "keys" of this MapArray
-    keys: ArrayRef,
-    /// The second child of `entries`, the "values" of this MapArray
-    values: ArrayRef,
+    entries: StructArray,
     /// The start and end offsets of each entry
     value_offsets: OffsetBuffer<i32>,
 }
@@ -54,35 +50,34 @@ impl MapArray {
 
     /// Returns a reference to the keys of this map
     pub fn keys(&self) -> &ArrayRef {
-        &self.keys
+        self.entries.column(0)
     }
 
     /// Returns a reference to the values of this map
     pub fn values(&self) -> &ArrayRef {
-        &self.values
+        self.entries.column(1)
     }
 
     /// Returns a reference to the [`StructArray`] entries of this map
-    pub fn entries(&self) -> &ArrayRef {
+    pub fn entries(&self) -> &StructArray {
         &self.entries
     }
 
     /// Returns the data type of the map's keys.
     pub fn key_type(&self) -> &DataType {
-        self.keys.data_type()
+        self.keys().data_type()
     }
 
     /// Returns the data type of the map's values.
     pub fn value_type(&self) -> &DataType {
-        self.values.data_type()
+        self.values().data_type()
     }
 
     /// Returns ith value of this map array.
     ///
-    /// This is a [`StructArray`] containing two fields
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
-    pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
+    pub unsafe fn value_unchecked(&self, i: usize) -> StructArray {
         let end = *self.value_offsets().get_unchecked(i + 1);
         let start = *self.value_offsets().get_unchecked(i);
         self.entries
@@ -92,7 +87,7 @@ impl MapArray {
     /// Returns ith value of this map array.
     ///
     /// This is a [`StructArray`] containing two fields
-    pub fn value(&self, i: usize) -> ArrayRef {
+    pub fn value(&self, i: usize) -> StructArray {
         let end = self.value_offsets()[i + 1] as usize;
         let start = self.value_offsets()[i] as usize;
         self.entries.slice(start, end - start)
@@ -117,8 +112,6 @@ impl MapArray {
             data_type: self.data_type.clone(),
             nulls: self.nulls.as_ref().map(|n| n.slice(offset, length)),
             entries: self.entries.clone(),
-            keys: self.keys.clone(),
-            values: self.values.clone(),
             value_offsets: self.value_offsets.slice(offset, length),
         }
     }
@@ -181,10 +174,7 @@ impl MapArray {
                 entries.data_type()
             )));
         }
-
-        let keys = make_array(entries.child_data()[0].clone());
-        let values = make_array(entries.child_data()[1].clone());
-        let entries = make_array(entries);
+        let entries = entries.into();
 
         // SAFETY:
         // ArrayData is valid, and verified type above
@@ -194,8 +184,6 @@ impl MapArray {
             data_type: data.data_type().clone(),
             nulls: data.nulls().cloned(),
             entries,
-            keys,
-            values,
             value_offsets,
         })
     }
