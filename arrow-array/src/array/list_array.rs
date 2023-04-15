@@ -121,6 +121,16 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
             )));
         }
 
+        if field.data_type() != values.data_type() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "{}ListArray expected data type {} got {} for {:?}",
+                OffsetSize::PREFIX,
+                field.data_type(),
+                values.data_type(),
+                field.name()
+            )));
+        }
+
         Ok(Self {
             data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
             nulls,
@@ -495,7 +505,7 @@ mod tests {
     use super::*;
     use crate::builder::{Int32Builder, ListBuilder};
     use crate::types::Int32Type;
-    use crate::Int32Array;
+    use crate::{Int32Array, Int64Array};
     use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
     use arrow_schema::Field;
 
@@ -1103,5 +1113,67 @@ mod tests {
         );
         assert_eq!(string.len(), 0);
         assert_eq!(string.value_offsets(), &[0]);
+    }
+
+    #[test]
+    fn test_try_new() {
+        let offsets = OffsetBuffer::new(vec![0, 1, 4, 5].into());
+        let values = Int32Array::new(DataType::Int32, vec![1, 2, 3, 4, 5].into(), None);
+        let values = Arc::new(values) as ArrayRef;
+
+        let field = Arc::new(Field::new("element", DataType::Int32, false));
+        ListArray::new(field.clone(), offsets.clone(), values.clone(), None);
+
+        let nulls = NullBuffer::new_null(3);
+        ListArray::new(field.clone(), offsets.clone(), values.clone(), Some(nulls));
+
+        let nulls = NullBuffer::new_null(3);
+        let offsets = OffsetBuffer::new(vec![0, 1, 2, 4, 5].into());
+        let err = LargeListArray::try_new(
+            field.clone(),
+            offsets.clone(),
+            values.clone(),
+            Some(nulls),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect number of nulls for LargeListArray, expected 4 got 3"
+        );
+
+        let field = Arc::new(Field::new("element", DataType::Int64, false));
+        let err =
+            LargeListArray::try_new(field.clone(), offsets.clone(), values.clone(), None)
+                .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: LargeListArray expected data type Int64 got Int32 for \"element\""
+        );
+
+        let nulls = NullBuffer::new_null(7);
+        let values = Int64Array::new(DataType::Int64, vec![0; 7].into(), Some(nulls));
+        let values = Arc::new(values);
+
+        let err = LargeListArray::try_new(field, offsets.clone(), values.clone(), None)
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Non-nullable field of LargeListArray \"element\" cannot contain nulls"
+        );
+
+        let field = Arc::new(Field::new("element", DataType::Int64, true));
+        LargeListArray::new(field.clone(), offsets.clone(), values.clone(), None);
+
+        let values = Int64Array::new(DataType::Int64, vec![0; 2].into(), None);
+        let err = LargeListArray::try_new(field, offsets.clone(), Arc::new(values), None)
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Max offset of 5 exceeds length of values 2"
+        );
     }
 }
