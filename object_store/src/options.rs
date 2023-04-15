@@ -59,7 +59,9 @@ impl StoreOptions {
         feature = "http"
     )))]
     pub fn new(store_options: HashMap<String, String>) -> Self {
-        Self { _store_options: store_options }
+        Self {
+            _store_options: store_options,
+        }
     }
 
     /// Gets an instance of ClientOptions
