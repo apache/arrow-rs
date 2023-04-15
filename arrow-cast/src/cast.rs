@@ -548,7 +548,7 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
     if cast_options.safe {
         let iter = array
             .iter()
-            .map(|v| v.and_then(|v| ((v as i128).checked_mul(scale))));
+            .map(|v| v.and_then(|v| v.checked_mul(scale).map(|v| v as i128)));
         Ok(Arc::new(unsafe {
             PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(iter)
         }))
@@ -557,13 +557,15 @@ fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
             .iter()
             .map(|v| {
                 v.map(|v| {
-                    (v as i128).mul_checked(scale).map_err(|_| {
-                        ArrowError::ComputeError(format!(
+                    if let Ok(v) = v.mul_checked(scale) {
+                        Ok(v as i128)
+                    } else {
+                        Err(ArrowError::ComputeError(format!(
                             "Cannot cast to {:?}. Overflowing on {:?}",
-                            D::DATA_TYPE,
+                            IntervalMonthDayNanoType::DATA_TYPE,
                             v
-                        ))
-                    })
+                        )))
+                    }
                 })
                 .transpose()
             })
@@ -8431,9 +8433,8 @@ mod tests {
         let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
             array,
             &CastOptions { safe: false },
-        )
-        .unwrap();
-        assert_eq!(casted_array.value(0), 9223372036854775807000000000);
+        );
+        assert!(casted_array.is_err());
 
         // from duration millisecond to interval month day nano
         let array = vec![1234567];
@@ -8452,9 +8453,8 @@ mod tests {
         let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
             array,
             &CastOptions { safe: false },
-        )
-        .unwrap();
-        assert_eq!(casted_array.value(0), 9223372036854775807000000);
+        );
+        assert!(casted_array.is_err());
 
         // from duration microsecond to interval month day nano
         let array = vec![1234567];
@@ -8473,9 +8473,8 @@ mod tests {
         let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
             array,
             &CastOptions { safe: false },
-        )
-        .unwrap();
-        assert_eq!(casted_array.value(0), 9223372036854775807000);
+        );
+        assert!(casted_array.is_err());
 
         // from duration nanosecond to interval month day nano
         let array = vec![1234567];
