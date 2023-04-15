@@ -32,11 +32,11 @@ use crate::gcp::GoogleConfigKey;
 #[derive(Clone, Debug, Default)]
 pub struct StoreOptions {
     /// Store specific options like key, secret, region etc.
-    pub store_options: HashMap<String, String>,
+    store_options: HashMap<String, String>,
 
     /// Options specific for the internal client
     #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
-    pub client_options: ClientOptions,
+    client_options: ClientOptions,
 }
 
 impl StoreOptions {
