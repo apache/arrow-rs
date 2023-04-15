@@ -1125,17 +1125,13 @@ mod tests {
         ListArray::new(field.clone(), offsets.clone(), values.clone(), None);
 
         let nulls = NullBuffer::new_null(3);
-        ListArray::new(field.clone(), offsets.clone(), values.clone(), Some(nulls));
+        ListArray::new(field.clone(), offsets, values.clone(), Some(nulls));
 
         let nulls = NullBuffer::new_null(3);
         let offsets = OffsetBuffer::new(vec![0, 1, 2, 4, 5].into());
-        let err = LargeListArray::try_new(
-            field.clone(),
-            offsets.clone(),
-            values.clone(),
-            Some(nulls),
-        )
-        .unwrap_err();
+        let err =
+            LargeListArray::try_new(field, offsets.clone(), values.clone(), Some(nulls))
+                .unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -1165,11 +1161,11 @@ mod tests {
         );
 
         let field = Arc::new(Field::new("element", DataType::Int64, true));
-        LargeListArray::new(field.clone(), offsets.clone(), values.clone(), None);
+        LargeListArray::new(field.clone(), offsets.clone(), values, None);
 
         let values = Int64Array::new(DataType::Int64, vec![0; 2].into(), None);
-        let err = LargeListArray::try_new(field, offsets.clone(), Arc::new(values), None)
-            .unwrap_err();
+        let err =
+            LargeListArray::try_new(field, offsets, Arc::new(values), None).unwrap_err();
 
         assert_eq!(
             err.to_string(),
