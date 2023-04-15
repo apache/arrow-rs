@@ -807,7 +807,7 @@ pub fn parse_url(
                 "http" | "https" => {
                     let store = http::HttpBuilder::default()
                         .with_url(url.as_ref())
-                        .with_client_options(_store_options.client_options)
+                        .with_client_options(_store_options.get_client_options())
                         .build()?;
 
                     Ok(Box::from(store))

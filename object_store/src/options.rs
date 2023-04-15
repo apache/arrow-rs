@@ -32,7 +32,7 @@ use crate::gcp::GoogleConfigKey;
 #[derive(Clone, Debug, Default)]
 pub struct StoreOptions {
     /// Store specific options like key, secret, region etc.
-    store_options: HashMap<String, String>,
+    _store_options: HashMap<String, String>,
 
     /// Options specific for the internal client
     #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
@@ -47,7 +47,7 @@ impl StoreOptions {
         client_options: ClientOptions,
     ) -> Self {
         Self {
-            store_options,
+            _store_options: store_options,
             client_options,
         }
     }
@@ -59,7 +59,7 @@ impl StoreOptions {
         feature = "http"
     )))]
     pub fn new(store_options: HashMap<String, String>) -> Self {
-        Self { store_options }
+        Self { _store_options: store_options }
     }
 
     /// Gets an instance of ClientOptions
@@ -71,7 +71,7 @@ impl StoreOptions {
     /// Ensures that provided options are compatible with Azure
     #[cfg(feature = "azure")]
     pub fn get_azure_options(&self) -> HashMap<AzureConfigKey, String> {
-        self.store_options
+        self._store_options
             .iter()
             .map(|(key, value)| {
                 let conf_key =
@@ -85,7 +85,7 @@ impl StoreOptions {
     /// Ensures that provided options are compatible with S3
     #[cfg(feature = "aws")]
     pub fn get_s3_options(&self) -> HashMap<AmazonS3ConfigKey, String> {
-        self.store_options
+        self._store_options
             .iter()
             .map(|(key, value)| {
                 let conf_key =
@@ -99,7 +99,7 @@ impl StoreOptions {
     /// Ensures that provided options are compatible with GCS
     #[cfg(feature = "gcp")]
     pub fn get_gcs_options(&self) -> HashMap<GoogleConfigKey, String> {
-        self.store_options
+        self._store_options
             .iter()
             .map(|(key, value)| {
                 let conf_key =
