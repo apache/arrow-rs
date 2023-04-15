@@ -64,6 +64,41 @@ impl StoreOptions {
         }
     }
 
+    #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
+    pub fn from_iterable<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
+        iter: I,
+        client_options: ClientOptions,
+    ) -> Self {
+        let store_options: HashMap<String, String> = iter
+            .into_iter()
+            .map(|(key, value)| (key.as_ref().to_ascii_lowercase(), value.into()))
+            .collect();
+
+        Self {
+            _store_options: store_options,
+            client_options,
+        }
+    }
+
+    #[cfg(not(any(
+        feature = "gcp",
+        feature = "aws",
+        feature = "azure",
+        feature = "http"
+    )))]
+    pub fn from_iterable<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
+        iter: I,
+    ) -> Self {
+        let store_options: HashMap<String, String> = iter
+            .into_iter()
+            .map(|(key, value)| (key.as_ref().to_ascii_lowercase(), value.into()))
+            .collect();
+
+        Self {
+            _store_options: store_options,
+        }
+    }
+
     /// Gets an instance of ClientOptions
     #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
     pub fn get_client_options(&self) -> ClientOptions {
