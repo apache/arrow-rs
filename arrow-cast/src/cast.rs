@@ -8435,7 +8435,7 @@ mod tests {
             &DEFAULT_CAST_OPTIONS,
         )
         .unwrap();
-        assert_eq!(casted_array.value(0), 0);
+        assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
             array,
@@ -8462,7 +8462,7 @@ mod tests {
             &DEFAULT_CAST_OPTIONS,
         )
         .unwrap();
-        assert_eq!(casted_array.value(0), 0);
+        assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
             array,
@@ -8489,7 +8489,7 @@ mod tests {
             &DEFAULT_CAST_OPTIONS,
         )
         .unwrap();
-        assert_eq!(casted_array.value(0), 0);
+        assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
             array,
@@ -8560,7 +8560,7 @@ mod tests {
             &DEFAULT_CAST_OPTIONS,
         )
         .unwrap();
-        assert_eq!(casted_array.value(0), 0);
+        assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
             array,
@@ -8578,6 +8578,13 @@ mod tests {
         assert_eq!(casted_array.value(0), 1);
 
         let array = vec![i128::MAX];
+        let casted_array = cast_from_interval_to_duration::<DurationMillisecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert!(!casted_array.is_valid(0));
+
         let casted_array = cast_from_interval_to_duration::<DurationMillisecondType>(
             array,
             &CastOptions { safe: false },
@@ -8603,7 +8610,7 @@ mod tests {
             &DEFAULT_CAST_OPTIONS,
         )
         .unwrap();
-        assert_eq!(casted_array.value(0), 0);
+        assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
             array,
@@ -8634,7 +8641,7 @@ mod tests {
             casted_array.data_type(),
             &DataType::Duration(TimeUnit::Nanosecond)
         );
-        assert_eq!(casted_array.value(0), 0);
+        assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
             array,
