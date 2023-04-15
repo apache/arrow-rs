@@ -2293,4 +2293,33 @@ mod tests {
         let array = array.with_timezone("+02:00");
         assert_eq!(array.timezone(), Some("+02:00"));
     }
+
+    #[test]
+    fn test_try_new() {
+        Int32Array::new(DataType::Int32, vec![1, 2, 3, 4].into(), None);
+        Int32Array::new(
+            DataType::Int32,
+            vec![1, 2, 3, 4].into(),
+            Some(NullBuffer::new_null(4)),
+        );
+        let err = Int32Array::try_new(DataType::Int64, vec![1, 2, 3, 4].into(), None)
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: PrimitiveArray expected data type Int32 got Int64"
+        );
+
+        let err = Int32Array::try_new(
+            DataType::Int32,
+            vec![1, 2, 3, 4].into(),
+            Some(NullBuffer::new_null(3)),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect number of nulls for PrimitiveArray, expected 4 got 3"
+        );
+    }
 }
