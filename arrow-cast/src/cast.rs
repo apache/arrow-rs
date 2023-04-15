@@ -2100,6 +2100,74 @@ where
     }
 }
 
+fn convert_to_smaller_equal_scale_decimal<I, O>(
+    array: &PrimitiveArray<I>,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let error = cast_decimal_to_decimal_error::<I>(output_precision, output_scale);
+    let div = I::Native::from_decimal(10_i128)
+        .unwrap()
+        .pow_checked((input_scale - output_scale) as u32)?;
+
+    let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
+    let half_neg = half.neg_wrapping();
+
+    let f = |x: I::Native| {
+        // div is >= 10 and so this cannot overflow
+        let d = x.div_wrapping(div);
+        let r = x.mod_wrapping(div);
+
+        // Round result
+        let adjusted = match x >= I::Native::ZERO {
+            true if r >= half => d.add_wrapping(I::Native::ONE),
+            false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
+            _ => d,
+        };
+        O::Native::from_decimal(adjusted)
+    };
+
+    Ok(match cast_options.safe {
+        true => array.unary_opt(f),
+        false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
+    })
+}
+
+fn convert_to_bigger_scale_decimal<I, O>(
+    array: &PrimitiveArray<I>,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let error = cast_decimal_to_decimal_error::<I>(output_precision, output_scale);
+    let mul = O::Native::from_decimal(10_i128)
+        .unwrap()
+        .pow_checked((output_scale - input_scale) as u32)?;
+
+    let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
+
+    Ok(match cast_options.safe {
+        true => array.unary_opt(f),
+        false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
+    })
+}
+
+// Only support one type of decimal cast operations
 fn cast_decimal_to_decimal_same_type<T>(
     array: &PrimitiveArray<T>,
     input_scale: i8,
@@ -2111,49 +2179,26 @@ where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let error = cast_decimal_to_decimal_error::<T>(output_precision, output_scale);
-
     let array: PrimitiveArray<T> = if input_scale == output_scale {
         // the scale doesn't change, the native value don't need to be changed
         array.clone()
     } else if input_scale > output_scale {
-        let div = T::Native::from_decimal(10_i128)
-            .unwrap()
-            .pow_checked((input_scale - output_scale) as u32)?;
-
-        let half = div.div_wrapping(T::Native::from_usize(2).unwrap());
-        let half_neg = half.neg_wrapping();
-
-        let f = |x: T::Native| {
-            // div is >= 10 and so this cannot overflow
-            let d = x.div_wrapping(div);
-            let r = x.mod_wrapping(div);
-
-            // Round result
-            let adjusted = match x >= T::Native::ZERO {
-                true if r >= half => d.add_wrapping(T::Native::ONE),
-                false if r <= half_neg => d.sub_wrapping(T::Native::ONE),
-                _ => d,
-            };
-            Some(adjusted)
-        };
-
-        match cast_options.safe {
-            true => array.unary_opt(f),
-            false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
-        }
+        convert_to_smaller_equal_scale_decimal::<T, T>(
+            array,
+            input_scale,
+            output_precision,
+            output_scale,
+            cast_options,
+        )?
     } else {
-        // input_scale > output_scale
-        let mul = T::Native::from_decimal(10_i128)
-            .unwrap()
-            .pow_checked((output_scale - input_scale) as u32)?;
-
-        let f = |x| T::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
-
-        match cast_options.safe {
-            true => array.unary_opt(f),
-            false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
-        }
+        // input_scale < output_scale
+        convert_to_bigger_scale_decimal::<T, T>(
+            array,
+            input_scale,
+            output_precision,
+            output_scale,
+            cast_options,
+        )?
     };
 
     Ok(Arc::new(array.with_precision_and_scale(
@@ -2162,6 +2207,7 @@ where
     )?))
 }
 
+// Support two different types of decimal cast operations
 fn cast_decimal_to_decimal<I, O>(
     array: &PrimitiveArray<I>,
     input_scale: i8,
@@ -2175,45 +2221,22 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let error = cast_decimal_to_decimal_error::<I>(output_precision, output_scale);
-
     let array: PrimitiveArray<O> = if input_scale > output_scale {
-        let div = I::Native::from_decimal(10_i128)
-            .unwrap()
-            .pow_checked((input_scale - output_scale) as u32)?;
-
-        let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
-        let half_neg = half.neg_wrapping();
-
-        let f = |x: I::Native| {
-            // div is >= 10 and so this cannot overflow
-            let d = x.div_wrapping(div);
-            let r = x.mod_wrapping(div);
-
-            // Round result
-            let adjusted = match x >= I::Native::ZERO {
-                true if r >= half => d.add_wrapping(I::Native::ONE),
-                false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
-                _ => d,
-            };
-            O::Native::from_decimal(adjusted)
-        };
-
-        match cast_options.safe {
-            true => array.unary_opt(f),
-            false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
-        }
+        convert_to_smaller_equal_scale_decimal::<I, O>(
+            array,
+            input_scale,
+            output_precision,
+            output_scale,
+            cast_options,
+        )?
     } else {
-        let mul = O::Native::from_decimal(10_i128)
-            .unwrap()
-            .pow_checked((output_scale - input_scale) as u32)?;
-
-        let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
-
-        match cast_options.safe {
-            true => array.unary_opt(f),
-            false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
-        }
+        convert_to_bigger_scale_decimal::<I, O>(
+            array,
+            input_scale,
+            output_precision,
+            output_scale,
+            cast_options,
+        )?
     };
 
     Ok(Arc::new(array.with_precision_and_scale(
