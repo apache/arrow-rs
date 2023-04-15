@@ -741,13 +741,15 @@ impl From<Error> for std::io::Error {
 /// ```
 pub fn parse_url(
     url: impl AsRef<str>,
-    store_options: Option<StoreOptions>,
+    store_options: Option<impl Into<StoreOptions>>,
 ) -> Result<Box<DynObjectStore>> {
     let storage_url = url.as_ref();
 
     match Url::parse(storage_url) {
         Ok(url) => {
-            let _store_options = store_options.unwrap_or(StoreOptions::default());
+            let _store_options = store_options
+                .map(Into::into)
+                .unwrap_or(StoreOptions::default());
 
             match url.scheme() {
                 #[cfg(any(feature = "aws", feature = "aws_profile"))]
