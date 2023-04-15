@@ -8431,6 +8431,13 @@ mod tests {
 
         let array = vec![i64::MAX];
         let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 0);
+
+        let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
             array,
             &CastOptions { safe: false },
         );
@@ -8451,6 +8458,13 @@ mod tests {
 
         let array = vec![i64::MAX];
         let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 0);
+
+        let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
             array,
             &CastOptions { safe: false },
         );
@@ -8470,6 +8484,13 @@ mod tests {
         assert_eq!(casted_array.value(0), 1234567000);
 
         let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 0);
+
         let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
             array,
             &CastOptions { safe: false },
@@ -8535,6 +8556,13 @@ mod tests {
 
         let array = vec![i128::MAX];
         let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 0);
+
+        let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
             array,
             &CastOptions { safe: false },
         );
@@ -8571,10 +8599,18 @@ mod tests {
 
         let array = vec![i128::MAX];
         let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 0);
+
+        let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
             array,
             &CastOptions { safe: false },
         );
         assert!(casted_array.is_err());
+
         // from interval month day nano to duration nanosecond
         let array = vec![1234567];
         let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
@@ -8590,7 +8626,7 @@ mod tests {
 
         let array = vec![i128::MAX];
         let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
-            array,
+            array.clone(),
             &DEFAULT_CAST_OPTIONS,
         )
         .unwrap();
@@ -8599,5 +8635,11 @@ mod tests {
             &DataType::Duration(TimeUnit::Nanosecond)
         );
         assert_eq!(casted_array.value(0), 0);
+
+        let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
     }
 }
