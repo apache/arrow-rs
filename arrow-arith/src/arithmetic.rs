@@ -3877,10 +3877,8 @@ mod tests {
         ]);
 
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampSecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
         let expected = TimestampSecondArray::from(vec![
             1 + SECONDS_IN_DAY * 31,
             2 + SECONDS_IN_DAY * 31,
@@ -3900,10 +3898,8 @@ mod tests {
             Some(IntervalDayTimeType::make_value(1, 0)),
         ]);
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampSecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
         let expected = TimestampSecondArray::from(vec![
             1 + SECONDS_IN_DAY,
             2 + SECONDS_IN_DAY,
@@ -3923,10 +3919,8 @@ mod tests {
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
         ]);
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampSecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
         let expected = TimestampSecondArray::from(vec![
             1 + SECONDS_IN_DAY,
             2 + SECONDS_IN_DAY,
@@ -3950,10 +3944,8 @@ mod tests {
         ]);
 
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampSecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
         let expected = TimestampSecondArray::from(vec![
             1 - SECONDS_IN_DAY * 31,
             2 - SECONDS_IN_DAY * 31,
@@ -3973,10 +3965,8 @@ mod tests {
             Some(IntervalDayTimeType::make_value(1, 0)),
         ]);
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampSecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
         let expected = TimestampSecondArray::from(vec![
             1 - SECONDS_IN_DAY,
             2 - SECONDS_IN_DAY,
@@ -3996,10 +3986,8 @@ mod tests {
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
         ]);
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampSecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
         let expected = TimestampSecondArray::from(vec![
             1 - SECONDS_IN_DAY,
             2 - SECONDS_IN_DAY,
@@ -4023,10 +4011,8 @@ mod tests {
         ]);
 
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMillisecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
         let expected = TimestampMillisecondArray::from(vec![
             1 + SECONDS_IN_DAY * 31 * 1_000,
             2 + SECONDS_IN_DAY * 31 * 1_000,
@@ -4046,10 +4032,8 @@ mod tests {
             Some(IntervalDayTimeType::make_value(1, 0)),
         ]);
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMillisecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
         let expected = TimestampMillisecondArray::from(vec![
             1 + SECONDS_IN_DAY * 1_000,
             2 + SECONDS_IN_DAY * 1_000,
@@ -4069,10 +4053,8 @@ mod tests {
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
         ]);
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMillisecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
         let expected = TimestampMillisecondArray::from(vec![
             1 + SECONDS_IN_DAY * 1_000,
             2 + SECONDS_IN_DAY * 1_000,
@@ -4096,10 +4078,8 @@ mod tests {
         ]);
 
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMillisecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
         let expected = TimestampMillisecondArray::from(vec![
             1 - SECONDS_IN_DAY * 31 * 1_000,
             2 - SECONDS_IN_DAY * 31 * 1_000,
@@ -4119,10 +4099,8 @@ mod tests {
             Some(IntervalDayTimeType::make_value(1, 0)),
         ]);
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMillisecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
         let expected = TimestampMillisecondArray::from(vec![
             1 - SECONDS_IN_DAY * 1_000,
             2 - SECONDS_IN_DAY * 1_000,
@@ -4142,10 +4120,8 @@ mod tests {
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
         ]);
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMillisecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
         let expected = TimestampMillisecondArray::from(vec![
             1 - SECONDS_IN_DAY * 1_000,
             2 - SECONDS_IN_DAY * 1_000,
@@ -4169,10 +4145,8 @@ mod tests {
         ]);
 
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
         let expected = TimestampMicrosecondArray::from(vec![
             1 + SECONDS_IN_DAY * 31 * 1_000_000,
             2 + SECONDS_IN_DAY * 31 * 1_000_000,
@@ -4192,10 +4166,8 @@ mod tests {
             Some(IntervalDayTimeType::make_value(1, 0)),
         ]);
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
         let expected = TimestampMicrosecondArray::from(vec![
             1 + SECONDS_IN_DAY * 1_000_000,
             2 + SECONDS_IN_DAY * 1_000_000,
@@ -4215,10 +4187,8 @@ mod tests {
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
         ]);
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
         let expected = TimestampMicrosecondArray::from(vec![
             1 + SECONDS_IN_DAY * 1_000_000,
             2 + SECONDS_IN_DAY * 1_000_000,
@@ -4242,10 +4212,8 @@ mod tests {
         ]);
 
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
         let expected = TimestampMicrosecondArray::from(vec![
             1 - SECONDS_IN_DAY * 31 * 1_000_000,
             2 - SECONDS_IN_DAY * 31 * 1_000_000,
@@ -4265,10 +4233,8 @@ mod tests {
             Some(IntervalDayTimeType::make_value(1, 0)),
         ]);
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
         let expected = TimestampMicrosecondArray::from(vec![
             1 - SECONDS_IN_DAY * 1_000_000,
             2 - SECONDS_IN_DAY * 1_000_000,
@@ -4288,10 +4254,8 @@ mod tests {
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
         ]);
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
         let expected = TimestampMicrosecondArray::from(vec![
             1 - SECONDS_IN_DAY * 1_000_000,
             2 - SECONDS_IN_DAY * 1_000_000,
@@ -4315,10 +4279,8 @@ mod tests {
         ]);
 
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
         let expected = TimestampNanosecondArray::from(vec![
             1 + SECONDS_IN_DAY * 31 * 1_000_000_000,
             2 + SECONDS_IN_DAY * 31 * 1_000_000_000,
@@ -4338,10 +4300,8 @@ mod tests {
             Some(IntervalDayTimeType::make_value(1, 0)),
         ]);
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
         let expected = TimestampNanosecondArray::from(vec![
             1 + SECONDS_IN_DAY * 1_000_000_000,
             2 + SECONDS_IN_DAY * 1_000_000_000,
@@ -4361,10 +4321,8 @@ mod tests {
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
         ]);
         let result = add_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
         let expected = TimestampNanosecondArray::from(vec![
             1 + SECONDS_IN_DAY * 1_000_000_000,
             2 + SECONDS_IN_DAY * 1_000_000_000,
@@ -4388,10 +4346,8 @@ mod tests {
         ]);
 
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
         let expected = TimestampNanosecondArray::from(vec![
             1 - SECONDS_IN_DAY * 31 * 1_000_000_000,
             2 - SECONDS_IN_DAY * 31 * 1_000_000_000,
@@ -4411,10 +4367,8 @@ mod tests {
             Some(IntervalDayTimeType::make_value(1, 0)),
         ]);
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
         let expected = TimestampNanosecondArray::from(vec![
             1 - SECONDS_IN_DAY * 1_000_000_000,
             2 - SECONDS_IN_DAY * 1_000_000_000,
@@ -4434,10 +4388,8 @@ mod tests {
             Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
         ]);
         let result = subtract_dyn(&a, &b).unwrap();
-        let result = result
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
         let expected = TimestampNanosecondArray::from(vec![
             1 - SECONDS_IN_DAY * 1_000_000_000,
             2 - SECONDS_IN_DAY * 1_000_000_000,
