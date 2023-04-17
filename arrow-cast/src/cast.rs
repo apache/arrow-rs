@@ -2179,26 +2179,28 @@ where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let array: PrimitiveArray<T> = if input_scale == output_scale {
-        // the scale doesn't change, the native value don't need to be changed
-        array.clone()
-    } else if input_scale > output_scale {
-        convert_to_smaller_equal_scale_decimal::<T, T>(
+    let array: PrimitiveArray<T> = match input_scale.cmp(&output_scale) {
+        Ordering::Equal => {
+            // the scale doesn't change, the native value don't need to be changed
+            array.clone()
+        }
+        Ordering::Greater => convert_to_smaller_equal_scale_decimal::<T, T>(
             array,
             input_scale,
             output_precision,
             output_scale,
             cast_options,
-        )?
-    } else {
-        // input_scale < output_scale
-        convert_to_bigger_scale_decimal::<T, T>(
-            array,
-            input_scale,
-            output_precision,
-            output_scale,
-            cast_options,
-        )?
+        )?,
+        Ordering::Less => {
+            // input_scale < output_scale
+            convert_to_bigger_scale_decimal::<T, T>(
+                array,
+                input_scale,
+                output_precision,
+                output_scale,
+                cast_options,
+            )?
+        }
     };
 
     Ok(Arc::new(array.with_precision_and_scale(
