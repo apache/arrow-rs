@@ -2081,15 +2081,17 @@ impl DecimalCast for i256 {
     }
 }
 
-fn cast_decimal_to_decimal_error<O>(
+fn cast_decimal_to_decimal_error<I, O>(
     output_precision: u8,
     output_scale: i8,
-) -> impl Fn(<O as ArrowPrimitiveType>::Native) -> ArrowError
+) -> impl Fn(<I as ArrowPrimitiveType>::Native) -> ArrowError
 where
+    I: DecimalType,
     O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    move |x: O::Native| {
+    move |x: I::Native| {
         ArrowError::CastError(format!(
             "Cannot cast to {}({}, {}). Overflowing on {:?}",
             O::PREFIX,
@@ -2113,7 +2115,7 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let error = cast_decimal_to_decimal_error::<I>(output_precision, output_scale);
+    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
     let div = I::Native::from_decimal(10_i128)
         .unwrap()
         .pow_checked((input_scale - output_scale) as u32)?;
@@ -2154,7 +2156,7 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let error = cast_decimal_to_decimal_error::<I>(output_precision, output_scale);
+    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
     let mul = O::Native::from_decimal(10_i128)
         .unwrap()
         .pow_checked((output_scale - input_scale) as u32)?;
