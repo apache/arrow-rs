@@ -1841,7 +1841,7 @@ mod tests {
             let keys: Int32Array =
                 [Some(0), Some(2), None, Some(1)].into_iter().collect();
 
-            let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+            let array = DictionaryArray::new(keys, Arc::new(values));
 
             let schema =
                 Schema::new(vec![Field::new("dict", array.data_type().clone(), true)]);

@@ -167,7 +167,7 @@ mod tests {
             Some(1),
             None,
         ]);
-        let array = DictionaryArray::try_new(&keys, &values)?;
+        let array = DictionaryArray::new(keys, Arc::new(values));
 
         let data = array.into_data();
         test_round_trip(&data)

@@ -3624,11 +3624,11 @@ mod tests {
     fn test_dict_decimal() {
         let values = Decimal128Array::from_iter_values([0, 1, 2, 3, 4, 5]);
         let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
-        let array1 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = Decimal128Array::from_iter_values([7, -3, 4, 3, 5]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let result = add_dyn(&array1, &array2).unwrap();
         let expected =
@@ -3650,7 +3650,7 @@ mod tests {
         ]);
         let keys =
             Int8Array::from(vec![Some(1_i8), None, Some(5), Some(4), Some(3), None]);
-        let array1 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = Decimal256Array::from_iter_values([
             i256::from_i128(7),
@@ -3661,7 +3661,7 @@ mod tests {
         ]);
         let keys =
             Int8Array::from(vec![Some(0_i8), Some(0), None, Some(2), Some(3), Some(4)]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let result = add_dyn(&array1, &array2).unwrap();
         let expected = Arc::new(Decimal256Array::from(vec![
