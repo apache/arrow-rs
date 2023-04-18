@@ -301,7 +301,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         if let Some(n) = nulls.as_ref() {
             if n.len() != values.len() {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect number of nulls for PrimitiveArray, expected {} got {}",
+                    "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
                     values.len(),
                     n.len(),
                 )));
@@ -2319,7 +2319,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Invalid argument error: Incorrect number of nulls for PrimitiveArray, expected 4 got 3"
+            "Invalid argument error: Incorrect length of null buffer for PrimitiveArray, expected 4 got 3"
         );
     }
 }
