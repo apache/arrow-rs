@@ -2102,7 +2102,7 @@ where
     }
 }
 
-fn convert_to_smaller_equal_scale_decimal<I, O>(
+fn convert_to_smaller_scale_decimal<I, O>(
     array: &PrimitiveArray<I>,
     input_scale: i8,
     output_precision: u8,
@@ -2143,7 +2143,7 @@ where
     })
 }
 
-fn convert_to_bigger_scale_decimal<I, O>(
+fn convert_to_bigger_or_equal_scale_decimal<I, O>(
     array: &PrimitiveArray<I>,
     input_scale: i8,
     output_precision: u8,
@@ -2186,7 +2186,7 @@ where
             // the scale doesn't change, the native value don't need to be changed
             array.clone()
         }
-        Ordering::Greater => convert_to_smaller_equal_scale_decimal::<T, T>(
+        Ordering::Greater => convert_to_smaller_scale_decimal::<T, T>(
             array,
             input_scale,
             output_precision,
@@ -2195,7 +2195,7 @@ where
         )?,
         Ordering::Less => {
             // input_scale < output_scale
-            convert_to_bigger_scale_decimal::<T, T>(
+            convert_to_bigger_or_equal_scale_decimal::<T, T>(
                 array,
                 input_scale,
                 output_precision,
@@ -2226,7 +2226,7 @@ where
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
     let array: PrimitiveArray<O> = if input_scale > output_scale {
-        convert_to_smaller_equal_scale_decimal::<I, O>(
+        convert_to_smaller_scale_decimal::<I, O>(
             array,
             input_scale,
             output_precision,
@@ -2234,7 +2234,7 @@ where
             cast_options,
         )?
     } else {
-        convert_to_bigger_scale_decimal::<I, O>(
+        convert_to_bigger_or_equal_scale_decimal::<I, O>(
             array,
             input_scale,
             output_precision,
