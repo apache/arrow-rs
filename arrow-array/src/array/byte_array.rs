@@ -480,7 +480,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 2");
 
-        BinaryArray::new(offsets.clone(), non_utf8_data.clone(), None);
+        BinaryArray::new(offsets, non_utf8_data, None);
 
         let offsets = OffsetBuffer::new(vec![0, 5, 11].into());
         let err = StringArray::try_new(offsets.clone(), data.clone(), None).unwrap_err();
@@ -489,7 +489,7 @@ mod tests {
             "Invalid argument error: Offset of 11 exceeds length of values 10"
         );
 
-        let err = BinaryArray::try_new(offsets.clone(), data.clone(), None).unwrap_err();
+        let err = BinaryArray::try_new(offsets.clone(), data, None).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Invalid argument error: Maximum offset of 11 is larger than values of length 10"
@@ -507,6 +507,6 @@ mod tests {
             "Invalid argument error: Split UTF-8 codepoint at offset 3"
         );
 
-        BinaryArray::new(offsets, non_ascii_data.clone(), None);
+        BinaryArray::new(offsets, non_ascii_data, None);
     }
 }
