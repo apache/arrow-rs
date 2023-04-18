@@ -787,12 +787,12 @@ mod tests {
         let arr_secs = TimestampSecondArray::from(vec![Some(ts_secs), None]);
         let arr_names = StringArray::from(vec![Some("a"), Some("b")]);
 
-        let tz = "+00:00".to_string();
+        let tz = "+00:00";
 
-        let arr_nanos = arr_nanos.with_timezone(&tz);
-        let arr_micros = arr_micros.with_timezone(&tz);
-        let arr_millis = arr_millis.with_timezone(&tz);
-        let arr_secs = arr_secs.with_timezone(&tz);
+        let arr_nanos = arr_nanos.with_timezone(tz);
+        let arr_micros = arr_micros.with_timezone(tz);
+        let arr_millis = arr_millis.with_timezone(tz);
+        let arr_secs = arr_secs.with_timezone(tz);
 
         let schema = Schema::new(vec![
             Field::new("nanos", arr_nanos.data_type().clone(), true),
