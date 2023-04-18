@@ -208,7 +208,7 @@ where
     //  Soundness
     //      `values` is an iterator with a known size from a PrimitiveArray
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-    Ok(PrimitiveArray::new(O::DATA_TYPE, buffer.into(), nulls))
+    Ok(PrimitiveArray::new(buffer.into(), nulls))
 }
 
 /// Given two arrays of length `len`, calls `op(a[i], b[i])` for `i` in `0..len`, mutating
@@ -312,7 +312,7 @@ where
         })?;
 
         let values = buffer.finish().into();
-        Ok(PrimitiveArray::new(O::DATA_TYPE, values, Some(nulls)))
+        Ok(PrimitiveArray::new(values, Some(nulls)))
     }
 }
 
@@ -396,7 +396,7 @@ where
             buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
         };
     }
-    Ok(PrimitiveArray::new(O::DATA_TYPE, buffer.into(), None))
+    Ok(PrimitiveArray::new(buffer.into(), None))
 }
 
 /// This intentional inline(never) attribute helps LLVM optimize the loop.
