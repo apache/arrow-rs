@@ -17,7 +17,7 @@
 
 use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
-use crate::{error::Result, FlightData, SchemaAsIpc};
+use crate::{error::Result, FlightData, FlightDescriptor, SchemaAsIpc};
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
@@ -72,6 +72,8 @@ pub struct FlightDataEncoderBuilder {
     app_metadata: Bytes,
     /// Optional schema, if known before data.
     schema: Option<SchemaRef>,
+    /// Optional flight descriptor, if known before data.
+    descriptor: Option<FlightDescriptor>,
 }
 
 /// Default target size for encoded [`FlightData`].
@@ -87,6 +89,7 @@ impl Default for FlightDataEncoderBuilder {
             options: IpcWriteOptions::default(),
             app_metadata: Bytes::new(),
             schema: None,
+            descriptor: None,
         }
     }
 }
@@ -134,6 +137,14 @@ impl FlightDataEncoderBuilder {
         self
     }
 
+    pub fn with_flight_descriptor(
+        mut self,
+        descriptor: Option<FlightDescriptor>,
+    ) -> Self {
+        self.descriptor = descriptor;
+        self
+    }
+
     /// Return a [`Stream`](futures::Stream) of [`FlightData`],
     /// consuming self. More details on [`FlightDataEncoder`]
     pub fn build<S>(self, input: S) -> FlightDataEncoder
@@ -145,6 +156,7 @@ impl FlightDataEncoderBuilder {
             options,
             app_metadata,
             schema,
+            descriptor,
         } = self;
 
         FlightDataEncoder::new(
@@ -153,6 +165,7 @@ impl FlightDataEncoderBuilder {
             max_flight_data_size,
             options,
             app_metadata,
+            descriptor,
         )
     }
 }
@@ -160,6 +173,7 @@ impl FlightDataEncoderBuilder {
 /// Stream that encodes a stream of record batches to flight data.
 ///
 /// See [`FlightDataEncoderBuilder`] for details and example.
+#[warn(dead_code)]
 pub struct FlightDataEncoder {
     /// Input stream
     inner: BoxStream<'static, Result<RecordBatch>>,
@@ -176,6 +190,8 @@ pub struct FlightDataEncoder {
     queue: VecDeque<FlightData>,
     /// Is this stream done (inner is empty or errored)
     done: bool,
+    /// descriptor, set after the first batch
+    descriptor: Option<FlightDescriptor>,
 }
 
 impl FlightDataEncoder {
@@ -185,6 +201,7 @@ impl FlightDataEncoder {
         max_flight_data_size: usize,
         options: IpcWriteOptions,
         app_metadata: Bytes,
+        descriptor: Option<FlightDescriptor>,
     ) -> Self {
         let mut encoder = Self {
             inner,
@@ -194,6 +211,7 @@ impl FlightDataEncoder {
             app_metadata: Some(app_metadata),
             queue: VecDeque::new(),
             done: false,
+            descriptor,
         };
 
         // If schema is known up front, enqueue it immediately
@@ -210,7 +228,13 @@ impl FlightDataEncoder {
 
     /// Place the `FlightData` in the queue to send
     fn queue_messages(&mut self, datas: impl IntoIterator<Item = FlightData>) {
-        for data in datas {
+        let mut is_first = true;
+        for mut data in datas {
+            // The first message is the schema message need to set the descriptor
+            if is_first {
+                data.flight_descriptor = self.descriptor.clone();
+                is_first = !is_first;
+            }
             self.queue_message(data)
         }
     }
