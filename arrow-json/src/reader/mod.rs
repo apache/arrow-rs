@@ -634,6 +634,7 @@ fn make_decoder(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
     use std::sync::Arc;
@@ -1975,5 +1976,27 @@ mod tests {
             err,
             "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got [123, 3465346]"
         );
+    }
+
+    #[test]
+    fn test_serialize_timestamp() {
+        let json = vec![
+            json!({"timestamp": 1681319393}),
+            json!({"timestamp": "1970-01-01T00:00:00+02:00"}),
+        ];
+        let schema = Schema::new(vec![Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Second, None),
+            true,
+        )]);
+        let mut decoder = ReaderBuilder::new(Arc::new(schema))
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&json).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 1);
+        let values = batch.column(0).as_primitive::<TimestampSecondType>();
+        assert_eq!(values.values(), &[1681319393, -7200]);
     }
 }
