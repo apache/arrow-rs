@@ -109,7 +109,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         if let Some(n) = nulls.as_ref() {
             if n.len() != len {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect number of nulls for {}ListArray, expected {len} got {}",
+                    "Incorrect length of null buffer for {}ListArray, expected {len} got {}",
                     OffsetSize::PREFIX,
                     n.len(),
                 )));
@@ -1137,7 +1137,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Invalid argument error: Incorrect number of nulls for LargeListArray, expected 4 got 3"
+            "Invalid argument error: Incorrect length of null buffer for LargeListArray, expected 4 got 3"
         );
 
         let field = Arc::new(Field::new("element", DataType::Int64, false));

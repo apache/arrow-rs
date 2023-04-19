@@ -21,10 +21,10 @@ use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
 use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait};
-use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -59,6 +59,87 @@ impl<T: ByteArrayType> Clone for GenericByteArray<T> {
 impl<T: ByteArrayType> GenericByteArray<T> {
     /// Data type of the array.
     pub const DATA_TYPE: DataType = T::DATA_TYPE;
+
+    /// Create a new [`GenericByteArray`] from the provided parts, panicking on failure
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`GenericByteArray::try_new`] returns an error
+    pub fn new(
+        offsets: OffsetBuffer<T::Offset>,
+        values: Buffer,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        Self::try_new(offsets, values, nulls).unwrap()
+    }
+
+    /// Create a new [`GenericByteArray`] from the provided parts, returning an error on failure
+    ///
+    /// # Errors
+    ///
+    /// * `offsets.len() - 1 != nulls.len()`
+    /// * Any consecutive pair of `offsets` does not denote a valid slice of `values`
+    pub fn try_new(
+        offsets: OffsetBuffer<T::Offset>,
+        values: Buffer,
+        nulls: Option<NullBuffer>,
+    ) -> Result<Self, ArrowError> {
+        let len = offsets.len() - 1;
+
+        // Verify that each pair of offsets is a valid slices of values
+        T::validate(&offsets, &values)?;
+
+        if let Some(n) = nulls.as_ref() {
+            if n.len() != len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of null buffer for {}{}Array, expected {len} got {}",
+                    T::Offset::PREFIX,
+                    T::PREFIX,
+                    n.len(),
+                )));
+            }
+        }
+
+        Ok(Self {
+            data_type: T::DATA_TYPE,
+            value_offsets: offsets,
+            value_data: values,
+            nulls,
+        })
+    }
+
+    /// Create a new [`GenericByteArray`] from the provided parts, without validation
+    ///
+    /// # Safety
+    ///
+    /// Safe if [`Self::try_new`] would not error
+    pub fn new_unchecked(
+        offsets: OffsetBuffer<T::Offset>,
+        values: Buffer,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        Self {
+            data_type: T::DATA_TYPE,
+            value_offsets: offsets,
+            value_data: values,
+            nulls,
+        }
+    }
+
+    /// Create a new [`GenericByteArray`] of length `len` where all values are null
+    pub fn new_null(len: usize) -> Self {
+        Self {
+            data_type: T::DATA_TYPE,
+            value_offsets: OffsetBuffer::new_zeroed(len),
+            value_data: MutableBuffer::new(0).into(),
+            nulls: Some(NullBuffer::new_null(len)),
+        }
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(self) -> (OffsetBuffer<T::Offset>, Buffer, Option<NullBuffer>) {
+        (self.value_offsets, self.value_data, self.nulls)
+    }
 
     /// Returns the length for value at index `i`.
     /// # Panics
@@ -372,5 +453,62 @@ impl<'a, T: ByteArrayType> IntoIterator for &'a GenericByteArray<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         ArrayIter::new(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{BinaryArray, StringArray};
+    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
+
+    #[test]
+    fn try_new() {
+        let data = Buffer::from_slice_ref("helloworld");
+        let offsets = OffsetBuffer::new(vec![0, 5, 10].into());
+        StringArray::new(offsets.clone(), data.clone(), None);
+
+        let nulls = NullBuffer::new_null(3);
+        let err =
+            StringArray::try_new(offsets.clone(), data.clone(), Some(nulls.clone()))
+                .unwrap_err();
+        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for StringArray, expected 2 got 3");
+
+        let err =
+            BinaryArray::try_new(offsets.clone(), data.clone(), Some(nulls)).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for BinaryArray, expected 2 got 3");
+
+        let non_utf8_data = Buffer::from_slice_ref(b"he\xFFloworld");
+        let err = StringArray::try_new(offsets.clone(), non_utf8_data.clone(), None)
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 2");
+
+        BinaryArray::new(offsets, non_utf8_data, None);
+
+        let offsets = OffsetBuffer::new(vec![0, 5, 11].into());
+        let err = StringArray::try_new(offsets.clone(), data.clone(), None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offset of 11 exceeds length of values 10"
+        );
+
+        let err = BinaryArray::try_new(offsets.clone(), data, None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Maximum offset of 11 is larger than values of length 10"
+        );
+
+        let non_ascii_data = Buffer::from_slice_ref("heìloworld");
+        StringArray::new(offsets.clone(), non_ascii_data.clone(), None);
+        BinaryArray::new(offsets, non_ascii_data.clone(), None);
+
+        let offsets = OffsetBuffer::new(vec![0, 3, 10].into());
+        let err = StringArray::try_new(offsets.clone(), non_ascii_data.clone(), None)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Split UTF-8 codepoint at offset 3"
+        );
+
+        BinaryArray::new(offsets, non_ascii_data, None);
     }
 }
