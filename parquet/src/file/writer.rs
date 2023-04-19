@@ -544,7 +544,7 @@ pub struct SerializedColumnWriter<'a> {
 }
 
 impl<'a> SerializedColumnWriter<'a> {
-    /// Create a new [`SerializedColumnWriter`] from a `[`ColumnWriter`] and an
+    /// Create a new [`SerializedColumnWriter`] from a [`ColumnWriter`] and an
     /// optional callback to be invoked on [`Self::close`]
     pub fn new(
         inner: ColumnWriter<'a>,
@@ -563,7 +563,7 @@ impl<'a> SerializedColumnWriter<'a> {
         get_typed_column_writer_mut(&mut self.inner)
     }
 
-    /// Close this [`SerializedColumnWriter]
+    /// Close this [`SerializedColumnWriter`]
     pub fn close(mut self) -> Result<()> {
         let r = match self.inner {
             ColumnWriter::BoolColumnWriter(typed) => typed.close()?,
