@@ -85,6 +85,8 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
         let len = offsets.len() - 1;
+
+        // Verify that each pair of offsets is a valid slices of values
         T::validate(&offsets, &values)?;
 
         if let Some(n) = nulls.as_ref() {
