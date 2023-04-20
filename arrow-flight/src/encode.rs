@@ -17,7 +17,7 @@
 
 use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
-use crate::{error::Result, FlightData, FlightDescriptor, SchemaAsIpc};
+use crate::{error::Result, FlightData, FlightDescriptor, IpcMessage, SchemaAsIpc};
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
@@ -173,7 +173,6 @@ impl FlightDataEncoderBuilder {
 /// Stream that encodes a stream of record batches to flight data.
 ///
 /// See [`FlightDataEncoderBuilder`] for details and example.
-#[warn(dead_code)]
 pub struct FlightDataEncoder {
     /// Input stream
     inner: BoxStream<'static, Result<RecordBatch>>,
@@ -211,13 +210,19 @@ impl FlightDataEncoder {
             app_metadata: Some(app_metadata),
             queue: VecDeque::new(),
             done: false,
-            descriptor,
+            descriptor: None,
         };
 
         // If schema is known up front, enqueue it immediately
         if let Some(schema) = schema {
             encoder.encode_schema(&schema);
         }
+
+        // If descriptor is known up front, enqueue it immediately
+        if let Some(descriptor) = descriptor {
+            encoder.encode_descriptor(&descriptor);
+        }
+
         encoder
     }
 
@@ -228,13 +233,7 @@ impl FlightDataEncoder {
 
     /// Place the `FlightData` in the queue to send
     fn queue_messages(&mut self, datas: impl IntoIterator<Item = FlightData>) {
-        let mut is_first = true;
-        for mut data in datas {
-            // The first message is the schema message need to set the descriptor
-            if is_first {
-                data.flight_descriptor = self.descriptor.clone();
-                is_first = !is_first;
-            }
+        for data in datas {
             self.queue_message(data)
         }
     }
@@ -255,6 +254,24 @@ impl FlightDataEncoder {
         // remember schema
         self.schema = Some(schema.clone());
         schema
+    }
+
+    /// Encodes descriptor as a [`FlightData`] in self.queue.
+    /// Updates `self.descriptor` and returns the new descriptor
+    fn encode_descriptor(&mut self, descriptor: &FlightDescriptor) -> FlightDescriptor {
+        // The first message is the descriptor message, and all
+        // batches have the same descriptor
+        let descriptor = descriptor.clone();
+        let descriptor_flight_data = FlightData::new(
+            Some(descriptor.clone()),
+            IpcMessage(Bytes::new()),
+            vec![],
+            vec![],
+        );
+        self.queue_message(descriptor_flight_data);
+        // remember descriptor
+        self.descriptor = Some(descriptor.clone());
+        descriptor
     }
 
     /// Encodes batch into one or more `FlightData` messages in self.queue
