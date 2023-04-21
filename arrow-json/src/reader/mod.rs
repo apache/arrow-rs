@@ -211,6 +211,28 @@ impl ReaderBuilder {
 
     /// Create a [`Decoder`]
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
+        let empty_list_name: Vec<&String> = self
+            .schema
+            .fields
+            .iter()
+            .filter(|f| match f.data_type() {
+                DataType::List(expr)
+                | DataType::FixedSizeList(expr, _)
+                | DataType::LargeList(expr) => {
+                    expr.data_type().equals_datatype(&DataType::Null)
+                }
+                _ => false,
+            })
+            .map(|f| f.name())
+            .collect();
+
+        if empty_list_name.len() > 0 {
+            return Err(ArrowError::JsonError(format!(
+                "cannot build decoder with empty JSON array {:?}.",
+                empty_list_name
+            )));
+        }
+
         let decoder = make_decoder(
             DataType::Struct(self.schema.fields.clone()),
             self.coerce_primitive,
@@ -743,6 +765,19 @@ mod tests {
         assert!(col5.is_null(2));
         assert!(col5.is_null(3));
         assert_eq!(col5.values(), &[0, 254, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_empty_array_should_error() {
+        let f = File::open("test/data/empty_array.json").unwrap();
+
+        let mut reader = BufReader::new(f);
+        let schema = infer_json_schema(&mut reader, None).unwrap();
+
+        ReaderBuilder::new(SchemaRef::new(schema))
+            .build_decoder()
+            .unwrap();
     }
 
     #[test]
