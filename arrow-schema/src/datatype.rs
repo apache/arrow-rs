@@ -715,14 +715,11 @@ mod tests {
         assert!(!list_n.equals_datatype(&list_p));
         assert!(!list_n.equals_datatype(&list_q));
 
-        let list_r =
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_a));
+        let list_r = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_a));
         let list_s =
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_b.clone()));
-        let list_t =
-            DataType::Dictionary(Box::new(DataType::Int8), Box::new(list_b));
-        let list_u =
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_c));
+        let list_t = DataType::Dictionary(Box::new(DataType::Int8), Box::new(list_b));
+        let list_u = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_c));
 
         assert!(list_r.equals_datatype(&list_s));
         assert!(!list_r.equals_datatype(&list_t));
