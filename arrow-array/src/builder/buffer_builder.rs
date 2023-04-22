@@ -17,8 +17,8 @@
 
 use crate::array::ArrowPrimitiveType;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
-use std::marker::PhantomData;
 use half::f16;
+use std::marker::PhantomData;
 
 use crate::types::*;
 
@@ -46,9 +46,11 @@ pub type Float32BufferBuilder = BufferBuilder<f32>;
 pub type Float64BufferBuilder = BufferBuilder<f64>;
 
 /// Buffer builder for 128-bit decimal type.
-pub type Decimal128BufferBuilder = BufferBuilder<<Decimal128Type as ArrowPrimitiveType>::Native>;
+pub type Decimal128BufferBuilder =
+    BufferBuilder<<Decimal128Type as ArrowPrimitiveType>::Native>;
 /// Buffer builder for 256-bit decimal type.
-pub type Decimal256BufferBuilder = BufferBuilder<<Decimal256Type as ArrowPrimitiveType>::Native>;
+pub type Decimal256BufferBuilder =
+    BufferBuilder<<Decimal256Type as ArrowPrimitiveType>::Native>;
 
 /// Buffer builder for timestamp type of second unit.
 pub type TimestampSecondBufferBuilder =
