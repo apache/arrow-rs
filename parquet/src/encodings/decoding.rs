@@ -33,6 +33,8 @@ use crate::util::{
     memory::ByteBufferPtr,
 };
 
+mod byte_stream_split_decoder;
+
 pub(crate) mod private {
     use super::*;
 
@@ -105,8 +107,32 @@ pub(crate) mod private {
         }
     }
 
-    impl GetDecoder for f32 {}
-    impl GetDecoder for f64 {}
+    impl GetDecoder for f32 {
+        fn get_decoder<T: DataType<T = Self>>(
+            descr: ColumnDescPtr,
+            encoding: Encoding,
+        ) -> Result<Box<dyn Decoder<T>>> {
+            match encoding {
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
+                    byte_stream_split_decoder::ByteStreamSplitDecoder::new(),
+                )),
+                _ => get_decoder_default(descr, encoding),
+            }
+        }
+    }
+    impl GetDecoder for f64 {
+        fn get_decoder<T: DataType<T = Self>>(
+            descr: ColumnDescPtr,
+            encoding: Encoding,
+        ) -> Result<Box<dyn Decoder<T>>> {
+            match encoding {
+                Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(
+                    byte_stream_split_decoder::ByteStreamSplitDecoder::new(),
+                )),
+                _ => get_decoder_default(descr, encoding),
+            }
+        }
+    }
 
     impl GetDecoder for ByteArray {
         fn get_decoder<T: DataType<T = Self>>(
@@ -1070,6 +1096,9 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
 
 #[cfg(test)]
 mod tests {
+
+    use arrow::datatypes::Float64Type;
+
     use super::{super::encoding::*, *};
 
     use std::f32::consts::PI as PI_f32;
@@ -1854,12 +1883,29 @@ mod tests {
         test_delta_byte_array_decode(data);
     }
 
+    #[test]
+    fn test_byte_stream_split_multiple() {
+        let data = vec![
+            vec![
+                f32::from_le_bytes([0xAA, 0xBB, 0xCC, 0xDD]),
+                f32::from_le_bytes([0x00, 0x11, 0x22, 0x33]),
+            ],
+            vec![f32::from_le_bytes([0xA3, 0xB4, 0xC5, 0xD6])],
+        ];
+        // let data = vec![vec![0.0f64], vec![1.0]];
+        test_byte_stream_split_decode::<FloatType>(data);
+    }
+
     fn test_rle_value_decode<T: DataType>(data: Vec<Vec<T::T>>) {
         test_encode_decode::<T>(data, Encoding::RLE);
     }
 
     fn test_delta_bit_packed_decode<T: DataType>(data: Vec<Vec<T::T>>) {
         test_encode_decode::<T>(data, Encoding::DELTA_BINARY_PACKED);
+    }
+
+    fn test_byte_stream_split_decode<T: DataType>(data: Vec<Vec<T::T>>) {
+        test_encode_decode::<T>(data, Encoding::BYTE_STREAM_SPLIT);
     }
 
     fn test_delta_byte_array_decode(data: Vec<Vec<ByteArray>>) {
@@ -1882,6 +1928,7 @@ mod tests {
             encoder.put(&v[..]).expect("ok to encode");
         }
         let bytes = encoder.flush_buffer().expect("ok to flush buffer");
+        println!("{:x?}", bytes.data());
 
         // Flatten expected data as contiguous array of values
         let expected: Vec<T::T> = data.iter().flat_map(|s| s.clone()).collect();

@@ -31,6 +31,7 @@ use crate::util::{
 
 pub use dict_encoder::DictEncoder;
 
+mod byte_stream_split_encoder;
 mod dict_encoder;
 
 // ----------------------------------------------------------------------
@@ -87,6 +88,9 @@ pub fn get_encoder<T: DataType>(encoding: Encoding) -> Result<Box<dyn Encoder<T>
         Encoding::DELTA_BINARY_PACKED => Box::new(DeltaBitPackEncoder::new()),
         Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(DeltaLengthByteArrayEncoder::new()),
         Encoding::DELTA_BYTE_ARRAY => Box::new(DeltaByteArrayEncoder::new()),
+        Encoding::BYTE_STREAM_SPLIT => {
+            Box::new(byte_stream_split_encoder::ByteStreamSplitEncoder::new())
+        }
         e => return Err(nyi_err!("Encoding {} is not supported", e)),
     };
     Ok(encoder)
@@ -794,12 +798,14 @@ mod tests {
     fn test_float() {
         FloatType::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         FloatType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
+        FloatType::test(Encoding::BYTE_STREAM_SPLIT, TEST_SET_SIZE, -1);
     }
 
     #[test]
     fn test_double() {
         DoubleType::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         DoubleType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
+        DoubleType::test(Encoding::BYTE_STREAM_SPLIT, TEST_SET_SIZE, -1);
     }
 
     #[test]
@@ -918,6 +924,37 @@ mod tests {
             3, // only suffix bytes, length encoder is not flushed yet
             0,
         );
+
+        // BYTE_STREAM_SPLIT
+        run_test::<FloatType>(Encoding::BYTE_STREAM_SPLIT, -1, &[0.1, 0.2], 0, 8, 0);
+    }
+
+    #[test]
+    fn test_byte_stream_split_example_f32() {
+        // Test data from https://github.com/apache/parquet-format/blob/2a481fe1aad64ff770e21734533bb7ef5a057dac/Encodings.md#byte-stream-split-byte_stream_split--9
+        let mut encoder = create_test_encoder::<FloatType>(Encoding::BYTE_STREAM_SPLIT);
+        let mut decoder =
+            create_test_decoder::<FloatType>(0, Encoding::BYTE_STREAM_SPLIT);
+
+        let input = vec![
+            f32::from_le_bytes([0xAA, 0xBB, 0xCC, 0xDD]),
+            f32::from_le_bytes([0x00, 0x11, 0x22, 0x33]),
+            f32::from_le_bytes([0xA3, 0xB4, 0xC5, 0xD6]),
+        ];
+
+        encoder.put(&input).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+
+        assert_eq!(
+            encoded.data(),
+            [0xAA, 0x00, 0xA3, 0xBB, 0x11, 0xB4, 0xCC, 0x22, 0xC5, 0xDD, 0x33, 0xD6]
+        );
+
+        let mut decoded = vec![0.0; input.len()];
+        decoder.set_data(encoded, input.len()).unwrap();
+        decoder.get(&mut decoded).unwrap();
+
+        assert_eq!(decoded, input);
     }
 
     // See: https://github.com/sunchao/parquet-rs/issues/47
