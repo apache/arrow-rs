@@ -22,6 +22,8 @@ use std::{collections::HashMap, sync::Arc};
 use arrow_array::types::Int32Type;
 use arrow_array::{ArrayRef, DictionaryArray, Float64Array, RecordBatch, UInt8Array};
 use arrow_cast::pretty::pretty_format_batches;
+use arrow_flight::flight_descriptor::DescriptorType;
+use arrow_flight::FlightDescriptor;
 use arrow_flight::{
     decode::{DecodedPayload, FlightDataDecoder, FlightRecordBatchStream},
     encode::FlightDataEncoderBuilder,
@@ -134,6 +136,29 @@ async fn test_zero_batches_schema_specified() {
     assert!(decoder.next().await.is_none());
     // But schema has been received correctly
     assert_eq!(decoder.schema(), Some(&schema));
+}
+
+#[tokio::test]
+async fn test_with_flight_descriptor() {
+    let stream = futures::stream::iter(vec![Ok(make_dictionary_batch(5))]);
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+
+    let descriptor = Some(FlightDescriptor {
+        r#type: DescriptorType::Path.into(),
+        path: vec!["table_name".to_string()],
+        cmd: Bytes::default(),
+    });
+
+    let encoder = FlightDataEncoderBuilder::default()
+        .with_schema(schema.clone())
+        .with_flight_descriptor(descriptor.clone());
+
+    let mut encoder = encoder.build(stream);
+
+    // First batch should be the schema
+    let first_batch = encoder.next().await.unwrap().unwrap();
+
+    assert_eq!(first_batch.flight_descriptor, descriptor);
 }
 
 #[tokio::test]
