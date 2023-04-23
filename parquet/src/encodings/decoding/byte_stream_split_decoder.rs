@@ -117,14 +117,8 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
     }
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
-        todo!()
-        // let values_skipped = 0;
-        // let new = self.cur_value_idx + num_values;
-        // if new > self.num_values {
-        //     return Ok()
-        // }
-        // self.cur_value_idx.s + num_values
-        // self.cur_value_idx.a += num_values;
-        // Ok()
+        let to_skip = usize::min(self.values_left(), num_values);
+        self.values_decoded += to_skip;
+        Ok(to_skip)
     }
 }

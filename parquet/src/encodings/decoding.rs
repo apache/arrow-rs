@@ -1096,8 +1096,6 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
 #[cfg(test)]
 mod tests {
 
-    use arrow::datatypes::Float64Type;
-
     use super::{super::encoding::*, *};
 
     use std::f32::consts::PI as PI_f32;
@@ -1798,8 +1796,18 @@ mod tests {
             ],
             vec![f32::from_le_bytes([0xA3, 0xB4, 0xC5, 0xD6])],
         ];
-        // let data = vec![vec![0.0f64], vec![1.0]];
         test_byte_stream_split_decode::<FloatType>(data);
+    }
+
+    #[test]
+    fn test_skip_byte_stream_split() {
+        let block_data = vec![0.3, 0.4, 0.1, 4.10];
+        test_skip::<FloatType>(block_data.clone(), Encoding::BYTE_STREAM_SPLIT, 2);
+        test_skip::<DoubleType>(
+            block_data.into_iter().map(|x| x as f64).collect(),
+            Encoding::BYTE_STREAM_SPLIT,
+            100,
+        );
     }
 
     fn test_rle_value_decode<T: DataType>(data: Vec<Vec<T::T>>) {
