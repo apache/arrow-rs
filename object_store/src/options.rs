@@ -42,12 +42,12 @@ pub struct StoreOptions {
 impl StoreOptions {
     /// Create a new instance of [`StorageOptions`]
     #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
-    pub fn new(
-        store_options: HashMap<String, String>,
+    pub fn new<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
+        iterable: I,
         client_options: ClientOptions,
     ) -> Self {
         Self {
-            _store_options: store_options,
+            _store_options: Self::iter_2_opts(iterable),
             client_options,
         }
     }
@@ -58,44 +58,11 @@ impl StoreOptions {
         feature = "azure",
         feature = "http"
     )))]
-    pub fn new(store_options: HashMap<String, String>) -> Self {
-        Self {
-            _store_options: store_options,
-        }
-    }
-
-    #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
-    pub fn from_iterable<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
-        iter: I,
-        client_options: ClientOptions,
+    pub fn new<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
+        iterable: I,
     ) -> Self {
-        let store_options: HashMap<String, String> = iter
-            .into_iter()
-            .map(|(key, value)| (key.as_ref().to_ascii_lowercase(), value.into()))
-            .collect();
-
         Self {
-            _store_options: store_options,
-            client_options,
-        }
-    }
-
-    #[cfg(not(any(
-        feature = "gcp",
-        feature = "aws",
-        feature = "azure",
-        feature = "http"
-    )))]
-    pub fn from_iterable<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
-        iter: I,
-    ) -> Self {
-        let store_options: HashMap<String, String> = iter
-            .into_iter()
-            .map(|(key, value)| (key.as_ref().to_ascii_lowercase(), value.into()))
-            .collect();
-
-        Self {
-            _store_options: store_options,
+            _store_options: Self::iter_2_opts(iterable),
         }
     }
 
@@ -144,6 +111,15 @@ impl StoreOptions {
 
                 (conf_key, value.clone())
             })
+            .collect()
+    }
+
+    fn iter_2_opts<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
+        iterable: I,
+    ) -> HashMap<String, String> {
+        iterable
+            .into_iter()
+            .map(|(key, value)| (key.as_ref().to_ascii_lowercase(), value.into()))
             .collect()
     }
 }

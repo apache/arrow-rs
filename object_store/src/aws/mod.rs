@@ -1563,7 +1563,7 @@ mod tests {
         // Create instance of S3 object_store.
         let integration = parse_url(
             format!("s3://{}/", &config.bucket_name.unwrap()),
-            Some(StoreOptions::from_iterable(store_options, client_options)),
+            Some(StoreOptions::new(store_options, client_options)),
         )
         .unwrap();
 
