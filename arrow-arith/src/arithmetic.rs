@@ -840,8 +840,10 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
         }
 
         DataType::Interval(_)
-            if right.data_type().is_temporal()
-                && left.data_type() != right.data_type() =>
+            if matches!(
+                right.data_type(),
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+            ) =>
         {
             add_dyn(right, left)
         }
