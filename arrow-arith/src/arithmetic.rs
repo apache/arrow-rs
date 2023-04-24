@@ -838,6 +838,13 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
                 ))),
             }
         }
+
+        DataType::Interval(_)
+            if right.data_type().is_temporal()
+                && left.data_type() != right.data_type() =>
+        {
+            add_dyn(right, left)
+        }
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
@@ -1987,6 +1994,13 @@ mod tests {
             c.value(0),
             Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
         );
+
+        let c = add_dyn(&b, &a).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
+        );
     }
 
     #[test]
@@ -1996,6 +2010,13 @@ mod tests {
         )]);
         let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
+        );
+
+        let c = add_dyn(&b, &a).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
             c.value(0),
@@ -2018,6 +2039,13 @@ mod tests {
             c.value(0),
             Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
         );
+
+        let c = add_dyn(&b, &a).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
+        );
     }
 
     #[test]
@@ -2028,6 +2056,13 @@ mod tests {
         let b =
             IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
+        );
+
+        let c = add_dyn(&b, &a).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
@@ -2047,6 +2082,13 @@ mod tests {
             c.value(0),
             Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
         );
+
+        let c = add_dyn(&b, &a).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
+        );
     }
 
     #[test]
@@ -2059,6 +2101,13 @@ mod tests {
                 1, 2, 3,
             )]);
         let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
+        );
+
+        let c = add_dyn(&b, &a).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
@@ -3888,6 +3937,10 @@ mod tests {
         ]);
         assert_eq!(result, &expected);
 
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+        assert_eq!(result, &expected);
+
         // timestamp second + interval day time
         let a = TimestampSecondArray::from(vec![1, 2, 3, 4, 5]);
         let b = IntervalDayTimeArray::from(vec![
@@ -3908,6 +3961,9 @@ mod tests {
             5 + SECONDS_IN_DAY,
         ]);
         assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+        assert_eq!(result, &expected);
 
         // timestamp second + interval month day nanosecond
         let a = TimestampSecondArray::from(vec![1, 2, 3, 4, 5]);
@@ -3929,6 +3985,9 @@ mod tests {
             5 + SECONDS_IN_DAY,
         ]);
         assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+        assert_eq!(result, &expected);
     }
 
     #[test]
@@ -4021,6 +4080,9 @@ mod tests {
             5 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000,
         ]);
         assert_eq!(result, &expected);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(result, &expected);
 
         // timestamp millisecond + interval day time
         let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
@@ -4042,6 +4104,9 @@ mod tests {
             5 + SECONDS_IN_DAY * 1_000,
         ]);
         assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(result, &expected);
 
         // timestamp millisecond + interval month day nanosecond
         let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
@@ -4063,6 +4128,9 @@ mod tests {
             5 + SECONDS_IN_DAY * 1_000,
         ]);
         assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(result, &expected);
     }
 
     #[test]
@@ -4155,6 +4223,9 @@ mod tests {
             5 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000,
         ]);
         assert_eq!(result, &expected);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(result, &expected);
 
         // timestamp microsecond + interval day time
         let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
@@ -4176,6 +4247,9 @@ mod tests {
             5 + SECONDS_IN_DAY * 1_000_000,
         ]);
         assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(result, &expected);
 
         // timestamp microsecond + interval month day nanosecond
         let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
@@ -4197,6 +4271,9 @@ mod tests {
             5 + SECONDS_IN_DAY * 1_000_000,
         ]);
         assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(result, &expected);
     }
 
     #[test]
@@ -4289,6 +4366,9 @@ mod tests {
             5 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000_000,
         ]);
         assert_eq!(result, &expected);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(result, &expected);
 
         // timestamp nanosecond + interval day time
         let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
@@ -4310,6 +4390,9 @@ mod tests {
             5 + SECONDS_IN_DAY * 1_000_000_000,
         ]);
         assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(result, &expected);
 
         // timestamp nanosecond + interval month day nanosecond
         let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
@@ -4331,6 +4414,9 @@ mod tests {
             5 + SECONDS_IN_DAY * 1_000_000_000,
         ]);
         assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(result, &expected);
     }
 
     #[test]
