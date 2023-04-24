@@ -955,8 +955,10 @@ fn convert_walkdir_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::options::StoreOptions;
     use crate::test_util::flatten_list_stream;
     use crate::{
+        parse_url,
         tests::{
             copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
             list_with_delimiter, put_get_delete_list, rename_and_copy, stream_get,
@@ -984,6 +986,38 @@ mod tests {
     fn test_non_tokio() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        futures::executor::block_on(async move {
+            put_get_delete_list(&integration).await;
+            list_uses_directories_correctly(&integration).await;
+            list_with_delimiter(&integration).await;
+            stream_get(&integration).await;
+        });
+    }
+
+    #[tokio::test]
+    async fn local_parse_from_url_test() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().to_str().map(|s| s.to_string()).unwrap();
+
+        let integration =
+            parse_url(format!("file://{}", path), None::<StoreOptions>).unwrap();
+
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        stream_get(&integration).await;
+    }
+
+    #[test]
+    fn local_parse_from_url_test_non_tokio() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().to_str().map(|s| s.to_string()).unwrap();
+
+        let integration =
+            parse_url(format!("file://{}", path), None::<StoreOptions>).unwrap();
+
         futures::executor::block_on(async move {
             put_get_delete_list(&integration).await;
             list_uses_directories_correctly(&integration).await;

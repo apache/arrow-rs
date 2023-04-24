@@ -1550,7 +1550,6 @@ mod tests {
         }
     }
 
-    /// Follow the logic used in other tests to prevent code duplication.
     async fn s3_parse_from_url_test(config: AmazonS3Builder, is_local: bool) {
         let store_options = HashMap::from([
             ("AWS_ACCESS_KEY_ID", config.access_key_id.unwrap()),

@@ -824,7 +824,12 @@ pub fn parse_url(
                 "memory" => Ok(Box::from(memory::InMemory::default())),
 
                 #[cfg(not(target_arch = "wasm32"))]
-                "file" => Ok(Box::from(local::LocalFileSystem::default())),
+                "file" => {
+                    let path = url.path();
+                    let store = local::LocalFileSystem::new_with_prefix(path)?;
+
+                    Ok(Box::from(store))
+                }
 
                 _ => Err(Error::NotImplemented),
             }
