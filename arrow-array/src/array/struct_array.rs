@@ -17,7 +17,7 @@
 
 use crate::{make_array, Array, ArrayRef, RecordBatch};
 use arrow_buffer::{buffer_bin_or, Buffer, NullBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, Fields, SchemaBuilder};
 use std::sync::Arc;
 use std::{any::Any, ops::Index};
@@ -74,24 +74,26 @@ use std::{any::Any, ops::Index};
 /// ```
 #[derive(Clone)]
 pub struct StructArray {
-    data: ArrayData,
-    pub(crate) boxed_fields: Vec<ArrayRef>,
+    len: usize,
+    data_type: DataType,
+    nulls: Option<NullBuffer>,
+    pub(crate) fields: Vec<ArrayRef>,
 }
 
 impl StructArray {
     /// Returns the field at `pos`.
     pub fn column(&self, pos: usize) -> &ArrayRef {
-        &self.boxed_fields[pos]
+        &self.fields[pos]
     }
 
     /// Return the number of fields in this struct array
     pub fn num_columns(&self) -> usize {
-        self.boxed_fields.len()
+        self.fields.len()
     }
 
     /// Returns the fields of the struct array
     pub fn columns(&self) -> &[ArrayRef] {
-        &self.boxed_fields
+        &self.fields
     }
 
     /// Returns child array refs of the struct array
@@ -102,7 +104,7 @@ impl StructArray {
 
     /// Return field names in this struct array
     pub fn column_names(&self) -> Vec<&str> {
-        match self.data.data_type() {
+        match self.data_type() {
             DataType::Struct(fields) => fields
                 .iter()
                 .map(|f| f.name().as_str())
@@ -132,27 +134,48 @@ impl StructArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
-    pub fn slice(&self, offset: usize, length: usize) -> Self {
-        // TODO: Slice buffers directly (#3880)
-        self.data.slice(offset, length).into()
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        assert!(
+            offset.saturating_add(len) <= self.len,
+            "the length + offset of the sliced StructArray cannot exceed the existing length"
+        );
+
+        let fields = self.fields.iter().map(|a| a.slice(offset, len)).collect();
+
+        Self {
+            len,
+            data_type: self.data_type.clone(),
+            nulls: self.nulls.as_ref().map(|n| n.slice(offset, len)),
+            fields,
+        }
     }
 }
 
 impl From<ArrayData> for StructArray {
     fn from(data: ArrayData) -> Self {
-        let boxed_fields = data
+        let fields = data
             .child_data()
             .iter()
             .map(|cd| make_array(cd.clone()))
             .collect();
 
-        Self { data, boxed_fields }
+        Self {
+            len: data.len(),
+            data_type: data.data_type().clone(),
+            nulls: data.nulls().cloned(),
+            fields,
+        }
     }
 }
 
 impl From<StructArray> for ArrayData {
     fn from(array: StructArray) -> Self {
-        array.data
+        let builder = ArrayDataBuilder::new(array.data_type)
+            .len(array.len)
+            .nulls(array.nulls)
+            .child_data(array.fields.iter().map(|x| x.to_data()).collect());
+
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -228,24 +251,53 @@ impl Array for StructArray {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
     }
 
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn offset(&self) -> usize {
+        0
+    }
+
     fn nulls(&self) -> Option<&NullBuffer> {
-        self.data.nulls()
+        self.nulls.as_ref()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        let mut size = self.fields.iter().map(|a| a.get_buffer_memory_size()).sum();
+        if let Some(n) = self.nulls.as_ref() {
+            size += n.buffer().capacity();
+        }
+        size
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        let mut size = self.fields.iter().map(|a| a.get_array_memory_size()).sum();
+        size += std::mem::size_of::<Self>();
+        if let Some(n) = self.nulls.as_ref() {
+            size += n.buffer().capacity();
+        }
+        size
     }
 }
 
@@ -343,15 +395,11 @@ impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
 
 impl From<RecordBatch> for StructArray {
     fn from(value: RecordBatch) -> Self {
-        // TODO: Don't store ArrayData inside arrays (#3880)
-        let builder = ArrayData::builder(DataType::Struct(value.schema().fields.clone()))
-            .child_data(value.columns().iter().map(|x| x.to_data()).collect())
-            .len(value.num_rows());
-
-        // Safety: RecordBatch must be valid
         Self {
-            data: unsafe { builder.build_unchecked() },
-            boxed_fields: value.columns().to_vec(),
+            len: value.num_rows(),
+            data_type: DataType::Struct(value.schema().fields().clone()),
+            nulls: None,
+            fields: value.columns().to_vec(),
         }
     }
 }
@@ -607,7 +655,6 @@ mod tests {
         let sliced_array = struct_array.slice(2, 3);
         let sliced_array = sliced_array.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(3, sliced_array.len());
-        assert_eq!(2, sliced_array.offset());
         assert_eq!(1, sliced_array.null_count());
         assert!(sliced_array.is_valid(0));
         assert!(sliced_array.is_null(1));
@@ -616,7 +663,6 @@ mod tests {
         let sliced_c0 = sliced_array.column(0);
         let sliced_c0 = sliced_c0.as_any().downcast_ref::<BooleanArray>().unwrap();
         assert_eq!(3, sliced_c0.len());
-        assert_eq!(2, sliced_c0.offset());
         assert!(sliced_c0.is_null(0));
         assert!(sliced_c0.is_null(1));
         assert!(sliced_c0.is_valid(2));
@@ -625,7 +671,6 @@ mod tests {
         let sliced_c1 = sliced_array.column(1);
         let sliced_c1 = sliced_c1.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(3, sliced_c1.len());
-        assert_eq!(2, sliced_c1.offset());
         assert!(sliced_c1.is_valid(0));
         assert_eq!(42, sliced_c1.value(0));
         assert!(sliced_c1.is_null(1));

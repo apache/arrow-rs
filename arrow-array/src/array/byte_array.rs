@@ -23,7 +23,7 @@ use crate::types::ByteArrayType;
 use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_buffer::{NullBuffer, OffsetBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
 use std::sync::Arc;
@@ -39,17 +39,19 @@ use std::sync::Arc;
 /// [`BinaryArray`]: crate::BinaryArray
 /// [`LargeBinaryArray`]: crate::LargeBinaryArray
 pub struct GenericByteArray<T: ByteArrayType> {
-    data: ArrayData,
+    data_type: DataType,
     value_offsets: OffsetBuffer<T::Offset>,
     value_data: Buffer,
+    nulls: Option<NullBuffer>,
 }
 
 impl<T: ByteArrayType> Clone for GenericByteArray<T> {
     fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),
+            data_type: self.data_type.clone(),
             value_offsets: self.value_offsets.clone(),
             value_data: self.value_data.clone(),
+            nulls: self.nulls.clone(),
         }
     }
 }
@@ -135,7 +137,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &T::Native {
         assert!(
-            i < self.data.len(),
+            i < self.len(),
             "Trying to access an element at index {} from a {}{}Array of length {}",
             i,
             T::Offset::PREFIX,
@@ -154,29 +156,33 @@ impl<T: ByteArrayType> GenericByteArray<T> {
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
-        // TODO: Slice buffers directly (#3880)
-        self.data.slice(offset, length).into()
+        Self {
+            data_type: self.data_type.clone(),
+            value_offsets: self.value_offsets.slice(offset, length),
+            value_data: self.value_data.clone(),
+            nulls: self.nulls.as_ref().map(|n| n.slice(offset, length)),
+        }
     }
 
     /// Returns `GenericByteBuilder` of this byte array for mutating its values if the underlying
     /// offset and data buffers are not shared by others.
     pub fn into_builder(self) -> Result<GenericByteBuilder<T>, Self> {
         let len = self.len();
-        let null_bit_buffer = self.data.nulls().map(|b| b.inner().sliced());
-
-        let element_len = std::mem::size_of::<T::Offset>();
-        let offset_buffer = self.data.buffers()[0]
-            .slice_with_length(self.data.offset() * element_len, (len + 1) * element_len);
-
-        let element_len = std::mem::size_of::<u8>();
         let value_len =
             T::Offset::as_usize(self.value_offsets()[len] - self.value_offsets()[0]);
-        let value_buffer = self.data.buffers()[1]
-            .slice_with_length(self.data.offset() * element_len, value_len * element_len);
 
-        drop(self.data);
-        drop(self.value_data);
-        drop(self.value_offsets);
+        let data = self.into_data();
+        let null_bit_buffer = data.nulls().map(|b| b.inner().sliced());
+
+        let element_len = std::mem::size_of::<T::Offset>();
+        let offset_buffer = data.buffers()[0]
+            .slice_with_length(data.offset() * element_len, (len + 1) * element_len);
+
+        let element_len = std::mem::size_of::<u8>();
+        let value_buffer = data.buffers()[1]
+            .slice_with_length(data.offset() * element_len, value_len * element_len);
+
+        drop(data);
 
         let try_mutable_null_buffer = match null_bit_buffer {
             None => Ok(None),
@@ -258,24 +264,49 @@ impl<T: ByteArrayType> Array for GenericByteArray<T> {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
     }
 
+    fn len(&self) -> usize {
+        self.value_offsets.len() - 1
+    }
+
+    fn is_empty(&self) -> bool {
+        self.value_offsets.len() <= 1
+    }
+
+    fn offset(&self) -> usize {
+        0
+    }
+
     fn nulls(&self) -> Option<&NullBuffer> {
-        self.data.nulls()
+        self.nulls.as_ref()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        let mut sum = self.value_offsets.inner().inner().capacity();
+        sum += self.value_data.capacity();
+        if let Some(x) = &self.nulls {
+            sum += x.buffer().capacity()
+        }
+        sum
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.get_buffer_memory_size()
     }
 }
 
@@ -313,18 +344,25 @@ impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {
         let value_offsets = unsafe { get_offsets(&data) };
         let value_data = data.buffers()[1].clone();
         Self {
-            data,
-            // SAFETY:
-            // ArrayData must be valid, and validated data type above
             value_offsets,
             value_data,
+            data_type: data.data_type().clone(),
+            nulls: data.nulls().cloned(),
         }
     }
 }
 
 impl<T: ByteArrayType> From<GenericByteArray<T>> for ArrayData {
     fn from(array: GenericByteArray<T>) -> Self {
-        array.data
+        let len = array.len();
+
+        let offsets = array.value_offsets.into_inner().into_inner();
+        let builder = ArrayDataBuilder::new(array.data_type)
+            .len(len)
+            .buffers(vec![offsets, array.value_data])
+            .nulls(array.nulls);
+
+        unsafe { builder.build_unchecked() }
     }
 }
 

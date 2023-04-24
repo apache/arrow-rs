@@ -29,7 +29,7 @@ use arrow_buffer::{
     i256, ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, ScalarBuffer,
 };
 use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
@@ -248,17 +248,18 @@ pub use crate::types::ArrowPrimitiveType;
 /// }
 /// ```
 pub struct PrimitiveArray<T: ArrowPrimitiveType> {
-    /// Underlying ArrayData
-    data: ArrayData,
+    data_type: DataType,
     /// Values data
     values: ScalarBuffer<T::Native>,
+    nulls: Option<NullBuffer>,
 }
 
 impl<T: ArrowPrimitiveType> Clone for PrimitiveArray<T> {
     fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),
+            data_type: self.data_type.clone(),
             values: self.values.clone(),
+            nulls: self.nulls.clone(),
         }
     }
 }
@@ -281,16 +282,11 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             assert_eq!(values.len(), n.len());
         }
 
-        // TODO: Don't store ArrayData inside arrays (#3880)
-        let data = unsafe {
-            ArrayData::builder(data_type)
-                .len(values.len())
-                .nulls(nulls)
-                .buffers(vec![values.inner().clone()])
-                .build_unchecked()
-        };
-
-        Self { data, values }
+        Self {
+            data_type,
+            values,
+            nulls,
+        }
     }
 
     /// Asserts that `data_type` is compatible with `Self`
@@ -306,12 +302,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns the length of this array.
     #[inline]
     pub fn len(&self) -> usize {
-        self.data.len()
+        self.values.len()
     }
 
     /// Returns whether this array is empty.
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.values.is_empty()
     }
 
     /// Returns the values of this array
@@ -367,18 +363,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Creates a PrimitiveArray based on an iterator of values without nulls
     pub fn from_iter_values<I: IntoIterator<Item = T::Native>>(iter: I) -> Self {
         let val_buf: Buffer = iter.into_iter().collect();
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                T::DATA_TYPE,
-                val_buf.len() / std::mem::size_of::<<T as ArrowPrimitiveType>::Native>(),
-                None,
-                None,
-                0,
-                vec![val_buf],
-                vec![],
-            )
-        };
-        PrimitiveArray::from(data)
+        let len = val_buf.len() / std::mem::size_of::<T::Native>();
+        Self {
+            data_type: T::DATA_TYPE,
+            values: ScalarBuffer::new(val_buf, 0, len),
+            nulls: None,
+        }
     }
 
     /// Creates a PrimitiveArray based on a constant value with `count` elements
@@ -410,8 +400,11 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
-        // TODO: Slice buffers directly (#3880)
-        self.data.slice(offset, length).into()
+        Self {
+            data_type: self.data_type.clone(),
+            values: self.values.slice(offset, length),
+            nulls: self.nulls.as_ref().map(|n| n.slice(offset, length)),
+        }
     }
 
     /// Reinterprets this array's contents as a different data type without copying
@@ -436,7 +429,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     where
         K: ArrowPrimitiveType<Native = T::Native>,
     {
-        let d = self.data.clone().into_builder().data_type(K::DATA_TYPE);
+        let d = self.to_data().into_builder().data_type(K::DATA_TYPE);
 
         // SAFETY:
         // Native type is the same
@@ -629,14 +622,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// data buffer is not shared by others.
     pub fn into_builder(self) -> Result<PrimitiveBuilder<T>, Self> {
         let len = self.len();
-        let null_bit_buffer = self.data.nulls().map(|b| b.inner().sliced());
+        let data = self.into_data();
+        let null_bit_buffer = data.nulls().map(|b| b.inner().sliced());
 
         let element_len = std::mem::size_of::<T::Native>();
-        let buffer = self.data.buffers()[0]
-            .slice_with_length(self.data.offset() * element_len, len * element_len);
+        let buffer = data.buffers()[0]
+            .slice_with_length(data.offset() * element_len, len * element_len);
 
-        drop(self.data);
-        drop(self.values);
+        drop(data);
 
         let try_mutable_null_buffer = match null_bit_buffer {
             None => Ok(None),
@@ -686,7 +679,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
 impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
     fn from(array: PrimitiveArray<T>) -> Self {
-        array.data
+        let builder = ArrayDataBuilder::new(array.data_type)
+            .len(array.values.len())
+            .nulls(array.nulls)
+            .buffers(vec![array.values.into_inner()]);
+
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -695,24 +693,48 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
     }
 
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        0
+    }
+
     fn nulls(&self) -> Option<&NullBuffer> {
-        self.data.nulls()
+        self.nulls.as_ref()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        let mut size = self.values.inner().capacity();
+        if let Some(n) = self.nulls.as_ref() {
+            size += n.buffer().capacity();
+        }
+        size
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.get_buffer_memory_size()
     }
 }
 
@@ -1061,8 +1083,7 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     /// Construct a timestamp array with an optional timezone
     pub fn with_timezone_opt<S: Into<Arc<str>>>(&self, timezone: Option<S>) -> Self {
         let array_data = unsafe {
-            self.data
-                .clone()
+            self.to_data()
                 .into_builder()
                 .data_type(DataType::Timestamp(T::UNIT, timezone.map(Into::into)))
                 .build_unchecked()
@@ -1083,7 +1104,11 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
 
         let values =
             ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
-        Self { data, values }
+        Self {
+            data_type: data.data_type().clone(),
+            values,
+            nulls: data.nulls().cloned(),
+        }
     }
 }
 
@@ -1108,12 +1133,10 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
         self.validate_precision_scale(precision, scale)?;
 
         // safety: self.data is valid DataType::Decimal as checked above
-        let new_data_type = T::TYPE_CONSTRUCTOR(precision, scale);
-        let data = self.data.into_builder().data_type(new_data_type);
-
-        // SAFETY
-        // Validated data above
-        Ok(unsafe { data.build_unchecked().into() })
+        Ok(Self {
+            data_type: T::TYPE_CONSTRUCTOR(precision, scale),
+            ..self
+        })
     }
 
     // validate that the new precision and scale are valid or not
@@ -1244,7 +1267,7 @@ mod tests {
     fn test_primitive_array_from_vec() {
         let buf = Buffer::from_slice_ref([0, 1, 2, 3, 4]);
         let arr = Int32Array::from(vec![0, 1, 2, 3, 4]);
-        assert_eq!(buf, *arr.data.buffers()[0]);
+        assert_eq!(&buf, arr.values.inner());
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1484,7 +1507,6 @@ mod tests {
 
         let arr2 = arr.slice(2, 5);
         assert_eq!(5, arr2.len());
-        assert_eq!(2, arr2.offset());
         assert_eq!(1, arr2.null_count());
 
         for i in 0..arr2.len() {
@@ -1497,7 +1519,6 @@ mod tests {
 
         let arr3 = arr2.slice(2, 3);
         assert_eq!(3, arr3.len());
-        assert_eq!(4, arr3.offset());
         assert_eq!(0, arr3.null_count());
 
         let int_arr3 = arr3.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -1742,7 +1763,7 @@ mod tests {
     fn test_primitive_array_builder() {
         // Test building a primitive array with ArrayData builder and offset
         let buf = Buffer::from_slice_ref([0i32, 1, 2, 3, 4, 5, 6]);
-        let buf2 = buf.clone();
+        let buf2 = buf.slice_with_length(8, 20);
         let data = ArrayData::builder(DataType::Int32)
             .len(5)
             .offset(2)
@@ -1750,7 +1771,7 @@ mod tests {
             .build()
             .unwrap();
         let arr = Int32Array::from(data);
-        assert_eq!(buf2, *arr.data.buffers()[0]);
+        assert_eq!(&buf2, arr.values.inner());
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.null_count());
         for i in 0..3 {

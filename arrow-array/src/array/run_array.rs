@@ -62,7 +62,7 @@ use crate::{
 /// ```
 
 pub struct RunArray<R: RunEndIndexType> {
-    data: ArrayData,
+    data_type: DataType,
     run_ends: RunEndBuffer<R::Native>,
     values: ArrayRef,
 }
@@ -70,7 +70,7 @@ pub struct RunArray<R: RunEndIndexType> {
 impl<R: RunEndIndexType> Clone for RunArray<R> {
     fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),
+            data_type: self.data_type.clone(),
             run_ends: self.run_ends.clone(),
             values: self.values.clone(),
         }
@@ -256,8 +256,11 @@ impl<R: RunEndIndexType> RunArray<R> {
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
-        // TODO: Slice buffers directly (#3880)
-        self.data.slice(offset, length).into()
+        Self {
+            data_type: self.data_type.clone(),
+            run_ends: self.run_ends.slice(offset, length),
+            values: self.values.clone(),
+        }
     }
 }
 
@@ -282,7 +285,7 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
 
         let values = make_array(data.child_data()[1].clone());
         Self {
-            data,
+            data_type: data.data_type().clone(),
             run_ends,
             values,
         }
@@ -291,7 +294,21 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
 
 impl<R: RunEndIndexType> From<RunArray<R>> for ArrayData {
     fn from(array: RunArray<R>) -> Self {
-        array.data
+        let len = array.run_ends.len();
+        let offset = array.run_ends.offset();
+
+        let run_ends = ArrayDataBuilder::new(R::DATA_TYPE)
+            .len(array.run_ends.values().len())
+            .buffers(vec![array.run_ends.into_inner().into_inner()]);
+
+        let run_ends = unsafe { run_ends.build_unchecked() };
+
+        let builder = ArrayDataBuilder::new(array.data_type)
+            .len(len)
+            .offset(offset)
+            .child_data(vec![run_ends, array.values.to_data()]);
+
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -300,24 +317,46 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
     }
 
+    fn len(&self) -> usize {
+        self.run_ends.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.run_ends.is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        self.run_ends.offset()
+    }
+
     fn nulls(&self) -> Option<&NullBuffer> {
         None
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        self.run_ends.inner().inner().capacity() + self.values.get_buffer_memory_size()
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.run_ends.inner().inner().capacity()
+            + self.values.get_array_memory_size()
     }
 }
 
@@ -497,10 +536,6 @@ impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
         self.run_array
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.run_array.data
-    }
-
     fn to_data(&self) -> ArrayData {
         self.run_array.to_data()
     }
@@ -509,12 +544,36 @@ impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
         self.run_array.into_data()
     }
 
+    fn data_type(&self) -> &DataType {
+        self.run_array.data_type()
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.run_array.slice(offset, length))
     }
 
+    fn len(&self) -> usize {
+        self.run_array.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.run_array.is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        self.run_array.offset()
+    }
+
     fn nulls(&self) -> Option<&NullBuffer> {
         self.run_array.nulls()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        self.run_array.get_buffer_memory_size()
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        self.run_array.get_array_memory_size()
     }
 }
 

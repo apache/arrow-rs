@@ -208,9 +208,7 @@ pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 /// assert_eq!(&array, &expected);
 /// ```
 pub struct DictionaryArray<K: ArrowDictionaryKeyType> {
-    /// Data of this dictionary. Note that this is _not_ compatible with the C Data interface,
-    /// as, in the current implementation, `values` below are the first child of this struct.
-    data: ArrayData,
+    data_type: DataType,
 
     /// The keys of this dictionary. These are constructed from the
     /// buffer and null bitmap of `data`.  Also, note that these do
@@ -228,7 +226,7 @@ pub struct DictionaryArray<K: ArrowDictionaryKeyType> {
 impl<K: ArrowDictionaryKeyType> Clone for DictionaryArray<K> {
     fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),
+            data_type: self.data_type.clone(),
             keys: self.keys.clone(),
             values: self.values.clone(),
             is_ordered: self.is_ordered,
@@ -325,8 +323,12 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
-        // TODO: Slice buffers directly (#3880)
-        self.data.slice(offset, length).into()
+        Self {
+            data_type: self.data_type.clone(),
+            keys: self.keys.slice(offset, length),
+            values: self.values.clone(),
+            is_ordered: self.is_ordered,
+        }
     }
 
     /// Downcast this dictionary to a [`TypedDictionaryArray`]
@@ -390,8 +392,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
         assert!(values.len() >= self.values.len());
 
         let builder = self
-            .data
-            .clone()
+            .to_data()
             .into_builder()
             .data_type(DataType::Dictionary(
                 Box::new(K::DATA_TYPE),
@@ -419,7 +420,6 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
         let key_array = self.keys().clone();
         let value_array = self.values().as_primitive::<V>().clone();
 
-        drop(self.data);
         drop(self.keys);
         drop(self.values);
 
@@ -504,20 +504,22 @@ impl<T: ArrowDictionaryKeyType> From<ArrayData> for DictionaryArray<T> {
                 key_data_type
             );
 
+            let values = make_array(data.child_data()[0].clone());
+            let data_type = data.data_type().clone();
+
             // create a zero-copy of the keys' data
             // SAFETY:
             // ArrayData is valid and verified type above
 
             let keys = PrimitiveArray::<T>::from(unsafe {
-                data.clone()
-                    .into_builder()
+                data.into_builder()
                     .data_type(T::DATA_TYPE)
                     .child_data(vec![])
                     .build_unchecked()
             });
-            let values = make_array(data.child_data()[0].clone());
+
             Self {
-                data,
+                data_type,
                 keys,
                 values,
                 is_ordered: false,
@@ -530,7 +532,14 @@ impl<T: ArrowDictionaryKeyType> From<ArrayData> for DictionaryArray<T> {
 
 impl<T: ArrowDictionaryKeyType> From<DictionaryArray<T>> for ArrayData {
     fn from(array: DictionaryArray<T>) -> Self {
-        array.data
+        let builder = array
+            .keys
+            .into_data()
+            .into_builder()
+            .data_type(array.data_type)
+            .child_data(vec![array.values.to_data()]);
+
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -594,24 +603,46 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
     }
 
+    fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        self.keys.offset()
+    }
+
     fn nulls(&self) -> Option<&NullBuffer> {
-        self.data.nulls()
+        self.keys.nulls()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        self.keys.get_buffer_memory_size() + self.values.get_buffer_memory_size()
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.keys.get_buffer_memory_size()
+            + self.values.get_array_memory_size()
     }
 }
 
@@ -685,10 +716,6 @@ impl<'a, K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'a, 
         self.dictionary
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.dictionary.data
-    }
-
     fn to_data(&self) -> ArrayData {
         self.dictionary.to_data()
     }
@@ -697,12 +724,36 @@ impl<'a, K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'a, 
         self.dictionary.into_data()
     }
 
+    fn data_type(&self) -> &DataType {
+        self.dictionary.data_type()
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.dictionary.slice(offset, length))
     }
 
+    fn len(&self) -> usize {
+        self.dictionary.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.dictionary.is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        self.dictionary.offset()
+    }
+
     fn nulls(&self) -> Option<&NullBuffer> {
         self.dictionary.nulls()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        self.dictionary.get_buffer_memory_size()
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        self.dictionary.get_array_memory_size()
     }
 }
 

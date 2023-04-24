@@ -474,7 +474,7 @@ impl From<StructArray> for RecordBatch {
         );
         let row_count = value.len();
         let schema = Arc::new(Schema::new(value.fields().clone()));
-        let columns = value.boxed_fields;
+        let columns = value.fields;
 
         RecordBatch {
             schema,
@@ -614,7 +614,7 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
                 .unwrap();
-        assert_eq!(record_batch.get_array_memory_size(), 564);
+        assert_eq!(record_batch.get_array_memory_size(), 364);
     }
 
     fn check_batch(record_batch: RecordBatch, num_rows: usize) {

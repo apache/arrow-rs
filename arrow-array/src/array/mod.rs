@@ -94,10 +94,6 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn as_any(&self) -> &dyn Any;
 
-    /// Returns a reference to the underlying data of this array
-    #[deprecated(note = "Use Array::to_data or Array::into_data")]
-    fn data(&self) -> &ArrayData;
-
     /// Returns the underlying data of this array
     fn to_data(&self) -> ArrayData;
 
@@ -105,13 +101,6 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// Unlike [`Array::to_data`] this consumes self, allowing it avoid unnecessary clones
     fn into_data(self) -> ArrayData;
-
-    /// Returns a reference-counted pointer to the underlying data of this array.
-    #[deprecated(note = "Use Array::to_data or Array::into_data")]
-    #[allow(deprecated)]
-    fn data_ref(&self) -> &ArrayData {
-        self.data()
-    }
 
     /// Returns a reference to the [`DataType`](arrow_schema::DataType) of this array.
     ///
@@ -125,10 +114,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(*array.data_type(), DataType::Int32);
     /// ```
-    #[allow(deprecated)] // (#3880)
-    fn data_type(&self) -> &DataType {
-        self.data_ref().data_type()
-    }
+    fn data_type(&self) -> &DataType;
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     ///
@@ -156,10 +142,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(array.len(), 5);
     /// ```
-    #[allow(deprecated)] // (#3880)
-    fn len(&self) -> usize {
-        self.data_ref().len()
-    }
+    fn len(&self) -> usize;
 
     /// Returns whether this array is empty.
     ///
@@ -172,10 +155,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(array.is_empty(), false);
     /// ```
-    #[allow(deprecated)] // (#3880)
-    fn is_empty(&self) -> bool {
-        self.data_ref().is_empty()
-    }
+    fn is_empty(&self) -> bool;
 
     /// Returns the offset into the underlying data used by this array(-slice).
     /// Note that the underlying data can be shared by many arrays.
@@ -184,19 +164,15 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// # Example:
     ///
     /// ```
-    /// use arrow_array::{Array, Int32Array};
+    /// use arrow_array::{Array, BooleanArray};
     ///
-    /// let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
-    /// // Make slice over the values [2, 3, 4]
+    /// let array = BooleanArray::from(vec![false, false, true, true]);
     /// let array_slice = array.slice(1, 3);
     ///
     /// assert_eq!(array.offset(), 0);
     /// assert_eq!(array_slice.offset(), 1);
     /// ```
-    #[allow(deprecated)] // (#3880)
-    fn offset(&self) -> usize {
-        self.data_ref().offset()
-    }
+    fn offset(&self) -> usize;
 
     /// Returns the null buffers of this array if any
     fn nulls(&self) -> Option<&NullBuffer>;
@@ -253,21 +229,12 @@ pub trait Array: std::fmt::Debug + Send + Sync {
 
     /// Returns the total number of bytes of memory pointed to by this array.
     /// The buffers store bytes in the Arrow memory format, and include the data as well as the validity map.
-    #[allow(deprecated)] // (#3880)
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data_ref().get_buffer_memory_size()
-    }
+    fn get_buffer_memory_size(&self) -> usize;
 
     /// Returns the total number of bytes of memory occupied physically by this array.
     /// This value will always be greater than returned by `get_buffer_memory_size()` and
     /// includes the overhead of the data structures that contain the pointers to the various buffers.
-    #[allow(deprecated)] // (#3880)
-    fn get_array_memory_size(&self) -> usize {
-        // both data.get_array_memory_size and size_of_val(self) include ArrayData fields,
-        // to only count additional fields of this array subtract size_of(ArrayData)
-        self.data_ref().get_array_memory_size() + std::mem::size_of_val(self)
-            - std::mem::size_of::<ArrayData>()
-    }
+    fn get_array_memory_size(&self) -> usize;
 }
 
 /// A reference-counted reference to a generic `Array`.
@@ -279,22 +246,12 @@ impl Array for ArrayRef {
         self.as_ref().as_any()
     }
 
-    #[allow(deprecated)]
-    fn data(&self) -> &ArrayData {
-        self.as_ref().data()
-    }
-
     fn to_data(&self) -> ArrayData {
         self.as_ref().to_data()
     }
 
     fn into_data(self) -> ArrayData {
         self.to_data()
-    }
-
-    #[allow(deprecated)]
-    fn data_ref(&self) -> &ArrayData {
-        self.as_ref().data_ref()
     }
 
     fn data_type(&self) -> &DataType {
@@ -347,22 +304,12 @@ impl<'a, T: Array> Array for &'a T {
         T::as_any(self)
     }
 
-    #[allow(deprecated)]
-    fn data(&self) -> &ArrayData {
-        T::data(self)
-    }
-
     fn to_data(&self) -> ArrayData {
         T::to_data(self)
     }
 
     fn into_data(self) -> ArrayData {
         self.to_data()
-    }
-
-    #[allow(deprecated)]
-    fn data_ref(&self) -> &ArrayData {
-        T::data_ref(self)
     }
 
     fn data_type(&self) -> &DataType {
@@ -435,93 +382,80 @@ pub trait ArrayAccessor: Array {
 }
 
 impl PartialEq for dyn Array + '_ {
-    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl<T: Array> PartialEq<T> for dyn Array + '_ {
-    #[allow(deprecated)]
     fn eq(&self, other: &T) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for NullArray {
-    #[allow(deprecated)]
     fn eq(&self, other: &NullArray) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl<T: ArrowPrimitiveType> PartialEq for PrimitiveArray<T> {
-    #[allow(deprecated)]
     fn eq(&self, other: &PrimitiveArray<T>) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl<K: ArrowDictionaryKeyType> PartialEq for DictionaryArray<K> {
-    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for BooleanArray {
-    #[allow(deprecated)]
     fn eq(&self, other: &BooleanArray) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericStringArray<OffsetSize> {
-    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericBinaryArray<OffsetSize> {
-    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for FixedSizeBinaryArray {
-    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListArray<OffsetSize> {
-    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for MapArray {
-    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for FixedSizeListArray {
-    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for StructArray {
-    #[allow(deprecated)]
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
@@ -752,7 +686,7 @@ mod tests {
     use super::*;
     use crate::cast::{as_union_array, downcast_array};
     use crate::downcast_run_array;
-    use arrow_buffer::{Buffer, MutableBuffer};
+    use arrow_buffer::MutableBuffer;
     use arrow_schema::{Field, Fields, UnionFields, UnionMode};
 
     #[test]
@@ -962,12 +896,8 @@ mod tests {
 
         assert_eq!(0, null_arr.get_buffer_memory_size());
         assert_eq!(
-            std::mem::size_of::<NullArray>(),
+            std::mem::size_of::<usize>(),
             null_arr.get_array_memory_size()
-        );
-        assert_eq!(
-            std::mem::size_of::<NullArray>(),
-            std::mem::size_of::<ArrayData>(),
         );
     }
 
@@ -1001,8 +931,7 @@ mod tests {
         // which includes the optional validity buffer
         // plus one buffer on the heap
         assert_eq!(
-            std::mem::size_of::<PrimitiveArray<Int64Type>>()
-                + std::mem::size_of::<Buffer>(),
+            std::mem::size_of::<PrimitiveArray<Int64Type>>(),
             empty_with_bitmap.get_array_memory_size()
         );
 

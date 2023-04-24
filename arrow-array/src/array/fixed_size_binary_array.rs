@@ -20,7 +20,7 @@ use crate::iterator::FixedSizeBinaryIter;
 use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{bit_util, Buffer, MutableBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
@@ -51,9 +51,11 @@ use std::sync::Arc;
 ///
 #[derive(Clone)]
 pub struct FixedSizeBinaryArray {
-    data: ArrayData,
+    data_type: DataType, // Must be DataType::FixedSizeBinary(value_length)
     value_data: Buffer,
-    length: i32,
+    nulls: Option<NullBuffer>,
+    len: usize,
+    value_length: i32,
 }
 
 impl FixedSizeBinaryArray {
@@ -62,12 +64,12 @@ impl FixedSizeBinaryArray {
     /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &[u8] {
         assert!(
-            i < self.data.len(),
+            i < self.len(),
             "Trying to access an element at index {} from a FixedSizeBinaryArray of length {}",
             i,
             self.len()
         );
-        let offset = i + self.data.offset();
+        let offset = i + self.offset();
         unsafe {
             let pos = self.value_offset_at(offset);
             std::slice::from_raw_parts(
@@ -81,7 +83,7 @@ impl FixedSizeBinaryArray {
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
     pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
-        let offset = i + self.data.offset();
+        let offset = i + self.offset();
         let pos = self.value_offset_at(offset);
         std::slice::from_raw_parts(
             self.value_data.as_ptr().offset(pos as isize),
@@ -94,7 +96,7 @@ impl FixedSizeBinaryArray {
     /// Note this doesn't do any bound checking, for performance reason.
     #[inline]
     pub fn value_offset(&self, i: usize) -> i32 {
-        self.value_offset_at(self.data.offset() + i)
+        self.value_offset_at(self.offset() + i)
     }
 
     /// Returns the length for an element.
@@ -102,18 +104,30 @@ impl FixedSizeBinaryArray {
     /// All elements have the same length as the array is a fixed size.
     #[inline]
     pub fn value_length(&self) -> i32 {
-        self.length
+        self.value_length
     }
 
     /// Returns a clone of the value data buffer
     pub fn value_data(&self) -> Buffer {
-        self.data.buffers()[0].clone()
+        self.value_data.clone()
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
-    pub fn slice(&self, offset: usize, length: usize) -> Self {
-        // TODO: Slice buffers directly (#3880)
-        self.data.slice(offset, length).into()
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        assert!(
+            offset.saturating_add(len) <= self.len,
+            "the length + offset of the sliced FixedSizeBinaryArray cannot exceed the existing length"
+        );
+
+        let size = self.value_length as usize;
+
+        Self {
+            data_type: self.data_type.clone(),
+            nulls: self.nulls.as_ref().map(|n| n.slice(offset, len)),
+            value_length: self.value_length,
+            value_data: self.value_data.slice_with_length(offset * size, len * size),
+            len,
+        }
     }
 
     /// Create an array from an iterable argument of sparse byte slices.
@@ -364,7 +378,7 @@ impl FixedSizeBinaryArray {
 
     #[inline]
     fn value_offset_at(&self, i: usize) -> i32 {
-        self.length * i as i32
+        self.value_length * i as i32
     }
 
     /// constructs a new iterator
@@ -380,22 +394,33 @@ impl From<ArrayData> for FixedSizeBinaryArray {
             1,
             "FixedSizeBinaryArray data should contain 1 buffer only (values)"
         );
-        let value_data = data.buffers()[0].clone();
-        let length = match data.data_type() {
+        let value_length = match data.data_type() {
             DataType::FixedSizeBinary(len) => *len,
             _ => panic!("Expected data type to be FixedSizeBinary"),
         };
+
+        let size = value_length as usize;
+        let value_data =
+            data.buffers()[0].slice_with_length(data.offset() * size, data.len() * size);
+
         Self {
-            data,
+            data_type: data.data_type().clone(),
+            nulls: data.nulls().cloned(),
+            len: data.len(),
             value_data,
-            length,
+            value_length,
         }
     }
 }
 
 impl From<FixedSizeBinaryArray> for ArrayData {
     fn from(array: FixedSizeBinaryArray) -> Self {
-        array.data
+        let builder = ArrayDataBuilder::new(array.data_type)
+            .len(array.len)
+            .buffers(vec![array.value_data])
+            .nulls(array.nulls);
+
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -468,24 +493,48 @@ impl Array for FixedSizeBinaryArray {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
     fn to_data(&self) -> ArrayData {
-        self.data.clone()
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         Arc::new(self.slice(offset, length))
     }
 
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn offset(&self) -> usize {
+        0
+    }
+
     fn nulls(&self) -> Option<&NullBuffer> {
-        self.data.nulls()
+        self.nulls.as_ref()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        let mut sum = self.value_data.capacity();
+        if let Some(n) = &self.nulls {
+            sum += n.buffer().capacity();
+        }
+        sum
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.get_buffer_memory_size()
     }
 }
 
@@ -566,9 +615,9 @@ mod tests {
             fixed_size_binary_array.value(1)
         );
         assert_eq!(2, fixed_size_binary_array.len());
-        assert_eq!(5, fixed_size_binary_array.value_offset(0));
+        assert_eq!(0, fixed_size_binary_array.value_offset(0));
         assert_eq!(5, fixed_size_binary_array.value_length());
-        assert_eq!(10, fixed_size_binary_array.value_offset(1));
+        assert_eq!(5, fixed_size_binary_array.value_offset(1));
     }
 
     #[test]
