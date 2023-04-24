@@ -1109,6 +1109,8 @@ fn profile_credentials(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::options::StoreOptions;
+    use crate::parse_url;
     use crate::tests::{
         get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
         put_get_delete_list_opts, rename_and_copy, stream_get,
@@ -1543,5 +1545,34 @@ mod tests {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+
+    #[tokio::test]
+    async fn s3_parse_from_url_test() {
+        // Follow the logic used in other tests to prevent code duplication.
+        let config = maybe_skip_integration!();
+        let store_options = HashMap::from([
+            ("AWS_ACCESS_KEY_ID", config.access_key_id.unwrap()),
+            ("AWS_SECRET_ACCESS_KEY", config.secret_access_key.unwrap()),
+            ("aws_default_region", config.region.unwrap()),
+            ("AWS_ENDPOINT", config.endpoint.clone().unwrap()),
+        ]);
+
+        let client_options = ClientOptions::new().with_allow_http(true);
+
+        // Create instance of S3 object_store.
+        let integration = parse_url(
+            format!("s3://{}/", &config.bucket_name.unwrap()),
+            Some(StoreOptions::from_iterable(store_options, client_options)),
+        )
+        .unwrap();
+
+        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
+
+        put_get_delete_list_opts(&integration, is_local).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        stream_get(&integration).await;
     }
 }
