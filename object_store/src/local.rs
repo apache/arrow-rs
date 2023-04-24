@@ -1000,7 +1000,7 @@ mod tests {
         let path = root.path().to_str().map(|s| s.to_string()).unwrap();
 
         let integration =
-            parse_url(format!("file://{}", path), None::<StoreOptions>).unwrap();
+            parse_url(format!("file://{path}"), None::<StoreOptions>).unwrap();
 
         put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
@@ -1016,7 +1016,7 @@ mod tests {
         let path = root.path().to_str().map(|s| s.to_string()).unwrap();
 
         let integration =
-            parse_url(format!("file://{}", path), None::<StoreOptions>).unwrap();
+            parse_url(format!("file://{path}"), None::<StoreOptions>).unwrap();
 
         futures::executor::block_on(async move {
             put_get_delete_list(&integration).await;
