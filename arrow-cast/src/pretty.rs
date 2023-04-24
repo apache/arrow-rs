@@ -649,17 +649,17 @@ mod tests {
 
         let c1 = StructArray::from(vec![
             (
-                Field::new("c11", DataType::Int32, true),
+                Arc::new(Field::new("c11", DataType::Int32, true)),
                 Arc::new(Int32Array::from(vec![Some(1), None, Some(5)])) as ArrayRef,
             ),
             (
-                Field::new_struct(
+                Arc::new(Field::new_struct(
                     "c12",
                     vec![Field::new("c121", DataType::Utf8, false)],
                     false,
-                ),
+                )),
                 Arc::new(StructArray::from(vec![(
-                    Field::new("c121", DataType::Utf8, false),
+                    Arc::new(Field::new("c121", DataType::Utf8, false)),
                     Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")]))
                         as ArrayRef,
                 )])) as ArrayRef,

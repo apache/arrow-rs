@@ -879,13 +879,19 @@ mod tests {
     #[test]
     fn arrow_writer_complex() {
         // define schema
-        let struct_field_d = Field::new("d", DataType::Float64, true);
-        let struct_field_f = Field::new("f", DataType::Float32, true);
-        let struct_field_g =
-            Field::new_list("g", Field::new("item", DataType::Int16, true), false);
-        let struct_field_h =
-            Field::new_list("h", Field::new("item", DataType::Int16, false), true);
-        let struct_field_e = Field::new_struct(
+        let struct_field_d = Arc::new(Field::new("d", DataType::Float64, true));
+        let struct_field_f = Arc::new(Field::new("f", DataType::Float32, true));
+        let struct_field_g = Arc::new(Field::new_list(
+            "g",
+            Field::new("item", DataType::Int16, true),
+            false,
+        ));
+        let struct_field_h = Arc::new(Field::new_list(
+            "h",
+            Field::new("item", DataType::Int16, false),
+            true,
+        ));
+        let struct_field_e = Arc::new(Field::new_struct(
             "e",
             vec![
                 struct_field_f.clone(),
@@ -893,7 +899,7 @@ mod tests {
                 struct_field_h.clone(),
             ],
             false,
-        );
+        ));
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, true),
@@ -963,9 +969,9 @@ mod tests {
         // It was subsequently fixed while investigating https://github.com/apache/arrow-rs/issues/245.
 
         // define schema
-        let offset_field = Field::new("offset", DataType::Int32, false);
-        let partition_field = Field::new("partition", DataType::Int64, true);
-        let topic_field = Field::new("topic", DataType::Utf8, true);
+        let offset_field = Arc::new(Field::new("offset", DataType::Int32, false));
+        let partition_field = Arc::new(Field::new("partition", DataType::Int64, true));
+        let topic_field = Arc::new(Field::new("topic", DataType::Utf8, true));
         let schema = Schema::new(vec![Field::new(
             "some_nested_object",
             DataType::Struct(Fields::from(vec![
@@ -1857,7 +1863,7 @@ mod tests {
     #[test]
     fn struct_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let struct_field_a = Field::new("f", DataType::Int32, false);
+        let struct_field_a = Arc::new(Field::new("f", DataType::Int32, false));
         let s = StructArray::from(vec![(struct_field_a, Arc::new(a_values) as ArrayRef)]);
 
         let values = Arc::new(s);
@@ -2233,20 +2239,20 @@ mod tests {
     #[test]
     fn complex_aggregate() {
         // Tests aggregating nested data
-        let field_a = Field::new("leaf_a", DataType::Int32, false);
-        let field_b = Field::new("leaf_b", DataType::Int32, true);
-        let struct_a = Field::new(
+        let field_a = Arc::new(Field::new("leaf_a", DataType::Int32, false));
+        let field_b = Arc::new(Field::new("leaf_b", DataType::Int32, true));
+        let struct_a = Arc::new(Field::new(
             "struct_a",
             DataType::Struct(vec![field_a.clone(), field_b.clone()].into()),
             true,
-        );
+        ));
 
-        let list_a = Field::new("list", DataType::List(Arc::new(struct_a)), true);
-        let struct_b = Field::new(
+        let list_a = Arc::new(Field::new("list", DataType::List(struct_a), true));
+        let struct_b = Arc::new(Field::new(
             "struct_b",
             DataType::Struct(vec![list_a.clone()].into()),
             false,
-        );
+        ));
 
         let schema = Arc::new(Schema::new(vec![struct_b]));
 

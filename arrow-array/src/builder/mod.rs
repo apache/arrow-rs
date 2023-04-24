@@ -115,14 +115,14 @@
 //!     /// Note: returns StructArray to allow nesting within another array if desired
 //!     fn finish(&mut self) -> StructArray {
 //!         let i32 = Arc::new(self.i32.finish()) as ArrayRef;
-//!         let i32_field = Field::new("i32", DataType::Int32, false);
+//!         let i32_field = Arc::new(Field::new("i32", DataType::Int32, false));
 //!
 //!         let string = Arc::new(self.string.finish()) as ArrayRef;
-//!         let string_field = Field::new("i32", DataType::Utf8, false);
+//!         let string_field = Arc::new(Field::new("i32", DataType::Utf8, false));
 //!
 //!         let i32_list = Arc::new(self.i32_list.finish()) as ArrayRef;
 //!         let value_field = Arc::new(Field::new("item", DataType::Int32, true));
-//!         let i32_list_field = Field::new("i32_list", DataType::List(value_field), true);
+//!         let i32_list_field = Arc::new(Field::new("i32_list", DataType::List(value_field), true));
 //!
 //!         StructArray::from(vec![
 //!             (i32_field, i32),

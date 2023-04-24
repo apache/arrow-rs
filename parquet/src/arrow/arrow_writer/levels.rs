@@ -675,7 +675,7 @@ mod tests {
             .unwrap();
 
         let list = make_array(list);
-        let list_field = Field::new("list", list_type, true);
+        let list_field = Arc::new(Field::new("list", list_type, true));
 
         let struct_array =
             StructArray::from((vec![(list_field, list)], Buffer::from([0b00011010])));
@@ -793,7 +793,7 @@ mod tests {
             .build()
             .unwrap();
         let list = make_array(list);
-        let list_field = Field::new("list", list_type, true);
+        let list_field = Arc::new(Field::new("list", list_type, true));
 
         let struct_array = StructArray::from(vec![(list_field, list)]);
         let array = Arc::new(struct_array) as ArrayRef;
@@ -839,7 +839,7 @@ mod tests {
             .unwrap();
 
         let list_2 = make_array(list_2);
-        let list_2_field = Field::new("list_2", list_2_type, true);
+        let list_2_field = Arc::new(Field::new("list_2", list_2_type, true));
 
         let struct_array =
             StructArray::from((vec![(list_2_field, list_2)], Buffer::from([0b00001111])));
@@ -871,13 +871,13 @@ mod tests {
         //  - {a: {b: {c: 6}}}
 
         let c = Int32Array::from_iter([Some(1), None, Some(3), None, Some(5), Some(6)]);
-        let c_field = Field::new("c", DataType::Int32, true);
+        let c_field = Arc::new(Field::new("c", DataType::Int32, true));
         let b = StructArray::from((
             (vec![(c_field, Arc::new(c) as ArrayRef)]),
             Buffer::from([0b00110111]),
         ));
 
-        let b_field = Field::new("b", b.data_type().clone(), true);
+        let b_field = Arc::new(Field::new("b", b.data_type().clone(), true));
         let a = StructArray::from((
             (vec![(b_field, Arc::new(b) as ArrayRef)]),
             Buffer::from([0b00101111]),
@@ -944,18 +944,18 @@ mod tests {
         // this tests the level generation from the equivalent arrow_writer_complex test
 
         // define schema
-        let struct_field_d = Field::new("d", DataType::Float64, true);
-        let struct_field_f = Field::new("f", DataType::Float32, true);
-        let struct_field_g = Field::new(
+        let struct_field_d = Arc::new(Field::new("d", DataType::Float64, true));
+        let struct_field_f = Arc::new(Field::new("f", DataType::Float32, true));
+        let struct_field_g = Arc::new(Field::new(
             "g",
             DataType::List(Arc::new(Field::new("items", DataType::Int16, false))),
             false,
-        );
-        let struct_field_e = Field::new(
+        ));
+        let struct_field_e = Arc::new(Field::new(
             "e",
             DataType::Struct(vec![struct_field_f.clone(), struct_field_g.clone()].into()),
             true,
-        );
+        ));
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, true),
@@ -1072,7 +1072,7 @@ mod tests {
     #[test]
     fn test_null_vs_nonnull_struct() {
         // define schema
-        let offset_field = Field::new("offset", DataType::Int32, true);
+        let offset_field = Arc::new(Field::new("offset", DataType::Int32, true));
         let schema = Schema::new(vec![Field::new(
             "some_nested_object",
             DataType::Struct(vec![offset_field.clone()].into()),
@@ -1095,7 +1095,7 @@ mod tests {
 
         // create second batch
         // define schema
-        let offset_field = Field::new("offset", DataType::Int32, true);
+        let offset_field = Arc::new(Field::new("offset", DataType::Int32, true));
         let schema = Schema::new(vec![Field::new(
             "some_nested_object",
             DataType::Struct(vec![offset_field.clone()].into()),
@@ -1286,7 +1286,7 @@ mod tests {
         // This test assumes that nulls don't take up space
         assert_eq!(inner.values().len(), 7);
 
-        let field = Field::new("list", inner.data_type().clone(), true);
+        let field = Arc::new(Field::new("list", inner.data_type().clone(), true));
         let array = Arc::new(inner) as ArrayRef;
         let nulls = Buffer::from([0b01010111]);
         let struct_a = StructArray::from((vec![(field, array)], nulls));
@@ -1331,8 +1331,8 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        let field_a1 = Field::new("list", a1.data_type().clone(), true);
-        let field_a2 = Field::new("integers", a2.data_type().clone(), true);
+        let field_a1 = Arc::new(Field::new("list", a1.data_type().clone(), true));
+        let field_a2 = Arc::new(Field::new("integers", a2.data_type().clone(), true));
 
         let nulls = Buffer::from([0b00110111]);
         let struct_a = Arc::new(

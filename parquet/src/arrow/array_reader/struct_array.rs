@@ -292,7 +292,7 @@ mod tests {
 
         let validity = Buffer::from([0b00000111]);
         let struct_fields = vec![(
-            Field::new("foo", expected_l.data_type().clone(), true),
+            Arc::new(Field::new("foo", expected_l.data_type().clone(), true)),
             expected_l.clone() as ArrayRef,
         )];
         let expected = StructArray::from((struct_fields, validity));

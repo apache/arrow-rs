@@ -1099,7 +1099,7 @@ mod tests {
         let metadata: HashMap<String, String> =
             [("Hello".to_string(), "World! 😊".to_string())].into();
         let struct_array = StructArray::from(vec![(
-            Field::new("a", DataType::Int32, false).with_metadata(metadata),
+            Arc::new(Field::new("a", DataType::Int32, false).with_metadata(metadata)),
             Arc::new(Int32Array::from(vec![2, 4, 6])) as Arc<dyn Array>,
         )]);
 

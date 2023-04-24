@@ -764,11 +764,11 @@ fn test_map_nulls_append() {
 
     let expected_entry_array = StructArray::from(vec![
         (
-            Field::new("keys", DataType::Int64, false),
+            Arc::new(Field::new("keys", DataType::Int64, false)),
             Arc::new(expected_key_array) as ArrayRef,
         ),
         (
-            Field::new("values", DataType::Int64, true),
+            Arc::new(Field::new("values", DataType::Int64, true)),
             Arc::new(expected_value_array) as ArrayRef,
         ),
     ]);

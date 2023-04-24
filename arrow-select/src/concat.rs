@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_concat_struct_arrays() {
-        let field = Field::new("field", DataType::Int64, true);
+        let field = Arc::new(Field::new("field", DataType::Int64, true));
         let input_primitive_1: ArrayRef =
             Arc::new(PrimitiveArray::<Int64Type>::from(vec![
                 Some(-1),
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_concat_struct_array_slices() {
-        let field = Field::new("field", DataType::Int64, true);
+        let field = Arc::new(Field::new("field", DataType::Int64, true));
         let input_primitive_1: ArrayRef =
             Arc::new(PrimitiveArray::<Int64Type>::from(vec![
                 Some(-1),
