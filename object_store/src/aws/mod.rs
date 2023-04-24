@@ -1394,7 +1394,7 @@ mod tests {
     async fn s3_test() {
         let config = maybe_skip_integration!();
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
-        let integration = config.build().unwrap();
+        let integration = config.clone().build().unwrap();
 
         // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
         put_get_delete_list_opts(&integration, is_local).await;
@@ -1402,18 +1402,21 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
+        s3_parse_from_url_test(config, is_local).await;
 
         // run integration test with unsigned payload enabled
         let config = maybe_skip_integration!().with_unsigned_payload(true);
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
-        let integration = config.build().unwrap();
+        let integration = config.clone().build().unwrap();
         put_get_delete_list_opts(&integration, is_local).await;
+        s3_parse_from_url_test(config.clone(), is_local).await;
 
         // run integration test with checksum set to sha256
         let config = maybe_skip_integration!().with_checksum_algorithm(Checksum::SHA256);
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
-        let integration = config.build().unwrap();
+        let integration = config.clone().build().unwrap();
         put_get_delete_list_opts(&integration, is_local).await;
+        s3_parse_from_url_test(config, is_local).await;
     }
 
     #[tokio::test]
@@ -1547,10 +1550,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn s3_parse_from_url_test() {
-        // Follow the logic used in other tests to prevent code duplication.
-        let config = maybe_skip_integration!();
+    /// Follow the logic used in other tests to prevent code duplication.
+    async fn s3_parse_from_url_test(config: AmazonS3Builder, is_local: bool) {
         let store_options = HashMap::from([
             ("AWS_ACCESS_KEY_ID", config.access_key_id.unwrap()),
             ("AWS_SECRET_ACCESS_KEY", config.secret_access_key.unwrap()),
@@ -1562,12 +1563,10 @@ mod tests {
 
         // Create instance of S3 object_store.
         let integration = parse_url(
-            format!("s3://{}_2/", &config.bucket_name.unwrap()),
+            format!("s3://{}/", &config.bucket_name.unwrap()),
             Some(StoreOptions::new(store_options, client_options)),
         )
         .unwrap();
-
-        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
 
         put_get_delete_list_opts(&integration, is_local).await;
         list_uses_directories_correctly(&integration).await;
