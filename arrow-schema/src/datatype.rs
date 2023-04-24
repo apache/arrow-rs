@@ -710,22 +710,25 @@ mod tests {
             DataType::Map(Arc::new(Field::new("f2", list_b.clone(), true)), false);
         let list_q =
             DataType::Map(Arc::new(Field::new("f2", list_c.clone(), true)), true);
+        let list_r =
+            DataType::Map(Arc::new(Field::new("f1", list_a.clone(), false)), true);
 
         assert!(list_n.equals_datatype(&list_o));
         assert!(!list_n.equals_datatype(&list_p));
         assert!(!list_n.equals_datatype(&list_q));
+        assert!(!list_n.equals_datatype(&list_r));
 
-        let list_r = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_a));
-        let list_s =
+        let list_s = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_a));
+        let list_t =
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_b.clone()));
-        let list_t = DataType::Dictionary(Box::new(DataType::Int8), Box::new(list_b));
-        let list_u = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_c));
+        let list_u = DataType::Dictionary(Box::new(DataType::Int8), Box::new(list_b));
+        let list_v = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_c));
 
-        assert!(list_r.equals_datatype(&list_s));
-        assert!(!list_r.equals_datatype(&list_t));
-        assert!(!list_r.equals_datatype(&list_u));
+        assert!(list_s.equals_datatype(&list_t));
+        assert!(!list_s.equals_datatype(&list_u));
+        assert!(!list_s.equals_datatype(&list_v));
 
-        let list_v = DataType::Union(
+        let union_a = DataType::Union(
             UnionFields::new(
                 vec![1, 2],
                 vec![
@@ -735,7 +738,7 @@ mod tests {
             ),
             UnionMode::Sparse,
         );
-        let list_w = DataType::Union(
+        let union_b = DataType::Union(
             UnionFields::new(
                 vec![1, 2],
                 vec![
@@ -745,7 +748,7 @@ mod tests {
             ),
             UnionMode::Sparse,
         );
-        let list_x = DataType::Union(
+        let union_c = DataType::Union(
             UnionFields::new(
                 vec![2, 1],
                 vec![
@@ -755,7 +758,7 @@ mod tests {
             ),
             UnionMode::Sparse,
         );
-        let list_y = DataType::Union(
+        let union_d = DataType::Union(
             UnionFields::new(
                 vec![2, 1],
                 vec![
@@ -765,26 +768,42 @@ mod tests {
             ),
             UnionMode::Sparse,
         );
+        let union_e = DataType::Union(
+            UnionFields::new(
+                vec![1, 2],
+                vec![
+                    Field::new("f1", DataType::Utf8, true),
+                    Field::new("f2", DataType::UInt8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
 
-        assert!(list_v.equals_datatype(&list_w));
-        assert!(list_v.equals_datatype(&list_x));
-        assert!(!list_v.equals_datatype(&list_y));
+        assert!(union_a.equals_datatype(&union_b));
+        assert!(union_a.equals_datatype(&union_c));
+        assert!(!union_a.equals_datatype(&union_d));
+        assert!(!union_a.equals_datatype(&union_e));
 
-        let list_z = DataType::RunEndEncoded(
+        let list_w = DataType::RunEndEncoded(
             Arc::new(Field::new("f1", DataType::Int64, true)),
             Arc::new(Field::new("f2", DataType::Utf8, true)),
         );
-        let list_aa = DataType::RunEndEncoded(
+        let list_x = DataType::RunEndEncoded(
             Arc::new(Field::new("ff1", DataType::Int64, true)),
             Arc::new(Field::new("ff2", DataType::Utf8, true)),
         );
-        let list_bb = DataType::RunEndEncoded(
+        let list_y = DataType::RunEndEncoded(
             Arc::new(Field::new("ff1", DataType::UInt16, true)),
             Arc::new(Field::new("ff2", DataType::Utf8, true)),
         );
+        let list_z = DataType::RunEndEncoded(
+            Arc::new(Field::new("f1", DataType::Int64, false)),
+            Arc::new(Field::new("f2", DataType::Utf8, true)),
+        );
 
-        assert!(list_z.equals_datatype(&list_aa));
-        assert!(!list_z.equals_datatype(&list_bb));
+        assert!(list_w.equals_datatype(&list_x));
+        assert!(!list_w.equals_datatype(&list_y));
+        assert!(!list_w.equals_datatype(&list_z));
     }
 
     #[test]
