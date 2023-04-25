@@ -193,8 +193,16 @@ impl ReaderBuilder {
         Self { batch_size, ..self }
     }
 
-    /// Sets if the decoder should coerce primitive values (bool and number) into string when the Schema's column is Utf8 or LargeUtf8.
+    /// Sets if the decoder should coerce primitive values (bool and number) into string
+    /// when the Schema's column is Utf8 or LargeUtf8.
+    #[deprecated(note = "Use with_coerce_primitive")]
     pub fn coerce_primitive(self, coerce_primitive: bool) -> Self {
+        self.with_coerce_primitive(coerce_primitive)
+    }
+
+    /// Sets if the decoder should coerce primitive values (bool and number) into string
+    /// when the Schema's column is Utf8 or LargeUtf8.
+    pub fn with_coerce_primitive(self, coerce_primitive: bool) -> Self {
         Self {
             coerce_primitive,
             ..self
@@ -666,7 +674,7 @@ mod tests {
         for batch_size in [1, 3, 100, batch_size] {
             unbuffered = ReaderBuilder::new(schema.clone())
                 .with_batch_size(batch_size)
-                .coerce_primitive(coerce_primitive)
+                .with_coerce_primitive(coerce_primitive)
                 .build(Cursor::new(buf.as_bytes()))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
@@ -680,7 +688,7 @@ mod tests {
             for b in [1, 3, 5] {
                 let buffered = ReaderBuilder::new(schema.clone())
                     .with_batch_size(batch_size)
-                    .coerce_primitive(coerce_primitive)
+                    .with_coerce_primitive(coerce_primitive)
                     .build(BufReader::with_capacity(b, Cursor::new(buf.as_bytes())))
                     .unwrap()
                     .collect::<Result<Vec<_>, _>>()
