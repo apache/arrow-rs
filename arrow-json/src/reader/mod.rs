@@ -146,6 +146,7 @@ use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
 use crate::reader::list_array::ListArrayDecoder;
 use crate::reader::map_array::MapArrayDecoder;
+use crate::reader::null_array::NullArrayDecoder;
 use crate::reader::primitive_array::PrimitiveArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
@@ -156,6 +157,7 @@ mod boolean_array;
 mod decimal_array;
 mod list_array;
 mod map_array;
+mod null_array;
 mod primitive_array;
 mod schema;
 mod serializer;
@@ -580,6 +582,7 @@ fn make_decoder(
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
+        DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
         DataType::Float64 => primitive_decoder!(Float64Type, data_type),
         DataType::Timestamp(TimeUnit::Second, None) => {
@@ -647,7 +650,7 @@ mod tests {
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field, FieldRef, Schema};
 
     use crate::reader::infer_json_schema;
     use crate::ReaderBuilder;
@@ -1600,6 +1603,62 @@ mod tests {
         assert!(!cc.value(0));
         assert!(!cc.value(4));
         assert!(!cc.is_valid(5));
+    }
+
+    #[test]
+    fn test_empty_json_arrays() {
+        let json_content = r#"
+            {"items": []}
+            {"items": null}
+            {}
+            "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "items",
+            DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+            true,
+        )]));
+
+        let batches = do_read(json_content, 1024, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col1 = batches[0].column(0).as_list::<i32>();
+        assert_eq!(col1.null_count(), 2);
+        assert!(col1.value(0).is_empty());
+        assert_eq!(col1.value(0).data_type(), &DataType::Null);
+        assert!(col1.is_null(1));
+        assert!(col1.is_null(2));
+    }
+
+    #[test]
+    fn test_nested_empty_json_arrays() {
+        let json_content = r#"
+            {"items": [[],[]]}
+            {"items": [[null, null],[null]]}
+            "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "items",
+            DataType::List(FieldRef::new(Field::new(
+                "item",
+                DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+                true,
+            ))),
+            true,
+        )]));
+
+        let batches = do_read(json_content, 1024, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col1 = batches[0].column(0).as_list::<i32>();
+        assert_eq!(col1.null_count(), 0);
+        assert_eq!(col1.value(0).len(), 2);
+        assert!(col1.value(0).as_list::<i32>().value(0).is_empty());
+        assert!(col1.value(0).as_list::<i32>().value(1).is_empty());
+
+        assert_eq!(col1.value(1).len(), 2);
+        assert_eq!(col1.value(1).as_list::<i32>().value(0).len(), 2);
+        assert_eq!(col1.value(1).as_list::<i32>().value(1).len(), 1);
     }
 
     #[test]
