@@ -29,14 +29,17 @@ use snafu::{ResultExt, Snafu};
 use std::env;
 use std::fs::File;
 use std::io::BufReader;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::info;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Unable to open service account file: {}", source))]
-    OpenCredentials { source: std::io::Error },
+    #[snafu(display("Unable to open service account file from {}: {}", path.display(), source))]
+    OpenCredentials {
+        source: std::io::Error,
+        path: PathBuf,
+    },
 
     #[snafu(display("Unable to decode service account file: {}", source))]
     DecodeCredentials { source: serde_json::Error },
@@ -233,7 +236,9 @@ fn read_credentials_file<T>(
 where
     T: serde::de::DeserializeOwned,
 {
-    let file = File::open(service_account_path).context(OpenCredentialsSnafu)?;
+    let file = File::open(&service_account_path).context(OpenCredentialsSnafu {
+        path: service_account_path.as_ref().to_owned(),
+    })?;
     let reader = BufReader::new(file);
     serde_json::from_reader(reader).context(DecodeCredentialsSnafu)
 }
