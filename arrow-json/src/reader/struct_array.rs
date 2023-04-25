@@ -120,19 +120,11 @@ impl ArrayDecoder for StructArrayDecoder {
         for (c, f) in child_data.iter().zip(fields) {
             // Sanity check
             assert_eq!(c.len(), pos.len());
+            if let Some(a) = c.nulls() {
+                let nulls_valid = f.is_nullable()
+                    || nulls.as_ref().map(|n| n.contains(a)).unwrap_or_default();
 
-            if !f.is_nullable() && c.null_count() != 0 {
-                // Need to verify nulls
-                let valid = match nulls.as_ref() {
-                    Some(nulls) => {
-                        let lhs = nulls.inner().bit_chunks().iter_padded();
-                        let rhs = c.nulls().unwrap().inner().bit_chunks().iter_padded();
-                        lhs.zip(rhs).all(|(l, r)| (l & !r) == 0)
-                    }
-                    None => false,
-                };
-
-                if !valid {
+                if !nulls_valid {
                     return Err(ArrowError::JsonError(format!("Encountered unmasked nulls in non-nullable StructArray child: {f}")));
                 }
             }

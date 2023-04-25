@@ -467,17 +467,12 @@ impl Default for RecordBatchOptions {
 }
 impl From<StructArray> for RecordBatch {
     fn from(value: StructArray) -> Self {
-        assert_eq!(
-            value.null_count(),
-            0,
-            "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
-        );
         let row_count = value.len();
-        let schema = Arc::new(Schema::new(value.fields().clone()));
-        let columns = value.fields;
+        let (fields, columns, nulls) = value.into_parts();
+        assert_eq!(nulls.map(|n| n.null_count()).unwrap_or_default(), 0, "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation");
 
         RecordBatch {
-            schema,
+            schema: Arc::new(Schema::new(fields)),
             row_count,
             columns,
         }
