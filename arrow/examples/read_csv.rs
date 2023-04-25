@@ -37,8 +37,10 @@ fn main() {
     );
     let file = File::open(path).unwrap();
 
-    let mut csv =
-        csv::Reader::new(file, Arc::new(schema), false, None, 1024, None, None, None);
+    let mut csv = csv::ReaderBuilder::new(Arc::new(schema))
+        .build(file)
+        .unwrap();
+
     let batch = csv.next().unwrap().unwrap();
     print_batches(&[batch]).unwrap();
 }
