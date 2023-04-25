@@ -832,6 +832,18 @@ impl<W: Write> FileWriter<W> {
         Ok(())
     }
 
+    /// Gets a reference to the underlying writer.
+    pub fn get_ref(&self) -> &W {
+        self.writer.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying writer.
+    ///
+    /// It is inadvisable to directly write to the underlying writer.
+    pub fn get_mut(&mut self) -> &mut W {
+        self.writer.get_mut()
+    }
+
     /// Unwraps the BufWriter housed in FileWriter.writer, returning the underlying
     /// writer
     ///
@@ -918,6 +930,18 @@ impl<W: Write> StreamWriter<W> {
         self.finished = true;
 
         Ok(())
+    }
+
+    /// Gets a reference to the underlying writer.
+    pub fn get_ref(&self) -> &W {
+        self.writer.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying writer.
+    ///
+    /// It is inadvisable to directly write to the underlying writer.
+    pub fn get_mut(&mut self) -> &mut W {
+        self.writer.get_mut()
     }
 
     /// Unwraps the BufWriter housed in StreamWriter.writer, returning the underlying
@@ -1841,7 +1865,7 @@ mod tests {
             let keys: Int32Array =
                 [Some(0), Some(2), None, Some(1)].into_iter().collect();
 
-            let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+            let array = DictionaryArray::new(keys, Arc::new(values));
 
             let schema =
                 Schema::new(vec![Field::new("dict", array.data_type().clone(), true)]);

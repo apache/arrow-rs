@@ -58,8 +58,8 @@ a great place to meet other contributors and get guidance on where to contribute
 2. the [GitHub Discussions][discussions]
 3. the [Discord channel](https://discord.gg/YAb2TdazKQ)
 
-Unlike other parts of the Arrow ecosystem, the Rust implementation uses [GitHub issues][issues] as the system of record for new features
-and bug fixes and this plays a critical role in the release process.
+The Rust implementation uses [GitHub issues][issues] as the system of record for new features and bug fixes and
+this plays a critical role in the release process.
 
 For design discussions we generally collaborate on Google documents and file a GitHub issue linking to the document.
 

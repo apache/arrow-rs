@@ -303,6 +303,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
                 IntervalUnit::MonthDayNano => false,
             }
         }
+        (Duration(_), Interval(IntervalUnit::MonthDayNano)) => true,
+        (Interval(IntervalUnit::MonthDayNano), Duration(_)) => true,
         (_, _) => false,
     }
 }
@@ -455,6 +457,122 @@ where
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
+    }
+}
+
+/// Cast the array from interval to duration
+fn cast_interval_to_duration<D: ArrowTemporalType<Native = i64>>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array
+        .as_any()
+        .downcast_ref::<IntervalMonthDayNanoArray>()
+        .ok_or_else(|| {
+            ArrowError::ComputeError(
+                "Internal Error: Cannot cast interval to IntervalArray of expected type"
+                    .to_string(),
+            )
+        })?;
+
+    let scale = match D::DATA_TYPE {
+        DataType::Duration(TimeUnit::Second) => 1_000_000_000,
+        DataType::Duration(TimeUnit::Millisecond) => 1_000_000,
+        DataType::Duration(TimeUnit::Microsecond) => 1_000,
+        DataType::Duration(TimeUnit::Nanosecond) => 1,
+        _ => unreachable!(),
+    };
+
+    if cast_options.safe {
+        let iter = array.iter().map(|v| {
+            v.and_then(|v| {
+                let v = v / scale;
+                if v > i64::MAX as i128 {
+                    None
+                } else {
+                    Some(v as i64)
+                }
+            })
+        });
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<D>::from_trusted_len_iter(iter)
+        }))
+    } else {
+        let vec = array
+            .iter()
+            .map(|v| {
+                v.map(|v| {
+                    let v = v / scale;
+                    if v > i64::MAX as i128 {
+                        Err(ArrowError::ComputeError(format!(
+                            "Cannot cast to {:?}. Overflowing on {:?}",
+                            D::DATA_TYPE,
+                            v
+                        )))
+                    } else {
+                        Ok(v as i64)
+                    }
+                })
+                .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<D>::from_trusted_len_iter(vec.iter())
+        }))
+    }
+}
+
+/// Cast the array from duration and interval
+fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array
+        .as_any()
+        .downcast_ref::<PrimitiveArray<D>>()
+        .ok_or_else(|| {
+            ArrowError::ComputeError(
+                "Internal Error: Cannot cast duration to DurationArray of expected type"
+                    .to_string(),
+            )
+        })?;
+
+    let scale = match array.data_type() {
+        DataType::Duration(TimeUnit::Second) => 1_000_000_000,
+        DataType::Duration(TimeUnit::Millisecond) => 1_000_000,
+        DataType::Duration(TimeUnit::Microsecond) => 1_000,
+        DataType::Duration(TimeUnit::Nanosecond) => 1,
+        _ => unreachable!(),
+    };
+
+    if cast_options.safe {
+        let iter = array
+            .iter()
+            .map(|v| v.and_then(|v| v.checked_mul(scale).map(|v| v as i128)));
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(iter)
+        }))
+    } else {
+        let vec = array
+            .iter()
+            .map(|v| {
+                v.map(|v| {
+                    if let Ok(v) = v.mul_checked(scale) {
+                        Ok(v as i128)
+                    } else {
+                        Err(ArrowError::ComputeError(format!(
+                            "Cannot cast to {:?}. Overflowing on {:?}",
+                            IntervalMonthDayNanoType::DATA_TYPE,
+                            v
+                        )))
+                    }
+                })
+                .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(vec.iter())
+        }))
     }
 }
 
@@ -733,7 +851,7 @@ pub fn cast_with_options(
             cast_primitive_to_list::<i64>(array, to, to_type, cast_options)
         }
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
-            cast_decimal_to_decimal::<Decimal128Type, Decimal128Type>(
+            cast_decimal_to_decimal_same_type::<Decimal128Type>(
                 array.as_primitive(),
                 *s1,
                 *p2,
@@ -742,7 +860,7 @@ pub fn cast_with_options(
             )
         }
         (Decimal256(_, s1), Decimal256(p2, s2)) => {
-            cast_decimal_to_decimal::<Decimal256Type, Decimal256Type>(
+            cast_decimal_to_decimal_same_type::<Decimal256Type>(
                 array.as_primitive(),
                 *s1,
                 *p2,
@@ -1174,16 +1292,16 @@ pub fn cast_with_options(
                 cast_string_to_time64nanosecond::<i32>(array, cast_options)
             }
             Timestamp(TimeUnit::Second, to_tz) => {
-                cast_string_to_timestamp::<i32, TimestampSecondType>(array, to_tz,cast_options)
+                cast_string_to_timestamp::<i32, TimestampSecondType>(array, to_tz, cast_options)
             }
             Timestamp(TimeUnit::Millisecond, to_tz) => {
                 cast_string_to_timestamp::<i32, TimestampMillisecondType>(array, to_tz, cast_options)
             }
             Timestamp(TimeUnit::Microsecond, to_tz) => {
-                cast_string_to_timestamp::<i32, TimestampMicrosecondType>(array, to_tz,cast_options)
+                cast_string_to_timestamp::<i32, TimestampMicrosecondType>(array, to_tz, cast_options)
             }
             Timestamp(TimeUnit::Nanosecond, to_tz) => {
-                cast_string_to_timestamp::<i32, TimestampNanosecondType>(array, to_tz,cast_options)
+                cast_string_to_timestamp::<i32, TimestampNanosecondType>(array, to_tz, cast_options)
             }
             Interval(IntervalUnit::YearMonth) => {
                 cast_string_to_year_month_interval::<i32>(array, cast_options)
@@ -1267,7 +1385,7 @@ pub fn cast_with_options(
                 cast_byte_container::<BinaryType, LargeBinaryType>(array)
             }
             FixedSizeBinary(size) => {
-                cast_binary_to_fixed_size_binary::<i32>(array,*size, cast_options)
+                cast_binary_to_fixed_size_binary::<i32>(array, *size, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
@@ -1758,12 +1876,12 @@ pub fn cast_with_options(
                         })
                 }
                 false => {
-                            array.as_primitive::<TimestampSecondType>().try_unary::<_, Date64Type, _>(
-                                |x| {
-                                    x.mul_checked(MILLISECONDS)
-                                },
-                            )?
-                        }
+                    array.as_primitive::<TimestampSecondType>().try_unary::<_, Date64Type, _>(
+                        |x| {
+                            x.mul_checked(MILLISECONDS)
+                        },
+                    )?
+                }
             },
         )),
         (Timestamp(TimeUnit::Millisecond, _), Date64) => {
@@ -1804,10 +1922,10 @@ pub fn cast_with_options(
             Ok(Arc::new(
                 array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64us(as_time_res_with_timezone::<
-                        TimestampMillisecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64us(as_time_res_with_timezone::<
+                            TimestampMillisecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Millisecond, tz), Time64(TimeUnit::Nanosecond)) => {
@@ -1815,10 +1933,10 @@ pub fn cast_with_options(
             Ok(Arc::new(
                 array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64ns(as_time_res_with_timezone::<
-                        TimestampMillisecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64ns(as_time_res_with_timezone::<
+                            TimestampMillisecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Microsecond, tz), Time64(TimeUnit::Microsecond)) => {
@@ -1826,10 +1944,10 @@ pub fn cast_with_options(
             Ok(Arc::new(
                 array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64us(as_time_res_with_timezone::<
-                        TimestampMicrosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64us(as_time_res_with_timezone::<
+                            TimestampMicrosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Microsecond, tz), Time64(TimeUnit::Nanosecond)) => {
@@ -1837,10 +1955,10 @@ pub fn cast_with_options(
             Ok(Arc::new(
                 array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64ns(as_time_res_with_timezone::<
-                        TimestampMicrosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64ns(as_time_res_with_timezone::<
+                            TimestampMicrosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Nanosecond, tz), Time64(TimeUnit::Microsecond)) => {
@@ -1848,10 +1966,10 @@ pub fn cast_with_options(
             Ok(Arc::new(
                 array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64us(as_time_res_with_timezone::<
-                        TimestampNanosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64us(as_time_res_with_timezone::<
+                            TimestampNanosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Nanosecond, tz), Time64(TimeUnit::Nanosecond)) => {
@@ -1859,10 +1977,10 @@ pub fn cast_with_options(
             Ok(Arc::new(
                 array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64ns(as_time_res_with_timezone::<
-                        TimestampNanosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64ns(as_time_res_with_timezone::<
+                            TimestampNanosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Second, tz), Time32(TimeUnit::Second)) => {
@@ -1903,10 +2021,10 @@ pub fn cast_with_options(
             Ok(Arc::new(
                 array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
-                    Ok(time_to_time32ms(as_time_res_with_timezone::<
-                        TimestampMillisecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time32ms(as_time_res_with_timezone::<
+                            TimestampMillisecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Microsecond, tz), Time32(TimeUnit::Second)) => {
@@ -1925,10 +2043,10 @@ pub fn cast_with_options(
             Ok(Arc::new(
                 array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
-                    Ok(time_to_time32ms(as_time_res_with_timezone::<
-                        TimestampMicrosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time32ms(as_time_res_with_timezone::<
+                            TimestampMicrosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Nanosecond, tz), Time32(TimeUnit::Second)) => {
@@ -1947,10 +2065,10 @@ pub fn cast_with_options(
             Ok(Arc::new(
                 array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
-                    Ok(time_to_time32ms(as_time_res_with_timezone::<
-                        TimestampNanosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time32ms(as_time_res_with_timezone::<
+                            TimestampNanosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
 
@@ -2014,7 +2132,30 @@ pub fn cast_with_options(
         (Duration(TimeUnit::Nanosecond), Int64) => {
             cast_reinterpret_arrays::<DurationNanosecondType, Int64Type>(array)
         }
-
+        (Duration(TimeUnit::Second), Interval(IntervalUnit::MonthDayNano)) => {
+            cast_duration_to_interval::<DurationSecondType>(array, cast_options)
+        }
+        (Duration(TimeUnit::Millisecond), Interval(IntervalUnit::MonthDayNano)) => {
+            cast_duration_to_interval::<DurationMillisecondType>(array, cast_options)
+        }
+        (Duration(TimeUnit::Microsecond), Interval(IntervalUnit::MonthDayNano)) => {
+            cast_duration_to_interval::<DurationMicrosecondType>(array, cast_options)
+        }
+        (Duration(TimeUnit::Nanosecond), Interval(IntervalUnit::MonthDayNano)) => {
+            cast_duration_to_interval::<DurationNanosecondType>(array, cast_options)
+        }
+        (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Second)) => {
+            cast_interval_to_duration::<DurationSecondType>(array, cast_options)
+        }
+        (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Millisecond)) => {
+            cast_interval_to_duration::<DurationMillisecondType>(array, cast_options)
+        }
+        (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Microsecond)) => {
+            cast_interval_to_duration::<DurationMicrosecondType>(array, cast_options)
+        }
+        (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Nanosecond)) => {
+            cast_interval_to_duration::<DurationNanosecondType>(array, cast_options)
+        }
         (Interval(IntervalUnit::YearMonth), Int64) => {
             cast_numeric_arrays::<IntervalYearMonthType, Int64Type>(array, cast_options)
         }
@@ -2081,6 +2222,137 @@ impl DecimalCast for i256 {
     }
 }
 
+fn cast_decimal_to_decimal_error<I, O>(
+    output_precision: u8,
+    output_scale: i8,
+) -> impl Fn(<I as ArrowPrimitiveType>::Native) -> ArrowError
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    move |x: I::Native| {
+        ArrowError::CastError(format!(
+            "Cannot cast to {}({}, {}). Overflowing on {:?}",
+            O::PREFIX,
+            output_precision,
+            output_scale,
+            x
+        ))
+    }
+}
+
+fn convert_to_smaller_scale_decimal<I, O>(
+    array: &PrimitiveArray<I>,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
+    let div = I::Native::from_decimal(10_i128)
+        .unwrap()
+        .pow_checked((input_scale - output_scale) as u32)?;
+
+    let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
+    let half_neg = half.neg_wrapping();
+
+    let f = |x: I::Native| {
+        // div is >= 10 and so this cannot overflow
+        let d = x.div_wrapping(div);
+        let r = x.mod_wrapping(div);
+
+        // Round result
+        let adjusted = match x >= I::Native::ZERO {
+            true if r >= half => d.add_wrapping(I::Native::ONE),
+            false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
+            _ => d,
+        };
+        O::Native::from_decimal(adjusted)
+    };
+
+    Ok(match cast_options.safe {
+        true => array.unary_opt(f),
+        false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
+    })
+}
+
+fn convert_to_bigger_or_equal_scale_decimal<I, O>(
+    array: &PrimitiveArray<I>,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
+    let mul = O::Native::from_decimal(10_i128)
+        .unwrap()
+        .pow_checked((output_scale - input_scale) as u32)?;
+
+    let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
+
+    Ok(match cast_options.safe {
+        true => array.unary_opt(f),
+        false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
+    })
+}
+
+// Only support one type of decimal cast operations
+fn cast_decimal_to_decimal_same_type<T>(
+    array: &PrimitiveArray<T>,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    T: DecimalType,
+    T::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let array: PrimitiveArray<T> = match input_scale.cmp(&output_scale) {
+        Ordering::Equal => {
+            // the scale doesn't change, the native value don't need to be changed
+            array.clone()
+        }
+        Ordering::Greater => convert_to_smaller_scale_decimal::<T, T>(
+            array,
+            input_scale,
+            output_precision,
+            output_scale,
+            cast_options,
+        )?,
+        Ordering::Less => {
+            // input_scale < output_scale
+            convert_to_bigger_or_equal_scale_decimal::<T, T>(
+                array,
+                input_scale,
+                output_precision,
+                output_scale,
+                cast_options,
+            )?
+        }
+    };
+
+    Ok(Arc::new(array.with_precision_and_scale(
+        output_precision,
+        output_scale,
+    )?))
+}
+
+// Support two different types of decimal cast operations
 fn cast_decimal_to_decimal<I, O>(
     array: &PrimitiveArray<I>,
     input_scale: i8,
@@ -2094,53 +2366,22 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let error = |x| {
-        ArrowError::CastError(format!(
-            "Cannot cast to {}({}, {}). Overflowing on {:?}",
-            O::PREFIX,
+    let array: PrimitiveArray<O> = if input_scale > output_scale {
+        convert_to_smaller_scale_decimal::<I, O>(
+            array,
+            input_scale,
             output_precision,
             output_scale,
-            x
-        ))
-    };
-
-    let array: PrimitiveArray<O> = if input_scale > output_scale {
-        let div = I::Native::from_decimal(10_i128)
-            .unwrap()
-            .pow_checked((input_scale - output_scale) as u32)?;
-
-        let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
-        let half_neg = half.neg_wrapping();
-
-        let f = |x: I::Native| {
-            // div is >= 10 and so this cannot overflow
-            let d = x.div_wrapping(div);
-            let r = x.mod_wrapping(div);
-
-            // Round result
-            let adjusted = match x >= I::Native::ZERO {
-                true if r >= half => d.add_wrapping(I::Native::ONE),
-                false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
-                _ => d,
-            };
-            O::Native::from_decimal(adjusted)
-        };
-
-        match cast_options.safe {
-            true => array.unary_opt(f),
-            false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
-        }
+            cast_options,
+        )?
     } else {
-        let mul = O::Native::from_decimal(10_i128)
-            .unwrap()
-            .pow_checked((output_scale - input_scale) as u32)?;
-
-        let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
-
-        match cast_options.safe {
-            true => array.unary_opt(f),
-            false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
-        }
+        convert_to_bigger_or_equal_scale_decimal::<I, O>(
+            array,
+            input_scale,
+            output_precision,
+            output_scale,
+            cast_options,
+        )?
     };
 
     Ok(Arc::new(array.with_precision_and_scale(
@@ -7680,7 +7921,7 @@ mod tests {
             Decimal128Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal128Type>("12345", 2).unwrap(),
                 38,
-                2
+                2,
             ),
             "12345.00"
         );
@@ -7688,7 +7929,7 @@ mod tests {
             Decimal128Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal128Type>("0.12345", 2).unwrap(),
                 38,
-                2
+                2,
             ),
             "0.12"
         );
@@ -7696,7 +7937,7 @@ mod tests {
             Decimal128Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal128Type>(".12345", 2).unwrap(),
                 38,
-                2
+                2,
             ),
             "0.12"
         );
@@ -7704,7 +7945,7 @@ mod tests {
             Decimal128Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal128Type>(".1265", 2).unwrap(),
                 38,
-                2
+                2,
             ),
             "0.13"
         );
@@ -7712,7 +7953,7 @@ mod tests {
             Decimal128Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal128Type>(".1265", 2).unwrap(),
                 38,
-                2
+                2,
             ),
             "0.13"
         );
@@ -7721,7 +7962,7 @@ mod tests {
             Decimal256Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal256Type>("123.45", 3).unwrap(),
                 38,
-                3
+                3,
             ),
             "123.450"
         );
@@ -7729,7 +7970,7 @@ mod tests {
             Decimal256Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal256Type>("12345", 3).unwrap(),
                 38,
-                3
+                3,
             ),
             "12345.000"
         );
@@ -7737,7 +7978,7 @@ mod tests {
             Decimal256Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal256Type>("0.12345", 3).unwrap(),
                 38,
-                3
+                3,
             ),
             "0.123"
         );
@@ -7745,7 +7986,7 @@ mod tests {
             Decimal256Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal256Type>(".12345", 3).unwrap(),
                 38,
-                3
+                3,
             ),
             "0.123"
         );
@@ -7753,7 +7994,7 @@ mod tests {
             Decimal256Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal256Type>(".1265", 3).unwrap(),
                 38,
-                3
+                3,
             ),
             "0.127"
         );
@@ -8268,5 +8509,267 @@ mod tests {
             &CastOptions { safe: false },
         );
         assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal256 of precision 7. Max is 9999999", err.unwrap_err().to_string());
+    }
+
+    /// helper function to test casting from duration to interval
+    fn cast_from_duration_to_interval<T: ArrowTemporalType>(
+        array: Vec<i64>,
+        cast_options: &CastOptions,
+    ) -> Result<PrimitiveArray<IntervalMonthDayNanoType>, ArrowError>
+    where
+        arrow_array::PrimitiveArray<T>: From<Vec<i64>>,
+    {
+        let array = PrimitiveArray::<T>::from(array);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Interval(IntervalUnit::MonthDayNano),
+            cast_options,
+        )?;
+        casted_array
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .ok_or_else(|| {
+                ArrowError::ComputeError(
+                    "Failed to downcast to IntervalMonthDayNanoArray".to_string(),
+                )
+            })
+            .cloned()
+    }
+
+    #[test]
+    fn test_cast_from_duration_to_interval() {
+        // from duration second to interval month day nano
+        let array = vec![1234567];
+        let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(casted_array.value(0), 1234567000000000);
+
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
+
+        // from duration millisecond to interval month day nano
+        let array = vec![1234567];
+        let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(casted_array.value(0), 1234567000000);
+
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
+
+        // from duration microsecond to interval month day nano
+        let array = vec![1234567];
+        let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(casted_array.value(0), 1234567000);
+
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
+
+        // from duration nanosecond to interval month day nano
+        let array = vec![1234567];
+        let casted_array = cast_from_duration_to_interval::<DurationNanosecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(casted_array.value(0), 1234567);
+
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationNanosecondType>(
+            array,
+            &CastOptions { safe: false },
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 9223372036854775807);
+    }
+
+    // helper function to test casting from interval to duration
+    fn cast_from_interval_to_duration<T: ArrowTemporalType>(
+        array: Vec<i128>,
+        cast_options: &CastOptions,
+    ) -> Result<PrimitiveArray<T>, ArrowError> {
+        let array = IntervalMonthDayNanoArray::from(array);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(&array, &T::DATA_TYPE, cast_options)?;
+        casted_array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .ok_or_else(|| {
+                ArrowError::ComputeError(format!(
+                    "Failed to downcast to {}",
+                    T::DATA_TYPE
+                ))
+            })
+            .cloned()
+    }
+
+    #[test]
+    fn test_cast_from_interval_to_duration() {
+        // from interval month day nano to duration second
+        let array = vec![1234567];
+        let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Duration(TimeUnit::Second)
+        );
+        assert_eq!(casted_array.value(0), 0);
+
+        let array = vec![i128::MAX];
+        let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
+
+        // from interval month day nano to duration millisecond
+        let array = vec![1234567];
+        let casted_array = cast_from_interval_to_duration::<DurationMillisecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 1);
+
+        let array = vec![i128::MAX];
+        let casted_array = cast_from_interval_to_duration::<DurationMillisecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array = cast_from_interval_to_duration::<DurationMillisecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
+
+        // from interval month day nano to duration microsecond
+        let array = vec![1234567];
+        let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Duration(TimeUnit::Microsecond)
+        );
+        assert_eq!(casted_array.value(0), 1234);
+
+        let array = vec![i128::MAX];
+        let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
+
+        // from interval month day nano to duration nanosecond
+        let array = vec![1234567];
+        let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
+            array,
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Duration(TimeUnit::Nanosecond)
+        );
+        assert_eq!(casted_array.value(0), 1234567);
+
+        let array = vec![i128::MAX];
+        let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
+            array.clone(),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Duration(TimeUnit::Nanosecond)
+        );
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
+            array,
+            &CastOptions { safe: false },
+        );
+        assert!(casted_array.is_err());
     }
 }

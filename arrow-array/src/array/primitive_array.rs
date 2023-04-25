@@ -269,24 +269,54 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     ///
     /// # Panics
     ///
-    /// Panics if:
+    /// Panics if [`Self::try_new`] returns an error
+    pub fn new(values: ScalarBuffer<T::Native>, nulls: Option<NullBuffer>) -> Self {
+        Self::try_new(values, nulls).unwrap()
+    }
+
+    /// Create a new [`PrimitiveArray`] from the provided data_type, values, nulls
+    ///
+    /// # Errors
+    ///
+    /// Errors if:
     /// - `values.len() != nulls.len()`
-    /// - `!Self::is_compatible(data_type)`
-    pub fn new(
-        data_type: DataType,
+    pub fn try_new(
         values: ScalarBuffer<T::Native>,
         nulls: Option<NullBuffer>,
-    ) -> Self {
-        Self::assert_compatible(&data_type);
+    ) -> Result<Self, ArrowError> {
         if let Some(n) = nulls.as_ref() {
-            assert_eq!(values.len(), n.len());
+            if n.len() != values.len() {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
+                    values.len(),
+                    n.len(),
+                )));
+            }
         }
 
-        Self {
-            data_type,
+        Ok(Self {
+            data_type: T::DATA_TYPE,
             values,
             nulls,
-        }
+        })
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(self) -> (DataType, ScalarBuffer<T::Native>, Option<NullBuffer>) {
+        (self.data_type, self.values, self.nulls)
+    }
+
+    /// Overrides the [`DataType`] of this [`PrimitiveArray`]
+    ///
+    /// Prefer using [`Self::with_timezone`] or [`Self::with_precision_and_scale`] where
+    /// the primitive type is suitably constrained, as these cannot panic
+    ///
+    /// # Panics
+    ///
+    /// Panics if ![Self::is_compatible]
+    pub fn with_data_type(self, data_type: DataType) -> Self {
+        Self::assert_compatible(&data_type);
+        Self { data_type, ..self }
     }
 
     /// Asserts that `data_type` is compatible with `Self`
@@ -375,7 +405,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn from_value(value: T::Native, count: usize) -> Self {
         unsafe {
             let val_buf = Buffer::from_trusted_len_iter((0..count).map(|_| value));
-            Self::new(T::DATA_TYPE, val_buf.into(), None)
+            Self::new(val_buf.into(), None)
         }
     }
 
@@ -467,7 +497,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         //  Soundness
         //      `values` is an iterator with a known size because arrays are sized.
         let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-        PrimitiveArray::new(O::DATA_TYPE, buffer.into(), nulls)
+        PrimitiveArray::new(buffer.into(), nulls)
     }
 
     /// Applies an unary and infallible function to a mutable primitive array.
@@ -530,7 +560,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         }
 
         let values = buffer.finish().into();
-        Ok(PrimitiveArray::new(O::DATA_TYPE, values, nulls))
+        Ok(PrimitiveArray::new(values, nulls))
     }
 
     /// Applies an unary and fallible function to all valid values in a mutable primitive array.
@@ -615,7 +645,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let nulls = BooleanBuffer::new(null_builder.finish(), 0, len);
         let values = buffer.finish().into();
         let nulls = unsafe { NullBuffer::new_unchecked(nulls, out_null_count) };
-        PrimitiveArray::new(O::DATA_TYPE, values, Some(nulls))
+        PrimitiveArray::new(values, Some(nulls))
     }
 
     /// Returns `PrimitiveBuilder` of this primitive array for mutating its values if the underlying
@@ -1071,7 +1101,7 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     }
 
     /// Construct a timestamp array with new timezone
-    pub fn with_timezone(&self, timezone: impl Into<String>) -> Self {
+    pub fn with_timezone(&self, timezone: impl Into<Arc<str>>) -> Self {
         self.with_timezone_opt(Some(timezone.into()))
     }
 
@@ -1261,6 +1291,7 @@ mod tests {
     use crate::builder::{Decimal128Builder, Decimal256Builder};
     use crate::cast::downcast_array;
     use crate::{ArrayRef, BooleanArray};
+    use arrow_schema::TimeUnit;
     use std::sync::Arc;
 
     #[test]
@@ -2261,5 +2292,30 @@ mod tests {
 
         let array = array.with_timezone("+02:00");
         assert_eq!(array.timezone(), Some("+02:00"));
+    }
+
+    #[test]
+    fn test_try_new() {
+        Int32Array::new(vec![1, 2, 3, 4].into(), None);
+        Int32Array::new(vec![1, 2, 3, 4].into(), Some(NullBuffer::new_null(4)));
+
+        let err =
+            Int32Array::try_new(vec![1, 2, 3, 4].into(), Some(NullBuffer::new_null(3)))
+                .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for PrimitiveArray, expected 4 got 3"
+        );
+
+        TimestampNanosecondArray::new(vec![1, 2, 3, 4].into(), None).with_data_type(
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("03:00".into())),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "PrimitiveArray expected data type Int32 got Date32")]
+    fn test_with_data_type() {
+        Int32Array::new(vec![1, 2, 3, 4].into(), None).with_data_type(DataType::Date32);
     }
 }

@@ -29,10 +29,13 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// # Panics
     ///
     /// Panics if `buffer` is not a non-empty buffer containing
-    /// monotonically increasing values greater than zero
+    /// monotonically increasing values greater than or equal to zero
     pub fn new(buffer: ScalarBuffer<O>) -> Self {
         assert!(!buffer.is_empty(), "offsets cannot be empty");
-        assert!(buffer[0] > O::usize_as(0), "offsets must be greater than 0");
+        assert!(
+            buffer[0] >= O::usize_as(0),
+            "offsets must be greater than 0"
+        );
         assert!(
             buffer.windows(2).all(|w| w[0] <= w[1]),
             "offsets must be monotonically increasing"
@@ -45,7 +48,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// # Safety
     ///
     /// `buffer` must be a non-empty buffer containing monotonically increasing
-    /// values greater than zero
+    /// values greater than or equal to zero
     pub unsafe fn new_unchecked(buffer: ScalarBuffer<O>) -> Self {
         Self(buffer)
     }
@@ -53,6 +56,16 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// Create a new [`OffsetBuffer`] containing a single 0 value
     pub fn new_empty() -> Self {
         let buffer = MutableBuffer::from_len_zeroed(std::mem::size_of::<O>());
+        Self(buffer.into_buffer().into())
+    }
+
+    /// Create a new [`OffsetBuffer`] containing `len + 1` `0` values
+    pub fn new_zeroed(len: usize) -> Self {
+        let len_bytes = len
+            .checked_add(1)
+            .and_then(|o| o.checked_mul(std::mem::size_of::<O>()))
+            .expect("overflow");
+        let buffer = MutableBuffer::from_len_zeroed(len_bytes);
         Self(buffer.into_buffer().into())
     }
 
@@ -102,6 +115,23 @@ mod tests {
     #[should_panic(expected = "offsets must be greater than 0")]
     fn negative_offsets() {
         OffsetBuffer::new(vec![-1, 0, 1].into());
+    }
+
+    #[test]
+    fn offsets() {
+        OffsetBuffer::new(vec![0, 1, 2, 3].into());
+
+        let offsets = OffsetBuffer::<i32>::new_zeroed(3);
+        assert_eq!(offsets.as_ref(), &[0; 4]);
+
+        let offsets = OffsetBuffer::<i32>::new_zeroed(0);
+        assert_eq!(offsets.as_ref(), &[0; 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "overflow")]
+    fn offsets_new_zeroed_overflow() {
+        OffsetBuffer::<i32>::new_zeroed(usize::MAX);
     }
 
     #[test]

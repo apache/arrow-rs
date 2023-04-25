@@ -283,6 +283,7 @@ pub mod tests {
     use arrow_buffer::i256;
     use half::f16;
     use std::cmp::Ordering;
+    use std::sync::Arc;
 
     #[test]
     fn test_fixed_size_binary() {
@@ -423,11 +424,11 @@ pub mod tests {
     fn test_primitive_dict() {
         let values = Int32Array::from(vec![1_i32, 0, 2, 5]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = Int32Array::from(vec![2_i32, 3, 4, 5]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
@@ -442,11 +443,11 @@ pub mod tests {
     fn test_float_dict() {
         let values = Float32Array::from(vec![1.0, 0.5, 2.1, 5.5]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
 
         let values = Float32Array::from(vec![1.2, 3.2, 4.0, 5.5]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
@@ -461,11 +462,11 @@ pub mod tests {
     fn test_timestamp_dict() {
         let values = TimestampSecondArray::from(vec![1, 0, 2, 5]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = TimestampSecondArray::from(vec![2, 3, 4, 5]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
@@ -480,11 +481,11 @@ pub mod tests {
     fn test_interval_dict() {
         let values = IntervalDayTimeArray::from(vec![1, 0, 2, 5]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = IntervalDayTimeArray::from(vec![2, 3, 4, 5]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
@@ -499,11 +500,11 @@ pub mod tests {
     fn test_duration_dict() {
         let values = DurationSecondArray::from(vec![1, 0, 2, 5]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = DurationSecondArray::from(vec![2, 3, 4, 5]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
@@ -518,11 +519,11 @@ pub mod tests {
     fn test_decimal_dict() {
         let values = Decimal128Array::from(vec![1, 0, 2, 5]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = Decimal128Array::from(vec![2, 3, 4, 5]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let cmp = build_compare(&array1, &array2).unwrap();
 
@@ -542,7 +543,7 @@ pub mod tests {
             i256::from_i128(5),
         ]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 3]);
-        let array1 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = Decimal256Array::from(vec![
             i256::from_i128(2),
@@ -551,7 +552,7 @@ pub mod tests {
             i256::from_i128(5),
         ]);
         let keys = Int8Array::from_iter_values([0, 1, 1, 3]);
-        let array2 = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let cmp = build_compare(&array1, &array2).unwrap();
 

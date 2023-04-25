@@ -175,7 +175,7 @@ impl LevelInfoBuilder {
     }
 
     /// Given an `array`, write the level data for the elements in `range`
-    fn write(&mut self, array: &ArrayRef, range: Range<usize>) {
+    fn write(&mut self, array: &dyn Array, range: Range<usize>) {
         match array.data_type() {
             d if is_leaf(d) => self.write_leaf(array, range),
             DataType::Dictionary(_, v) if is_leaf(v.as_ref()) => {
@@ -225,7 +225,7 @@ impl LevelInfoBuilder {
         &mut self,
         offsets: &[O],
         nulls: Option<&NullBuffer>,
-        values: &ArrayRef,
+        values: &dyn Array,
         range: Range<usize>,
     ) {
         let (child, ctx) = match self {
@@ -372,7 +372,7 @@ impl LevelInfoBuilder {
     }
 
     /// Write a primitive array, as defined by [`is_leaf`]
-    fn write_leaf(&mut self, array: &ArrayRef, range: Range<usize>) {
+    fn write_leaf(&mut self, array: &dyn Array, range: Range<usize>) {
         let info = match self {
             Self::Primitive(info) => info,
             _ => unreachable!(),
@@ -918,12 +918,11 @@ mod tests {
         assert_eq!(a_list_data.null_count(), 1);
 
         let a = ListArray::from(a_list_data);
-        let values = Arc::new(a) as _;
 
         let item_field = Field::new("item", a_list_type, true);
         let mut builder =
             LevelInfoBuilder::try_new(&item_field, Default::default()).unwrap();
-        builder.write(&values, 2..4);
+        builder.write(&a, 2..4);
         let levels = builder.finish();
 
         assert_eq!(levels.len(), 1);

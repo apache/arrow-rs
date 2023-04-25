@@ -25,7 +25,7 @@ use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{tape_error, ArrayDecoder};
+use crate::reader::ArrayDecoder;
 
 pub struct DecimalArrayDecoder<D: DecimalType> {
     precision: u8,
@@ -64,7 +64,7 @@ where
                     let value = parse_decimal::<D>(s, self.precision, self.scale)?;
                     builder.append_value(value)
                 }
-                d => return Err(tape_error(d, "decimal")),
+                _ => return Err(tape.error(*p, "decimal")),
             }
         }
 

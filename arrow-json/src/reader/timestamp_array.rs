@@ -16,7 +16,6 @@
 // under the License.
 
 use chrono::TimeZone;
-use num::NumCast;
 use std::marker::PhantomData;
 
 use arrow_array::builder::PrimitiveBuilder;
@@ -27,7 +26,7 @@ use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{tape_error, ArrayDecoder};
+use crate::reader::ArrayDecoder;
 
 /// A specialized [`ArrayDecoder`] for timestamps
 pub struct TimestampArrayDecoder<P: ArrowTimestampType, Tz: TimeZone> {
@@ -78,10 +77,10 @@ where
                 }
                 TapeElement::Number(idx) => {
                     let s = tape.get_string(idx);
-                    let value = lexical_core::parse::<f64>(s.as_bytes())
-                        .ok()
-                        .and_then(NumCast::from)
-                        .ok_or_else(|| {
+                    let b = s.as_bytes();
+                    let value = lexical_core::parse::<i64>(b)
+                        .or_else(|_| lexical_core::parse::<f64>(b).map(|x| x as i64))
+                        .map_err(|_| {
                             ArrowError::JsonError(format!(
                                 "failed to parse {s} as {}",
                                 self.data_type
@@ -90,7 +89,7 @@ where
 
                     builder.append_value(value)
                 }
-                d => return Err(tape_error(d, "primitive")),
+                _ => return Err(tape.error(*p, "primitive")),
             }
         }
 

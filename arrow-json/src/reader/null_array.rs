@@ -15,29 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::BooleanBuilder;
-use arrow_array::Array;
-use arrow_data::ArrayData;
-use arrow_schema::ArrowError;
-
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
+use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_schema::{ArrowError, DataType};
 
 #[derive(Default)]
-pub struct BooleanArrayDecoder {}
+pub struct NullArrayDecoder {}
 
-impl ArrayDecoder for BooleanArrayDecoder {
+impl ArrayDecoder for NullArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
-        let mut builder = BooleanBuilder::with_capacity(pos.len());
         for p in pos {
-            match tape.get(*p) {
-                TapeElement::Null => builder.append_null(),
-                TapeElement::True => builder.append_value(true),
-                TapeElement::False => builder.append_value(false),
-                _ => return Err(tape.error(*p, "boolean")),
+            if !matches!(tape.get(*p), TapeElement::Null) {
+                return Err(tape.error(*p, "null"));
             }
         }
-
-        Ok(builder.finish().into_data())
+        ArrayDataBuilder::new(DataType::Null).len(pos.len()).build()
     }
 }

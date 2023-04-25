@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::types::GenericStringType;
-use crate::{
-    Array, GenericBinaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait,
-};
+use crate::{GenericBinaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::{bit_util, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
@@ -105,27 +103,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     pub fn try_from_binary(
         v: GenericBinaryArray<OffsetSize>,
     ) -> Result<Self, ArrowError> {
-        let offsets = v.value_offsets();
-        let values = v.value_data();
-
-        // We only need to validate that all values are valid UTF-8
-        let validated = std::str::from_utf8(values).map_err(|e| {
-            ArrowError::CastError(format!("Encountered non UTF-8 data: {e}"))
-        })?;
-
-        for offset in offsets.iter() {
-            let o = offset.as_usize();
-            if !validated.is_char_boundary(o) {
-                return Err(ArrowError::CastError(format!(
-                    "Split UTF-8 codepoint at offset {o}"
-                )));
-            }
-        }
-
-        let builder = v.into_data().into_builder().data_type(Self::DATA_TYPE);
-        // SAFETY:
-        // Validated UTF-8 above
-        Ok(Self::from(unsafe { builder.build_unchecked() }))
+        let (offsets, values, nulls) = v.into_parts();
+        Self::try_new(offsets, values, nulls)
     }
 }
 
@@ -261,6 +240,7 @@ mod tests {
     use super::*;
     use crate::builder::{ListBuilder, PrimitiveBuilder, StringBuilder};
     use crate::types::UInt8Type;
+    use crate::Array;
     use arrow_buffer::Buffer;
     use arrow_schema::Field;
     use std::sync::Arc;
