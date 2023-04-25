@@ -19,7 +19,7 @@
 
 use crate::delta::shift_months;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
-use arrow_buffer::i256;
+use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
 use arrow_schema::{
     ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
@@ -1526,10 +1526,18 @@ pub trait ByteArrayType: 'static + Send + Sync + bytes::ByteArrayTypeSealed {
     /// Utf8Array will have native type has &str
     /// BinaryArray will have type as [u8]
     type Native: bytes::ByteArrayNativeType + AsRef<Self::Native> + AsRef<[u8]> + ?Sized;
+
     /// "Binary" or "String", for use in error messages
     const PREFIX: &'static str;
+
     /// Datatype of array elements
     const DATA_TYPE: DataType;
+
+    /// Verifies that every consecutive pair of `offsets` denotes a valid slice of `values`
+    fn validate(
+        offsets: &OffsetBuffer<Self::Offset>,
+        values: &Buffer,
+    ) -> Result<(), ArrowError>;
 }
 
 /// [`ByteArrayType`] for string arrays
@@ -1547,6 +1555,33 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericStringType<O> {
     } else {
         DataType::Utf8
     };
+
+    fn validate(
+        offsets: &OffsetBuffer<Self::Offset>,
+        values: &Buffer,
+    ) -> Result<(), ArrowError> {
+        // Verify that the slice as a whole is valid UTF-8
+        let validated = std::str::from_utf8(values).map_err(|e| {
+            ArrowError::InvalidArgumentError(format!("Encountered non UTF-8 data: {e}"))
+        })?;
+
+        // Verify each offset is at a valid character boundary in this UTF-8 array
+        for offset in offsets.iter() {
+            let o = offset.as_usize();
+            if !validated.is_char_boundary(o) {
+                if o < validated.len() {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Split UTF-8 codepoint at offset {o}"
+                    )));
+                }
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Offset of {o} exceeds length of values {}",
+                    validated.len()
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// An arrow utf8 array with i32 offsets
@@ -1569,6 +1604,21 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
     } else {
         DataType::Binary
     };
+
+    fn validate(
+        offsets: &OffsetBuffer<Self::Offset>,
+        values: &Buffer,
+    ) -> Result<(), ArrowError> {
+        // offsets are guaranteed to be monotonically increasing and non-empty
+        let max_offset = offsets.last().unwrap().as_usize();
+        if values.len() < max_offset {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Maximum offset of {max_offset} is larger than values of length {}",
+                values.len()
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// An arrow binary array with i32 offsets

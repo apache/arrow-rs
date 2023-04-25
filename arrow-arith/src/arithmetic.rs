@@ -129,7 +129,7 @@ where
         unsafe { arrow_buffer::Buffer::try_from_trusted_len_iter(values) }
     }?;
 
-    Ok(PrimitiveArray::new(T::DATA_TYPE, buffer.into(), nulls))
+    Ok(PrimitiveArray::new(buffer.into(), nulls))
 }
 
 /// Calculates the modulus operation `left % right` on two SIMD inputs.
@@ -356,7 +356,7 @@ where
         }
     }
 
-    Ok(PrimitiveArray::new(T::DATA_TYPE, result.into(), nulls))
+    Ok(PrimitiveArray::new(result.into(), nulls))
 }
 
 /// Applies $OP to $LEFT and $RIGHT which are two dictionaries which have (the same) key type $KT

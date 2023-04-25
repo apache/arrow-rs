@@ -109,7 +109,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         if let Some(n) = nulls.as_ref() {
             if n.len() != len {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect number of nulls for {}ListArray, expected {len} got {}",
+                    "Incorrect length of null buffer for {}ListArray, expected {len} got {}",
                     OffsetSize::PREFIX,
                     n.len(),
                 )));
@@ -1120,7 +1120,7 @@ mod tests {
     #[test]
     fn test_try_new() {
         let offsets = OffsetBuffer::new(vec![0, 1, 4, 5].into());
-        let values = Int32Array::new(DataType::Int32, vec![1, 2, 3, 4, 5].into(), None);
+        let values = Int32Array::new(vec![1, 2, 3, 4, 5].into(), None);
         let values = Arc::new(values) as ArrayRef;
 
         let field = Arc::new(Field::new("element", DataType::Int32, false));
@@ -1137,7 +1137,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Invalid argument error: Incorrect number of nulls for LargeListArray, expected 4 got 3"
+            "Invalid argument error: Incorrect length of null buffer for LargeListArray, expected 4 got 3"
         );
 
         let field = Arc::new(Field::new("element", DataType::Int64, false));
@@ -1151,7 +1151,7 @@ mod tests {
         );
 
         let nulls = NullBuffer::new_null(7);
-        let values = Int64Array::new(DataType::Int64, vec![0; 7].into(), Some(nulls));
+        let values = Int64Array::new(vec![0; 7].into(), Some(nulls));
         let values = Arc::new(values);
 
         let err = LargeListArray::try_new(field, offsets.clone(), values.clone(), None)
@@ -1165,7 +1165,7 @@ mod tests {
         let field = Arc::new(Field::new("element", DataType::Int64, true));
         LargeListArray::new(field.clone(), offsets.clone(), values, None);
 
-        let values = Int64Array::new(DataType::Int64, vec![0; 2].into(), None);
+        let values = Int64Array::new(vec![0; 2].into(), None);
         let err =
             LargeListArray::try_new(field, offsets, Arc::new(values), None).unwrap_err();
 
