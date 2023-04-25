@@ -26,7 +26,7 @@
 //!
 //! ```
 //! # use arrow_schema::*;
-//! # use arrow_csv::Reader;
+//! # use arrow_csv::{Reader, ReaderBuilder};
 //! # use std::fs::File;
 //! # use std::sync::Arc;
 //!
@@ -38,7 +38,7 @@
 //!
 //! let file = File::open("test/data/uk_cities.csv").unwrap();
 //!
-//! let mut csv = Reader::new(file, Arc::new(schema), false, None, 1024, None, None, None);
+//! let mut csv = ReaderBuilder::new(Arc::new(schema)).build(file).unwrap();
 //! let batch = csv.next().unwrap().unwrap();
 //! ```
 //!
@@ -509,8 +509,7 @@ impl<R: BufRead> Iterator for BufReader<R> {
 ///     schema: SchemaRef,
 ///     batch_size: usize,
 /// ) -> Result<impl Iterator<Item = Result<RecordBatch, ArrowError>>, ArrowError> {
-///     let mut decoder = ReaderBuilder::new()
-///         .with_schema(schema)
+///     let mut decoder = ReaderBuilder::new(schema)
 ///         .with_batch_size(batch_size)
 ///         .build_decoder();
 ///
@@ -980,19 +979,19 @@ impl ReaderBuilder {
     /// # Example
     ///
     /// ```
-    /// use arrow_csv::{Reader, ReaderBuilder};
-    /// use std::fs::File;
+    /// # use arrow_csv::{Reader, ReaderBuilder};
+    /// # use std::fs::File;
+    /// # use std::io::Seek;
+    /// # use std::sync::Arc;
+    /// # use arrow_csv::reader::Format;
+    /// #
+    /// let mut file = File::open("test/data/uk_cities_with_headers.csv").unwrap();
+    /// // Infer the schema with the first 100 records
+    /// let (schema, _) = Format::default().infer_schema(&mut file, Some(100)).unwrap();
+    /// file.rewind().unwrap();
     ///
-    /// fn example() -> Reader<File> {
-    ///     let file = File::open("test/data/uk_cities_with_headers.csv").unwrap();
-    ///
-    ///     // create a builder, inferring the schema with the first 100 records
-    ///     let builder = ReaderBuilder::new().infer_schema(Some(100));
-    ///
-    ///     let reader = builder.build(file).unwrap();
-    ///
-    ///     reader
-    /// }
+    /// // create a builder
+    /// ReaderBuilder::new(Arc::new(schema)).build(file).unwrap();
     /// ```
     pub fn new(schema: SchemaRef) -> ReaderBuilder {
         Self {
