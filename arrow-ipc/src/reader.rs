@@ -1038,6 +1038,20 @@ impl<R: Read + Seek> FileReader<R> {
             ))),
         }
     }
+
+    /// Gets a reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        self.reader.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_mut(&mut self) -> &mut R {
+        self.reader.get_mut()
+    }
 }
 
 impl<R: Read + Seek> Iterator for FileReader<R> {
@@ -1242,6 +1256,20 @@ impl<R: Read> StreamReader<R> {
                 format!("Reading types other than record batches not yet supported, unable to read {t:?} ")
             )),
         }
+    }
+
+    /// Gets a reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        self.reader.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_mut(&mut self) -> &mut R {
+        self.reader.get_mut()
     }
 }
 
