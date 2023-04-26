@@ -742,6 +742,7 @@ impl From<Error> for std::io::Error {
 pub fn parse_url(
     url: impl AsRef<str>,
     store_options: Option<impl Into<StoreOptions>>,
+    from_env: bool,
 ) -> Result<Box<DynObjectStore>> {
     let storage_url = url.as_ref();
 
@@ -754,11 +755,15 @@ pub fn parse_url(
             match url.scheme() {
                 #[cfg(any(feature = "aws", feature = "aws_profile"))]
                 "s3" | "s3a" => {
-                    let store = aws::AmazonS3Builder::default()
-                        .with_url(storage_url)
-                        .with_client_options(_store_options.get_client_options())
-                        .try_with_options(_store_options.get_s3_options())
-                        .and_then(|builder| builder.build())?;
+                    let store = if from_env {
+                        aws::AmazonS3Builder::from_env()
+                    } else {
+                        aws::AmazonS3Builder::default()
+                    }
+                    .with_url(storage_url)
+                    .with_client_options(_store_options.get_client_options())
+                    .try_with_options(_store_options.get_s3_options())
+                    .and_then(|builder| builder.build())?;
 
                     Ok(Box::from(store))
                 }
@@ -771,11 +776,15 @@ pub fn parse_url(
 
                 #[cfg(feature = "gcp")]
                 "gs" => {
-                    let store = gcp::GoogleCloudStorageBuilder::default()
-                        .with_url(storage_url)
-                        .with_client_options(_store_options.get_client_options())
-                        .try_with_options(_store_options.get_gcs_options())
-                        .and_then(|builder| builder.build())?;
+                    let store = if from_env {
+                        gcp::GoogleCloudStorageBuilder::from_env()
+                    } else {
+                        gcp::GoogleCloudStorageBuilder::default()
+                    }
+                    .with_url(storage_url)
+                    .with_client_options(_store_options.get_client_options())
+                    .try_with_options(_store_options.get_gcs_options())
+                    .and_then(|builder| builder.build())?;
 
                     Ok(Box::from(store))
                 }
@@ -788,11 +797,15 @@ pub fn parse_url(
 
                 #[cfg(feature = "azure")]
                 "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => {
-                    let store = azure::MicrosoftAzureBuilder::default()
-                        .with_url(storage_url)
-                        .with_client_options(_store_options.get_client_options())
-                        .try_with_options(_store_options.get_azure_options())
-                        .and_then(|builder| builder.build())?;
+                    let store = if from_env {
+                        azure::MicrosoftAzureBuilder::from_env()
+                    } else {
+                        azure::MicrosoftAzureBuilder::default()
+                    }
+                    .with_url(storage_url)
+                    .with_client_options(_store_options.get_client_options())
+                    .try_with_options(_store_options.get_azure_options())
+                    .and_then(|builder| builder.build())?;
 
                     Ok(Box::from(store))
                 }

@@ -1564,6 +1564,7 @@ mod tests {
         let integration = parse_url(
             format!("s3://{}/", &config.bucket_name.unwrap()),
             Some(StoreOptions::new(store_options, client_options)),
+            false,
         )
         .unwrap();
 
