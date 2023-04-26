@@ -220,7 +220,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             .add_buffer(value_offsets)
             .add_child_data(child_data);
 
-        if let Some(mut builder) = validity {
+        if let Some(builder) = validity {
             assert_eq!(builder.len(), list_offsets.len() - 1);
             data_builder = data_builder.null_bit_buffer(Some(builder.into()))
         }

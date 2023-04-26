@@ -1965,7 +1965,7 @@ mod tests {
         BooleanBufferBuilder, BufferBuilder, PrimitiveDictionaryBuilder,
     };
     use arrow_array::temporal_conversions::SECONDS_IN_DAY;
-    use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
+    use arrow_buffer::buffer::NullBuffer;
     use arrow_buffer::i256;
     use arrow_data::ArrayDataBuilder;
     use chrono::NaiveDate;

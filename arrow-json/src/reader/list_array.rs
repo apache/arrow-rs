@@ -19,7 +19,7 @@ use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{make_decoder, ArrayDecoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_array::OffsetSizeTrait;
-use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
