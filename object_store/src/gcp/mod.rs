@@ -1218,7 +1218,9 @@ mod test {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    use crate::options::StoreOptions;
     use crate::{
+        parse_url,
         tests::{
             copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
             list_with_delimiter, put_get_delete_list, rename_and_copy, stream_get,
@@ -1280,13 +1282,49 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test() {
-        let integration = maybe_skip_integration!().build().unwrap();
+        let config = maybe_skip_integration!();
+        let integration = config.clone().build().unwrap();
 
         put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         if integration.client.base_url == default_gcs_base_url() {
+            // Fake GCS server doesn't currently honor ifGenerationMatch
+            // https://github.com/fsouza/fake-gcs-server/issues/994
+            copy_if_not_exists(&integration).await;
+            // Fake GCS server does not yet implement XML Multipart uploads
+            // https://github.com/fsouza/fake-gcs-server/issues/852
+            stream_get(&integration).await;
+        }
+
+        gcs_parse_from_url_test(config, &integration.client.base_url).await;
+    }
+
+    async fn gcs_parse_from_url_test(
+        config: GoogleCloudStorageBuilder,
+        base_url: &String,
+    ) {
+        let store_options = HashMap::from([(
+            "GOOGLE_SERVICE_ACCOUNT",
+            config.service_account_path.unwrap().to_string(),
+        )]);
+
+        let client_options = ClientOptions::new().with_allow_http(true);
+
+        // Create instance of S3 object_store.
+        let integration = parse_url(
+            format!("gs://{}/", &config.bucket_name.unwrap()),
+            Some(StoreOptions::new(store_options, client_options)),
+            false,
+        )
+        .unwrap();
+
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        if base_url.clone() == default_gcs_base_url() {
             // Fake GCS server doesn't currently honor ifGenerationMatch
             // https://github.com/fsouza/fake-gcs-server/issues/994
             copy_if_not_exists(&integration).await;
