@@ -197,12 +197,12 @@ impl MapArray {
         let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
         let keys_data = StringArray::from_iter_values(keys);
 
-        let keys_field = Field::new("keys", DataType::Utf8, false);
-        let values_field = Field::new(
+        let keys_field = Arc::new(Field::new("keys", DataType::Utf8, false));
+        let values_field = Arc::new(Field::new(
             "values",
             values.data_type().clone(),
             values.null_count() > 0,
-        );
+        ));
 
         let entry_struct = StructArray::from(vec![
             (keys_field, Arc::new(keys_data) as ArrayRef),
@@ -336,8 +336,8 @@ mod tests {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
         let entry_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
 
-        let keys = Field::new("keys", DataType::Int32, false);
-        let values = Field::new("values", DataType::UInt32, false);
+        let keys = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values = Arc::new(Field::new("values", DataType::UInt32, false));
         let entry_struct = StructArray::from(vec![
             (keys, make_array(keys_data)),
             (values, make_array(values_data)),
@@ -382,8 +382,8 @@ mod tests {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
         let entry_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
 
-        let keys_field = Field::new("keys", DataType::Int32, false);
-        let values_field = Field::new("values", DataType::UInt32, true);
+        let keys_field = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values_field = Arc::new(Field::new("values", DataType::UInt32, true));
         let entry_struct = StructArray::from(vec![
             (keys_field.clone(), make_array(key_data)),
             (values_field.clone(), make_array(value_data.clone())),
@@ -504,8 +504,8 @@ mod tests {
         //  [[3, 4, 5], [6, 7]]
         let entry_offsets = Buffer::from(&[0, 3, 5].to_byte_slice());
 
-        let keys = Field::new("keys", DataType::Int32, false);
-        let values = Field::new("values", DataType::UInt32, false);
+        let keys = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values = Arc::new(Field::new("values", DataType::UInt32, false));
         let entry_struct = StructArray::from(vec![
             (keys, make_array(keys_data)),
             (values, make_array(values_data)),
@@ -582,8 +582,8 @@ mod tests {
 
         let key_array = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
         let value_array = Arc::new(UInt32Array::from(vec![0u32, 10, 20])) as ArrayRef;
-        let keys_field = Field::new("keys", DataType::Utf8, false);
-        let values_field = Field::new("values", DataType::UInt32, false);
+        let keys_field = Arc::new(Field::new("keys", DataType::Utf8, false));
+        let values_field = Arc::new(Field::new("values", DataType::UInt32, false));
         let struct_array =
             StructArray::from(vec![(keys_field, key_array), (values_field, value_array)]);
         assert_eq!(

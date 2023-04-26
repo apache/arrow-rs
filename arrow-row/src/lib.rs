@@ -1748,9 +1748,9 @@ mod tests {
     fn test_struct() {
         // Test basic
         let a = Arc::new(Int32Array::from(vec![1, 1, 2, 2])) as ArrayRef;
-        let a_f = Field::new("int", DataType::Int32, false);
+        let a_f = Arc::new(Field::new("int", DataType::Int32, false));
         let u = Arc::new(StringArray::from(vec!["a", "b", "c", "d"])) as ArrayRef;
-        let u_f = Field::new("s", DataType::Utf8, false);
+        let u_f = Arc::new(Field::new("s", DataType::Utf8, false));
         let s1 = Arc::new(StructArray::from(vec![(a_f, a), (u_f, u)])) as ArrayRef;
 
         let sort_fields = vec![SortField::new(s1.data_type().clone())];

@@ -25,7 +25,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, FieldRef};
 
 use num::{ToPrimitive, Zero};
 
@@ -163,8 +163,8 @@ where
                 .iter()
                 .map(|a| take_impl(a.as_ref(), indices, Some(options.clone())))
                 .collect::<Result<Vec<ArrayRef>, _>>()?;
-            let fields: Vec<(Field, ArrayRef)> =
-                fields.iter().map(|f| f.as_ref().clone()).zip(arrays).collect();
+            let fields: Vec<(FieldRef, ArrayRef)> =
+                fields.iter().cloned().zip(arrays).collect();
 
             // Create the null bit buffer.
             let is_valid: Buffer = indices
@@ -924,7 +924,7 @@ where
 mod tests {
     use super::*;
     use arrow_array::builder::*;
-    use arrow_schema::{Fields, TimeUnit};
+    use arrow_schema::{Field, Fields, TimeUnit};
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,

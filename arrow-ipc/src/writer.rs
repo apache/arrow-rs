@@ -1692,8 +1692,13 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
-        let dctfield =
-            Field::new_dict("dict", array.data_type().clone(), false, 2, false);
+        let dctfield = Arc::new(Field::new_dict(
+            "dict",
+            array.data_type().clone(),
+            false,
+            2,
+            false,
+        ));
 
         let s = StructArray::from(vec![(dctfield, array)]);
         let struct_array = Arc::new(s) as ArrayRef;
@@ -1896,11 +1901,11 @@ mod tests {
 
             let struct_array = StructArray::from(vec![
                 (
-                    Field::new("s", DataType::Utf8, true),
+                    Arc::new(Field::new("s", DataType::Utf8, true)),
                     Arc::new(strings) as ArrayRef,
                 ),
                 (
-                    Field::new("c", DataType::Int32, true),
+                    Arc::new(Field::new("c", DataType::Int32, true)),
                     Arc::new(ints) as ArrayRef,
                 ),
             ]);

@@ -127,12 +127,12 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(make_fixed_size_binary_array()),
         Arc::new(StructArray::from(vec![
             (
-                Field::new("a", DataType::Boolean, false),
+                Arc::new(Field::new("a", DataType::Boolean, false)),
                 Arc::new(BooleanArray::from(vec![false, false, true, true]))
                     as Arc<dyn Array>,
             ),
             (
-                Field::new("b", DataType::Int32, false),
+                Arc::new(Field::new("b", DataType::Int32, false)),
                 Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
             ),
         ])),

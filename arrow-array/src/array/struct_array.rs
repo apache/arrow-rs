@@ -18,7 +18,7 @@
 use crate::{make_array, new_null_array, Array, ArrayRef, RecordBatch};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field, Fields, SchemaBuilder};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, SchemaBuilder};
 use std::sync::Arc;
 use std::{any::Any, ops::Index};
 
@@ -58,11 +58,11 @@ use std::{any::Any, ops::Index};
 ///
 /// let struct_array = StructArray::from(vec![
 ///     (
-///         Field::new("b", DataType::Boolean, false),
+///         Arc::new(Field::new("b", DataType::Boolean, false)),
 ///         boolean.clone() as ArrayRef,
 ///     ),
 ///     (
-///         Field::new("c", DataType::Int32, false),
+///         Arc::new(Field::new("c", DataType::Int32, false)),
 ///         int.clone() as ArrayRef,
 ///     ),
 /// ]);
@@ -379,8 +379,8 @@ impl Array for StructArray {
     }
 }
 
-impl From<Vec<(Field, ArrayRef)>> for StructArray {
-    fn from(v: Vec<(Field, ArrayRef)>) -> Self {
+impl From<Vec<(FieldRef, ArrayRef)>> for StructArray {
+    fn from(v: Vec<(FieldRef, ArrayRef)>) -> Self {
         let (schema, arrays): (SchemaBuilder, _) = v.into_iter().unzip();
         StructArray::new(schema.finish().fields, arrays, None)
     }
@@ -405,8 +405,8 @@ impl std::fmt::Debug for StructArray {
     }
 }
 
-impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
-    fn from(pair: (Vec<(Field, ArrayRef)>, Buffer)) -> Self {
+impl From<(Vec<(FieldRef, ArrayRef)>, Buffer)> for StructArray {
+    fn from(pair: (Vec<(FieldRef, ArrayRef)>, Buffer)) -> Self {
         let len = pair.0.first().map(|x| x.1.len()).unwrap_or_default();
         let (fields, arrays): (SchemaBuilder, Vec<_>) = pair.0.into_iter().unzip();
         let nulls = NullBuffer::new(BooleanBuffer::new(pair.1, 0, len));
@@ -480,11 +480,11 @@ mod tests {
 
         let struct_array = StructArray::from(vec![
             (
-                Field::new("b", DataType::Boolean, false),
+                Arc::new(Field::new("b", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Field::new("c", DataType::Int32, false),
+                Arc::new(Field::new("c", DataType::Int32, false)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -503,11 +503,11 @@ mod tests {
 
         let struct_array = StructArray::from(vec![
             (
-                Field::new("b", DataType::Boolean, false),
+                Arc::new(Field::new("b", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Field::new("c", DataType::Int32, false),
+                Arc::new(Field::new("c", DataType::Int32, false)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -582,7 +582,7 @@ mod tests {
     )]
     fn test_struct_array_from_mismatched_types_single() {
         drop(StructArray::from(vec![(
-            Field::new("b", DataType::Int16, false),
+            Arc::new(Field::new("b", DataType::Int16, false)),
             Arc::new(BooleanArray::from(vec![false, false, true, true]))
                 as Arc<dyn Array>,
         )]));
@@ -595,12 +595,12 @@ mod tests {
     fn test_struct_array_from_mismatched_types_multiple() {
         drop(StructArray::from(vec![
             (
-                Field::new("b", DataType::Int16, false),
+                Arc::new(Field::new("b", DataType::Int16, false)),
                 Arc::new(BooleanArray::from(vec![false, false, true, true]))
                     as Arc<dyn Array>,
             ),
             (
-                Field::new("c", DataType::Utf8, false),
+                Arc::new(Field::new("c", DataType::Utf8, false)),
                 Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
             ),
         ]));
@@ -700,11 +700,11 @@ mod tests {
     fn test_invalid_struct_child_array_lengths() {
         drop(StructArray::from(vec![
             (
-                Field::new("b", DataType::Float32, false),
+                Arc::new(Field::new("b", DataType::Float32, false)),
                 Arc::new(Float32Array::from(vec![1.1])) as Arc<dyn Array>,
             ),
             (
-                Field::new("c", DataType::Float64, false),
+                Arc::new(Field::new("c", DataType::Float64, false)),
                 Arc::new(Float64Array::from(vec![2.2, 3.3])),
             ),
         ]));
@@ -722,7 +722,7 @@ mod tests {
     )]
     fn test_struct_array_from_mismatched_nullability() {
         drop(StructArray::from(vec![(
-            Field::new("c", DataType::Int32, false),
+            Arc::new(Field::new("c", DataType::Int32, false)),
             Arc::new(Int32Array::from(vec![Some(42), None, Some(19)])) as ArrayRef,
         )]));
     }
