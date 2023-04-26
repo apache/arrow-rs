@@ -124,7 +124,7 @@ impl ObjectStore for InMemory {
         Ok(Box::new(InMemoryAppend {
             location: _location.clone(),
             data: Vec::<u8>::new(),
-            storage: self.storage.clone(),
+            storage: StorageType::clone(&self.storage),
         }))
     }
 
@@ -360,7 +360,7 @@ impl AsyncWrite for InMemoryAppend {
         mut self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
-        let storage = self.storage.clone();
+        let storage = StorageType::clone(&self.storage);
 
         let mut writer = storage.write();
 
