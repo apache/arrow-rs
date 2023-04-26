@@ -237,10 +237,8 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
         let mut metadata = input.get_metadata().await?;
 
         if options.page_index
-            && metadata
-                .page_indexes()
-                .zip(metadata.offset_indexes())
-                .is_none()
+            && metadata.column_index().is_none()
+            && metadata.offset_index().is_none()
         {
             let mut fetch_ranges = vec![];
             let mut index_lengths: Vec<Vec<usize>> = vec![];
@@ -400,7 +398,7 @@ where
         let meta = self.metadata.row_group(row_group_idx);
         let page_locations = self
             .metadata
-            .offset_indexes()
+            .offset_index()
             .map(|x| x[row_group_idx].as_slice());
 
         let mut row_group = InMemoryRowGroup {
@@ -947,8 +945,8 @@ mod tests {
         let metadata_with_index = builder.metadata();
 
         // Check offset indexes are present for all columns
-        let offset_index = metadata_with_index.offset_indexes().unwrap();
-        let column_index = metadata_with_index.page_indexes().unwrap();
+        let offset_index = metadata_with_index.offset_index().unwrap();
+        let column_index = metadata_with_index.column_index().unwrap();
 
         assert_eq!(offset_index.len(), metadata_with_index.num_row_groups());
         assert_eq!(column_index.len(), metadata_with_index.num_row_groups());
