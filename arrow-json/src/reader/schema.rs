@@ -442,11 +442,10 @@ fn collect_field_types_from_object(
                 // inferring
             }
             Value::Number(n) => {
-                if n.is_f64() {
-                    set_object_scalar_field_type(field_types, k, DataType::Float64)?;
-                } else {
-                    // default to i64
+                if n.is_i64() {
                     set_object_scalar_field_type(field_types, k, DataType::Int64)?;
+                } else {
+                    set_object_scalar_field_type(field_types, k, DataType::Float64)?;
                 }
             }
             Value::String(_) => {
