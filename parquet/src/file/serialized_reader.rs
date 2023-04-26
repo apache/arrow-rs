@@ -269,7 +269,6 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                     index_reader::read_columns_indexes(&chunk_reader, rg.columns())?;
                 let offset_index =
                     index_reader::read_pages_locations(&chunk_reader, rg.columns())?;
-                rg.set_page_offset(offset_index.clone());
                 columns_indexes.push(column_index);
                 offset_indexes.push(offset_index);
             }
@@ -328,9 +327,10 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
         // Row groups should be processed sequentially.
         let props = Arc::clone(&self.props);
         let f = Arc::clone(&self.chunk_reader);
-        Ok(Box::new(SerializedRowGroupReader::new_with_properties(
+        Ok(Box::new(SerializedRowGroupReader::new(
             f,
             row_group_metadata,
+            self.metadata.offset_indexes().map(|x| x[i].as_slice()),
             props,
         )?))
     }
@@ -344,15 +344,17 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
 pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: &'a RowGroupMetaData,
+    page_locations: Option<&'a [Vec<PageLocation>]>,
     props: ReaderPropertiesPtr,
     bloom_filters: Vec<Option<Sbbf>>,
 }
 
 impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
     /// Creates new row group reader from a file, row group metadata and custom config.
-    fn new_with_properties(
+    fn new(
         chunk_reader: Arc<R>,
         metadata: &'a RowGroupMetaData,
+        page_locations: Option<&'a [Vec<PageLocation>]>,
         props: ReaderPropertiesPtr,
     ) -> Result<Self> {
         let bloom_filters = if props.read_bloom_filter() {
@@ -367,6 +369,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
         Ok(Self {
             chunk_reader,
             metadata,
+            page_locations,
             props,
             bloom_filters,
         })
@@ -386,11 +389,7 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
     fn get_column_page_reader(&self, i: usize) -> Result<Box<dyn PageReader>> {
         let col = self.metadata.column(i);
 
-        let page_locations = self
-            .metadata
-            .page_offset_index()
-            .as_ref()
-            .map(|x| x[i].clone());
+        let page_locations = self.page_locations.map(|x| x[i].clone());
 
         let props = Arc::clone(&self.props);
         Ok(Box::new(SerializedPageReader::new_with_properties(
