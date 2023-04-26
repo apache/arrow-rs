@@ -1103,6 +1103,8 @@ fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::options::StoreOptions;
+    use crate::parse_url;
     use crate::tests::{
         copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
         put_get_delete_list, put_get_delete_list_opts, rename_and_copy, stream_get,
@@ -1174,7 +1176,34 @@ mod tests {
 
     #[tokio::test]
     async fn azure_blob_test() {
-        let integration = maybe_skip_integration!().build().unwrap();
+        let config = maybe_skip_integration!();
+        let integration = config.clone().build().unwrap();
+        put_get_delete_list_opts(&integration, false).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        stream_get(&integration).await;
+
+        azure_parse_from_url_test(config).await;
+    }
+
+    async fn azure_parse_from_url_test(config: MicrosoftAzureBuilder) {
+        let store_options = HashMap::from([(
+            "azure_storage_use_emulator",
+            config.use_emulator.to_string(),
+        )]);
+
+        let client_options = ClientOptions::new().with_allow_http(true);
+
+        // Create instance of S3 object_store.
+        let integration = parse_url(
+            format!("az://{}/", &config.container_name.unwrap()),
+            Some(StoreOptions::new(store_options, client_options)),
+            false,
+        )
+        .unwrap();
+
         put_get_delete_list_opts(&integration, false).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;

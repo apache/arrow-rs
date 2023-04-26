@@ -742,7 +742,7 @@ impl From<Error> for std::io::Error {
 pub fn parse_url(
     url: impl AsRef<str>,
     store_options: Option<impl Into<StoreOptions>>,
-    from_env: bool,
+    _from_env: bool,
 ) -> Result<Box<DynObjectStore>> {
     let storage_url = url.as_ref();
 
@@ -755,7 +755,7 @@ pub fn parse_url(
             match url.scheme() {
                 #[cfg(any(feature = "aws", feature = "aws_profile"))]
                 "s3" | "s3a" => {
-                    let store = if from_env {
+                    let store = if _from_env {
                         aws::AmazonS3Builder::from_env()
                     } else {
                         aws::AmazonS3Builder::default()
@@ -776,7 +776,7 @@ pub fn parse_url(
 
                 #[cfg(feature = "gcp")]
                 "gs" => {
-                    let store = if from_env {
+                    let store = if _from_env {
                         gcp::GoogleCloudStorageBuilder::from_env()
                     } else {
                         gcp::GoogleCloudStorageBuilder::default()
@@ -796,8 +796,8 @@ pub fn parse_url(
                 }),
 
                 #[cfg(feature = "azure")]
-                "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => {
-                    let store = if from_env {
+                "az" | "adl" | "azure" | "abfs" | "abfss" => {
+                    let store = if _from_env {
                         azure::MicrosoftAzureBuilder::from_env()
                     } else {
                         azure::MicrosoftAzureBuilder::default()
@@ -811,12 +811,10 @@ pub fn parse_url(
                 }
 
                 #[cfg(not(feature = "azure"))]
-                "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => {
-                    Err(Error::MissingFeature {
-                        feature: "azure",
-                        url: storage_url.into(),
-                    })
-                }
+                "az" | "adl" | "azure" | "abfs" | "abfss" => Err(Error::MissingFeature {
+                    feature: "azure",
+                    url: storage_url.into(),
+                }),
 
                 #[cfg(feature = "http")]
                 "http" | "https" => {
