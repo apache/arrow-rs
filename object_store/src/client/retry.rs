@@ -24,6 +24,7 @@ use reqwest::header::LOCATION;
 use reqwest::{Response, StatusCode};
 use std::time::{Duration, Instant};
 use tracing::info;
+use snafu::Error as SnafuError;
 
 /// Retry request error
 #[derive(Debug)]
@@ -192,11 +193,29 @@ impl RetryExt for reqwest::RequestBuilder {
                     },
                     Err(e) =>
                     {
-                        return Err(Error{
-                            retries,
-                            message: "request error".to_string(),
-                            source: Some(e)
-                        })
+                        let mut do_retry = false;
+                        if let Some(source) = e.source() {
+                            if let Some(e) = source.downcast_ref::<hyper::Error>() {
+                                if e.is_connect() || e.is_closed() || e.is_incomplete_message() {
+                                    do_retry = true;
+                                }
+                            }
+                        }
+
+                        if retries == max_retries
+                            || now.elapsed() > retry_timeout
+                            || !do_retry {
+
+                            return Err(Error{
+                                retries,
+                                message: "request error".to_string(),
+                                source: Some(e)
+                            })
+                        }
+                        let sleep = backoff.next();
+                        retries += 1;
+                        info!("Encountered request error ({}) backing off for {} seconds, retry {} of {}", e, sleep.as_secs_f32(), retries, max_retries);
+                        tokio::time::sleep(sleep).await;
                     }
                 }
             }
@@ -344,6 +363,19 @@ mod tests {
         let e = do_request().await.unwrap_err();
         assert_eq!(e.retries, retry.max_retries);
         assert_eq!(e.message, "502 Bad Gateway");
+
+        // Panic results in an incomplete message error in the client
+        mock.push_fn(|_| {panic!()});
+        let r = do_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+
+        // Gives up after retrying mulitiple panics
+        for _ in 0..=retry.max_retries {
+            mock.push_fn(|_| {panic!()});
+        }
+        let e = do_request().await.unwrap_err();
+        assert_eq!(e.retries, retry.max_retries);
+        assert_eq!(e.message, "request error");
 
         // Shutdown
         mock.shutdown().await
