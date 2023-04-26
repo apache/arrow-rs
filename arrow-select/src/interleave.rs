@@ -122,7 +122,7 @@ impl<'a, T: Array + 'static> Interleave<'a, T> {
                 null_count += !v as usize;
                 builder.append(v)
             }
-            builder.finish()
+            builder.into()
         });
 
         Self {

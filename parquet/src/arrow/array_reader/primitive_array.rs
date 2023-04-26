@@ -147,7 +147,7 @@ where
                 for e in record_data.as_slice() {
                     boolean_buffer.append(*e > 0);
                 }
-                boolean_buffer.finish()
+                boolean_buffer.into()
             }
             PhysicalType::INT96 => {
                 // SAFETY - record_data is an aligned buffer of Int96

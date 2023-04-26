@@ -149,7 +149,7 @@ impl BooleanBuilder {
         let null_bit_buffer = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
-            .add_buffer(self.values_builder.finish())
+            .add_buffer(self.values_builder.finish().into_inner())
             .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { builder.build_unchecked() };

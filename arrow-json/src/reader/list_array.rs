@@ -99,9 +99,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
         }
 
         let child_data = self.decoder.decode(tape, &child_pos)?;
-        let nulls = nulls
-            .as_mut()
-            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
+        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())

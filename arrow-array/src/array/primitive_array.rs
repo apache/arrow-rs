@@ -25,9 +25,7 @@ use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{Array, ArrayAccessor, ArrayRef};
-use arrow_buffer::{
-    i256, ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, ScalarBuffer,
-};
+use arrow_buffer::{i256, ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -642,7 +640,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             Ok::<_, ()>(())
         });
 
-        let nulls = BooleanBuffer::new(null_builder.finish(), 0, len);
+        let nulls = null_builder.finish();
         let values = buffer.finish().into();
         let nulls = unsafe { NullBuffer::new_unchecked(nulls, out_null_count) };
         PrimitiveArray::new(values, Some(nulls))

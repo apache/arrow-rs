@@ -113,9 +113,7 @@ impl ArrayDecoder for StructArrayDecoder {
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
-        let nulls = nulls
-            .as_mut()
-            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
+        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
         for (c, f) in child_data.iter().zip(fields) {
             // Sanity check

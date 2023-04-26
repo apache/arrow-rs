@@ -3575,12 +3575,7 @@ mod tests {
         null_buffer_builder.resize(13);
         assert_eq!(null_buffer_builder.len(), 13);
 
-        let null_buffer = null_buffer_builder.finish();
-
-        // `count_set_bits_offset` takes len in bits as parameter.
-        assert_eq!(null_buffer.count_set_bits_offset(0, 13), 0);
-
-        let nulls = BooleanBuffer::new(null_buffer, 0, 13);
+        let nulls = null_buffer_builder.finish();
         assert_eq!(nulls.count_set_bits(), 0);
         let nulls = NullBuffer::new(nulls);
         assert_eq!(nulls.null_count(), 13);

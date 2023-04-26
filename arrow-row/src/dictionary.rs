@@ -202,7 +202,7 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
 
     let builder = ArrayDataBuilder::new(data_type)
         .len(len)
-        .null_bit_buffer(Some(null_builder.finish()))
+        .null_bit_buffer(Some(null_builder.into()))
         .null_count(null_count)
         .add_buffer(keys.finish())
         .add_child_data(child);
@@ -250,7 +250,7 @@ fn decode_bool(values: &[&[u8]]) -> ArrayData {
 
     let builder = ArrayDataBuilder::new(DataType::Boolean)
         .len(values.len())
-        .add_buffer(builder.finish());
+        .add_buffer(builder.into());
 
     // SAFETY: Buffers correct length
     unsafe { builder.build_unchecked() }
