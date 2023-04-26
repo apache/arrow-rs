@@ -1434,6 +1434,7 @@ pub fn multiply_dyn_checked(
     }
 }
 
+#[cfg(feature = "dyn_arith_dict")]
 fn get_precision_scale(dt: &DataType) -> Result<(u8, i8), ArrowError> {
     match dt {
         DataType::Decimal128(precision, scale) => Ok((*precision, *scale)),
