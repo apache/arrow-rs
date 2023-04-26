@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{make_decoder, tape_error, ArrayDecoder};
+use crate::reader::{make_decoder, ArrayDecoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_array::OffsetSizeTrait;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
@@ -78,7 +78,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                     nulls.append(false);
                     *p + 1
                 }
-                (d, _) => return Err(tape_error(d, "[")),
+                _ => return Err(tape.error(*p, "[")),
             };
 
             let mut cur_idx = *p + 1;
@@ -86,9 +86,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                 child_pos.push(cur_idx);
 
                 // Advance to next field
-                cur_idx = tape
-                    .next(cur_idx)
-                    .map_err(|d| tape_error(d, "list value"))?;
+                cur_idx = tape.next(cur_idx, "list value")?;
             }
 
             let offset = O::from_usize(child_pos.len()).ok_or_else(|| {

@@ -43,6 +43,7 @@ walkdir = "2"
 
 # Cloud storage support
 base64 = { version = "0.21", default-features = false, features = ["std"], optional = true }
+hyper = { version = "0.14", default-features = false, optional = true }
 quick-xml = { version = "0.28.0", features = ["serialize"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, optional = true }
@@ -66,7 +67,7 @@ tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-ut
 nix = "0.26.1"
 
 [features]
-cloud = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
+cloud = ["serde", "serde_json", "quick-xml",  "hyper", "reqwest", "reqwest/json","reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
 azure = ["cloud"]
 gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud"]

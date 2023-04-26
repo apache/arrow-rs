@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{make_decoder, tape_error, ArrayDecoder};
+use crate::reader::{make_decoder, ArrayDecoder};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -74,7 +74,7 @@ impl ArrayDecoder for StructArrayDecoder {
                     nulls.append(false);
                     continue;
                 }
-                (d, _) => return Err(tape_error(d, "{")),
+                _ => return Err(tape.error(*p, "{")),
             };
 
             let mut cur_idx = *p + 1;
@@ -82,7 +82,7 @@ impl ArrayDecoder for StructArrayDecoder {
                 // Read field name
                 let field_name = match tape.get(cur_idx) {
                     TapeElement::String(s) => tape.get_string(s),
-                    d => return Err(tape_error(d, "field name")),
+                    _ => return Err(tape.error(cur_idx, "field name")),
                 };
 
                 // Update child pos if match found
@@ -93,9 +93,7 @@ impl ArrayDecoder for StructArrayDecoder {
                 }
 
                 // Advance to next field
-                cur_idx = tape
-                    .next(cur_idx + 1)
-                    .map_err(|d| tape_error(d, "field value"))?;
+                cur_idx = tape.next(cur_idx + 1, "field value")?;
             }
         }
 
@@ -103,7 +101,16 @@ impl ArrayDecoder for StructArrayDecoder {
             .decoders
             .iter_mut()
             .zip(child_pos)
-            .map(|(d, pos)| d.decode(tape, &pos))
+            .zip(fields)
+            .map(|((d, pos), f)| {
+                d.decode(tape, &pos).map_err(|e| match e {
+                    ArrowError::JsonError(s) => ArrowError::JsonError(format!(
+                        "whilst decoding field '{}': {s}",
+                        f.name()
+                    )),
+                    e => e,
+                })
+            })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         let nulls = nulls
@@ -113,19 +120,11 @@ impl ArrayDecoder for StructArrayDecoder {
         for (c, f) in child_data.iter().zip(fields) {
             // Sanity check
             assert_eq!(c.len(), pos.len());
+            if let Some(a) = c.nulls() {
+                let nulls_valid = f.is_nullable()
+                    || nulls.as_ref().map(|n| n.contains(a)).unwrap_or_default();
 
-            if !f.is_nullable() && c.null_count() != 0 {
-                // Need to verify nulls
-                let valid = match nulls.as_ref() {
-                    Some(nulls) => {
-                        let lhs = nulls.inner().bit_chunks().iter_padded();
-                        let rhs = c.nulls().unwrap().inner().bit_chunks().iter_padded();
-                        lhs.zip(rhs).all(|(l, r)| (l & !r) == 0)
-                    }
-                    None => false,
-                };
-
-                if !valid {
+                if !nulls_valid {
                     return Err(ArrowError::JsonError(format!("Encountered unmasked nulls in non-nullable StructArray child: {f}")));
                 }
             }

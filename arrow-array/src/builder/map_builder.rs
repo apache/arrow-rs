@@ -181,16 +181,16 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             keys_arr.null_count()
         );
 
-        let keys_field = Field::new(
+        let keys_field = Arc::new(Field::new(
             self.field_names.key.as_str(),
             keys_arr.data_type().clone(),
             false, // always non-nullable
-        );
-        let values_field = Field::new(
+        ));
+        let values_field = Arc::new(Field::new(
             self.field_names.value.as_str(),
             values_arr.data_type().clone(),
             true,
-        );
+        ));
 
         let struct_array =
             StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);

@@ -787,12 +787,12 @@ mod tests {
         let arr_secs = TimestampSecondArray::from(vec![Some(ts_secs), None]);
         let arr_names = StringArray::from(vec![Some("a"), Some("b")]);
 
-        let tz = "+00:00".to_string();
+        let tz = "+00:00";
 
-        let arr_nanos = arr_nanos.with_timezone(&tz);
-        let arr_micros = arr_micros.with_timezone(&tz);
-        let arr_millis = arr_millis.with_timezone(&tz);
-        let arr_secs = arr_secs.with_timezone(&tz);
+        let arr_nanos = arr_nanos.with_timezone(tz);
+        let arr_micros = arr_micros.with_timezone(tz);
+        let arr_millis = arr_millis.with_timezone(tz);
+        let arr_secs = arr_secs.with_timezone(tz);
 
         let schema = Schema::new(vec![
             Field::new("nanos", arr_nanos.data_type().clone(), true),
@@ -983,19 +983,19 @@ mod tests {
 
         let c1 = StructArray::from(vec![
             (
-                Field::new("c11", DataType::Int32, true),
+                Arc::new(Field::new("c11", DataType::Int32, true)),
                 Arc::new(Int32Array::from(vec![Some(1), None, Some(5)])) as ArrayRef,
             ),
             (
-                Field::new(
+                Arc::new(Field::new(
                     "c12",
                     DataType::Struct(
                         vec![Field::new("c121", DataType::Utf8, false)].into(),
                     ),
                     false,
-                ),
+                )),
                 Arc::new(StructArray::from(vec![(
-                    Field::new("c121", DataType::Utf8, false),
+                    Arc::new(Field::new("c121", DataType::Utf8, false)),
                     Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")]))
                         as ArrayRef,
                 )])) as ArrayRef,
@@ -1150,19 +1150,19 @@ mod tests {
 
         let struct_values = StructArray::from(vec![
             (
-                Field::new("c11", DataType::Int32, true),
+                Arc::new(Field::new("c11", DataType::Int32, true)),
                 Arc::new(Int32Array::from(vec![Some(1), None, Some(5)])) as ArrayRef,
             ),
             (
-                Field::new(
+                Arc::new(Field::new(
                     "c12",
                     DataType::Struct(
                         vec![Field::new("c121", DataType::Utf8, false)].into(),
                     ),
                     false,
-                ),
+                )),
                 Arc::new(StructArray::from(vec![(
-                    Field::new("c121", DataType::Utf8, false),
+                    Arc::new(Field::new("c121", DataType::Utf8, false)),
                     Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")]))
                         as ArrayRef,
                 )])) as ArrayRef,
@@ -1340,8 +1340,8 @@ mod tests {
             super::StringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
         let values_array = super::Int64Array::from(vec![10, 20, 30, 40, 50]);
 
-        let keys = Field::new("keys", DataType::Utf8, false);
-        let values = Field::new("values", DataType::Int64, false);
+        let keys = Arc::new(Field::new("keys", DataType::Utf8, false));
+        let values = Arc::new(Field::new("values", DataType::Int64, false));
         let entry_struct = StructArray::from(vec![
             (keys, Arc::new(keys_array) as ArrayRef),
             (values, Arc::new(values_array) as ArrayRef),

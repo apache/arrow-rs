@@ -129,7 +129,7 @@ where
         unsafe { arrow_buffer::Buffer::try_from_trusted_len_iter(values) }
     }?;
 
-    Ok(PrimitiveArray::new(T::DATA_TYPE, buffer.into(), nulls))
+    Ok(PrimitiveArray::new(buffer.into(), nulls))
 }
 
 /// Calculates the modulus operation `left % right` on two SIMD inputs.
@@ -356,7 +356,7 @@ where
         }
     }
 
-    Ok(PrimitiveArray::new(T::DATA_TYPE, result.into(), nulls))
+    Ok(PrimitiveArray::new(result.into(), nulls))
 }
 
 /// Applies $OP to $LEFT and $RIGHT which are two dictionaries which have (the same) key type $KT
@@ -739,6 +739,114 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
                 ))),
             }
         }
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            let l = left.as_primitive::<TimestampSecondType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_checked_op(l, r, TimestampSecondType::add_year_months)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_checked_op(l, r, TimestampSecondType::add_day_time)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_checked_op(l, r, TimestampSecondType::add_month_day_nano)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            let l = left.as_primitive::<TimestampMicrosecondType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_checked_op(l, r, TimestampMicrosecondType::add_year_months)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_checked_op(l, r, TimestampMicrosecondType::add_day_time)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_checked_op(l, r, TimestampMicrosecondType::add_month_day_nano)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            let l = left.as_primitive::<TimestampMillisecondType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_checked_op(l, r, TimestampMillisecondType::add_year_months)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_checked_op(l, r, TimestampMillisecondType::add_day_time)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_checked_op(l, r, TimestampMillisecondType::add_month_day_nano)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            let l = left.as_primitive::<TimestampNanosecondType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_checked_op(l, r, TimestampNanosecondType::add_year_months)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_checked_op(l, r, TimestampNanosecondType::add_day_time)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_checked_op(l, r, TimestampNanosecondType::add_month_day_nano)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
+        DataType::Interval(_)
+            if matches!(
+                right.data_type(),
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+            ) =>
+        {
+            add_dyn(right, left)
+        }
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
@@ -964,6 +1072,104 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                     let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_op(l, r, Date64Type::subtract_month_day_nano)?;
                     Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            let l = left.as_primitive::<TimestampSecondType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_checked_op(l, r, TimestampSecondType::subtract_year_months)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_checked_op(l, r, TimestampSecondType::subtract_day_time)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_checked_op(l, r, TimestampSecondType::subtract_month_day_nano)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            let l = left.as_primitive::<TimestampMicrosecondType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_checked_op(l, r, TimestampMicrosecondType::subtract_year_months)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_checked_op(l, r, TimestampMicrosecondType::subtract_day_time)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_checked_op(l, r, TimestampMicrosecondType::subtract_month_day_nano)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            let l = left.as_primitive::<TimestampMillisecondType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_checked_op(l, r, TimestampMillisecondType::subtract_year_months)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_checked_op(l, r, TimestampMillisecondType::subtract_day_time)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_checked_op(l, r, TimestampMillisecondType::subtract_month_day_nano)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            let l = left.as_primitive::<TimestampNanosecondType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_checked_op(l, r, TimestampNanosecondType::subtract_year_months)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_checked_op(l, r, TimestampNanosecondType::subtract_day_time)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_checked_op(l, r, TimestampNanosecondType::subtract_month_day_nano)?;
+                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
                 }
                 _ => Err(ArrowError::CastError(format!(
                     "Cannot perform arithmetic operation between array of type {} and array of type {}",
@@ -1758,6 +1964,7 @@ mod tests {
     use arrow_array::builder::{
         BooleanBufferBuilder, BufferBuilder, PrimitiveDictionaryBuilder,
     };
+    use arrow_array::temporal_conversions::SECONDS_IN_DAY;
     use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
     use arrow_buffer::i256;
     use arrow_data::ArrayDataBuilder;
@@ -1789,6 +1996,13 @@ mod tests {
             c.value(0),
             Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
         );
+
+        let c = add_dyn(&b, &a).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
+        );
     }
 
     #[test]
@@ -1798,6 +2012,13 @@ mod tests {
         )]);
         let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
+        );
+
+        let c = add_dyn(&b, &a).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
             c.value(0),
@@ -1820,6 +2041,13 @@ mod tests {
             c.value(0),
             Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
         );
+
+        let c = add_dyn(&b, &a).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
+        );
     }
 
     #[test]
@@ -1830,6 +2058,13 @@ mod tests {
         let b =
             IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
+        );
+
+        let c = add_dyn(&b, &a).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
@@ -1849,6 +2084,13 @@ mod tests {
             c.value(0),
             Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
         );
+
+        let c = add_dyn(&b, &a).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
+        );
     }
 
     #[test]
@@ -1861,6 +2103,13 @@ mod tests {
                 1, 2, 3,
             )]);
         let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
+        );
+
+        let c = add_dyn(&b, &a).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
@@ -3426,11 +3675,11 @@ mod tests {
     fn test_dict_decimal() {
         let values = Decimal128Array::from_iter_values([0, 1, 2, 3, 4, 5]);
         let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
-        let array1 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = Decimal128Array::from_iter_values([7, -3, 4, 3, 5]);
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let result = add_dyn(&array1, &array2).unwrap();
         let expected =
@@ -3452,7 +3701,7 @@ mod tests {
         ]);
         let keys =
             Int8Array::from(vec![Some(1_i8), None, Some(5), Some(4), Some(3), None]);
-        let array1 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
 
         let values = Decimal256Array::from_iter_values([
             i256::from_i128(7),
@@ -3463,7 +3712,7 @@ mod tests {
         ]);
         let keys =
             Int8Array::from(vec![Some(0_i8), Some(0), None, Some(2), Some(3), Some(4)]);
-        let array2 = DictionaryArray::try_new(&keys, &values).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
 
         let result = add_dyn(&array1, &array2).unwrap();
         let expected = Arc::new(Decimal256Array::from(vec![
@@ -3664,5 +3913,578 @@ mod tests {
             result.value_as_string(0),
             "1234567890.0000000000000000000000000000"
         );
+    }
+
+    #[test]
+    fn test_timestamp_second_add_interval() {
+        // timestamp second + interval year month
+        let a = TimestampSecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
+        let expected = TimestampSecondArray::from(vec![
+            1 + SECONDS_IN_DAY * (365 + 31 + 28),
+            2 + SECONDS_IN_DAY * (365 + 31 + 28),
+            3 + SECONDS_IN_DAY * (365 + 31 + 28),
+            4 + SECONDS_IN_DAY * (365 + 31 + 28),
+            5 + SECONDS_IN_DAY * (365 + 31 + 28),
+        ]);
+        assert_eq!(result, &expected);
+
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+        assert_eq!(result, &expected);
+
+        // timestamp second + interval day time
+        let a = TimestampSecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+        ]);
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
+        let expected = TimestampSecondArray::from(vec![
+            1 + SECONDS_IN_DAY,
+            2 + SECONDS_IN_DAY,
+            3 + SECONDS_IN_DAY,
+            4 + SECONDS_IN_DAY,
+            5 + SECONDS_IN_DAY,
+        ]);
+        assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+        assert_eq!(result, &expected);
+
+        // timestamp second + interval month day nanosecond
+        let a = TimestampSecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+        ]);
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
+        let expected = TimestampSecondArray::from(vec![
+            1 + SECONDS_IN_DAY,
+            2 + SECONDS_IN_DAY,
+            3 + SECONDS_IN_DAY,
+            4 + SECONDS_IN_DAY,
+            5 + SECONDS_IN_DAY,
+        ]);
+        assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_timestamp_second_subtract_interval() {
+        // timestamp second + interval year month
+        let a = TimestampSecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
+        let expected = TimestampSecondArray::from(vec![
+            1 - SECONDS_IN_DAY * (31 + 30 + 365),
+            2 - SECONDS_IN_DAY * (31 + 30 + 365),
+            3 - SECONDS_IN_DAY * (31 + 30 + 365),
+            4 - SECONDS_IN_DAY * (31 + 30 + 365),
+            5 - SECONDS_IN_DAY * (31 + 30 + 365),
+        ]);
+        assert_eq!(&expected, result);
+
+        // timestamp second + interval day time
+        let a = TimestampSecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+        ]);
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
+        let expected = TimestampSecondArray::from(vec![
+            1 - SECONDS_IN_DAY,
+            2 - SECONDS_IN_DAY,
+            3 - SECONDS_IN_DAY,
+            4 - SECONDS_IN_DAY,
+            5 - SECONDS_IN_DAY,
+        ]);
+        assert_eq!(&expected, result);
+
+        // timestamp second + interval month day nanosecond
+        let a = TimestampSecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+        ]);
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+
+        let expected = TimestampSecondArray::from(vec![
+            1 - SECONDS_IN_DAY,
+            2 - SECONDS_IN_DAY,
+            3 - SECONDS_IN_DAY,
+            4 - SECONDS_IN_DAY,
+            5 - SECONDS_IN_DAY,
+        ]);
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_timestamp_millisecond_add_interval() {
+        // timestamp millisecond + interval year month
+        let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
+        let expected = TimestampMillisecondArray::from(vec![
+            1 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000,
+            2 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000,
+            3 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000,
+            4 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000,
+            5 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000,
+        ]);
+        assert_eq!(result, &expected);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(result, &expected);
+
+        // timestamp millisecond + interval day time
+        let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+        ]);
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
+        let expected = TimestampMillisecondArray::from(vec![
+            1 + SECONDS_IN_DAY * 1_000,
+            2 + SECONDS_IN_DAY * 1_000,
+            3 + SECONDS_IN_DAY * 1_000,
+            4 + SECONDS_IN_DAY * 1_000,
+            5 + SECONDS_IN_DAY * 1_000,
+        ]);
+        assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(result, &expected);
+
+        // timestamp millisecond + interval month day nanosecond
+        let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+        ]);
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
+        let expected = TimestampMillisecondArray::from(vec![
+            1 + SECONDS_IN_DAY * 1_000,
+            2 + SECONDS_IN_DAY * 1_000,
+            3 + SECONDS_IN_DAY * 1_000,
+            4 + SECONDS_IN_DAY * 1_000,
+            5 + SECONDS_IN_DAY * 1_000,
+        ]);
+        assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_timestamp_millisecond_subtract_interval() {
+        // timestamp millisecond + interval year month
+        let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
+        let expected = TimestampMillisecondArray::from(vec![
+            1 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000,
+            2 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000,
+            3 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000,
+            4 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000,
+            5 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000,
+        ]);
+        assert_eq!(&expected, result);
+
+        // timestamp millisecond + interval day time
+        let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+        ]);
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
+        let expected = TimestampMillisecondArray::from(vec![
+            1 - SECONDS_IN_DAY * 1_000,
+            2 - SECONDS_IN_DAY * 1_000,
+            3 - SECONDS_IN_DAY * 1_000,
+            4 - SECONDS_IN_DAY * 1_000,
+            5 - SECONDS_IN_DAY * 1_000,
+        ]);
+        assert_eq!(&expected, result);
+
+        // timestamp millisecond + interval month day nanosecond
+        let a = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+        ]);
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMillisecondType>();
+
+        let expected = TimestampMillisecondArray::from(vec![
+            1 - SECONDS_IN_DAY * 1_000,
+            2 - SECONDS_IN_DAY * 1_000,
+            3 - SECONDS_IN_DAY * 1_000,
+            4 - SECONDS_IN_DAY * 1_000,
+            5 - SECONDS_IN_DAY * 1_000,
+        ]);
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_timestamp_microsecond_add_interval() {
+        // timestamp microsecond + interval year month
+        let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
+        let expected = TimestampMicrosecondArray::from(vec![
+            1 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000,
+            2 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000,
+            3 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000,
+            4 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000,
+            5 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000,
+        ]);
+        assert_eq!(result, &expected);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(result, &expected);
+
+        // timestamp microsecond + interval day time
+        let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+        ]);
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
+        let expected = TimestampMicrosecondArray::from(vec![
+            1 + SECONDS_IN_DAY * 1_000_000,
+            2 + SECONDS_IN_DAY * 1_000_000,
+            3 + SECONDS_IN_DAY * 1_000_000,
+            4 + SECONDS_IN_DAY * 1_000_000,
+            5 + SECONDS_IN_DAY * 1_000_000,
+        ]);
+        assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(result, &expected);
+
+        // timestamp microsecond + interval month day nanosecond
+        let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+        ]);
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
+        let expected = TimestampMicrosecondArray::from(vec![
+            1 + SECONDS_IN_DAY * 1_000_000,
+            2 + SECONDS_IN_DAY * 1_000_000,
+            3 + SECONDS_IN_DAY * 1_000_000,
+            4 + SECONDS_IN_DAY * 1_000_000,
+            5 + SECONDS_IN_DAY * 1_000_000,
+        ]);
+        assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_timestamp_microsecond_subtract_interval() {
+        // timestamp microsecond + interval year month
+        let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
+        let expected = TimestampMicrosecondArray::from(vec![
+            1 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000_000,
+            2 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000_000,
+            3 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000_000,
+            4 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000_000,
+            5 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000_000,
+        ]);
+        assert_eq!(&expected, result);
+
+        // timestamp microsecond + interval day time
+        let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+        ]);
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
+        let expected = TimestampMicrosecondArray::from(vec![
+            1 - SECONDS_IN_DAY * 1_000_000,
+            2 - SECONDS_IN_DAY * 1_000_000,
+            3 - SECONDS_IN_DAY * 1_000_000,
+            4 - SECONDS_IN_DAY * 1_000_000,
+            5 - SECONDS_IN_DAY * 1_000_000,
+        ]);
+        assert_eq!(&expected, result);
+
+        // timestamp microsecond + interval month day nanosecond
+        let a = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+        ]);
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+
+        let expected = TimestampMicrosecondArray::from(vec![
+            1 - SECONDS_IN_DAY * 1_000_000,
+            2 - SECONDS_IN_DAY * 1_000_000,
+            3 - SECONDS_IN_DAY * 1_000_000,
+            4 - SECONDS_IN_DAY * 1_000_000,
+            5 - SECONDS_IN_DAY * 1_000_000,
+        ]);
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_timestamp_nanosecond_add_interval() {
+        // timestamp nanosecond + interval year month
+        let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
+        let expected = TimestampNanosecondArray::from(vec![
+            1 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000_000,
+            2 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000_000,
+            3 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000_000,
+            4 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000_000,
+            5 + SECONDS_IN_DAY * (31 + 28 + 365) * 1_000_000_000,
+        ]);
+        assert_eq!(result, &expected);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(result, &expected);
+
+        // timestamp nanosecond + interval day time
+        let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+        ]);
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
+        let expected = TimestampNanosecondArray::from(vec![
+            1 + SECONDS_IN_DAY * 1_000_000_000,
+            2 + SECONDS_IN_DAY * 1_000_000_000,
+            3 + SECONDS_IN_DAY * 1_000_000_000,
+            4 + SECONDS_IN_DAY * 1_000_000_000,
+            5 + SECONDS_IN_DAY * 1_000_000_000,
+        ]);
+        assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(result, &expected);
+
+        // timestamp nanosecond + interval month day nanosecond
+        let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+        ]);
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
+        let expected = TimestampNanosecondArray::from(vec![
+            1 + SECONDS_IN_DAY * 1_000_000_000,
+            2 + SECONDS_IN_DAY * 1_000_000_000,
+            3 + SECONDS_IN_DAY * 1_000_000_000,
+            4 + SECONDS_IN_DAY * 1_000_000_000,
+            5 + SECONDS_IN_DAY * 1_000_000_000,
+        ]);
+        assert_eq!(&expected, result);
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_timestamp_nanosecond_subtract_interval() {
+        // timestamp nanosecond + interval year month
+        let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
+        let expected = TimestampNanosecondArray::from(vec![
+            1 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000_000_000,
+            2 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000_000_000,
+            3 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000_000_000,
+            4 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000_000_000,
+            5 - SECONDS_IN_DAY * (31 + 30 + 365) * 1_000_000_000,
+        ]);
+        assert_eq!(&expected, result);
+
+        // timestamp nanosecond + interval day time
+        let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+            Some(IntervalDayTimeType::make_value(1, 0)),
+        ]);
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
+        let expected = TimestampNanosecondArray::from(vec![
+            1 - SECONDS_IN_DAY * 1_000_000_000,
+            2 - SECONDS_IN_DAY * 1_000_000_000,
+            3 - SECONDS_IN_DAY * 1_000_000_000,
+            4 - SECONDS_IN_DAY * 1_000_000_000,
+            5 - SECONDS_IN_DAY * 1_000_000_000,
+        ]);
+        assert_eq!(&expected, result);
+
+        // timestamp nanosecond + interval month day nanosecond
+        let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+        ]);
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<TimestampNanosecondType>();
+
+        let expected = TimestampNanosecondArray::from(vec![
+            1 - SECONDS_IN_DAY * 1_000_000_000,
+            2 - SECONDS_IN_DAY * 1_000_000_000,
+            3 - SECONDS_IN_DAY * 1_000_000_000,
+            4 - SECONDS_IN_DAY * 1_000_000_000,
+            5 - SECONDS_IN_DAY * 1_000_000_000,
+        ]);
+        assert_eq!(&expected, result);
     }
 }

@@ -22,7 +22,7 @@ use arrow_schema::ArrowError;
 use std::marker::PhantomData;
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{tape_error, ArrayDecoder};
+use crate::reader::ArrayDecoder;
 
 const TRUE: &str = "true";
 const FALSE: &str = "false";
@@ -61,7 +61,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                 TapeElement::Number(idx) if coerce_primitive => {
                     data_capacity += tape.get_string(idx).len();
                 }
-                d => return Err(tape_error(d, "string")),
+                _ => return Err(tape.error(*p, "string")),
             }
         }
 

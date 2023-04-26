@@ -146,6 +146,7 @@ use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
 use crate::reader::list_array::ListArrayDecoder;
 use crate::reader::map_array::MapArrayDecoder;
+use crate::reader::null_array::NullArrayDecoder;
 use crate::reader::primitive_array::PrimitiveArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
@@ -156,6 +157,7 @@ mod boolean_array;
 mod decimal_array;
 mod list_array;
 mod map_array;
+mod null_array;
 mod primitive_array;
 mod schema;
 mod serializer;
@@ -580,6 +582,7 @@ fn make_decoder(
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
+        DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
         DataType::Float64 => primitive_decoder!(Float64Type, data_type),
         DataType::Timestamp(TimeUnit::Second, None) => {
@@ -632,12 +635,9 @@ fn make_decoder(
     }
 }
 
-fn tape_error(d: TapeElement, expected: &str) -> ArrowError {
-    ArrowError::JsonError(format!("expected {expected} got {d}"))
-}
-
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
     use std::sync::Arc;
@@ -650,7 +650,7 @@ mod tests {
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field, FieldRef, Schema};
 
     use crate::reader::infer_json_schema;
     use crate::ReaderBuilder;
@@ -962,29 +962,29 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
 
         let buf = r#"{"a": 1}"#;
-        let result = ReaderBuilder::new(schema.clone())
+        let err = ReaderBuilder::new(schema.clone())
             .with_batch_size(1024)
             .build(Cursor::new(buf.as_bytes()))
             .unwrap()
-            .read();
+            .read()
+            .unwrap_err();
 
-        assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().to_string(),
-            "Json error: expected string got number".to_string()
+            err.to_string(),
+            "Json error: whilst decoding field 'a': expected string got 1"
         );
 
         let buf = r#"{"a": true}"#;
-        let result = ReaderBuilder::new(schema)
+        let err = ReaderBuilder::new(schema)
             .with_batch_size(1024)
             .build(Cursor::new(buf.as_bytes()))
             .unwrap()
-            .read();
+            .read()
+            .unwrap_err();
 
-        assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().to_string(),
-            "Json error: expected string got true".to_string()
+            err.to_string(),
+            "Json error: whilst decoding field 'a': expected string got true"
         );
     }
 
@@ -1374,6 +1374,29 @@ mod tests {
         assert_eq!(u64.values(), &[u64::MAX, u64::MAX, u64::MIN, u64::MIN]);
     }
 
+    #[test]
+    fn test_timestamp_truncation() {
+        let buf = r#"
+        {"time": 9223372036854775807 }
+        {"time": -9223372036854775808 }
+        {"time": 9e5 }
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]));
+
+        let batches = do_read(buf, 1024, true, schema);
+        assert_eq!(batches.len(), 1);
+
+        let i64 = batches[0]
+            .column(0)
+            .as_primitive::<TimestampNanosecondType>();
+        assert_eq!(i64.values(), &[i64::MAX, i64::MIN, 900000]);
+    }
+
     fn read_file(path: &str, schema: Option<Schema>) -> Reader<BufReader<File>> {
         let file = File::open(path).unwrap();
         let mut reader = BufReader::new(file);
@@ -1580,6 +1603,62 @@ mod tests {
         assert!(!cc.value(0));
         assert!(!cc.value(4));
         assert!(!cc.is_valid(5));
+    }
+
+    #[test]
+    fn test_empty_json_arrays() {
+        let json_content = r#"
+            {"items": []}
+            {"items": null}
+            {}
+            "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "items",
+            DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+            true,
+        )]));
+
+        let batches = do_read(json_content, 1024, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col1 = batches[0].column(0).as_list::<i32>();
+        assert_eq!(col1.null_count(), 2);
+        assert!(col1.value(0).is_empty());
+        assert_eq!(col1.value(0).data_type(), &DataType::Null);
+        assert!(col1.is_null(1));
+        assert!(col1.is_null(2));
+    }
+
+    #[test]
+    fn test_nested_empty_json_arrays() {
+        let json_content = r#"
+            {"items": [[],[]]}
+            {"items": [[null, null],[null]]}
+            "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "items",
+            DataType::List(FieldRef::new(Field::new(
+                "item",
+                DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+                true,
+            ))),
+            true,
+        )]));
+
+        let batches = do_read(json_content, 1024, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col1 = batches[0].column(0).as_list::<i32>();
+        assert_eq!(col1.null_count(), 0);
+        assert_eq!(col1.value(0).len(), 2);
+        assert!(col1.value(0).as_list::<i32>().value(0).is_empty());
+        assert!(col1.value(0).as_list::<i32>().value(1).is_empty());
+
+        assert_eq!(col1.value(1).len(), 2);
+        assert_eq!(col1.value(1).as_list::<i32>().value(0).len(), 2);
+        assert_eq!(col1.value(1).as_list::<i32>().value(1).len(), 1);
     }
 
     #[test]
@@ -1865,5 +1944,118 @@ mod tests {
         assert_eq!(12, sum_num_rows);
         assert_eq!(3, num_batches);
         assert_eq!(100000000000011, sum_a);
+    }
+
+    #[test]
+    fn test_decoder_error() {
+        let schema = Arc::new(Schema::new(vec![Field::new_struct(
+            "a",
+            vec![Field::new("child", DataType::Int32, false)],
+            true,
+        )]));
+
+        let parse_err = |s: &str| {
+            ReaderBuilder::new(schema.clone())
+                .build(Cursor::new(s.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+        };
+
+        let err = parse_err(r#"{"a": 123}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': expected { got 123"
+        );
+
+        let err = parse_err(r#"{"a": ["bar"]}"#);
+        assert_eq!(
+            err,
+            r#"Json error: whilst decoding field 'a': expected { got ["bar"]"#
+        );
+
+        let err = parse_err(r#"{"a": []}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': expected { got []"
+        );
+
+        let err = parse_err(r#"{"a": [{"child": 234}]}"#);
+        assert_eq!(
+            err,
+            r#"Json error: whilst decoding field 'a': expected { got [{"child": 234}]"#
+        );
+
+        let err = parse_err(r#"{"a": [{"child": {"foo": [{"foo": ["bar"]}]}}]}"#);
+        assert_eq!(
+            err,
+            r#"Json error: whilst decoding field 'a': expected { got [{"child": {"foo": [{"foo": ["bar"]}]}}]"#
+        );
+
+        let err = parse_err(r#"{"a": true}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': expected { got true"
+        );
+
+        let err = parse_err(r#"{"a": false}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': expected { got false"
+        );
+
+        let err = parse_err(r#"{"a": "foo"}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': expected { got \"foo\""
+        );
+
+        let err = parse_err(r#"{"a": {"child": false}}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got false"
+        );
+
+        let err = parse_err(r#"{"a": {"child": []}}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got []"
+        );
+
+        let err = parse_err(r#"{"a": {"child": [123]}}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got [123]"
+        );
+
+        let err = parse_err(r#"{"a": {"child": [123, 3465346]}}"#);
+        assert_eq!(
+            err,
+            "Json error: whilst decoding field 'a': whilst decoding field 'child': expected primitive got [123, 3465346]"
+        );
+    }
+
+    #[test]
+    fn test_serialize_timestamp() {
+        let json = vec![
+            json!({"timestamp": 1681319393}),
+            json!({"timestamp": "1970-01-01T00:00:00+02:00"}),
+        ];
+        let schema = Schema::new(vec![Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Second, None),
+            true,
+        )]);
+        let mut decoder = ReaderBuilder::new(Arc::new(schema))
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&json).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 1);
+        let values = batch.column(0).as_primitive::<TimestampSecondType>();
+        assert_eq!(values.values(), &[1681319393, -7200]);
     }
 }

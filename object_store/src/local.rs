@@ -1440,6 +1440,7 @@ mod not_wasm_tests {
         let mut writer = integration.append(&location).await.unwrap();
 
         writer.write_all(data.as_ref()).await.unwrap();
+        writer.flush().await.unwrap();
 
         let read_data = integration
             .get(&location)

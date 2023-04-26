@@ -49,15 +49,15 @@ fn main() -> Result<()> {
 
     let nested = StructArray::from(vec![
         (
-            Field::new("a", DataType::Utf8, false),
+            Arc::new(Field::new("a", DataType::Utf8, false)),
             Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])) as Arc<dyn Array>,
         ),
         (
-            Field::new("b", DataType::Float64, false),
+            Arc::new(Field::new("b", DataType::Float64, false)),
             Arc::new(Float64Array::from(vec![1.1, 2.2, 3.3, 4.4, 5.5])),
         ),
         (
-            Field::new("c", DataType::Float64, false),
+            Arc::new(Field::new("c", DataType::Float64, false)),
             Arc::new(Float64Array::from(vec![2.2, 3.3, 4.4, 5.5, 6.6])),
         ),
     ]);

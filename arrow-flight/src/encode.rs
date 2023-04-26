@@ -17,7 +17,7 @@
 
 use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
-use crate::{error::Result, FlightData, SchemaAsIpc};
+use crate::{error::Result, FlightData, FlightDescriptor, SchemaAsIpc};
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
@@ -72,6 +72,8 @@ pub struct FlightDataEncoderBuilder {
     app_metadata: Bytes,
     /// Optional schema, if known before data.
     schema: Option<SchemaRef>,
+    /// Optional flight descriptor, if known before data.
+    descriptor: Option<FlightDescriptor>,
 }
 
 /// Default target size for encoded [`FlightData`].
@@ -87,6 +89,7 @@ impl Default for FlightDataEncoderBuilder {
             options: IpcWriteOptions::default(),
             app_metadata: Bytes::new(),
             schema: None,
+            descriptor: None,
         }
     }
 }
@@ -134,6 +137,15 @@ impl FlightDataEncoderBuilder {
         self
     }
 
+    /// Specify a flight descriptor in the first FlightData message.
+    pub fn with_flight_descriptor(
+        mut self,
+        descriptor: Option<FlightDescriptor>,
+    ) -> Self {
+        self.descriptor = descriptor;
+        self
+    }
+
     /// Return a [`Stream`](futures::Stream) of [`FlightData`],
     /// consuming self. More details on [`FlightDataEncoder`]
     pub fn build<S>(self, input: S) -> FlightDataEncoder
@@ -145,6 +157,7 @@ impl FlightDataEncoderBuilder {
             options,
             app_metadata,
             schema,
+            descriptor,
         } = self;
 
         FlightDataEncoder::new(
@@ -153,6 +166,7 @@ impl FlightDataEncoderBuilder {
             max_flight_data_size,
             options,
             app_metadata,
+            descriptor,
         )
     }
 }
@@ -176,6 +190,8 @@ pub struct FlightDataEncoder {
     queue: VecDeque<FlightData>,
     /// Is this stream done (inner is empty or errored)
     done: bool,
+    /// cleared after the first FlightData message is sent
+    descriptor: Option<FlightDescriptor>,
 }
 
 impl FlightDataEncoder {
@@ -185,6 +201,7 @@ impl FlightDataEncoder {
         max_flight_data_size: usize,
         options: IpcWriteOptions,
         app_metadata: Bytes,
+        descriptor: Option<FlightDescriptor>,
     ) -> Self {
         let mut encoder = Self {
             inner,
@@ -194,17 +211,22 @@ impl FlightDataEncoder {
             app_metadata: Some(app_metadata),
             queue: VecDeque::new(),
             done: false,
+            descriptor,
         };
 
         // If schema is known up front, enqueue it immediately
         if let Some(schema) = schema {
             encoder.encode_schema(&schema);
         }
+
         encoder
     }
 
     /// Place the `FlightData` in the queue to send
-    fn queue_message(&mut self, data: FlightData) {
+    fn queue_message(&mut self, mut data: FlightData) {
+        if let Some(descriptor) = self.descriptor.take() {
+            data.flight_descriptor = Some(descriptor);
+        }
         self.queue.push_back(data);
     }
 
@@ -719,7 +741,7 @@ mod tests {
         // large dictionary (1024 distinct values) that are used throughout the array
         let values = StringArray::from_iter_values((0..1024).map(|i| "******".repeat(i)));
         let keys = Int32Array::from_iter_values((0..3000).map(|i| (3000 - i) % 1024));
-        let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+        let array = DictionaryArray::new(keys, Arc::new(values));
 
         let batch =
             RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();

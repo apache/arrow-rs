@@ -18,11 +18,12 @@
 use crate::array::{get_offsets, make_array, print_long_array};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
-    iterator::GenericListArrayIter, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
+    iterator::GenericListArrayIter, new_empty_array, Array, ArrayAccessor, ArrayRef,
+    ArrowPrimitiveType,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, FieldRef};
 use num::Integer;
 use std::any::Any;
 use std::sync::Arc;
@@ -73,12 +74,113 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// The data type constructor of list array.
     /// The input is the schema of the child array and
     /// the output is the [`DataType`], List or LargeList.
-    pub const DATA_TYPE_CONSTRUCTOR: fn(Arc<Field>) -> DataType = if OffsetSize::IS_LARGE
-    {
+    pub const DATA_TYPE_CONSTRUCTOR: fn(FieldRef) -> DataType = if OffsetSize::IS_LARGE {
         DataType::LargeList
     } else {
         DataType::List
     };
+
+    /// Create a new [`GenericListArray`] from the provided parts
+    ///
+    /// # Errors
+    ///
+    /// Errors if
+    ///
+    /// * `offsets.len() - 1 != nulls.len()`
+    /// * `offsets.last() > values.len()`
+    /// * `!field.is_nullable() && values.null_count() != 0`
+    pub fn try_new(
+        field: FieldRef,
+        offsets: OffsetBuffer<OffsetSize>,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Result<Self, ArrowError> {
+        let len = offsets.len() - 1; // Offsets guaranteed to not be empty
+        let end_offset = offsets.last().unwrap().as_usize();
+        // don't need to check other values of `offsets` because they are checked
+        // during construction of `OffsetsbBuffer`
+        if end_offset > values.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Max offset of {end_offset} exceeds length of values {}",
+                values.len()
+            )));
+        }
+
+        if let Some(n) = nulls.as_ref() {
+            if n.len() != len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of null buffer for {}ListArray, expected {len} got {}",
+                    OffsetSize::PREFIX,
+                    n.len(),
+                )));
+            }
+        }
+        if !field.is_nullable() && values.null_count() != 0 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Non-nullable field of {}ListArray {:?} cannot contain nulls",
+                OffsetSize::PREFIX,
+                field.name()
+            )));
+        }
+
+        if field.data_type() != values.data_type() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "{}ListArray expected data type {} got {} for {:?}",
+                OffsetSize::PREFIX,
+                field.data_type(),
+                values.data_type(),
+                field.name()
+            )));
+        }
+
+        Ok(Self {
+            data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
+            nulls,
+            values,
+            value_offsets: offsets,
+        })
+    }
+
+    /// Create a new [`GenericListArray`] from the provided parts
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`Self::try_new`] returns an error
+    pub fn new(
+        field: FieldRef,
+        offsets: OffsetBuffer<OffsetSize>,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        Self::try_new(field, offsets, values, nulls).unwrap()
+    }
+
+    /// Create a new [`GenericListArray`] of length `len` where all values are null
+    pub fn new_null(field: FieldRef, len: usize) -> Self {
+        let values = new_empty_array(field.data_type());
+        Self {
+            data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
+            nulls: Some(NullBuffer::new_null(len)),
+            value_offsets: OffsetBuffer::new_zeroed(len),
+            values,
+        }
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(
+        self,
+    ) -> (
+        FieldRef,
+        OffsetBuffer<OffsetSize>,
+        ArrayRef,
+        Option<NullBuffer>,
+    ) {
+        let f = match self.data_type {
+            DataType::List(f) | DataType::LargeList(f) => f,
+            _ => unreachable!(),
+        };
+        (f, self.value_offsets, self.values, self.nulls)
+    }
 
     /// Returns a reference to the offsets of this list
     ///
@@ -405,31 +507,16 @@ mod tests {
     use super::*;
     use crate::builder::{Int32Builder, ListBuilder};
     use crate::types::Int32Type;
-    use crate::Int32Array;
-    use arrow_buffer::{bit_util, Buffer, ToByteSlice};
+    use crate::{Int32Array, Int64Array};
+    use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
+    use arrow_schema::Field;
 
     fn create_from_buffers() -> ListArray {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
-            .build()
-            .unwrap();
-
-        // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
-
-        // Construct a list array from the above two
-        let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        ListArray::from(list_data)
+        let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 6, 8]));
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        ListArray::new(field, offsets, Arc::new(values), None)
     }
 
     #[test]
@@ -1028,5 +1115,63 @@ mod tests {
         );
         assert_eq!(string.len(), 0);
         assert_eq!(string.value_offsets(), &[0]);
+    }
+
+    #[test]
+    fn test_try_new() {
+        let offsets = OffsetBuffer::new(vec![0, 1, 4, 5].into());
+        let values = Int32Array::new(vec![1, 2, 3, 4, 5].into(), None);
+        let values = Arc::new(values) as ArrayRef;
+
+        let field = Arc::new(Field::new("element", DataType::Int32, false));
+        ListArray::new(field.clone(), offsets.clone(), values.clone(), None);
+
+        let nulls = NullBuffer::new_null(3);
+        ListArray::new(field.clone(), offsets, values.clone(), Some(nulls));
+
+        let nulls = NullBuffer::new_null(3);
+        let offsets = OffsetBuffer::new(vec![0, 1, 2, 4, 5].into());
+        let err =
+            LargeListArray::try_new(field, offsets.clone(), values.clone(), Some(nulls))
+                .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for LargeListArray, expected 4 got 3"
+        );
+
+        let field = Arc::new(Field::new("element", DataType::Int64, false));
+        let err =
+            LargeListArray::try_new(field.clone(), offsets.clone(), values.clone(), None)
+                .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: LargeListArray expected data type Int64 got Int32 for \"element\""
+        );
+
+        let nulls = NullBuffer::new_null(7);
+        let values = Int64Array::new(vec![0; 7].into(), Some(nulls));
+        let values = Arc::new(values);
+
+        let err = LargeListArray::try_new(field, offsets.clone(), values.clone(), None)
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Non-nullable field of LargeListArray \"element\" cannot contain nulls"
+        );
+
+        let field = Arc::new(Field::new("element", DataType::Int64, true));
+        LargeListArray::new(field.clone(), offsets.clone(), values, None);
+
+        let values = Int64Array::new(vec![0; 2].into(), None);
+        let err =
+            LargeListArray::try_new(field, offsets, Arc::new(values), None).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Max offset of 5 exceeds length of values 2"
+        );
     }
 }

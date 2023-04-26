@@ -1480,12 +1480,9 @@ mod tests {
     ) where
         PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
     {
-        let array = DictionaryArray::<K>::try_new(&keys, &values).unwrap();
+        let array = DictionaryArray::<K>::new(keys, Arc::new(values));
         let array_values = array.values().clone();
-        let dict = array_values
-            .as_any()
-            .downcast_ref::<PrimitiveArray<T>>()
-            .expect("Unable to get dictionary values");
+        let dict = array_values.as_primitive::<T>();
 
         let sorted = match limit {
             Some(_) => {

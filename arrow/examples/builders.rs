@@ -119,12 +119,12 @@ fn main() {
     // helper, which takes the underlying arrays and field types.
     let struct_array = StructArray::from(vec![
         (
-            Field::new("b", DataType::Boolean, false),
+            Arc::new(Field::new("b", DataType::Boolean, false)),
             Arc::new(BooleanArray::from(vec![false, false, true, true]))
                 as Arc<dyn Array>,
         ),
         (
-            Field::new("c", DataType::Int32, false),
+            Arc::new(Field::new("c", DataType::Int32, false)),
             Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
         ),
     ]);

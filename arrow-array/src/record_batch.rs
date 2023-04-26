@@ -467,17 +467,12 @@ impl Default for RecordBatchOptions {
 }
 impl From<StructArray> for RecordBatch {
     fn from(value: StructArray) -> Self {
-        assert_eq!(
-            value.null_count(),
-            0,
-            "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
-        );
         let row_count = value.len();
-        let schema = Arc::new(Schema::new(value.fields().clone()));
-        let columns = value.fields;
+        let (fields, columns, nulls) = value.into_parts();
+        assert_eq!(nulls.map(|n| n.null_count()).unwrap_or_default(), 0, "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation");
 
         RecordBatch {
-            schema,
+            schema: Arc::new(Schema::new(fields)),
             row_count,
             columns,
         }
@@ -793,11 +788,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
         let struct_array = StructArray::from(vec![
             (
-                Field::new("b", DataType::Boolean, false),
+                Arc::new(Field::new("b", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Field::new("c", DataType::Int32, false),
+                Arc::new(Field::new("c", DataType::Int32, false)),
                 int.clone() as ArrayRef,
             ),
         ]);

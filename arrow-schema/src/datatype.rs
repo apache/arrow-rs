@@ -431,7 +431,40 @@ impl DataType {
             (
                 DataType::Map(a_field, a_is_sorted),
                 DataType::Map(b_field, b_is_sorted),
-            ) => a_field == b_field && a_is_sorted == b_is_sorted,
+            ) => {
+                a_field.is_nullable() == b_field.is_nullable()
+                    && a_field.data_type().equals_datatype(b_field.data_type())
+                    && a_is_sorted == b_is_sorted
+            }
+            (
+                DataType::Dictionary(a_key, a_value),
+                DataType::Dictionary(b_key, b_value),
+            ) => a_key.equals_datatype(b_key) && a_value.equals_datatype(b_value),
+            (
+                DataType::RunEndEncoded(a_run_ends, a_values),
+                DataType::RunEndEncoded(b_run_ends, b_values),
+            ) => {
+                a_run_ends.is_nullable() == b_run_ends.is_nullable()
+                    && a_run_ends
+                        .data_type()
+                        .equals_datatype(b_run_ends.data_type())
+                    && a_values.is_nullable() == b_values.is_nullable()
+                    && a_values.data_type().equals_datatype(b_values.data_type())
+            }
+            (
+                DataType::Union(a_union_fields, a_union_mode),
+                DataType::Union(b_union_fields, b_union_mode),
+            ) => {
+                a_union_mode == b_union_mode
+                    && a_union_fields.len() == b_union_fields.len()
+                    && a_union_fields.iter().all(|a| {
+                        b_union_fields.iter().any(|b| {
+                            a.0 == b.0
+                                && a.1.is_nullable() == b.1.is_nullable()
+                                && a.1.data_type().equals_datatype(b.1.data_type())
+                        })
+                    })
+            }
             _ => self == other,
         }
     }
@@ -564,7 +597,7 @@ pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Field;
+    use crate::{Field, UnionMode};
 
     #[test]
     #[cfg(feature = "serde")]
@@ -628,10 +661,14 @@ mod tests {
         assert!(!list_b.equals_datatype(&list_c));
         assert!(!list_a.equals_datatype(&list_d));
 
-        let list_e =
-            DataType::FixedSizeList(Arc::new(Field::new("item", list_a, false)), 3);
-        let list_f =
-            DataType::FixedSizeList(Arc::new(Field::new("array", list_b, false)), 3);
+        let list_e = DataType::FixedSizeList(
+            Arc::new(Field::new("item", list_a.clone(), false)),
+            3,
+        );
+        let list_f = DataType::FixedSizeList(
+            Arc::new(Field::new("array", list_b.clone(), false)),
+            3,
+        );
         let list_g = DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::FixedSizeBinary(3), true)),
             3,
@@ -664,6 +701,109 @@ mod tests {
         assert!(!list_h.equals_datatype(&list_j));
         assert!(!list_k.equals_datatype(&list_l));
         assert!(list_k.equals_datatype(&list_m));
+
+        let list_n =
+            DataType::Map(Arc::new(Field::new("f1", list_a.clone(), true)), true);
+        let list_o =
+            DataType::Map(Arc::new(Field::new("f2", list_b.clone(), true)), true);
+        let list_p =
+            DataType::Map(Arc::new(Field::new("f2", list_b.clone(), true)), false);
+        let list_q =
+            DataType::Map(Arc::new(Field::new("f2", list_c.clone(), true)), true);
+        let list_r =
+            DataType::Map(Arc::new(Field::new("f1", list_a.clone(), false)), true);
+
+        assert!(list_n.equals_datatype(&list_o));
+        assert!(!list_n.equals_datatype(&list_p));
+        assert!(!list_n.equals_datatype(&list_q));
+        assert!(!list_n.equals_datatype(&list_r));
+
+        let list_s = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_a));
+        let list_t =
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_b.clone()));
+        let list_u = DataType::Dictionary(Box::new(DataType::Int8), Box::new(list_b));
+        let list_v = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(list_c));
+
+        assert!(list_s.equals_datatype(&list_t));
+        assert!(!list_s.equals_datatype(&list_u));
+        assert!(!list_s.equals_datatype(&list_v));
+
+        let union_a = DataType::Union(
+            UnionFields::new(
+                vec![1, 2],
+                vec![
+                    Field::new("f1", DataType::Utf8, false),
+                    Field::new("f2", DataType::UInt8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+        let union_b = DataType::Union(
+            UnionFields::new(
+                vec![1, 2],
+                vec![
+                    Field::new("ff1", DataType::Utf8, false),
+                    Field::new("ff2", DataType::UInt8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+        let union_c = DataType::Union(
+            UnionFields::new(
+                vec![2, 1],
+                vec![
+                    Field::new("fff2", DataType::UInt8, false),
+                    Field::new("fff1", DataType::Utf8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+        let union_d = DataType::Union(
+            UnionFields::new(
+                vec![2, 1],
+                vec![
+                    Field::new("fff1", DataType::Int8, false),
+                    Field::new("fff2", DataType::UInt8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+        let union_e = DataType::Union(
+            UnionFields::new(
+                vec![1, 2],
+                vec![
+                    Field::new("f1", DataType::Utf8, true),
+                    Field::new("f2", DataType::UInt8, false),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+
+        assert!(union_a.equals_datatype(&union_b));
+        assert!(union_a.equals_datatype(&union_c));
+        assert!(!union_a.equals_datatype(&union_d));
+        assert!(!union_a.equals_datatype(&union_e));
+
+        let list_w = DataType::RunEndEncoded(
+            Arc::new(Field::new("f1", DataType::Int64, true)),
+            Arc::new(Field::new("f2", DataType::Utf8, true)),
+        );
+        let list_x = DataType::RunEndEncoded(
+            Arc::new(Field::new("ff1", DataType::Int64, true)),
+            Arc::new(Field::new("ff2", DataType::Utf8, true)),
+        );
+        let list_y = DataType::RunEndEncoded(
+            Arc::new(Field::new("ff1", DataType::UInt16, true)),
+            Arc::new(Field::new("ff2", DataType::Utf8, true)),
+        );
+        let list_z = DataType::RunEndEncoded(
+            Arc::new(Field::new("f1", DataType::Int64, false)),
+            Arc::new(Field::new("f2", DataType::Utf8, true)),
+        );
+
+        assert!(list_w.equals_datatype(&list_x));
+        assert!(!list_w.equals_datatype(&list_y));
+        assert!(!list_w.equals_datatype(&list_z));
     }
 
     #[test]
@@ -741,5 +881,21 @@ mod tests {
     #[test]
     fn size_should_not_regress() {
         assert_eq!(std::mem::size_of::<DataType>(), 24);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate type id: 1")]
+    fn test_union_with_duplicated_type_id() {
+        let type_ids = vec![1, 1];
+        let _union = DataType::Union(
+            UnionFields::new(
+                type_ids,
+                vec![
+                    Field::new("f1", DataType::Int32, false),
+                    Field::new("f2", DataType::Utf8, false),
+                ],
+            ),
+            UnionMode::Dense,
+        );
     }
 }

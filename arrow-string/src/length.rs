@@ -66,7 +66,7 @@ macro_rules! kernel_dict {
                             stringify!($gt), $array.data_type())
                     });
                 let values = $kernel(dict.values())?;
-                let result = DictionaryArray::try_new(dict.keys(), &values)?;
+                let result = DictionaryArray::try_new(dict.keys().clone(), values)?;
                     Ok(Arc::new(result))
                 },
             )*

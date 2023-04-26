@@ -183,7 +183,7 @@ fn create_array(
                 )?;
                 node_index = triple.1;
                 buffer_index = triple.2;
-                struct_arrays.push((struct_field.as_ref().clone(), triple.0));
+                struct_arrays.push((struct_field.clone(), triple.0));
             }
             let null_count = struct_node.null_count() as usize;
             let struct_array = if null_count > 0 {
@@ -1038,6 +1038,20 @@ impl<R: Read + Seek> FileReader<R> {
             ))),
         }
     }
+
+    /// Gets a reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        self.reader.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_mut(&mut self) -> &mut R {
+        self.reader.get_mut()
+    }
 }
 
 impl<R: Read + Seek> Iterator for FileReader<R> {
@@ -1243,6 +1257,20 @@ impl<R: Read> StreamReader<R> {
             )),
         }
     }
+
+    /// Gets a reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        self.reader.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_mut(&mut self) -> &mut R {
+        self.reader.get_mut()
+    }
 }
 
 impl<R: Read> Iterator for StreamReader<R> {
@@ -1380,8 +1408,7 @@ mod tests {
 
         let array12_values = StringArray::from(vec!["x", "yy", "zzz"]);
         let array12_keys = Int8Array::from_iter_values([1, 1, 2]);
-        let array12 =
-            DictionaryArray::<Int8Type>::try_new(&array12_keys, &array12_values).unwrap();
+        let array12 = DictionaryArray::new(array12_keys, Arc::new(array12_values));
 
         let array13 = StringArray::from(vec!["a", "bb", "ccc"]);
 
@@ -1566,7 +1593,7 @@ mod tests {
 
         let array = Arc::new(inner) as ArrayRef;
 
-        let dctfield = Field::new("dict", array.data_type().clone(), false);
+        let dctfield = Arc::new(Field::new("dict", array.data_type().clone(), false));
 
         let s = StructArray::from(vec![(dctfield, array)]);
         let struct_array = Arc::new(s) as ArrayRef;
@@ -1668,9 +1695,12 @@ mod tests {
         );
         let string_array: ArrayRef = Arc::new(StringArray::from(xs.clone()));
         let struct_array = StructArray::from(vec![
-            (Field::new("f2.1", DataType::Utf8, false), string_array),
             (
-                Field::new("f2.2_struct", dict.data_type().clone(), false),
+                Arc::new(Field::new("f2.1", DataType::Utf8, false)),
+                string_array,
+            ),
+            (
+                Arc::new(Field::new("f2.2_struct", dict.data_type().clone(), false)),
                 dict.clone() as ArrayRef,
             ),
         ]);
@@ -1693,28 +1723,27 @@ mod tests {
     #[test]
     fn test_roundtrip_stream_nested_dict_of_map_of_dict() {
         let values = StringArray::from(vec![Some("a"), None, Some("b"), Some("c")]);
+        let values = Arc::new(values) as ArrayRef;
         let value_dict_keys = Int8Array::from_iter_values([0, 1, 1, 2, 3, 1]);
-        let value_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&value_dict_keys, &values).unwrap();
+        let value_dict_array = DictionaryArray::new(value_dict_keys, values.clone());
 
         let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 1, 1, 3]);
-        let key_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&key_dict_keys, &values).unwrap();
+        let key_dict_array = DictionaryArray::new(key_dict_keys, values);
 
-        let keys_field = Field::new_dict(
+        let keys_field = Arc::new(Field::new_dict(
             "keys",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
             1,
             false,
-        );
-        let values_field = Field::new_dict(
+        ));
+        let values_field = Arc::new(Field::new_dict(
             "values",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
             1,
             false,
-        );
+        ));
         let entry_struct = StructArray::from(vec![
             (keys_field, make_array(key_dict_array.into_data())),
             (values_field, make_array(value_dict_array.into_data())),
@@ -1738,8 +1767,7 @@ mod tests {
         let map_array = MapArray::from(map_data);
 
         let dict_keys = Int8Array::from_iter_values([0, 1, 1, 2, 2, 1]);
-        let dict_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&dict_keys, &map_array).unwrap();
+        let dict_dict_array = DictionaryArray::new(dict_keys, Arc::new(map_array));
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f1",
@@ -1761,7 +1789,7 @@ mod tests {
     ) {
         let values = StringArray::from(vec![Some("a"), None, Some("c"), None]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3]);
-        let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
         let dict_data = dict_array.to_data();
 
         let value_offsets = Buffer::from_slice_ref(offsets);
@@ -1775,8 +1803,7 @@ mod tests {
         let list_array = GenericListArray::<OffsetSize>::from(list_data);
 
         let keys_for_dict = Int8Array::from_iter_values([0, 3, 0, 1, 1, 2, 0, 1, 3]);
-        let dict_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&keys_for_dict, &list_array).unwrap();
+        let dict_dict_array = DictionaryArray::new(keys_for_dict, Arc::new(list_array));
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f1",
@@ -1824,8 +1851,8 @@ mod tests {
     fn test_roundtrip_stream_dict_of_fixed_size_list_of_dict() {
         let values = StringArray::from(vec![Some("a"), None, Some("c"), None]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3, 1, 2]);
-        let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
-        let dict_data = dict_array.to_data();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+        let dict_data = dict_array.into_data();
 
         let list_data_type = DataType::FixedSizeList(
             Arc::new(Field::new_dict(
@@ -1845,8 +1872,7 @@ mod tests {
         let list_array = FixedSizeListArray::from(list_data);
 
         let keys_for_dict = Int8Array::from_iter_values([0, 1, 0, 1, 1, 2, 0, 1, 2]);
-        let dict_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&keys_for_dict, &list_array).unwrap();
+        let dict_dict_array = DictionaryArray::new(keys_for_dict, Arc::new(list_array));
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f1",

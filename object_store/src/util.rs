@@ -229,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn test_coalesce_ranges() {
         let fetches = do_fetch(vec![], 0).await;
-        assert_eq!(fetches, vec![]);
+        assert!(fetches.is_empty());
 
         let fetches = do_fetch(vec![0..3], 0).await;
         assert_eq!(fetches, vec![0..3]);

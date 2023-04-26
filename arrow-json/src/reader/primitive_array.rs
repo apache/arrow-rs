@@ -25,7 +25,7 @@ use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{tape_error, ArrayDecoder};
+use crate::reader::ArrayDecoder;
 
 /// A trait for JSON-specific primitive parsing logic
 ///
@@ -116,7 +116,7 @@ where
 
                     builder.append_value(value)
                 }
-                d => return Err(tape_error(d, "primitive")),
+                _ => return Err(tape.error(*p, "primitive")),
             }
         }
 

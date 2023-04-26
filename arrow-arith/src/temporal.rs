@@ -17,8 +17,9 @@
 
 //! Defines temporal kernels for time and date related functions.
 
-use chrono::{DateTime, Datelike, NaiveDateTime, NaiveTime, Offset, Timelike};
 use std::sync::Arc;
+
+use chrono::{DateTime, Datelike, NaiveDateTime, NaiveTime, Offset, Timelike};
 
 use arrow_array::builder::*;
 use arrow_array::iterator::ArrayIter;
@@ -970,12 +971,14 @@ mod tests {
         .with_timezone("+01:00".to_string());
 
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 1]);
-        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let dict = DictionaryArray::try_new(keys.clone(), Arc::new(a)).unwrap();
 
         let b = hour_dyn(&dict).unwrap();
 
-        let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![11, 21, 7])).unwrap();
+        let expected_dict = DictionaryArray::new(
+            keys.clone(),
+            Arc::new(Int32Array::from(vec![11, 21, 7])),
+        );
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
 
@@ -984,7 +987,7 @@ mod tests {
         let b_old = minute_dyn(&dict).unwrap();
 
         let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 2, 3])).unwrap();
+            DictionaryArray::new(keys.clone(), Arc::new(Int32Array::from(vec![1, 2, 3])));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
         assert_eq!(&expected, &b_old);
@@ -994,7 +997,7 @@ mod tests {
         let b_old = second_dyn(&dict).unwrap();
 
         let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 2, 3])).unwrap();
+            DictionaryArray::new(keys.clone(), Arc::new(Int32Array::from(vec![1, 2, 3])));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
         assert_eq!(&expected, &b_old);
@@ -1003,8 +1006,7 @@ mod tests {
             time_fraction_dyn(&dict, "nanosecond", |t| t.nanosecond() as i32).unwrap();
 
         let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![0, 0, 0, 0, 0]))
-                .unwrap();
+            DictionaryArray::new(keys, Arc::new(Int32Array::from(vec![0, 0, 0, 0, 0])));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
     }
@@ -1015,15 +1017,14 @@ mod tests {
             vec![Some(1514764800000), Some(1550636625000)].into();
 
         let keys = Int8Array::from_iter_values([0_i8, 1, 1, 0]);
-        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
 
         let b = year_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![2018, 2019, 2019, 2018]),
-        )
-        .unwrap();
+        let expected_dict = DictionaryArray::new(
+            keys,
+            Arc::new(Int32Array::from(vec![2018, 2019, 2019, 2018])),
+        );
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
     }
@@ -1036,21 +1037,21 @@ mod tests {
             vec![Some(1514764800000), Some(1566275025000)].into();
 
         let keys = Int8Array::from_iter_values([0_i8, 1, 1, 0]);
-        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
 
         let b = quarter_dyn(&dict).unwrap();
 
-        let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 3, 3, 1])).unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let expected = DictionaryArray::new(
+            keys.clone(),
+            Arc::new(Int32Array::from(vec![1, 3, 3, 1])),
+        );
+        assert_eq!(b.as_ref(), &expected);
 
         let b = month_dyn(&dict).unwrap();
 
-        let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 8, 8, 1])).unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let expected =
+            DictionaryArray::new(keys, Arc::new(Int32Array::from(vec![1, 8, 8, 1])));
+        assert_eq!(b.as_ref(), &expected);
     }
 
     #[test]
@@ -1061,57 +1062,37 @@ mod tests {
             vec![Some(1514764800000), Some(1550636625000)].into();
 
         let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1), Some(0), None]);
-        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
 
         let b = num_days_from_monday_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![Some(0), Some(2), Some(2), Some(0), None]),
-        )
-        .unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let a = Int32Array::from(vec![Some(0), Some(2), Some(2), Some(0), None]);
+        let expected = DictionaryArray::new(keys.clone(), Arc::new(a));
+        assert_eq!(b.as_ref(), &expected);
 
         let b = num_days_from_sunday_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![Some(1), Some(3), Some(3), Some(1), None]),
-        )
-        .unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let a = Int32Array::from(vec![Some(1), Some(3), Some(3), Some(1), None]);
+        let expected = DictionaryArray::new(keys.clone(), Arc::new(a));
+        assert_eq!(b.as_ref(), &expected);
 
         let b = day_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![Some(1), Some(20), Some(20), Some(1), None]),
-        )
-        .unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let a = Int32Array::from(vec![Some(1), Some(20), Some(20), Some(1), None]);
+        let expected = DictionaryArray::new(keys.clone(), Arc::new(a));
+        assert_eq!(b.as_ref(), &expected);
 
         let b = doy_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![Some(1), Some(51), Some(51), Some(1), None]),
-        )
-        .unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let a = Int32Array::from(vec![Some(1), Some(51), Some(51), Some(1), None]);
+        let expected = DictionaryArray::new(keys.clone(), Arc::new(a));
+        assert_eq!(b.as_ref(), &expected);
 
         let b = week_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![Some(1), Some(8), Some(8), Some(1), None]),
-        )
-        .unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let a = Int32Array::from(vec![Some(1), Some(8), Some(8), Some(1), None]);
+        let expected = DictionaryArray::new(keys, Arc::new(a));
+        assert_eq!(b.as_ref(), &expected);
     }
 
     #[test]
@@ -1129,14 +1110,11 @@ mod tests {
         assert_eq!(453_000_000, b.value(1));
 
         let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1)]);
-        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
         let b = nanosecond_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![None, Some(453_000_000)]),
-        )
-        .unwrap();
+        let a = Int32Array::from(vec![None, Some(453_000_000)]);
+        let expected_dict = DictionaryArray::new(keys, Arc::new(a));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
     }
