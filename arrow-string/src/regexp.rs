@@ -101,7 +101,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
     let data = unsafe {
         ArrayDataBuilder::new(DataType::Boolean)
             .len(array.len())
-            .buffers(vec![result.finish()])
+            .buffers(vec![result.into()])
             .nulls(nulls)
             .build_unchecked()
     };
@@ -136,7 +136,7 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         }
     }
 
-    let buffer = result.finish();
+    let buffer = result.into();
     let data = unsafe {
         ArrayData::new_unchecked(
             DataType::Boolean,

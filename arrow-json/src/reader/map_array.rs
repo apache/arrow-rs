@@ -18,7 +18,7 @@
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{make_decoder, ArrayDecoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
-use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -139,9 +139,7 @@ impl ArrayDecoder for MapArrayDecoder {
         // Valid by construction
         let struct_data = unsafe { struct_data.build_unchecked() };
 
-        let nulls = nulls
-            .as_mut()
-            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
+        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
         let builder = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())

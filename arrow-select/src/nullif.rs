@@ -105,7 +105,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
             // Pad with 0s up to offset
             builder.resize(l_offset);
             builder.append_packed_range(0..len, &combined);
-            builder.finish()
+            builder.into()
         }
     };
 

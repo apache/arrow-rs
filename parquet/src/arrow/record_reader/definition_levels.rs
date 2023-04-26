@@ -123,7 +123,7 @@ impl DefinitionLevelBuffer {
 
         // Swap into self
         self.len = new_builder.len();
-        std::mem::replace(old_builder, new_builder).finish()
+        std::mem::replace(old_builder, new_builder).into()
     }
 
     pub fn nulls(&self) -> &BooleanBufferBuilder {

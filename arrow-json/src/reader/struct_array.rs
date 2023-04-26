@@ -18,7 +18,7 @@
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{make_decoder, ArrayDecoder};
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Fields};
 
@@ -113,9 +113,7 @@ impl ArrayDecoder for StructArrayDecoder {
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
-        let nulls = nulls
-            .as_mut()
-            .map(|x| NullBuffer::new(BooleanBuffer::new(x.finish(), 0, pos.len())));
+        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
         for (c, f) in child_data.iter().zip(fields) {
             // Sanity check
