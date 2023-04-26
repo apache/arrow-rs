@@ -663,6 +663,24 @@ mod tests {
     }
 
     #[test]
+    fn test_infer_json_schema_bigger_than_i64_max() {
+        let bigger_than_i64_max = (i64::MAX as i128) + 1;
+        let smaller_than_i64_min = (i64::MIN as i128) - 1;
+        let json = format!(
+            "{{ \"bigger_than_i64_max\": {}, \"smaller_than_i64_min\": {} }}",
+            bigger_than_i64_max, smaller_than_i64_min
+        );
+        let mut buf_reader = BufReader::new(json.as_bytes());
+        let inferred_schema = infer_json_schema(&mut buf_reader, Some(1)).unwrap();
+        let fields = inferred_schema.fields();
+
+        let (_, big_field) = fields.find("bigger_than_i64_max").unwrap();
+        assert_eq!(big_field.data_type(), &DataType::Float64);
+        let (_, small_field) = fields.find("smaller_than_i64_min").unwrap();
+        assert_eq!(small_field.data_type(), &DataType::Float64);
+    }
+
+    #[test]
     fn test_coercion_scalar_and_list() {
         use arrow_schema::DataType::*;
 
