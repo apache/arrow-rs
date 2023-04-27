@@ -762,8 +762,8 @@ pub fn parse_url(
                     }
                     .with_url(storage_url)
                     .with_client_options(_store_options.get_client_options())
-                    .try_with_options(_store_options.get_s3_options())
-                    .and_then(|builder| builder.build())?;
+                    .try_with_options(_store_options.get_s3_options()?)?
+                    .build()?;
 
                     Ok(Box::from(store))
                 }
@@ -783,8 +783,8 @@ pub fn parse_url(
                     }
                     .with_url(storage_url)
                     .with_client_options(_store_options.get_client_options())
-                    .try_with_options(_store_options.get_gcs_options())
-                    .and_then(|builder| builder.build())?;
+                    .try_with_options(_store_options.get_gcs_options()?)?
+                    .build()?;
 
                     Ok(Box::from(store))
                 }
@@ -804,8 +804,8 @@ pub fn parse_url(
                     }
                     .with_url(storage_url)
                     .with_client_options(_store_options.get_client_options())
-                    .try_with_options(_store_options.get_azure_options())
-                    .and_then(|builder| builder.build())?;
+                    .try_with_options(_store_options.get_azure_options()?)?
+                    .build()?;
 
                     Ok(Box::from(store))
                 }

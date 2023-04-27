@@ -74,44 +74,38 @@ impl StoreOptions {
 
     /// Ensures that provided options are compatible with Azure
     #[cfg(feature = "azure")]
-    pub fn get_azure_options(&self) -> HashMap<AzureConfigKey, String> {
-        self._store_options
-            .iter()
-            .map(|(key, value)| {
-                let conf_key =
-                    AzureConfigKey::from_str(&key.to_ascii_lowercase()).unwrap();
+    pub fn get_azure_options(&self) -> crate::Result<HashMap<AzureConfigKey, String>> {
+        let mut opts = HashMap::new();
+        for (key, value) in &self._store_options {
+            let conf_key = AzureConfigKey::from_str(&key.to_ascii_lowercase())?;
+            opts.insert(conf_key, value.clone());
+        }
 
-                (conf_key, value.clone())
-            })
-            .collect()
+        Ok(opts)
     }
 
     /// Ensures that provided options are compatible with S3
     #[cfg(feature = "aws")]
-    pub fn get_s3_options(&self) -> HashMap<AmazonS3ConfigKey, String> {
-        self._store_options
-            .iter()
-            .map(|(key, value)| {
-                let conf_key =
-                    AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).unwrap();
+    pub fn get_s3_options(&self) -> crate::Result<HashMap<AmazonS3ConfigKey, String>> {
+        let mut opts = HashMap::new();
+        for (key, value) in &self._store_options {
+            let conf_key = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase())?;
+            opts.insert(conf_key, value.clone());
+        }
 
-                (conf_key, value.clone())
-            })
-            .collect()
+        Ok(opts)
     }
 
     /// Ensures that provided options are compatible with GCS
     #[cfg(feature = "gcp")]
-    pub fn get_gcs_options(&self) -> HashMap<GoogleConfigKey, String> {
-        self._store_options
-            .iter()
-            .map(|(key, value)| {
-                let conf_key =
-                    GoogleConfigKey::from_str(&key.to_ascii_lowercase()).unwrap();
+    pub fn get_gcs_options(&self) -> crate::Result<HashMap<GoogleConfigKey, String>> {
+        let mut opts = HashMap::new();
+        for (key, value) in &self._store_options {
+            let conf_key = GoogleConfigKey::from_str(&key.to_ascii_lowercase())?;
+            opts.insert(conf_key, value.clone());
+        }
 
-                (conf_key, value.clone())
-            })
-            .collect()
+        Ok(opts)
     }
 
     fn iter_2_opts<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
