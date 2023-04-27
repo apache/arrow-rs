@@ -134,7 +134,7 @@ where
     T::Native: WrappingShl<Output = T::Native>,
 {
     bitwise_op(left, right, |a, b| {
-        let b = b.to_usize().unwrap();
+        let b = b.as_usize();
         a.wrapping_shl(b as u32)
     })
 }
@@ -150,7 +150,7 @@ where
     T::Native: WrappingShr<Output = T::Native>,
 {
     bitwise_op(left, right, |a, b| {
-        let b = b.to_usize().unwrap();
+        let b = b.as_usize();
         a.wrapping_shr(b as u32)
     })
 }
