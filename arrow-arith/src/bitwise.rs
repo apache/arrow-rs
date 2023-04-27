@@ -17,7 +17,9 @@
 
 use crate::arity::{binary, unary};
 use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
+use num::traits::{WrappingShl, WrappingShr};
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 // The helper function for bitwise operation with two array
@@ -121,6 +123,38 @@ where
     Ok(unary(array, |value| value ^ scalar))
 }
 
+/// Perform bitwise 'left << right' operation on two arrays. If either left or right value is null
+/// then the result is also null.
+pub fn bitwise_shift_left<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: ArrowNumericType,
+    T::Native: WrappingShl<Output = T::Native>,
+{
+    bitwise_op(left, right, |a, b| {
+        let b = b.to_usize().unwrap();
+        a.wrapping_shl(b as u32)
+    })
+}
+
+/// Perform bitwise 'left >> right' operation on two arrays. If either left or right value is null
+/// then the result is also null.
+pub fn bitwise_shift_right<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: ArrowNumericType,
+    T::Native: WrappingShr<Output = T::Native>,
+{
+    bitwise_op(left, right, |a, b| {
+        let b = b.to_usize().unwrap();
+        a.wrapping_shr(b as u32)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +175,24 @@ mod tests {
         let result = bitwise_and(&left, &right)?;
         assert_eq!(expected, result);
         Ok(())
+    }
+
+    #[test]
+    fn test_bitwise_shift_left() {
+        let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4)]);
+        let right = UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12)]);
+        let expected = UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384)]);
+        let result = bitwise_shift_left(&left, &right).unwrap();
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_bitwise_shift_right() {
+        let left = UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384)]);
+        let right = UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12)]);
+        let expected = UInt64Array::from(vec![Some(1), Some(2), None, Some(4)]);
+        let result = bitwise_shift_right(&left, &right).unwrap();
+        assert_eq!(expected, result);
     }
 
     #[test]
