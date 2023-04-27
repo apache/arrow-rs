@@ -24,8 +24,20 @@ use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{Index, NativeIndex};
 use crate::file::reader::ChunkReader;
 use crate::format::{ColumnIndex, OffsetIndex, PageLocation};
-use std::io::{Cursor, Read};
+use std::io::Cursor;
+use std::ops::Range;
 use thrift::protocol::{TCompactInputProtocol, TSerializable};
+
+/// Computes the aggregate range of two optional ranges
+pub(crate) fn acc_range(
+    a: Option<Range<usize>>,
+    b: Option<Range<usize>>,
+) -> Option<Range<usize>> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.start.min(b.start)..a.end.max(b.end)),
+        (None, x) | (x, None) => x,
+    }
+}
 
 /// Reads per-column [`Index`] for all columns of a row group by
 /// decoding [`ColumnIndex`] .
@@ -42,31 +54,23 @@ pub fn read_columns_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
 ) -> Result<Vec<Index>, ParquetError> {
-    let (offset, lengths) = get_index_offset_and_lengths(chunks)?;
-    let length = lengths.iter().sum::<usize>();
+    let fetch = chunks
+        .iter()
+        .fold(None, |range, c| acc_range(range, c.column_index_range()));
 
-    if length == 0 {
-        return Ok(vec![Index::NONE; chunks.len()]);
-    }
+    let fetch = match fetch {
+        Some(r) => r,
+        None => return Ok(vec![Index::NONE; chunks.len()]),
+    };
 
-    //read all need data into buffer
-    let mut reader = reader.get_read(offset, length)?;
-    let mut data = vec![0; length];
-    reader.read_exact(&mut data)?;
-
-    let mut start = 0;
-    let data = lengths.into_iter().map(|length| {
-        let r = &data[start..start + length];
-        start += length;
-        r
-    });
+    let bytes = reader.get_bytes(fetch.start as _, fetch.end - fetch.start)?;
+    let bytes = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
 
     chunks
         .iter()
-        .zip(data)
-        .map(|(chunk, data)| {
-            let column_type = chunk.column_type();
-            deserialize_column_index(data, column_type)
+        .map(|c| match c.column_index_range() {
+            Some(r) => decode_column_index(bytes(r), c.column_type()),
+            None => Ok(Index::NONE),
         })
         .collect()
 }
@@ -86,88 +90,39 @@ pub fn read_pages_locations<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
 ) -> Result<Vec<Vec<PageLocation>>, ParquetError> {
-    let (offset, total_length) = get_location_offset_and_total_length(chunks)?;
-
-    if total_length == 0 {
-        return Ok(vec![]);
-    }
-
-    //read all need data into buffer
-    let mut reader = reader.get_read(offset, total_length)?;
-    let mut data = vec![0; total_length];
-    reader.read_exact(&mut data)?;
-
-    let mut d = Cursor::new(data);
-    let mut result = vec![];
-
-    for _ in 0..chunks.len() {
-        let mut prot = TCompactInputProtocol::new(&mut d);
-        let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
-        result.push(offset.page_locations);
-    }
-    Ok(result)
-}
-
-//Get File offsets of every ColumnChunk's page_index
-//If there are invalid offset return a zero offset with empty lengths.
-pub(crate) fn get_index_offset_and_lengths(
-    chunks: &[ColumnChunkMetaData],
-) -> Result<(u64, Vec<usize>), ParquetError> {
-    let first_col_metadata = if let Some(chunk) = chunks.first() {
-        chunk
-    } else {
-        return Ok((0, vec![]));
-    };
-
-    let offset: u64 = if let Some(offset) = first_col_metadata.column_index_offset() {
-        offset.try_into().unwrap()
-    } else {
-        return Ok((0, vec![]));
-    };
-
-    let lengths = chunks
+    let fetch = chunks
         .iter()
-        .map(|x| x.column_index_length())
-        .map(|maybe_length| {
-            let index_length = maybe_length.unwrap_or(0);
-            Ok(index_length.try_into().unwrap())
+        .fold(None, |range, c| acc_range(range, c.offset_index_range()));
+
+    let fetch = match fetch {
+        Some(r) => r,
+        None => return Ok(vec![]),
+    };
+
+    let bytes = reader.get_bytes(fetch.start as _, fetch.end - fetch.start)?;
+    let bytes = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
+
+    chunks
+        .iter()
+        .map(|c| match c.offset_index_range() {
+            Some(r) => decode_offset_index(bytes(r)),
+            None => Err(general_err!("missing offset index")),
         })
-        .collect::<Result<Vec<_>, ParquetError>>()?;
-
-    Ok((offset, lengths))
+        .collect()
 }
 
-//Get File offset of ColumnChunk's pages_locations
-//If there are invalid offset return a zero offset with zero length.
-pub(crate) fn get_location_offset_and_total_length(
-    chunks: &[ColumnChunkMetaData],
-) -> Result<(u64, usize), ParquetError> {
-    let metadata = if let Some(chunk) = chunks.first() {
-        chunk
-    } else {
-        return Ok((0, 0));
-    };
-
-    let offset: u64 = if let Some(offset) = metadata.offset_index_offset() {
-        offset.try_into().unwrap()
-    } else {
-        return Ok((0, 0));
-    };
-
-    let total_length = chunks
-        .iter()
-        .map(|x| x.offset_index_length().unwrap())
-        .sum::<i32>() as usize;
-    Ok((offset, total_length))
+pub(crate) fn decode_offset_index(
+    data: &[u8],
+) -> Result<Vec<PageLocation>, ParquetError> {
+    let mut prot = TCompactInputProtocol::new(data);
+    let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
+    Ok(offset.page_locations)
 }
 
-pub(crate) fn deserialize_column_index(
+pub(crate) fn decode_column_index(
     data: &[u8],
     column_type: Type,
 ) -> Result<Index, ParquetError> {
-    if data.is_empty() {
-        return Ok(Index::NONE);
-    }
     let mut d = Cursor::new(data);
     let mut prot = TCompactInputProtocol::new(&mut d);
 
