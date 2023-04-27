@@ -19,7 +19,7 @@
 use crate::MultipartId;
 use crate::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore, Result};
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
@@ -119,10 +119,10 @@ impl ObjectStore for InMemory {
 
     async fn append(
         &self,
-        _location: &Path,
+        location: &Path,
     ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         Ok(Box::new(InMemoryAppend {
-            location: _location.clone(),
+            location: location.clone(),
             data: Vec::<u8>::new(),
             storage: StorageType::clone(&self.storage),
         }))
@@ -364,18 +364,16 @@ impl AsyncWrite for InMemoryAppend {
 
         let mut writer = storage.write();
 
-        let data = match writer.get_key_value(&self.location) {
-            Some(pair) => {
-                let mut stored_bytes = pair.1 .0.chunk().to_vec();
-                let appended = std::mem::take(&mut self.data);
-                stored_bytes.extend_from_slice(&appended);
-                stored_bytes
-            }
-
-            None => std::mem::take(&mut self.data),
+        if let Some((bytes, _)) = writer.remove(&self.location) {
+            let buf = std::mem::take(&mut self.data);
+            let concat = Bytes::from_iter(bytes.into_iter().chain(buf.into_iter()));
+            writer.insert(self.location.clone(), (concat, Utc::now()));
+        } else {
+            writer.insert(
+                self.location.clone(),
+                (Bytes::from(std::mem::take(&mut self.data)), Utc::now()),
+            );
         };
-        writer.insert(self.location.clone(), (Bytes::from(data), Utc::now()));
-
         Poll::Ready(Ok(()))
     }
 
