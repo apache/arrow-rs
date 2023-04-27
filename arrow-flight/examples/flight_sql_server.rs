@@ -551,9 +551,11 @@ mod tests {
     use std::future::Future;
     use std::time::Duration;
     use tempfile::NamedTempFile;
-    use tokio::net::{UnixListener, UnixStream};
-    use tokio::time::sleep;
-    use tokio_stream::wrappers::UnixListenerStream;
+    use tokio::{
+        net::{TcpStream, UnixListener, UnixStream},
+        time::sleep,
+    };
+    use tokio_stream::wrappers::{TcpListenerStream, UnixListenerStream};
     use tonic::transport::{Channel, ClientTlsConfig};
 
     use arrow_cast::pretty::pretty_format_batches;
@@ -564,6 +566,16 @@ mod tests {
 
     async fn client_with_uds(path: String) -> FlightSqlServiceClient<Channel> {
         let connector = service_fn(move |_| UnixStream::connect(path.clone()));
+        let channel = Endpoint::try_from("http://example.com")
+            .unwrap()
+            .connect_with_connector(connector)
+            .await
+            .unwrap();
+        FlightSqlServiceClient::new(channel)
+    }
+
+    async fn client_with_tcp(addr: String) -> FlightSqlServiceClient<Channel> {
+        let connector = service_fn(move |_| TcpStream::connect(addr.clone()));
         let channel = Endpoint::try_from("http://example.com")
             .unwrap()
             .connect_with_connector(connector)
@@ -607,61 +619,12 @@ mod tests {
         Ok(endpoint)
     }
 
-    #[tokio::test]
-    async fn test_select_https() {
-        tokio::spawn(async {
-            create_https_server().await.unwrap();
-        });
-
-        sleep(Duration::from_millis(2000)).await;
-
-        let request_future = async {
-            let cert = std::fs::read_to_string("examples/data/client1.pem").unwrap();
-            let key = std::fs::read_to_string("examples/data/client1.key").unwrap();
-            let server_ca = std::fs::read_to_string("examples/data/ca.pem").unwrap();
-
-            let tls_config = ClientTlsConfig::new()
-                .domain_name("localhost")
-                .ca_certificate(Certificate::from_pem(&server_ca))
-                .identity(Identity::from_pem(cert, key));
-            let endpoint = endpoint(String::from("https://127.0.0.1:50051"))
-                .unwrap()
-                .tls_config(tls_config)
-                .unwrap();
-            let channel = endpoint.connect().await.unwrap();
-            let mut client = FlightSqlServiceClient::new(channel);
-            let token = client.handshake("admin", "password").await.unwrap();
-            client.set_token(String::from_utf8(token.to_vec()).unwrap());
-            println!("Auth succeeded with token: {:?}", token);
-            let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
-            let flight_info = stmt.execute().await.unwrap();
-            let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
-            let flight_data = client.do_get(ticket).await.unwrap();
-            let flight_data: Vec<FlightData> = flight_data.try_collect().await.unwrap();
-            let batches = flight_data_to_batches(&flight_data).unwrap();
-            let res = pretty_format_batches(batches.as_slice()).unwrap();
-            let expected = r#"
-+-------------------+
-| salutation        |
-+-------------------+
-| Hello, FlightSQL! |
-+-------------------+"#
-                .trim()
-                .to_string();
-            assert_eq!(res.to_string(), expected);
-        };
-
-        tokio::select! {
-            _ = request_future => println!("Client finished!"),
-        }
-    }
-
     async fn auth_client(client: &mut FlightSqlServiceClient<Channel>) {
         let token = client.handshake("admin", "password").await.unwrap();
         client.set_token(String::from_utf8(token.to_vec()).unwrap());
     }
 
-    async fn test_client<F, C>(f: F)
+    async fn test_uds_client<F, C>(f: F)
     where
         F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
         C: Future<Output = ()>,
@@ -690,16 +653,87 @@ mod tests {
         }
     }
 
+    async fn test_tcp_client<F, C>(f: F)
+    where
+        F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
+        C: Future<Output = ()>,
+    {
+        let addr = "127.0.0.1:50051";
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let stream = TcpListenerStream::new(listener);
+
+        // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
+        let service = FlightSqlServiceImpl {};
+        let serve_future = Server::builder()
+            .add_service(FlightServiceServer::new(service))
+            .serve_with_incoming(stream);
+
+        let request_future = async {
+            sleep(Duration::from_millis(2000)).await;
+            let client = client_with_tcp(addr.to_owned()).await;
+            f(client).await
+        };
+
+        tokio::select! {
+            _ = serve_future => panic!("server returned first"),
+            _ = request_future => println!("Client finished!"),
+        }
+    }
+
+    async fn test_https_client<F, C>(f: F)
+    where
+        F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
+        C: Future<Output = ()>,
+    {
+        let serve_future = create_https_server();
+        let request_future = async {
+            //wait for server to start up
+            sleep(Duration::from_millis(2000)).await;
+
+            let cert = std::fs::read_to_string("examples/data/client1.pem").unwrap();
+            let key = std::fs::read_to_string("examples/data/client1.key").unwrap();
+            let server_ca = std::fs::read_to_string("examples/data/ca.pem").unwrap();
+
+            let tls_config = ClientTlsConfig::new()
+                .domain_name("localhost")
+                .ca_certificate(Certificate::from_pem(&server_ca))
+                .identity(Identity::from_pem(cert, key));
+            let endpoint = endpoint(String::from("https://127.0.0.1:50051"))
+                .unwrap()
+                .tls_config(tls_config)
+                .unwrap();
+            let channel = endpoint.connect().await.unwrap();
+            let client = FlightSqlServiceClient::new(channel);
+            f(client).await
+        };
+
+        tokio::select! {
+            _ = serve_future => panic!("server returned first"),
+            _ = request_future => println!("Client finished!"),
+        }
+    }
+
     #[tokio::test]
     async fn test_select_1() {
-        test_client(|mut client| async move {
+        let task = |mut client| async move {
             auth_client(&mut client).await;
+
+            let now = tokio::time::Instant::now();
             let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
+            println!("prepare cost: {:?}", now.elapsed());
+
+            let now = tokio::time::Instant::now();
             let flight_info = stmt.execute().await.unwrap();
+            println!("execute cost: {:?}", now.elapsed());
+
+            let now = tokio::time::Instant::now();
             let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
             let flight_data = client.do_get(ticket).await.unwrap();
             let flight_data: Vec<FlightData> = flight_data.try_collect().await.unwrap();
             let batches = flight_data_to_batches(&flight_data).unwrap();
+
+            println!("do get cost: {:?}", now.elapsed());
+
             let res = pretty_format_batches(batches.as_slice()).unwrap();
             let expected = r#"
 +-------------------+
@@ -710,13 +744,34 @@ mod tests {
                 .trim()
                 .to_string();
             assert_eq!(res.to_string(), expected);
-        })
-        .await
+        };
+
+        println!("testing uds client");
+        test_uds_client(task).await;
+        println!("=======");
+
+        println!("testing tcp client");
+        test_tcp_client(task).await;
+        println!("=======");
+
+        println!("testing https client");
+        test_https_client(task).await;
+        println!("=======");
+    }
+
+    async fn test_all_clients<F, C>(task: F)
+    where
+        F: FnOnce(FlightSqlServiceClient<Channel>) -> C + Copy,
+        C: Future<Output = ()>,
+    {
+        test_uds_client(task).await;
+        test_tcp_client(task).await;
+        test_https_client(task).await;
     }
 
     #[tokio::test]
     async fn test_execute_update() {
-        test_client(|mut client| async move {
+        test_all_clients(|mut client| async move {
             auth_client(&mut client).await;
             let res = client
                 .execute_update("creat table test(a int);".to_string())
@@ -729,7 +784,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth() {
-        test_client(|mut client| async move {
+        test_all_clients(|mut client| async move {
             // no handshake
             assert!(client
                 .prepare("select 1;".to_string())
