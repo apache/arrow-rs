@@ -554,7 +554,6 @@ mod tests {
     use std::time::Duration;
     use tempfile::NamedTempFile;
     use tokio::net::{TcpListener, UnixListener, UnixStream};
-    use tokio::time::sleep;
     use tokio_stream::wrappers::UnixListenerStream;
     use tonic::transport::{Channel, ClientTlsConfig};
 
@@ -626,8 +625,6 @@ mod tests {
     async fn test_select_https() {
         let (serve, addr) = create_https_server().await.unwrap();
         let uri = format!("https://{}:{}", addr.ip(), addr.port());
-
-        sleep(Duration::from_millis(2000)).await;
 
         let request_future = async {
             let cert = std::fs::read_to_string("examples/data/client1.pem").unwrap();
