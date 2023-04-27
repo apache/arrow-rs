@@ -547,12 +547,14 @@ impl ProstMessageExt for FetchResults {
 mod tests {
     use super::*;
     use futures::TryStreamExt;
+    use once_cell::sync::Lazy;
     use std::fs;
     use std::future::Future;
     use std::time::Duration;
     use tempfile::NamedTempFile;
     use tokio::{
         net::{TcpStream, UnixListener, UnixStream},
+        sync::Mutex,
         time::sleep,
     };
     use tokio_stream::wrappers::{TcpListenerStream, UnixListenerStream};
@@ -563,6 +565,9 @@ mod tests {
     use arrow_flight::utils::flight_data_to_batches;
     use tonic::transport::{Certificate, Endpoint};
     use tower::service_fn;
+
+    // This is a hack to ensure that the server will not be binded to the same for each test
+    static THE_RESOURCE: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
 
     async fn client_with_uds(path: String) -> FlightSqlServiceClient<Channel> {
         let connector = service_fn(move |_| UnixStream::connect(path.clone()));
@@ -715,6 +720,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_select_1() {
+        let _shard = THE_RESOURCE.lock().await;
+
         let task = |mut client| async move {
             auth_client(&mut client).await;
 
@@ -764,6 +771,8 @@ mod tests {
         F: FnOnce(FlightSqlServiceClient<Channel>) -> C + Copy,
         C: Future<Output = ()>,
     {
+        let _shard = THE_RESOURCE.lock().await;
+
         test_uds_client(task).await;
         test_tcp_client(task).await;
         test_https_client(task).await;
