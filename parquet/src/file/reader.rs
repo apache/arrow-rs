@@ -43,13 +43,27 @@ pub trait Length {
     fn len(&self) -> u64;
 }
 
-/// The ChunkReader trait generates readers of chunks of a source.
-/// For a file system reader, each chunk might contain a clone of File bounded on a given range.
-/// For an object store reader, each read can be mapped to a range request.
+/// The ChunkReader trait provides synchronous access to contiguous byte ranges of a source
 pub trait ChunkReader: Length + Send + Sync {
     type T: Read + Send;
     /// Get a serially readable slice of the current reader
-    /// This should fail if the slice exceeds the current bounds
+    ///
+    /// # IO Granularity
+    ///
+    /// The `length` parameter provides an upper bound on the amount of bytes that
+    /// will be read, however, it is intended purely as a hint.
+    ///
+    /// It is not guaranteed that `length` bytes will actually be read, nor are any guarantees
+    /// made on the size of `length`, it may be as large as a row group or as small as a couple
+    /// of bytes. It therefore should not be used to solely determine the granularity of
+    /// IO to the underlying storage system.
+    ///
+    /// Systems looking to mask high-IO latency through prefetching, such as encountered with
+    /// object storage, should consider fetching the relevant byte ranges into [`Bytes`]
+    /// and then feeding this into the synchronous APIs. Arrow users should also consider the
+    /// [async_reader] which performs this and allows for sophisticated pre-fetching strategies
+    ///
+    /// [async_reader]: crate::arrow::async_reader
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T>;
 
     /// Get a range as bytes
