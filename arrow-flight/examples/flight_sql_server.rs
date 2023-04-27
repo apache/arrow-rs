@@ -553,11 +553,11 @@ mod tests {
     use std::time::Duration;
     use tempfile::NamedTempFile;
     use tokio::{
-        net::{TcpStream, UnixListener, UnixStream},
+        net::{UnixListener, UnixStream},
         sync::Mutex,
         time::sleep,
     };
-    use tokio_stream::wrappers::{TcpListenerStream, UnixListenerStream};
+    use tokio_stream::wrappers::UnixListenerStream;
     use tonic::transport::{Channel, ClientTlsConfig};
 
     use arrow_cast::pretty::pretty_format_batches;
@@ -571,16 +571,6 @@ mod tests {
 
     async fn client_with_uds(path: String) -> FlightSqlServiceClient<Channel> {
         let connector = service_fn(move |_| UnixStream::connect(path.clone()));
-        let channel = Endpoint::try_from("http://example.com")
-            .unwrap()
-            .connect_with_connector(connector)
-            .await
-            .unwrap();
-        FlightSqlServiceClient::new(channel)
-    }
-
-    async fn client_with_tcp(addr: String) -> FlightSqlServiceClient<Channel> {
-        let connector = service_fn(move |_| TcpStream::connect(addr.clone()));
         let channel = Endpoint::try_from("http://example.com")
             .unwrap()
             .connect_with_connector(connector)
@@ -664,18 +654,18 @@ mod tests {
         C: Future<Output = ()>,
     {
         let addr = "127.0.0.1:50051";
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        let stream = TcpListenerStream::new(listener);
 
         // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
         let service = FlightSqlServiceImpl {};
         let serve_future = Server::builder()
             .add_service(FlightServiceServer::new(service))
-            .serve_with_incoming(stream);
+            .serve(addr.parse().unwrap());
 
         let request_future = async {
             sleep(Duration::from_millis(2000)).await;
-            let client = client_with_tcp(addr.to_owned()).await;
+            let endpoint = endpoint("http://127.0.0.1:50051".to_owned()).unwrap();
+            let channel = endpoint.connect_lazy();
+            let client = FlightSqlServiceClient::new(channel);
             f(client).await
         };
 
