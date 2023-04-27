@@ -267,7 +267,9 @@ impl HttpBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::options::StoreOptions;
     use crate::tests::*;
+    use crate::{parse_url, DynObjectStore};
 
     use super::*;
 
@@ -282,15 +284,44 @@ mod tests {
         let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
         let options = ClientOptions::new().with_allow_http(true);
         let integration = HttpBuilder::new()
-            .with_url(url)
-            .with_client_options(options)
+            .with_url(url.clone())
+            .with_client_options(options.clone())
             .build()
             .unwrap();
+
+        http_parse_from_url_test(url.clone(), options.clone()).await;
 
         put_get_delete_list_opts(&integration, false).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
+    }
+
+    async fn http_parse_from_url_test(url: String, client_options: ClientOptions) {
+        let opts: Vec<(String, String)> = vec![];
+        let integration =
+            parse_url(url, Some(StoreOptions::new(opts, client_options)), false).unwrap();
+
+        async fn clear_all_fixtures(storage: &DynObjectStore) {
+            let paths = storage
+                .list_with_delimiter(None)
+                .await
+                .unwrap()
+                .common_prefixes;
+
+            for f in &paths {
+                storage.delete(f).await.unwrap();
+            }
+        }
+
+        clear_all_fixtures(&integration).await;
+        put_get_delete_list_opts(&integration, false).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+
+        clear_all_fixtures(&integration).await;
     }
 }
