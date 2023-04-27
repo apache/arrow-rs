@@ -1301,13 +1301,10 @@ mod test {
         gcs_parse_from_url_test(config, &integration.client.base_url).await;
     }
 
-    async fn gcs_parse_from_url_test(
-        config: GoogleCloudStorageBuilder,
-        base_url: &String,
-    ) {
+    async fn gcs_parse_from_url_test(config: GoogleCloudStorageBuilder, base_url: &str) {
         let store_options = HashMap::from([(
             "GOOGLE_SERVICE_ACCOUNT",
-            config.service_account_path.unwrap().to_string(),
+            config.service_account_path.unwrap(),
         )]);
 
         let client_options = ClientOptions::new().with_allow_http(true);
@@ -1324,7 +1321,7 @@ mod test {
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
-        if base_url.clone() == default_gcs_base_url() {
+        if *base_url == default_gcs_base_url() {
             // Fake GCS server doesn't currently honor ifGenerationMatch
             // https://github.com/fsouza/fake-gcs-server/issues/994
             copy_if_not_exists(&integration).await;
