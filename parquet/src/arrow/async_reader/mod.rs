@@ -84,7 +84,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::format::OffsetIndex;
+use crate::format::{OffsetIndex, PageLocation};
 use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
@@ -237,10 +237,8 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
         let mut metadata = input.get_metadata().await?;
 
         if options.page_index
-            && metadata
-                .page_indexes()
-                .zip(metadata.offset_indexes())
-                .is_none()
+            && metadata.column_index().is_none()
+            && metadata.offset_index().is_none()
         {
             let mut fetch_ranges = vec![];
             let mut index_lengths: Vec<Vec<usize>> = vec![];
@@ -284,7 +282,6 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
                     offset_index.push(offset.page_locations);
                 }
 
-                rg.set_page_offset(offset_index.clone());
                 offset_indexes.push(offset_index);
 
                 let index_data = chunks.next().unwrap();
@@ -399,11 +396,17 @@ where
         // TODO: calling build_array multiple times is wasteful
 
         let meta = self.metadata.row_group(row_group_idx);
+        let page_locations = self
+            .metadata
+            .offset_index()
+            .map(|x| x[row_group_idx].as_slice());
+
         let mut row_group = InMemoryRowGroup {
             metadata: meta,
             // schema: meta.schema_descr_ptr(),
             row_count: meta.num_rows() as usize,
             column_chunks: vec![None; meta.columns().len()],
+            page_locations,
         };
 
         if let Some(filter) = self.filter.as_mut() {
@@ -614,6 +617,7 @@ where
 /// An in-memory collection of column chunks
 struct InMemoryRowGroup<'a> {
     metadata: &'a RowGroupMetaData,
+    page_locations: Option<&'a [Vec<PageLocation>]>,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
 }
@@ -626,9 +630,7 @@ impl<'a> InMemoryRowGroup<'a> {
         projection: &ProjectionMask,
         selection: Option<&RowSelection>,
     ) -> Result<()> {
-        if let Some((selection, page_locations)) =
-            selection.zip(self.metadata.page_offset_index().as_ref())
-        {
+        if let Some((selection, page_locations)) = selection.zip(self.page_locations) {
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
             let mut page_start_offsets: Vec<Vec<usize>> = vec![];
@@ -730,11 +732,7 @@ impl<'a> RowGroupCollection for InMemoryRowGroup<'a> {
                 "Invalid column index {i}, column was not fetched"
             ))),
             Some(data) => {
-                let page_locations = self
-                    .metadata
-                    .page_offset_index()
-                    .as_ref()
-                    .map(|index| index[i].clone());
+                let page_locations = self.page_locations.map(|index| index[i].clone());
                 let page_reader: Box<dyn PageReader> =
                     Box::new(SerializedPageReader::new(
                         data.clone(),
@@ -947,19 +945,24 @@ mod tests {
         let metadata_with_index = builder.metadata();
 
         // Check offset indexes are present for all columns
-        for rg in metadata_with_index.row_groups() {
-            let page_locations =
-                rg.page_offset_index().expect("expected page offset index");
-            assert_eq!(page_locations.len(), rg.columns().len())
-        }
+        let offset_index = metadata_with_index.offset_index().unwrap();
+        let column_index = metadata_with_index.column_index().unwrap();
+
+        assert_eq!(offset_index.len(), metadata_with_index.num_row_groups());
+        assert_eq!(column_index.len(), metadata_with_index.num_row_groups());
+
+        let num_columns = metadata_with_index
+            .file_metadata()
+            .schema_descr()
+            .num_columns();
 
         // Check page indexes are present for all columns
-        let page_indexes = metadata_with_index
-            .page_indexes()
-            .expect("expected page indexes");
-        for (idx, rg) in metadata_with_index.row_groups().iter().enumerate() {
-            assert_eq!(page_indexes[idx].len(), rg.columns().len())
-        }
+        offset_index
+            .iter()
+            .for_each(|x| assert_eq!(x.len(), num_columns));
+        column_index
+            .iter()
+            .for_each(|x| assert_eq!(x.len(), num_columns));
 
         let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![1, 2]);
         let stream = builder
@@ -999,29 +1002,9 @@ mod tests {
             requests: Default::default(),
         };
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
-        let builder =
-            ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
-                .await
-                .unwrap();
-
-        // The builder should have page and offset indexes loaded now
-        let metadata_with_index = builder.metadata();
-
-        // Check offset indexes are present for all columns
-        for rg in metadata_with_index.row_groups() {
-            let page_locations =
-                rg.page_offset_index().expect("expected page offset index");
-            assert_eq!(page_locations.len(), rg.columns().len())
-        }
-
-        // Check page indexes are present for all columns
-        let page_indexes = metadata_with_index
-            .page_indexes()
-            .expect("expected page indexes");
-        for (idx, rg) in metadata_with_index.row_groups().iter().enumerate() {
-            assert_eq!(page_indexes[idx].len(), rg.columns().len())
-        }
+        let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
+            .await
+            .unwrap();
 
         let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![1, 2]);
         let stream = builder
@@ -1473,10 +1456,13 @@ mod tests {
             index_reader::read_pages_locations(&data, metadata.row_group(0).columns())
                 .expect("reading offset index");
 
-        let mut row_group_meta = metadata.row_group(0).clone();
-        row_group_meta.set_page_offset(offset_index.clone());
-        let metadata =
-            ParquetMetaData::new(metadata.file_metadata().clone(), vec![row_group_meta]);
+        let row_group_meta = metadata.row_group(0).clone();
+        let metadata = ParquetMetaData::new_with_page_index(
+            metadata.file_metadata().clone(),
+            vec![row_group_meta],
+            None,
+            Some(vec![offset_index.clone()]),
+        );
 
         let metadata = Arc::new(metadata);
 
