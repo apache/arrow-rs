@@ -59,9 +59,10 @@ pub trait ChunkReader: Length + Send + Sync {
     /// IO to the underlying storage system.
     ///
     /// Systems looking to mask high-IO latency through prefetching, such as encountered with
-    /// object storage, should consider fetching the relevant byte ranges into [`Bytes`]
-    /// and then feeding this into the synchronous APIs. Arrow users should also consider the
-    /// [async_reader] which performs this and allows for sophisticated pre-fetching strategies
+    /// object storage, should consider instead fetching the relevant parts of the file into
+    /// [`Bytes`], and then feeding this into the synchronous APIs, instead of implementing
+    /// [`ChunkReader`] directly. Arrow users can make use of the [async_reader] which
+    /// performs this automatically, and allows for sophisticated pre-fetching strategies
     ///
     /// [async_reader]: crate::arrow::async_reader
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T>;
