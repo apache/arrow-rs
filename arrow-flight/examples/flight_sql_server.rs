@@ -601,7 +601,6 @@ mod tests {
         let uds = UnixListener::bind(path.clone()).unwrap();
         let stream = UnixListenerStream::new(uds);
 
-        // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
         let service = FlightSqlServiceImpl {};
         let serve_future = Server::builder()
             .add_service(FlightServiceServer::new(service))
@@ -632,7 +631,6 @@ mod tests {
         let (incoming, addr) = bind_tcp().await;
         let uri = format!("http://{}:{}", addr.ip(), addr.port());
 
-        // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
         let service = FlightSqlServiceImpl {};
         let serve_future = Server::builder()
             .add_service(FlightServiceServer::new(service))
