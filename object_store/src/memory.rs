@@ -117,6 +117,17 @@ impl ObjectStore for InMemory {
         Ok(())
     }
 
+    async fn append(
+        &self,
+        location: &Path,
+    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+        Ok(Box::new(InMemoryAppend {
+            location: location.clone(),
+            data: Vec::<u8>::new(),
+            storage: StorageType::clone(&self.storage),
+        }))
+    }
+
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let data = self.entry(location).await?;
 
@@ -329,8 +340,55 @@ impl AsyncWrite for InMemoryUpload {
     }
 }
 
+struct InMemoryAppend {
+    location: Path,
+    data: Vec<u8>,
+    storage: StorageType,
+}
+
+impl AsyncWrite for InMemoryAppend {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, io::Error>> {
+        self.data.extend_from_slice(buf);
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), io::Error>> {
+        let storage = StorageType::clone(&self.storage);
+
+        let mut writer = storage.write();
+
+        if let Some((bytes, _)) = writer.remove(&self.location) {
+            let buf = std::mem::take(&mut self.data);
+            let concat = Bytes::from_iter(bytes.into_iter().chain(buf.into_iter()));
+            writer.insert(self.location.clone(), (concat, Utc::now()));
+        } else {
+            writer.insert(
+                self.location.clone(),
+                (Bytes::from(std::mem::take(&mut self.data)), Utc::now()),
+            );
+        };
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), io::Error>> {
+        self.poll_flush(cx)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use tokio::io::AsyncWriteExt;
+
     use super::*;
 
     use crate::{
@@ -395,5 +453,51 @@ mod tests {
         } else {
             panic!("unexpected error type: {err:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn test_append_new() {
+        let in_memory = InMemory::new();
+        let location = Path::from("some_file");
+        let data = Bytes::from("arbitrary data");
+        let expected_data = data.clone();
+
+        let mut writer = in_memory.append(&location).await.unwrap();
+        writer.write_all(&data).await.unwrap();
+        writer.flush().await.unwrap();
+
+        let read_data = in_memory
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&*read_data, expected_data);
+    }
+
+    #[tokio::test]
+    async fn test_append_existing() {
+        let in_memory = InMemory::new();
+        let location = Path::from("some_file");
+        let data = Bytes::from("arbitrary");
+        let data_appended = Bytes::from(" data");
+        let expected_data = Bytes::from("arbitrary data");
+
+        let mut writer = in_memory.append(&location).await.unwrap();
+        writer.write_all(&data).await.unwrap();
+        writer.flush().await.unwrap();
+
+        writer.write_all(&data_appended).await.unwrap();
+        writer.flush().await.unwrap();
+
+        let read_data = in_memory
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&*read_data, expected_data);
     }
 }
