@@ -103,7 +103,7 @@ impl Index {
     }
 }
 
-/// Stores the [`PageIndex`] for each page of a column with [`Type`]
+/// Stores the [`PageIndex`] for each page of a column
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NativeIndex<T: ParquetValueType> {
     /// The indexes, one item per page
