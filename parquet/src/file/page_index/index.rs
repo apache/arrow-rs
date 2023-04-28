@@ -19,7 +19,7 @@
 
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
-use crate::data_type::{ByteArray, Int96};
+use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use crate::errors::ParquetError;
 use crate::format::{BoundaryOrder, ColumnIndex};
 use crate::util::bit_util::from_le_slice;
@@ -73,7 +73,7 @@ pub enum Index {
     FLOAT(NativeIndex<f32>),
     DOUBLE(NativeIndex<f64>),
     BYTE_ARRAY(NativeIndex<ByteArray>),
-    FIXED_LEN_BYTE_ARRAY(NativeIndex<ByteArray>),
+    FIXED_LEN_BYTE_ARRAY(NativeIndex<FixedLenByteArray>),
 }
 
 impl Index {
@@ -103,11 +103,9 @@ impl Index {
     }
 }
 
-/// Stores the [`PageIndex`] for each page of a column with [`Type`]
+/// Stores the [`PageIndex`] for each page of a column
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NativeIndex<T: ParquetValueType> {
-    /// The physical type of this column
-    pub physical_type: Type,
     /// The indexes, one item per page
     pub indexes: Vec<PageIndex<T>>,
     /// If the min/max elements are ordered, and if so in which
@@ -118,11 +116,10 @@ pub struct NativeIndex<T: ParquetValueType> {
 }
 
 impl<T: ParquetValueType> NativeIndex<T> {
+    pub const PHYSICAL_TYPE: Type = T::PHYSICAL_TYPE;
+
     /// Creates a new [`NativeIndex`]
-    pub(crate) fn try_new(
-        index: ColumnIndex,
-        physical_type: Type,
-    ) -> Result<Self, ParquetError> {
+    pub(crate) fn try_new(index: ColumnIndex) -> Result<Self, ParquetError> {
         let len = index.min_values.len();
 
         let null_counts = index
@@ -153,7 +150,6 @@ impl<T: ParquetValueType> NativeIndex<T> {
             .collect::<Result<Vec<_>, ParquetError>>()?;
 
         Ok(Self {
-            physical_type,
             indexes,
             boundary_order: index.boundary_order,
         })
