@@ -179,18 +179,22 @@ mod tests {
 
     #[test]
     fn test_bitwise_shift_left() {
-        let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4)]);
-        let right = UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12)]);
-        let expected = UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384)]);
+        let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4), Some(8)]);
+        let right =
+            UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12), Some(u64::MAX)]);
+        let expected =
+            UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(0)]);
         let result = bitwise_shift_left(&left, &right).unwrap();
         assert_eq!(expected, result);
     }
 
     #[test]
     fn test_bitwise_shift_right() {
-        let left = UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384)]);
-        let right = UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12)]);
-        let expected = UInt64Array::from(vec![Some(1), Some(2), None, Some(4)]);
+        let left =
+            UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(3)]);
+        let right =
+            UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12), Some(65)]);
+        let expected = UInt64Array::from(vec![Some(1), Some(2), None, Some(4), Some(1)]);
         let result = bitwise_shift_right(&left, &right).unwrap();
         assert_eq!(expected, result);
     }
