@@ -47,7 +47,8 @@ pub trait Length {
 /// For a file system reader, each chunk might contain a clone of File bounded on a given range.
 /// For an object store reader, each read can be mapped to a range request.
 pub trait ChunkReader: Length + Send + Sync {
-    type T: Read + Send;
+    type T: Read;
+
     /// Get a [`Read`] starting at the provided file offset
     fn get_read(&self, start: u64) -> Result<Self::T>;
 
