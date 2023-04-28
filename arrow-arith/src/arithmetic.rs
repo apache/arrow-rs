@@ -1444,6 +1444,29 @@ fn get_precision_scale(dt: &DataType) -> Result<(u8, i8), ArrowError> {
     }
 }
 
+/// Returns the precision and scale of the result of a multiplication of two decimal types,
+/// and the divisor for fixed point multiplication.
+fn get_fixed_point_info(
+    left: (u8, i8),
+    right: (u8, i8),
+    required_scale: i8,
+) -> Result<(u8, i8, i256), ArrowError> {
+    let product_scale = left.1 + right.1;
+    let precision = min(left.0 + right.0 + 1, DECIMAL128_MAX_PRECISION);
+
+    if required_scale > product_scale {
+        return Err(ArrowError::ComputeError(format!(
+            "Required scale {} is greater than product scale {}",
+            required_scale, product_scale
+        )));
+    }
+
+    let divisor =
+        i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
+
+    Ok((precision, product_scale, divisor))
+}
+
 #[cfg(feature = "dyn_arith_dict")]
 /// Perform `left * right` operation on two decimal arrays. If either left or right value is
 /// null then the result is also null.
@@ -1477,25 +1500,16 @@ pub fn multiply_fixed_point_dyn(
                         let lhs_precision_scale = get_precision_scale(lhs_value_type.as_ref())?;
                         let rhs_precision_scale = get_precision_scale(rhs_value_type.as_ref())?;
 
-                        let product_scale = lhs_precision_scale.1 + rhs_precision_scale.1;
-                        let precision = min(lhs_precision_scale.0 + rhs_precision_scale.0 + 1, DECIMAL128_MAX_PRECISION);
-
-                        if required_scale == product_scale {
-                            return multiply_dyn_checked(left, right)?.as_primitive::<Decimal128Type>().clone()
-                                .with_precision_and_scale(precision, required_scale).map(|a| Arc::new(a) as ArrayRef);
-                        }
-
-                        if required_scale > product_scale {
-                            return Err(ArrowError::ComputeError(format!(
-                                "Required scale {} is greater than product scale {}",
-                                required_scale, product_scale
-                            )));
-                        }
-
-                        let divisor =
-                            i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
+                        let (precision, product_scale, divisor) = get_fixed_point_info(lhs_precision_scale, rhs_precision_scale, required_scale)?;
 
                         let right = as_dictionary_array::<_>(right);
+
+                        if required_scale == product_scale {
+                            let mul = multiply_dyn(left, right)?;
+                            let array = mul.as_any().downcast_ref::<Decimal128Array>().unwrap();
+                            let array = array.clone().with_precision_and_scale(precision, required_scale)?;
+                            return Ok(Arc::new(array))
+                        }
 
                         let array = math_op_dict::<_, Decimal128Type, _>(left, right, |a, b| {
                             let a = i256::from_i128(a);
@@ -1545,26 +1559,16 @@ pub fn multiply_fixed_point_checked(
     right: &PrimitiveArray<Decimal128Type>,
     required_scale: i8,
 ) -> Result<PrimitiveArray<Decimal128Type>, ArrowError> {
-    let product_scale = left.scale() + right.scale();
-    let precision = min(
-        left.precision() + right.precision() + 1,
-        DECIMAL128_MAX_PRECISION,
-    );
+    let (precision, product_scale, divisor) = get_fixed_point_info(
+        (left.precision(), left.scale()),
+        (right.precision(), right.scale()),
+        required_scale,
+    )?;
 
     if required_scale == product_scale {
         return multiply_checked(left, right)?
             .with_precision_and_scale(precision, required_scale);
     }
-
-    if required_scale > product_scale {
-        return Err(ArrowError::ComputeError(format!(
-            "Required scale {} is greater than product scale {}",
-            required_scale, product_scale
-        )));
-    }
-
-    let divisor =
-        i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
 
     try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
         let a = i256::from_i128(a);
@@ -1599,26 +1603,16 @@ pub fn multiply_fixed_point(
     right: &PrimitiveArray<Decimal128Type>,
     required_scale: i8,
 ) -> Result<PrimitiveArray<Decimal128Type>, ArrowError> {
-    let product_scale = left.scale() + right.scale();
-    let precision = min(
-        left.precision() + right.precision() + 1,
-        DECIMAL128_MAX_PRECISION,
-    );
+    let (precision, product_scale, divisor) = get_fixed_point_info(
+        (left.precision(), left.scale()),
+        (right.precision(), right.scale()),
+        required_scale,
+    )?;
 
     if required_scale == product_scale {
         return multiply(left, right)?
             .with_precision_and_scale(precision, required_scale);
     }
-
-    if required_scale > product_scale {
-        return Err(ArrowError::ComputeError(format!(
-            "Required scale {} is greater than product scale {}",
-            required_scale, product_scale
-        )));
-    }
-
-    let divisor =
-        i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
 
     binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
         let a = i256::from_i128(a);
@@ -4084,6 +4078,33 @@ mod tests {
             result.as_primitive::<Decimal128Type>().value_as_string(2),
             "120.0000000000000000000000000000"
         );
+
+        // Required scale is same as the product of the input scales. Behavior is same as multiply_dyn.
+        let a = Decimal128Array::from(vec![123, 100])
+            .with_precision_and_scale(3, 2)
+            .unwrap();
+
+        let b = Decimal128Array::from(vec![100, 123, 120])
+            .with_precision_and_scale(3, 2)
+            .unwrap();
+
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1), None]);
+        let array1 = DictionaryArray::new(keys, Arc::new(a));
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(2), None]);
+        let array2 = DictionaryArray::new(keys, Arc::new(b));
+
+        let result = multiply_fixed_point_dyn(&array1, &array2, 4).unwrap();
+        let expected = multiply_dyn(&array1, &array2).unwrap();
+        let expected = Arc::new(
+            expected
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .unwrap()
+                .clone()
+                .with_precision_and_scale(7, 4)
+                .unwrap(),
+        ) as ArrayRef;
+        assert_eq!(&expected, &result);
     }
 
     #[test]
