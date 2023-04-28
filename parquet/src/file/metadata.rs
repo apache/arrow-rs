@@ -77,9 +77,9 @@ pub struct ParquetMetaData {
     file_metadata: FileMetaData,
     row_groups: Vec<RowGroupMetaData>,
     /// Page index for all pages in each column chunk
-    page_indexes: Option<ParquetColumnIndex>,
+    column_index: Option<ParquetColumnIndex>,
     /// Offset index for all pages in each column chunk
-    offset_indexes: Option<ParquetOffsetIndex>,
+    offset_index: Option<ParquetOffsetIndex>,
 }
 
 impl ParquetMetaData {
@@ -89,8 +89,8 @@ impl ParquetMetaData {
         ParquetMetaData {
             file_metadata,
             row_groups,
-            page_indexes: None,
-            offset_indexes: None,
+            column_index: None,
+            offset_index: None,
         }
     }
 
@@ -99,14 +99,14 @@ impl ParquetMetaData {
     pub fn new_with_page_index(
         file_metadata: FileMetaData,
         row_groups: Vec<RowGroupMetaData>,
-        page_indexes: Option<ParquetColumnIndex>,
-        offset_indexes: Option<ParquetOffsetIndex>,
+        column_index: Option<ParquetColumnIndex>,
+        offset_index: Option<ParquetOffsetIndex>,
     ) -> Self {
         ParquetMetaData {
             file_metadata,
             row_groups,
-            page_indexes,
-            offset_indexes,
+            column_index,
+            offset_index,
         }
     }
 
@@ -132,13 +132,25 @@ impl ParquetMetaData {
     }
 
     /// Returns page indexes in this file.
+    #[deprecated(note = "Use Self::column_index")]
     pub fn page_indexes(&self) -> Option<&ParquetColumnIndex> {
-        self.page_indexes.as_ref()
+        self.column_index.as_ref()
+    }
+
+    /// Returns the column index for this file if loaded
+    pub fn column_index(&self) -> Option<&ParquetColumnIndex> {
+        self.column_index.as_ref()
+    }
+
+    /// Returns the offset index for this file if loaded
+    #[deprecated(note = "Use Self::offset_index")]
+    pub fn offset_indexes(&self) -> Option<&ParquetOffsetIndex> {
+        self.offset_index.as_ref()
     }
 
     /// Returns offset indexes in this file.
-    pub fn offset_indexes(&self) -> Option<&ParquetOffsetIndex> {
-        self.offset_indexes.as_ref()
+    pub fn offset_index(&self) -> Option<&ParquetOffsetIndex> {
+        self.offset_index.as_ref()
     }
 }
 
@@ -252,8 +264,6 @@ pub struct RowGroupMetaData {
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
-    /// `page_offset_index[column_number][page_number]`
-    page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
 
 impl RowGroupMetaData {
@@ -297,13 +307,6 @@ impl RowGroupMetaData {
         self.columns.iter().map(|c| c.total_compressed_size).sum()
     }
 
-    /// Returns reference of page offset index of all column in this row group.
-    ///
-    /// The returned vector contains `page_offset[column_number][page_number]`
-    pub fn page_offset_index(&self) -> Option<&Vec<Vec<PageLocation>>> {
-        self.page_offset_index.as_ref()
-    }
-
     /// Returns reference to a schema descriptor.
     pub fn schema_descr(&self) -> &SchemaDescriptor {
         self.schema_descr.as_ref()
@@ -312,13 +315,6 @@ impl RowGroupMetaData {
     /// Returns reference counted clone of schema descriptor.
     pub fn schema_descr_ptr(&self) -> SchemaDescPtr {
         self.schema_descr.clone()
-    }
-
-    /// Sets page offset index for this row group.
-    ///
-    /// The vector represents `page_offset[column_number][page_number]`
-    pub fn set_page_offset(&mut self, page_offset: Vec<Vec<PageLocation>>) {
-        self.page_offset_index = Some(page_offset);
     }
 
     /// Method to convert from Thrift.
@@ -341,7 +337,6 @@ impl RowGroupMetaData {
             sorting_columns,
             total_byte_size,
             schema_descr,
-            page_offset_index: None,
         })
     }
 
@@ -366,7 +361,6 @@ pub struct RowGroupMetaDataBuilder {
     num_rows: i64,
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
-    page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
 
 impl RowGroupMetaDataBuilder {
@@ -378,7 +372,6 @@ impl RowGroupMetaDataBuilder {
             num_rows: 0,
             sorting_columns: None,
             total_byte_size: 0,
-            page_offset_index: None,
         }
     }
 
@@ -406,12 +399,6 @@ impl RowGroupMetaDataBuilder {
         self
     }
 
-    /// Sets page offset index for this row group.
-    pub fn set_page_offset(mut self, page_offset: Vec<Vec<PageLocation>>) -> Self {
-        self.page_offset_index = Some(page_offset);
-        self
-    }
-
     /// Builds row group metadata.
     pub fn build(self) -> Result<RowGroupMetaData> {
         if self.schema_descr.num_columns() != self.columns.len() {
@@ -428,7 +415,6 @@ impl RowGroupMetaDataBuilder {
             sorting_columns: self.sorting_columns,
             total_byte_size: self.total_byte_size,
             schema_descr: self.schema_descr,
-            page_offset_index: self.page_offset_index,
         })
     }
 }

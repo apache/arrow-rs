@@ -547,61 +547,31 @@ impl ProstMessageExt for FetchResults {
 mod tests {
     use super::*;
     use futures::TryStreamExt;
-    use once_cell::sync::Lazy;
     use std::fs;
     use std::future::Future;
+    use std::net::SocketAddr;
     use std::time::Duration;
     use tempfile::NamedTempFile;
-    use tokio::{
-        net::{UnixListener, UnixStream},
-        sync::Mutex,
-        time::sleep,
-    };
+    use tokio::net::{TcpListener, UnixListener, UnixStream};
     use tokio_stream::wrappers::UnixListenerStream;
     use tonic::transport::{Channel, ClientTlsConfig};
 
     use arrow_cast::pretty::pretty_format_batches;
     use arrow_flight::sql::client::FlightSqlServiceClient;
     use arrow_flight::utils::flight_data_to_batches;
+    use tonic::transport::server::TcpIncoming;
     use tonic::transport::{Certificate, Endpoint};
     use tower::service_fn;
 
-    // This is a hack to ensure that the server will not be binded to the same for each test
-    static THE_RESOURCE: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
-
-    async fn client_with_uds(path: String) -> FlightSqlServiceClient<Channel> {
-        let connector = service_fn(move |_| UnixStream::connect(path.clone()));
-        let channel = Endpoint::try_from("http://example.com")
-            .unwrap()
-            .connect_with_connector(connector)
-            .await
-            .unwrap();
-        FlightSqlServiceClient::new(channel)
+    async fn bind_tcp() -> (TcpIncoming, SocketAddr) {
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let incoming = TcpIncoming::from_listener(listener, true, None).unwrap();
+        (incoming, addr)
     }
 
-    async fn create_https_server() -> Result<(), tonic::transport::Error> {
-        let cert = std::fs::read_to_string("examples/data/server.pem").unwrap();
-        let key = std::fs::read_to_string("examples/data/server.key").unwrap();
-        let client_ca = std::fs::read_to_string("examples/data/client_ca.pem").unwrap();
-
-        let tls_config = ServerTlsConfig::new()
-            .identity(Identity::from_pem(&cert, &key))
-            .client_ca_root(Certificate::from_pem(&client_ca));
-
-        let addr = "0.0.0.0:50051".parse().unwrap();
-
-        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
-
-        Server::builder()
-            .tls_config(tls_config)
-            .unwrap()
-            .add_service(svc)
-            .serve(addr)
-            .await
-    }
-
-    fn endpoint(addr: String) -> Result<Endpoint, ArrowError> {
-        let endpoint = Endpoint::new(addr)
+    fn endpoint(uri: String) -> Result<Endpoint, ArrowError> {
+        let endpoint = Endpoint::new(uri)
             .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
             .connect_timeout(Duration::from_secs(20))
             .timeout(Duration::from_secs(20))
@@ -638,7 +608,13 @@ mod tests {
             .serve_with_incoming(stream);
 
         let request_future = async {
-            let client = client_with_uds(path).await;
+            let connector = service_fn(move |_| UnixStream::connect(path.clone()));
+            let channel = Endpoint::try_from("http://example.com")
+                .unwrap()
+                .connect_with_connector(connector)
+                .await
+                .unwrap();
+            let client = FlightSqlServiceClient::new(channel);
             f(client).await
         };
 
@@ -648,23 +624,23 @@ mod tests {
         }
     }
 
-    async fn test_tcp_client<F, C>(f: F)
+    async fn test_http_client<F, C>(f: F)
     where
         F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
         C: Future<Output = ()>,
     {
-        let addr = "127.0.0.1:50051";
+        let (incoming, addr) = bind_tcp().await;
+        let uri = format!("http://{}:{}", addr.ip(), addr.port());
 
         // We would just listen on TCP, but it seems impossible to know when tonic is ready to serve
         let service = FlightSqlServiceImpl {};
         let serve_future = Server::builder()
             .add_service(FlightServiceServer::new(service))
-            .serve(addr.parse().unwrap());
+            .serve_with_incoming(incoming);
 
         let request_future = async {
-            sleep(Duration::from_millis(2000)).await;
-            let endpoint = endpoint("http://127.0.0.1:50051".to_owned()).unwrap();
-            let channel = endpoint.connect_lazy();
+            let endpoint = endpoint(uri).unwrap();
+            let channel = endpoint.connect().await.unwrap();
             let client = FlightSqlServiceClient::new(channel);
             f(client).await
         };
@@ -680,11 +656,26 @@ mod tests {
         F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
         C: Future<Output = ()>,
     {
-        let serve_future = create_https_server();
-        let request_future = async {
-            //wait for server to start up
-            sleep(Duration::from_millis(2000)).await;
+        let cert = std::fs::read_to_string("examples/data/server.pem").unwrap();
+        let key = std::fs::read_to_string("examples/data/server.key").unwrap();
+        let client_ca = std::fs::read_to_string("examples/data/client_ca.pem").unwrap();
 
+        let tls_config = ServerTlsConfig::new()
+            .identity(Identity::from_pem(&cert, &key))
+            .client_ca_root(Certificate::from_pem(&client_ca));
+
+        let (incoming, addr) = bind_tcp().await;
+        let uri = format!("https://{}:{}", addr.ip(), addr.port());
+
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
+
+        let serve_future = Server::builder()
+            .tls_config(tls_config)
+            .unwrap()
+            .add_service(svc)
+            .serve_with_incoming(incoming);
+
+        let request_future = async {
             let cert = std::fs::read_to_string("examples/data/client1.pem").unwrap();
             let key = std::fs::read_to_string("examples/data/client1.key").unwrap();
             let server_ca = std::fs::read_to_string("examples/data/ca.pem").unwrap();
@@ -693,10 +684,8 @@ mod tests {
                 .domain_name("localhost")
                 .ca_certificate(Certificate::from_pem(&server_ca))
                 .identity(Identity::from_pem(cert, key));
-            let endpoint = endpoint(String::from("https://127.0.0.1:50051"))
-                .unwrap()
-                .tls_config(tls_config)
-                .unwrap();
+
+            let endpoint = endpoint(uri).unwrap().tls_config(tls_config).unwrap();
             let channel = endpoint.connect().await.unwrap();
             let client = FlightSqlServiceClient::new(channel);
             f(client).await
@@ -708,28 +697,37 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_select_1() {
-        let _shard = THE_RESOURCE.lock().await;
+    async fn test_all_clients<F, C>(task: F)
+    where
+        F: FnOnce(FlightSqlServiceClient<Channel>) -> C + Copy,
+        C: Future<Output = ()>,
+    {
+        println!("testing uds client");
+        test_uds_client(task).await;
+        println!("=======");
 
-        let task = |mut client| async move {
+        println!("testing http client");
+        test_http_client(task).await;
+        println!("=======");
+
+        println!("testing https client");
+        test_https_client(task).await;
+        println!("=======");
+    }
+
+    #[tokio::test]
+    async fn test_select() {
+        test_all_clients(|mut client| async move {
             auth_client(&mut client).await;
 
-            let now = tokio::time::Instant::now();
             let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
-            println!("prepare cost: {:?}", now.elapsed());
 
-            let now = tokio::time::Instant::now();
             let flight_info = stmt.execute().await.unwrap();
-            println!("execute cost: {:?}", now.elapsed());
 
-            let now = tokio::time::Instant::now();
             let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
             let flight_data = client.do_get(ticket).await.unwrap();
             let flight_data: Vec<FlightData> = flight_data.try_collect().await.unwrap();
             let batches = flight_data_to_batches(&flight_data).unwrap();
-
-            println!("do get cost: {:?}", now.elapsed());
 
             let res = pretty_format_batches(batches.as_slice()).unwrap();
             let expected = r#"
@@ -741,31 +739,8 @@ mod tests {
                 .trim()
                 .to_string();
             assert_eq!(res.to_string(), expected);
-        };
-
-        println!("testing uds client");
-        test_uds_client(task).await;
-        println!("=======");
-
-        println!("testing tcp client");
-        test_tcp_client(task).await;
-        println!("=======");
-
-        println!("testing https client");
-        test_https_client(task).await;
-        println!("=======");
-    }
-
-    async fn test_all_clients<F, C>(task: F)
-    where
-        F: FnOnce(FlightSqlServiceClient<Channel>) -> C + Copy,
-        C: Future<Output = ()>,
-    {
-        let _shard = THE_RESOURCE.lock().await;
-
-        test_uds_client(task).await;
-        test_tcp_client(task).await;
-        test_https_client(task).await;
+        })
+        .await
     }
 
     #[tokio::test]

@@ -78,10 +78,14 @@ fn do_test(test: LayoutTest) {
 
 fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
     assert_eq!(meta.row_groups().len(), layout.row_groups.len());
-    for (row_group, row_group_layout) in meta.row_groups().iter().zip(&layout.row_groups)
-    {
+    let iter = meta
+        .row_groups()
+        .iter()
+        .zip(&layout.row_groups)
+        .zip(meta.offset_index().unwrap());
+
+    for ((row_group, row_group_layout), offset_index) in iter {
         // Check against offset index
-        let offset_index = row_group.page_offset_index().unwrap();
         assert_eq!(offset_index.len(), row_group_layout.columns.len());
 
         for (column_index, column_layout) in
