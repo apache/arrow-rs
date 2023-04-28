@@ -253,7 +253,7 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
 
             if let Some(fetch) = fetch {
                 let bytes = input.get_bytes(fetch.clone()).await?;
-                let bytes = |r: Range<usize>| {
+                let get = |r: Range<usize>| {
                     &bytes[(r.start - fetch.start)..(r.end - fetch.start)]
                 };
 
@@ -267,12 +267,12 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
                     for chunk in rg.columns() {
                         let t = chunk.column_type();
                         let c = match chunk.column_index_range() {
-                            Some(range) => decode_column_index(bytes(range), t)?,
+                            Some(range) => decode_column_index(get(range), t)?,
                             None => Index::NONE,
                         };
 
                         let o = match chunk.offset_index_range() {
-                            Some(range) => decode_offset_index(bytes(range))?,
+                            Some(range) => decode_offset_index(get(range))?,
                             None => return Err(general_err!("missing offset index")),
                         };
 

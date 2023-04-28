@@ -66,12 +66,12 @@ pub fn read_columns_indexes<R: ChunkReader>(
     };
 
     let bytes = reader.get_bytes(fetch.start as _, fetch.end - fetch.start)?;
-    let bytes = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
+    let get = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
 
     chunks
         .iter()
         .map(|c| match c.column_index_range() {
-            Some(r) => decode_column_index(bytes(r), c.column_type()),
+            Some(r) => decode_column_index(get(r), c.column_type()),
             None => Ok(Index::NONE),
         })
         .collect()
@@ -102,12 +102,12 @@ pub fn read_pages_locations<R: ChunkReader>(
     };
 
     let bytes = reader.get_bytes(fetch.start as _, fetch.end - fetch.start)?;
-    let bytes = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
+    let get = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
 
     chunks
         .iter()
         .map(|c| match c.offset_index_range() {
-            Some(r) => decode_offset_index(bytes(r)),
+            Some(r) => decode_offset_index(get(r)),
             None => Err(general_err!("missing offset index")),
         })
         .collect()
