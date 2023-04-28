@@ -47,17 +47,23 @@ pub trait Length {
 
 /// The ChunkReader trait generates readers of chunks of a source.
 ///
-/// Concurrent or interleaved reads via either [`Self::get_read`] or [`Self::get_bytes`]
-/// may result in interleaved data. Care should be taken to avoid this.
-///
 /// For more information see [`File::try_clone`]
 pub trait ChunkReader: Length + Send + Sync {
     type T: Read;
 
     /// Get a [`Read`] starting at the provided file offset
+    ///
+    /// Subsequent or concurrent calls to [`Self::get_read`] or [`Self::get_bytes`] may
+    /// side-effect on previously returned [`Self::T`]. Care should be taken to avoid this
+    ///
+    /// See [`File::try_clone`] for more information
     fn get_read(&self, start: u64) -> Result<Self::T>;
 
     /// Get a range as bytes
+    ///
+    /// Concurrent calls to [`Self::get_bytes`] may result in interleaved output
+    ///
+    /// See [`File::try_clone`] for more information
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes>;
 }
 
