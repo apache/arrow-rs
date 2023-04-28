@@ -175,8 +175,7 @@ fn read_page_header<C: ChunkReader>(
         }
     }
 
-    let len = reader.len().checked_sub(offset).unwrap() as usize;
-    let input = reader.get_read(offset, len)?;
+    let input = reader.get_read(offset)?;
     let mut tracked = TrackedRead(input, 0);
     let mut prot = TCompactInputProtocol::new(&mut tracked);
     let header = PageHeader::read_from_in_protocol(&mut prot)?;

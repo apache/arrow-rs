@@ -49,7 +49,6 @@ impl<T: Read + Seek + Length + TryClone> ParquetReader for T {}
 pub struct FileSource<R: ParquetReader> {
     reader: RefCell<R>,
     start: u64,     // start position in a file
-    end: u64,       // end position in a file
     buf: Vec<u8>,   // buffer where bytes read in advance are stored
     buf_pos: usize, // current position of the reader in the buffer
     buf_cap: usize, // current number of bytes read into the buffer
@@ -60,7 +59,6 @@ impl<R: ParquetReader> fmt::Debug for FileSource<R> {
         f.debug_struct("FileSource")
             .field("reader", &"OPAQUE")
             .field("start", &self.start)
-            .field("end", &self.end)
             .field("buf.len", &self.buf.len())
             .field("buf_pos", &self.buf_pos)
             .field("buf_cap", &self.buf_cap)
@@ -70,12 +68,11 @@ impl<R: ParquetReader> fmt::Debug for FileSource<R> {
 
 impl<R: ParquetReader> FileSource<R> {
     /// Creates new file reader with start and length from a file handle
-    pub fn new(fd: &R, start: u64, length: usize) -> Self {
+    pub fn new(fd: &R, start: u64) -> Self {
         let reader = RefCell::new(fd.try_clone().unwrap());
         Self {
             reader,
             start,
-            end: start + length as u64,
             buf: vec![0_u8; DEFAULT_BUF_SIZE],
             buf_pos: 0,
             buf_cap: 0,
@@ -112,9 +109,6 @@ impl<R: ParquetReader> FileSource<R> {
 
 impl<R: ParquetReader> Read for FileSource<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let bytes_to_read = cmp::min(buf.len(), (self.end - self.start) as usize);
-        let buf = &mut buf[0..bytes_to_read];
-
         // If we don't have any buffered data and we're doing a massive read
         // (larger than our internal buffer), bypass our internal buffer
         // entirely.
@@ -134,12 +128,6 @@ impl<R: ParquetReader> Read for FileSource<R> {
     }
 }
 
-impl<R: ParquetReader> Length for FileSource<R> {
-    fn len(&self) -> u64 {
-        self.end - self.start
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,7 +139,8 @@ mod tests {
     #[test]
     fn test_io_read_fully() {
         let mut buf = vec![0; 8];
-        let mut src = FileSource::new(&get_test_file("alltypes_plain.parquet"), 0, 4);
+        let mut src =
+            FileSource::new(&get_test_file("alltypes_plain.parquet"), 0).take(4);
 
         let bytes_read = src.read(&mut buf[..]).unwrap();
         assert_eq!(bytes_read, 4);
@@ -161,7 +150,8 @@ mod tests {
     #[test]
     fn test_io_read_in_chunks() {
         let mut buf = vec![0; 4];
-        let mut src = FileSource::new(&get_test_file("alltypes_plain.parquet"), 0, 4);
+        let mut src =
+            FileSource::new(&get_test_file("alltypes_plain.parquet"), 0).take(4);
 
         let bytes_read = src.read(&mut buf[0..2]).unwrap();
         assert_eq!(bytes_read, 2);
@@ -172,34 +162,34 @@ mod tests {
 
     #[test]
     fn test_io_read_pos() {
-        let mut src = FileSource::new(&get_test_file("alltypes_plain.parquet"), 0, 4);
+        let mut src =
+            FileSource::new(&get_test_file("alltypes_plain.parquet"), 0).take(4);
 
-        let _ = src.read(&mut [0; 1]).unwrap();
-        assert_eq!(src.start, 1);
+        let read = src.read(&mut [0; 1]).unwrap();
+        assert_eq!(read, 1);
 
-        let _ = src.read(&mut [0; 4]).unwrap();
-        assert_eq!(src.start, 4);
+        let read = src.read(&mut [0; 4]).unwrap();
+        assert_eq!(read, 3);
     }
 
     #[test]
     fn test_io_read_over_limit() {
-        let mut src = FileSource::new(&get_test_file("alltypes_plain.parquet"), 0, 4);
+        let mut src =
+            FileSource::new(&get_test_file("alltypes_plain.parquet"), 0).take(4);
 
         // Read all bytes from source
         let _ = src.read(&mut [0; 128]).unwrap();
-        assert_eq!(src.start, 4);
 
         // Try reading again, should return 0 bytes.
         let bytes_read = src.read(&mut [0; 128]).unwrap();
         assert_eq!(bytes_read, 0);
-        assert_eq!(src.start, 4);
     }
 
     #[test]
     fn test_io_seek_switch() {
         let mut buf = vec![0; 4];
         let mut file = get_test_file("alltypes_plain.parquet");
-        let mut src = FileSource::new(&file, 0, 4);
+        let mut src = FileSource::new(&file, 0).take(4);
 
         file.seek(SeekFrom::Start(5_u64))
             .expect("File seek to a position");
@@ -224,7 +214,7 @@ mod tests {
         file.seek(SeekFrom::Start(3)).unwrap();
 
         // create the FileSource reader that starts at pos 1 ('b')
-        let mut chunk = FileSource::new(&file, 1, patterned_data.len() - 1);
+        let mut chunk = FileSource::new(&file, 1);
 
         // read the 'b' at pos 1
         let mut res = vec![0u8; 1];

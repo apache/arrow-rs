@@ -48,15 +48,17 @@ pub trait Length {
 /// For an object store reader, each read can be mapped to a range request.
 pub trait ChunkReader: Length + Send + Sync {
     type T: Read + Send;
-    /// Get a serially readable slice of the current reader
-    /// This should fail if the slice exceeds the current bounds
-    fn get_read(&self, start: u64, length: usize) -> Result<Self::T>;
+    /// Get a [`Read`] starting at the provided file offset
+    fn get_read(&self, start: u64) -> Result<Self::T>;
 
     /// Get a range as bytes
     /// This should fail if the exact number of bytes cannot be read
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(length);
-        let read = self.get_read(start, length)?.read_to_end(&mut buffer)?;
+        let read = self
+            .get_read(start)?
+            .take(length as _)
+            .read_to_end(&mut buffer)?;
 
         if read != length {
             return Err(eof_err!(

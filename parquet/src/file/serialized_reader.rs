@@ -65,8 +65,8 @@ impl TryClone for File {
 impl ChunkReader for File {
     type T = FileSource<File>;
 
-    fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
-        Ok(FileSource::new(self, start, length))
+    fn get_read(&self, start: u64) -> Result<Self::T> {
+        Ok(FileSource::new(self, start))
     }
 }
 
@@ -85,8 +85,9 @@ impl TryClone for Bytes {
 impl ChunkReader for Bytes {
     type T = bytes::buf::Reader<Bytes>;
 
-    fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
-        Ok(self.get_bytes(start, length)?.reader())
+    fn get_read(&self, start: u64) -> Result<Self::T> {
+        let start = start as usize;
+        Ok(self.slice(start..).reader())
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
@@ -662,7 +663,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         return Ok(None);
                     }
 
-                    let mut read = self.reader.get_read(*offset as u64, *remaining)?;
+                    let mut read = self.reader.get_read(*offset as u64)?;
                     let header = if let Some(header) = next_page_header.take() {
                         *header
                     } else {
@@ -752,8 +753,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                             continue;
                         }
                     } else {
-                        let mut read =
-                            self.reader.get_read(*offset as u64, *remaining_bytes)?;
+                        let mut read = self.reader.get_read(*offset as u64)?;
                         let (header_len, header) = read_page_header_len(&mut read)?;
                         *offset += header_len;
                         *remaining_bytes -= header_len;
@@ -807,8 +807,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     *offset += buffered_header.compressed_page_size as usize;
                     *remaining_bytes -= buffered_header.compressed_page_size as usize;
                 } else {
-                    let mut read =
-                        self.reader.get_read(*offset as u64, *remaining_bytes)?;
+                    let mut read = self.reader.get_read(*offset as u64)?;
                     let (header_len, header) = read_page_header_len(&mut read)?;
                     let data_page_size = header.compressed_page_size as usize;
                     *offset += header_len + data_page_size;
