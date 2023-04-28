@@ -379,13 +379,9 @@ impl AsyncWrite for InMemoryAppend {
 
     fn poll_shutdown(
         self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
+        cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
-        // does nothing different than flush
-        match self.poll_flush(_cx) {
-            Poll::Ready(_) => Poll::Ready(Ok(())),
-            Poll::Pending => Poll::Pending,
-        }
+        self.poll_flush(cx)
     }
 }
 
