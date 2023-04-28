@@ -28,7 +28,9 @@ use std::io::Cursor;
 use std::ops::Range;
 use thrift::protocol::{TCompactInputProtocol, TSerializable};
 
-/// Computes the aggregate range of two optional ranges
+/// Computes the covering range of two optional ranges
+///
+/// For example `acc_range(Some(7..9), Some(1..3)) = Some(1..9)`
 pub(crate) fn acc_range(
     a: Option<Range<usize>>,
     b: Option<Range<usize>>,
