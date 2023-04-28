@@ -40,61 +40,8 @@ use crate::format::{PageHeader, PageLocation, PageType};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
-use crate::util::{io::TryClone, memory::ByteBufferPtr};
-use bytes::{Buf, Bytes};
+use crate::util::memory::ByteBufferPtr;
 use thrift::protocol::{TCompactInputProtocol, TSerializable};
-// export `SliceableCursor` and `FileSource` publicly so clients can
-// re-use the logic in their own ParquetFileWriter wrappers
-pub use crate::util::io::FileSource;
-
-// ----------------------------------------------------------------------
-// Implementations of traits facilitating the creation of a new reader
-
-impl Length for File {
-    fn len(&self) -> u64 {
-        self.metadata().map(|m| m.len()).unwrap_or(0u64)
-    }
-}
-
-impl TryClone for File {
-    fn try_clone(&self) -> std::io::Result<Self> {
-        self.try_clone()
-    }
-}
-
-impl ChunkReader for File {
-    type T = FileSource<File>;
-
-    fn get_read(&self, start: u64) -> Result<Self::T> {
-        Ok(FileSource::new(self, start))
-    }
-}
-
-impl Length for Bytes {
-    fn len(&self) -> u64 {
-        self.len() as u64
-    }
-}
-
-impl TryClone for Bytes {
-    fn try_clone(&self) -> std::io::Result<Self> {
-        Ok(self.clone())
-    }
-}
-
-impl ChunkReader for Bytes {
-    type T = bytes::buf::Reader<Bytes>;
-
-    fn get_read(&self, start: u64) -> Result<Self::T> {
-        let start = start as usize;
-        Ok(self.slice(start..).reader())
-    }
-
-    fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
-        let start = start as usize;
-        Ok(self.slice(start..start + length))
-    }
-}
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -826,6 +773,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use std::sync::Arc;
 
     use crate::format::BoundaryOrder;
