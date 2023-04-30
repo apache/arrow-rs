@@ -60,9 +60,16 @@ use crate::{
     Result, RetryConfig, StreamExt,
 };
 
+#[cfg(feature = "aws_profile")]
+use crate::aws::region::RegionProvider;
+
 mod checksum;
 mod client;
 mod credential;
+mod region;
+
+#[cfg(feature = "aws_profile")]
+mod profile;
 
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 //
@@ -434,7 +441,7 @@ pub struct AmazonS3Builder {
 
 /// Configuration keys for [`AmazonS3Builder`]
 ///
-/// Configuration via keys can be dome via the [`try_with_option`](AmazonS3Builder::try_with_option)
+/// Configuration via keys can be done via the [`try_with_option`](AmazonS3Builder::try_with_option)
 /// or [`with_options`](AmazonS3Builder::try_with_options) methods on the builder.
 ///
 /// # Example
@@ -986,8 +993,14 @@ impl AmazonS3Builder {
             self.parse_url(&url)?;
         }
 
+        let region = match (self.region.clone(), self.profile.clone()) {
+            (Some(region), _) => Some(region),
+            (None, Some(profile)) => profile_region(profile),
+            (None, None) => None,
+        };
+
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
-        let region = self.region.context(MissingRegionSnafu)?;
+        let region = region.context(MissingRegionSnafu)?;
 
         let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
             (Some(key_id), Some(secret_key), token) => {
@@ -1095,11 +1108,26 @@ impl AmazonS3Builder {
 }
 
 #[cfg(feature = "aws_profile")]
+fn profile_region(profile: String) -> Option<String> {
+    let provider = profile::ProfileProvider::new(profile, None);
+
+    provider.get_region()
+}
+
+#[cfg(feature = "aws_profile")]
 fn profile_credentials(
     profile: String,
     region: String,
 ) -> Result<Box<dyn CredentialProvider>> {
-    Ok(Box::new(credential::ProfileProvider::new(profile, region)))
+    Ok(Box::new(profile::ProfileProvider::new(
+        profile,
+        Some(region),
+    )))
+}
+
+#[cfg(not(feature = "aws_profile"))]
+fn profile_region(_profile: String) -> Option<String> {
+    None
 }
 
 #[cfg(not(feature = "aws_profile"))]
@@ -1561,5 +1589,66 @@ mod tests {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+}
+
+#[cfg(all(test, feature = "aws_profile"))]
+mod profile_tests {
+    use super::*;
+    use profile::ProfileProvider;
+    use region::RegionProvider;
+    use std::env;
+
+    impl RegionProvider for ProfileProvider {
+        fn get_region(&self) -> Option<String> {
+            let region = "object_store:fake_region_from_profile".to_owned();
+            Some(region)
+        }
+    }
+
+    #[test]
+    fn s3_test_region_from_profile() {
+        let s3_url = "s3://bucket/prefix".to_owned();
+
+        let aws_profile = env::var("AWS_PROFILE")
+            .unwrap_or_else(|_| "object_store:fake_profile".into());
+
+        env::set_var("AWS_PROFILE", &aws_profile);
+        env::remove_var("AWS_REGION");
+        env::remove_var("AWS_DEFAULT_REGION");
+
+        let s3 = AmazonS3Builder::from_env()
+            .with_url(s3_url)
+            .build()
+            .unwrap();
+
+        let actual = s3.client.config().region.clone();
+        let expected = "object_store:fake_region_from_profile";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn s3_test_region_override() {
+        let s3_url = "s3://bucket/prefix".to_owned();
+
+        let aws_profile = env::var("AWS_PROFILE")
+            .unwrap_or_else(|_| "object_store:fake_profile".into());
+
+        let aws_region = env::var("AWS_REGION")
+            .unwrap_or_else(|_| "object_store:fake_default_region".into());
+
+        env::set_var("AWS_PROFILE", &aws_profile);
+
+        let s3 = AmazonS3Builder::from_env()
+            .with_url(s3_url)
+            .with_region(aws_region.clone())
+            .build()
+            .unwrap();
+
+        let actual = s3.client.config().region.clone();
+        let expected = aws_region.clone();
+
+        assert_eq!(actual, expected);
     }
 }
