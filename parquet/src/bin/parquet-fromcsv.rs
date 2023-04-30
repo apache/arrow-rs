@@ -61,6 +61,7 @@
 //! ```text
 //! - `-i`, `--input-file` : Path to input CSV file
 //! - `-f`, `--input-format` : Dialect for input file, `csv` or `tsv`.
+//! - `-C`, `--csv-compression` : Compression option for csv, default is UNCOMPRESSED
 //! - `-d`, `--delimiter : Field delimiter for CSV file, default depends `--input-format`
 //! - `-e`, `--escape` : Escape character for input file
 //! - `-h`, `--has-header` : Input has header
@@ -385,7 +386,6 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
             Box::new(Decompressor::new(input_file, 0)) as Box<dyn Read>
         }
         Compression::LZ4 => Box::new(lz4::Decoder::new(input_file).map_err(|e| {
-            // FIXME: it seems there should use unwarp because the Decoder::new only return OK
             ParquetFromCsvError::with_context(e, "Failed to create lz4::Decoder")
         })?) as Box<dyn Read>,
         Compression::ZSTD(_) => Box::new(zstd::Decoder::new(input_file).map_err(|e| {
@@ -420,13 +420,17 @@ fn main() -> Result<(), ParquetFromCsvError> {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::{Seek, Write},
+        io::Write,
         path::{Path, PathBuf},
     };
 
     use super::*;
     use arrow::datatypes::{DataType, Field};
+    use brotli::CompressorWriter;
     use clap::{CommandFactory, Parser};
+    use flate2::write::GzEncoder;
+    use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
+    use snap::write::FrameEncoder;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -645,8 +649,7 @@ mod tests {
         assert_debug_text(&builder_debug, "escape", "Some(92)");
     }
 
-    #[test]
-    fn test_convert_csv_to_parquet() {
+    fn test_convert_compressed_csv_to_parquet(csv_compression: Compression) {
         let schema = NamedTempFile::new().unwrap();
         let schema_text = r"message schema {
             optional int32 id;
@@ -655,14 +658,71 @@ mod tests {
         schema.as_file().write_all(schema_text.as_bytes()).unwrap();
 
         let mut input_file = NamedTempFile::new().unwrap();
-        {
-            let csv = input_file.as_file_mut();
+
+        fn wirte_tmp_file<T: Write>(w: &mut T) {
             for index in 1..2000 {
-                write!(csv, "{index},\"name_{index}\"\r\n").unwrap();
+                write!(w, "{index},\"name_{index}\"\r\n").unwrap();
             }
-            csv.flush().unwrap();
-            csv.rewind().unwrap();
+            w.flush().unwrap();
         }
+
+        // make sure the input_file's lifetime being long enough
+        input_file = match csv_compression {
+            Compression::UNCOMPRESSED => {
+                wirte_tmp_file(&mut input_file);
+                input_file
+            }
+            Compression::SNAPPY => {
+                let mut encoder = FrameEncoder::new(input_file);
+                wirte_tmp_file(&mut encoder);
+                encoder.into_inner().unwrap()
+            }
+            Compression::GZIP(level) => {
+                let mut encoder = GzEncoder::new(
+                    input_file,
+                    flate2::Compression::new(level.compression_level()),
+                );
+                wirte_tmp_file(&mut encoder);
+                encoder.finish().unwrap()
+            }
+            Compression::BROTLI(level) => {
+                let mut encoder =
+                    CompressorWriter::new(input_file, 0, level.compression_level(), 0);
+                wirte_tmp_file(&mut encoder);
+                encoder.into_inner()
+            }
+            Compression::LZ4 => {
+                let mut encoder = lz4::EncoderBuilder::new()
+                    .build(input_file)
+                    .map_err(|e| {
+                        ParquetFromCsvError::with_context(
+                            e,
+                            "Failed to create lz4::Encoder",
+                        )
+                    })
+                    .unwrap();
+                wirte_tmp_file(&mut encoder);
+                let (inner, err) = encoder.finish();
+                err.unwrap();
+                inner
+            }
+
+            Compression::ZSTD(level) => {
+                let mut encoder =
+                    zstd::Encoder::new(input_file, level.compression_level())
+                        .map_err(|e| {
+                            ParquetFromCsvError::with_context(
+                                e,
+                                "Failed to create zstd::Encoder",
+                            )
+                        })
+                        .unwrap();
+                wirte_tmp_file(&mut encoder);
+                encoder.finish().unwrap()
+            }
+            _ => panic!("compression type not support yet"),
+        };
+
         let output_parquet = NamedTempFile::new().unwrap();
 
         let args = Args {
@@ -677,7 +737,7 @@ mod tests {
             escape_char: None,
             quote_char: None,
             double_quote: None,
-            csv_compression: Compression::UNCOMPRESSED,
+            csv_compression: csv_compression,
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
@@ -686,5 +746,21 @@ mod tests {
             help: None,
         };
         convert_csv_to_parquet(&args).unwrap();
+    }
+
+    #[test]
+    fn test_convert_csv_to_parquet() {
+        test_convert_compressed_csv_to_parquet(Compression::UNCOMPRESSED);
+        test_convert_compressed_csv_to_parquet(Compression::SNAPPY);
+        test_convert_compressed_csv_to_parquet(Compression::GZIP(
+            GzipLevel::try_new(1).unwrap(),
+        ));
+        test_convert_compressed_csv_to_parquet(Compression::BROTLI(
+            BrotliLevel::try_new(2).unwrap(),
+        ));
+        test_convert_compressed_csv_to_parquet(Compression::LZ4);
+        test_convert_compressed_csv_to_parquet(Compression::ZSTD(
+            ZstdLevel::try_new(1).unwrap(),
+        ));
     }
 }
