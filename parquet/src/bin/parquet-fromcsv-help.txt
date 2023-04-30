@@ -47,8 +47,13 @@ Options:
           
           [possible values: true, false]
 
+  -C, --csv-compression <CSV_COMPRESSION>
+          compression mode of csv
+          
+          [default: UNCOMPRESSED]
+
   -c, --parquet-compression <PARQUET_COMPRESSION>
-          compression mode
+          compression mode of parquet
           
           [default: SNAPPY]
 

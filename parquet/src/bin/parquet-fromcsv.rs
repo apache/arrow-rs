@@ -72,13 +72,16 @@
 use std::{
     fmt::Display,
     fs::{read_to_string, File},
+    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use arrow_csv::ReaderBuilder;
 use arrow_schema::{ArrowError, Schema};
+use brotli::Decompressor;
 use clap::{Parser, ValueEnum};
+use flate2::read::GzDecoder;
 use parquet::{
     arrow::{parquet_to_arrow_schema, ArrowWriter},
     basic::Compression,
@@ -86,6 +89,7 @@ use parquet::{
     file::properties::{WriterProperties, WriterVersion},
     schema::{parser::parse_message_type, types::SchemaDescriptor},
 };
+use snap::read::FrameDecoder;
 
 #[derive(Debug)]
 enum ParquetFromCsvError {
@@ -193,7 +197,10 @@ struct Args {
     quote_char: Option<char>,
     #[clap(short('D'), long, help("double quote"))]
     double_quote: Option<bool>,
-    #[clap(short('c'), long, help("compression mode"), default_value_t=Compression::SNAPPY)]
+    #[clap(short('C'), long, help("compression mode of csv"), default_value_t=Compression::UNCOMPRESSED)]
+    #[clap(value_parser=compression_from_str)]
+    csv_compression: Compression,
+    #[clap(short('c'), long, help("compression mode of parquet"), default_value_t=Compression::SNAPPY)]
     #[clap(value_parser=compression_from_str)]
     parquet_compression: Compression,
 
@@ -368,9 +375,29 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
             &format!("Failed to open input file {:#?}", &args.input_file),
         )
     })?;
+
+    // open input file decoder
+    let input_file_decoder = match args.csv_compression {
+        Compression::UNCOMPRESSED => Box::new(input_file) as Box<dyn Read>,
+        Compression::SNAPPY => Box::new(FrameDecoder::new(input_file)) as Box<dyn Read>,
+        Compression::GZIP(_) => Box::new(GzDecoder::new(input_file)) as Box<dyn Read>,
+        Compression::BROTLI(_) => {
+            Box::new(Decompressor::new(input_file, 0)) as Box<dyn Read>
+        }
+        Compression::LZ4 => Box::new(lz4::Decoder::new(input_file).map_err(|e| {
+            // FIXME: it seems there should use unwarp because the Decoder::new only return OK
+            ParquetFromCsvError::with_context(e, "Failed to create lz4::Decoder")
+        })?) as Box<dyn Read>,
+        Compression::ZSTD(_) => Box::new(zstd::Decoder::new(input_file).map_err(|e| {
+            ParquetFromCsvError::with_context(e, "Failed to create zstd::Decoder")
+        })?) as Box<dyn Read>,
+        // TODO: I wonder which crates should i use to decompress lzo and lz4_raw?
+        _ => panic!("compression type not support yet"),
+    };
+
     // create input csv reader
     let builder = configure_reader_builder(args, arrow_schema);
-    let reader = builder.build(input_file)?;
+    let reader = builder.build(input_file_decoder)?;
     for batch_result in reader {
         let batch = batch_result.map_err(|e| {
             ParquetFromCsvError::with_context(e, "Failed to read RecordBatch from CSV")
@@ -558,6 +585,7 @@ mod tests {
             escape_char: None,
             quote_char: None,
             double_quote: None,
+            csv_compression: Compression::UNCOMPRESSED,
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
@@ -593,6 +621,7 @@ mod tests {
             escape_char: Some('\\'),
             quote_char: None,
             double_quote: None,
+            csv_compression: Compression::UNCOMPRESSED,
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
@@ -648,6 +677,7 @@ mod tests {
             escape_char: None,
             quote_char: None,
             double_quote: None,
+            csv_compression: Compression::UNCOMPRESSED,
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
