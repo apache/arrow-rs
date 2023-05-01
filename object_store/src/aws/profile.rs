@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::time::SystemTime;
 
-use super::credential::CredentialProvider;
+use crate::aws::credential::CredentialProvider;
 use crate::aws::AwsCredential;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::Result;
@@ -34,10 +34,7 @@ impl ProfileProvider {
 impl CredentialProvider for ProfileProvider {
     fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>> {
         Box::pin(self.cache.get_or_insert_with(move || async move {
-            let region = match self.region.clone() {
-                Some(r) => Some(Region::new(r)),
-                None => None,
-            };
+            let region = self.region.clone().map(Region::new);
 
             let config = ProviderConfig::default().with_region(region);
 
@@ -73,9 +70,9 @@ impl CredentialProvider for ProfileProvider {
 #[cfg(not(test))]
 mod region {
     use super::*;
-    use crate::aws::region::RegionProvider;
+    use crate::aws::credential::RegionProvider;
     use aws_config::meta::region::ProvideRegion;
-    use aws_config::profile::region::Builder as ProfileRegionBuilder;
+    use aws_config::profile::region::Builder;
 
     impl RegionProvider for ProfileProvider {
         #[tokio::main(flavor = "current_thread")]
@@ -84,16 +81,11 @@ mod region {
                 return Some(region);
             }
 
-            let provider = ProfileRegionBuilder::default()
-                .profile_name(&self.name)
-                .build();
+            let provider = Builder::default().profile_name(&self.name).build();
 
             let region = provider.region().await;
 
-            match region {
-                Some(region) => Some(region.as_ref().to_owned()),
-                None => None,
-            }
+            region.map(|region| region.as_ref().to_owned())
         }
     }
 }

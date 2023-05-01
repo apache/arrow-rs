@@ -291,6 +291,11 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
     (signed_headers, canonical_headers)
 }
 
+/// Provides a region name where cloud resources are located
+pub trait RegionProvider {
+    fn get_region(&self) -> Option<String>;
+}
+
 /// Provides credentials for use when signing requests
 pub trait CredentialProvider: std::fmt::Debug + Send + Sync {
     fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>>;

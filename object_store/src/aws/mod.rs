@@ -61,12 +61,11 @@ use crate::{
 };
 
 #[cfg(feature = "aws_profile")]
-use crate::aws::region::RegionProvider;
+use crate::aws::credential::RegionProvider;
 
 mod checksum;
 mod client;
 mod credential;
-mod region;
 
 #[cfg(feature = "aws_profile")]
 mod profile;
@@ -1595,8 +1594,8 @@ mod tests {
 #[cfg(all(test, feature = "aws_profile"))]
 mod profile_tests {
     use super::*;
+    use credential::RegionProvider;
     use profile::ProfileProvider;
-    use region::RegionProvider;
     use std::env;
 
     impl RegionProvider for ProfileProvider {
