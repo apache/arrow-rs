@@ -737,7 +737,7 @@ mod tests {
             escape_char: None,
             quote_char: None,
             double_quote: None,
-            csv_compression: csv_compression,
+            csv_compression,
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
             max_row_group_size: None,
