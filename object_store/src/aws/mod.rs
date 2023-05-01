@@ -60,9 +60,6 @@ use crate::{
     Result, RetryConfig, StreamExt,
 };
 
-#[cfg(feature = "aws_profile")]
-use crate::aws::credential::RegionProvider;
-
 mod checksum;
 mod client;
 mod credential;
@@ -1108,9 +1105,12 @@ impl AmazonS3Builder {
 
 #[cfg(feature = "aws_profile")]
 fn profile_region(profile: String) -> Option<String> {
+    use crate::aws::credential::RegionProvider;
+    use futures::executor::block_on;
+
     let provider = profile::ProfileProvider::new(profile, None);
 
-    provider.get_region()
+    block_on(provider.get_region())
 }
 
 #[cfg(feature = "aws_profile")]
@@ -1594,13 +1594,16 @@ mod tests {
 #[cfg(all(test, feature = "aws_profile"))]
 mod profile_tests {
     use super::*;
+    use async_trait::async_trait;
     use credential::RegionProvider;
     use profile::ProfileProvider;
     use std::env;
 
+    #[async_trait]
     impl RegionProvider for ProfileProvider {
-        fn get_region(&self) -> Option<String> {
+        async fn get_region(&self) -> Option<String> {
             let region = "object_store:fake_region_from_profile".to_owned();
+
             Some(region)
         }
     }

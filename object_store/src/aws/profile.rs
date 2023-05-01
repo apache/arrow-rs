@@ -71,11 +71,12 @@ impl CredentialProvider for ProfileProvider {
 mod region {
     use super::*;
     use crate::aws::credential::RegionProvider;
+    use async_trait::async_trait;
     use aws_config::meta::region::ProvideRegion;
     use aws_config::profile::region::Builder;
 
+    #[async_trait]
     impl RegionProvider for ProfileProvider {
-        #[tokio::main(flavor = "current_thread")]
         async fn get_region(&self) -> Option<String> {
             if let Some(region) = self.region.clone() {
                 return Some(region);
