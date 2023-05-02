@@ -1,6 +1,8 @@
 #![cfg(feature = "aws_profile")]
 
+use aws_config::meta::region::ProvideRegion;
 use aws_config::profile::ProfileFileCredentialsProvider;
+use aws_config::profile::ProfileFileRegionProvider;
 use aws_config::provider_config::ProviderConfig;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_types::region::Region;
@@ -28,6 +30,44 @@ impl ProfileProvider {
             region,
             cache: Default::default(),
         }
+    }
+
+    #[cfg(test)]
+    fn get_region_provider(&self) -> ProfileFileRegionProvider {
+        use aws_config::profile::profile_file::{ProfileFileKind, ProfileFiles};
+
+        let profile_name = &self.name;
+        let profile_region = "object_store:fake_region_from_profile";
+
+        let config = format!("[profile {}]\nregion = {}", &profile_name, &profile_region);
+
+        let profile_files = ProfileFiles::builder()
+            .with_contents(ProfileFileKind::Config, config)
+            .build();
+
+        ProfileFileRegionProvider::builder()
+            .profile_files(profile_files)
+            .profile_name(&self.name)
+            .build()
+    }
+
+    #[cfg(not(test))]
+    fn get_region_provider(&self) -> ProfileFileRegionProvider {
+        ProfileFileRegionProvider::builder()
+            .profile_name(&self.name)
+            .build()
+    }
+
+    pub async fn get_region(&self) -> Option<String> {
+        if let Some(region) = self.region.clone() {
+            return Some(region);
+        }
+
+        let provider = self.get_region_provider();
+
+        let region = provider.region().await;
+
+        region.map(|region| region.as_ref().to_owned())
     }
 }
 
@@ -64,52 +104,5 @@ impl CredentialProvider for ProfileProvider {
                 expiry,
             })
         }))
-    }
-}
-
-mod region {
-    use super::*;
-    use aws_config::meta::region::ProvideRegion;
-    use aws_config::profile::ProfileFileRegionProvider;
-
-    impl ProfileProvider {
-        #[cfg(test)]
-        fn get_profile_region_provider(&self) -> ProfileFileRegionProvider {
-            use aws_config::profile::profile_file::{ProfileFileKind, ProfileFiles};
-
-            let profile_name = &self.name;
-            let profile_region = "object_store:fake_region_from_profile";
-
-            let config =
-                format!("[profile {}]\nregion = {}", &profile_name, &profile_region);
-
-            let profile_files = ProfileFiles::builder()
-                .with_contents(ProfileFileKind::Config, config)
-                .build();
-
-            ProfileFileRegionProvider::builder()
-                .profile_files(profile_files)
-                .profile_name(&self.name)
-                .build()
-        }
-
-        #[cfg(not(test))]
-        fn get_profile_region_provider(&self) -> ProfileFileRegionProvider {
-            ProfileFileRegionProvider::builder()
-                .profile_name(&self.name)
-                .build()
-        }
-
-        pub async fn get_region(&self) -> Option<String> {
-            if let Some(region) = self.region.clone() {
-                return Some(region);
-            }
-
-            let provider = self.get_profile_region_provider();
-
-            let region = provider.region().await;
-
-            region.map(|region| region.as_ref().to_owned())
-        }
     }
 }
