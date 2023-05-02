@@ -1105,12 +1105,18 @@ impl AmazonS3Builder {
 
 #[cfg(feature = "aws_profile")]
 fn profile_region(profile: String) -> Option<String> {
-    use crate::aws::credential::RegionProvider;
-    use futures::executor::block_on;
+    use std::{panic, thread};
+    use tokio::runtime::Handle;
 
+    let handle = Handle::current();
     let provider = profile::ProfileProvider::new(profile, None);
 
-    block_on(provider.get_region())
+    let result = thread::spawn(move || handle.block_on(provider.get_region()));
+
+    match result.join() {
+        Ok(region) => region,
+        Err(e) => panic::resume_unwind(e),
+    }
 }
 
 #[cfg(feature = "aws_profile")]
@@ -1594,22 +1600,10 @@ mod tests {
 #[cfg(all(test, feature = "aws_profile"))]
 mod profile_tests {
     use super::*;
-    use async_trait::async_trait;
-    use credential::RegionProvider;
-    use profile::ProfileProvider;
     use std::env;
 
-    #[async_trait]
-    impl RegionProvider for ProfileProvider {
-        async fn get_region(&self) -> Option<String> {
-            let region = "object_store:fake_region_from_profile".to_owned();
-
-            Some(region)
-        }
-    }
-
-    #[test]
-    fn s3_test_region_from_profile() {
+    #[tokio::test]
+    async fn s3_test_region_from_profile() {
         let s3_url = "s3://bucket/prefix".to_owned();
 
         let aws_profile = env::var("AWS_PROFILE")
@@ -1637,8 +1631,8 @@ mod profile_tests {
         let aws_profile = env::var("AWS_PROFILE")
             .unwrap_or_else(|_| "object_store:fake_profile".into());
 
-        let aws_region = env::var("AWS_REGION")
-            .unwrap_or_else(|_| "object_store:fake_default_region".into());
+        let aws_region =
+            env::var("AWS_REGION").unwrap_or_else(|_| "object_store:fake_region".into());
 
         env::set_var("AWS_PROFILE", &aws_profile);
 

@@ -20,7 +20,6 @@ use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::util::hmac_sha256;
 use crate::{Result, RetryConfig};
-use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
@@ -290,12 +289,6 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
     }
 
     (signed_headers, canonical_headers)
-}
-
-/// Provides a region name where cloud resources are located
-#[async_trait]
-pub trait RegionProvider {
-    async fn get_region(&self) -> Option<String>;
 }
 
 /// Provides credentials for use when signing requests
