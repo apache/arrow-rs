@@ -56,7 +56,8 @@ mod levels;
 /// # use bytes::Bytes;
 /// # use arrow_array::{ArrayRef, Int64Array};
 /// # use arrow_array::RecordBatch;
-/// # use parquet::arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader};
+/// # use parquet::arrow::arrow_writer::ArrowWriter;
+/// # use parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 /// let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
 /// let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
 ///
@@ -65,8 +66,7 @@ mod levels;
 /// writer.write(&to_write).unwrap();
 /// writer.close().unwrap();
 ///
-/// let mut reader = ParquetFileArrowReader::try_new(Bytes::from(buffer)).unwrap();
-/// let mut reader = reader.get_record_reader(1024).unwrap();
+/// let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 1024).unwrap();
 /// let read = reader.next().unwrap().unwrap();
 ///
 /// assert_eq!(to_write, read);

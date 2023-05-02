@@ -33,6 +33,7 @@
 //! [`ColumnChunkMetaData`](struct.ColumnChunkMetaData.html) has information about column
 //! chunk (primitive leaf column), including encoding/compression, number of values, etc.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use crate::format::{
@@ -565,6 +566,13 @@ impl ColumnChunkMetaData {
         self.column_index_length
     }
 
+    /// Returns the range for the offset index if any
+    pub(crate) fn column_index_range(&self) -> Option<Range<usize>> {
+        let offset = usize::try_from(self.column_index_offset?).ok()?;
+        let length = usize::try_from(self.column_index_length?).ok()?;
+        Some(offset..(offset + length))
+    }
+
     /// Returns the offset for the offset index.
     pub fn offset_index_offset(&self) -> Option<i64> {
         self.offset_index_offset
@@ -573,6 +581,13 @@ impl ColumnChunkMetaData {
     /// Returns the offset for the offset index length.
     pub fn offset_index_length(&self) -> Option<i32> {
         self.offset_index_length
+    }
+
+    /// Returns the range for the offset index if any
+    pub(crate) fn offset_index_range(&self) -> Option<Range<usize>> {
+        let offset = usize::try_from(self.offset_index_offset?).ok()?;
+        let length = usize::try_from(self.offset_index_length?).ok()?;
+        Some(offset..(offset + length))
     }
 
     /// Method to convert from Thrift.

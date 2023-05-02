@@ -29,12 +29,12 @@ use arrow_select::filter::prep_null_mask_filter;
 use crate::arrow::array_reader::{
     build_array_reader, ArrayReader, FileReaderRowGroupCollection, RowGroupCollection,
 };
-use crate::arrow::schema::{parquet_to_array_schema_and_fields, parquet_to_arrow_schema};
-use crate::arrow::schema::{parquet_to_arrow_schema_by_columns, ParquetField};
+use crate::arrow::schema::parquet_to_array_schema_and_fields;
+use crate::arrow::schema::ParquetField;
 use crate::arrow::ProjectionMask;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{KeyValue, ParquetMetaData};
-use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
+use crate::file::metadata::ParquetMetaData;
+use crate::file::reader::{ChunkReader, SerializedFileReader};
 use crate::file::serialized_reader::ReadOptionsBuilder;
 use crate::schema::types::SchemaDescriptor;
 
@@ -198,43 +198,6 @@ impl<T> ArrowReaderBuilder<T> {
     }
 }
 
-/// Arrow reader api.
-/// With this api, user can get arrow schema from parquet file, and read parquet data
-/// into arrow arrays.
-#[deprecated(note = "Use ParquetRecordBatchReaderBuilder instead")]
-pub trait ArrowReader {
-    type RecordReader: RecordBatchReader;
-
-    /// Read parquet schema and convert it into arrow schema.
-    fn get_schema(&mut self) -> Result<Schema>;
-
-    /// Read parquet schema and convert it into arrow schema.
-    /// This schema only includes columns identified by `mask`.
-    fn get_schema_by_columns(&mut self, mask: ProjectionMask) -> Result<Schema>;
-
-    /// Returns record batch reader from whole parquet file.
-    ///
-    /// # Arguments
-    ///
-    /// `batch_size`: The size of each record batch returned from this reader. Only the
-    /// last batch may contain records less than this size, otherwise record batches
-    /// returned from this reader should contains exactly `batch_size` elements.
-    fn get_record_reader(&mut self, batch_size: usize) -> Result<Self::RecordReader>;
-
-    /// Returns record batch reader whose record batch contains columns identified by
-    /// `mask`.
-    ///
-    /// # Arguments
-    ///
-    /// `mask`: The columns that should be included in record batches.
-    /// `batch_size`: Please refer to `get_record_reader`.
-    fn get_record_reader_by_columns(
-        &mut self,
-        mask: ProjectionMask,
-        batch_size: usize,
-    ) -> Result<Self::RecordReader>;
-}
-
 /// Options that control how metadata is read for a parquet file
 ///
 /// See [`ArrowReaderBuilder`] for how to configure how the column data
@@ -270,143 +233,6 @@ impl ArrowReaderOptions {
     /// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
-    }
-}
-
-/// An `ArrowReader` that can be used to synchronously read parquet data as [`RecordBatch`]
-///
-/// See [`crate::arrow::async_reader`] for an asynchronous interface
-#[deprecated(note = "Use ParquetRecordBatchReaderBuilder instead")]
-pub struct ParquetFileArrowReader {
-    file_reader: Arc<dyn FileReader>,
-
-    #[allow(deprecated)]
-    options: ArrowReaderOptions,
-}
-
-#[allow(deprecated)]
-impl ArrowReader for ParquetFileArrowReader {
-    type RecordReader = ParquetRecordBatchReader;
-
-    fn get_schema(&mut self) -> Result<Schema> {
-        let file_metadata = self.file_reader.metadata().file_metadata();
-        parquet_to_arrow_schema(file_metadata.schema_descr(), self.get_kv_metadata())
-    }
-
-    fn get_schema_by_columns(&mut self, mask: ProjectionMask) -> Result<Schema> {
-        let file_metadata = self.file_reader.metadata().file_metadata();
-        parquet_to_arrow_schema_by_columns(
-            file_metadata.schema_descr(),
-            mask,
-            self.get_kv_metadata(),
-        )
-    }
-
-    fn get_record_reader(
-        &mut self,
-        batch_size: usize,
-    ) -> Result<ParquetRecordBatchReader> {
-        self.get_record_reader_by_columns(ProjectionMask::all(), batch_size)
-    }
-
-    fn get_record_reader_by_columns(
-        &mut self,
-        mask: ProjectionMask,
-        batch_size: usize,
-    ) -> Result<ParquetRecordBatchReader> {
-        let (_, field) = parquet_to_array_schema_and_fields(
-            self.parquet_schema(),
-            mask,
-            self.get_kv_metadata(),
-        )?;
-        let array_reader = build_array_reader(
-            field.as_ref(),
-            &ProjectionMask::all(),
-            &self.file_reader,
-        )?;
-
-        // Try to avoid allocate large buffer
-        let batch_size = self.file_reader.num_rows().min(batch_size);
-        Ok(ParquetRecordBatchReader::new(
-            batch_size,
-            array_reader,
-            None,
-        ))
-    }
-}
-
-#[allow(deprecated)]
-impl ParquetFileArrowReader {
-    /// Create a new [`ParquetFileArrowReader`] with the provided [`ChunkReader`]
-    ///
-    /// ```no_run
-    /// # use std::fs::File;
-    /// # use bytes::Bytes;
-    /// # use parquet::arrow::ParquetFileArrowReader;
-    ///
-    /// let file = File::open("file.parquet").unwrap();
-    /// let reader = ParquetFileArrowReader::try_new(file).unwrap();
-    ///
-    /// let bytes = Bytes::from(vec![]);
-    /// let reader = ParquetFileArrowReader::try_new(bytes).unwrap();
-    /// ```
-    pub fn try_new<R: ChunkReader + 'static>(chunk_reader: R) -> Result<Self> {
-        Self::try_new_with_options(chunk_reader, Default::default())
-    }
-
-    /// Create a new [`ParquetFileArrowReader`] with the provided [`ChunkReader`]
-    /// and [`ArrowReaderOptions`]
-    pub fn try_new_with_options<R: ChunkReader + 'static>(
-        chunk_reader: R,
-        options: ArrowReaderOptions,
-    ) -> Result<Self> {
-        let file_reader = Arc::new(SerializedFileReader::new(chunk_reader)?);
-        Ok(Self::new_with_options(file_reader, options))
-    }
-
-    /// Create a new [`ParquetFileArrowReader`] with the provided [`Arc<dyn FileReader>`]
-    pub fn new(file_reader: Arc<dyn FileReader>) -> Self {
-        Self::new_with_options(file_reader, Default::default())
-    }
-
-    /// Create a new [`ParquetFileArrowReader`] with the provided [`Arc<dyn FileReader>`]
-    /// and [`ArrowReaderOptions`]
-    pub fn new_with_options(
-        file_reader: Arc<dyn FileReader>,
-        options: ArrowReaderOptions,
-    ) -> Self {
-        Self {
-            file_reader,
-            options,
-        }
-    }
-
-    /// Expose the reader metadata
-    #[deprecated = "use metadata() instead"]
-    pub fn get_metadata(&mut self) -> ParquetMetaData {
-        self.file_reader.metadata().clone()
-    }
-
-    /// Returns the parquet metadata
-    pub fn metadata(&self) -> &ParquetMetaData {
-        self.file_reader.metadata()
-    }
-
-    /// Returns the parquet schema
-    pub fn parquet_schema(&self) -> &SchemaDescriptor {
-        self.file_reader.metadata().file_metadata().schema_descr()
-    }
-
-    /// Returns the key value metadata, returns `None` if [`ArrowReaderOptions::skip_arrow_metadata`]
-    fn get_kv_metadata(&self) -> Option<&Vec<KeyValue>> {
-        if self.options.skip_arrow_metadata {
-            return None;
-        }
-
-        self.file_reader
-            .metadata()
-            .file_metadata()
-            .key_value_metadata()
     }
 }
 
