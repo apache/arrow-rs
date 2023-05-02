@@ -80,9 +80,7 @@ use std::{
 
 use arrow_csv::ReaderBuilder;
 use arrow_schema::{ArrowError, Schema};
-use brotli::Decompressor;
 use clap::{Parser, ValueEnum};
-use flate2::read::GzDecoder;
 use parquet::{
     arrow::{parquet_to_arrow_schema, ArrowWriter},
     basic::Compression,
@@ -90,7 +88,6 @@ use parquet::{
     file::properties::{WriterProperties, WriterVersion},
     schema::{parser::parse_message_type, types::SchemaDescriptor},
 };
-use snap::read::FrameDecoder;
 
 #[derive(Debug)]
 enum ParquetFromCsvError {
@@ -380,10 +377,14 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
     // open input file decoder
     let input_file_decoder = match args.csv_compression {
         Compression::UNCOMPRESSED => Box::new(input_file) as Box<dyn Read>,
-        Compression::SNAPPY => Box::new(FrameDecoder::new(input_file)) as Box<dyn Read>,
-        Compression::GZIP(_) => Box::new(GzDecoder::new(input_file)) as Box<dyn Read>,
+        Compression::SNAPPY => {
+            Box::new(snap::read::FrameDecoder::new(input_file)) as Box<dyn Read>
+        }
+        Compression::GZIP(_) => {
+            Box::new(flate2::read::GzDecoder::new(input_file)) as Box<dyn Read>
+        }
         Compression::BROTLI(_) => {
-            Box::new(Decompressor::new(input_file, 0)) as Box<dyn Read>
+            Box::new(brotli::Decompressor::new(input_file, 0)) as Box<dyn Read>
         }
         Compression::LZ4 => Box::new(lz4::Decoder::new(input_file).map_err(|e| {
             ParquetFromCsvError::with_context(e, "Failed to create lz4::Decoder")
