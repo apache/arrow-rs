@@ -391,8 +391,7 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
         Compression::ZSTD(_) => Box::new(zstd::Decoder::new(input_file).map_err(|e| {
             ParquetFromCsvError::with_context(e, "Failed to create zstd::Decoder")
         })?) as Box<dyn Read>,
-        // TODO: I wonder which crates should i use to decompress lzo and lz4_raw?
-        _ => panic!("compression type not support yet"),
+        d => unimplemented!("compression type {d}"),
     };
 
     // create input csv reader
