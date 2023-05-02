@@ -598,7 +598,7 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: ArrowNativeTypeOp + ToPrimitive,
 {
-    let array = array.as_any().downcast_ref::<PrimitiveArray<D>>().unwrap();
+    let array = array.as_primitive::<D>();
 
     let div: D::Native = base.pow_checked(scale as u32).map_err(|_| {
         ArrowError::CastError(format!(
@@ -655,7 +655,7 @@ fn cast_decimal_to_float<D: DecimalType, T: ArrowPrimitiveType, F>(
 where
     F: Fn(D::Native) -> T::Native,
 {
-    let array = array.as_any().downcast_ref::<PrimitiveArray<D>>().unwrap();
+    let array = array.as_primitive::<D>();
     let array = array.unary::<_, T>(op);
     Ok(Arc::new(array))
 }
@@ -2404,16 +2404,12 @@ where
     if cast_options.safe {
         // If the value can't be casted to the `TO::Native`, return null
         Ok(Arc::new(numeric_cast::<FROM, TO>(
-            from.as_any()
-                .downcast_ref::<PrimitiveArray<FROM>>()
-                .unwrap(),
+            from.as_primitive::<FROM>(),
         )))
     } else {
         // If the value can't be casted to the `TO::Native`, return error
         Ok(Arc::new(try_numeric_cast::<FROM, TO>(
-            from.as_any()
-                .downcast_ref::<PrimitiveArray<FROM>>()
-                .unwrap(),
+            from.as_primitive::<FROM>(),
         )?))
     }
 }
@@ -3265,12 +3261,8 @@ fn cast_numeric_to_bool<FROM>(from: &dyn Array) -> Result<ArrayRef, ArrowError>
 where
     FROM: ArrowPrimitiveType,
 {
-    numeric_to_bool_cast::<FROM>(
-        from.as_any()
-            .downcast_ref::<PrimitiveArray<FROM>>()
-            .unwrap(),
-    )
-    .map(|to| Arc::new(to) as ArrayRef)
+    numeric_to_bool_cast::<FROM>(from.as_primitive::<FROM>())
+        .map(|to| Arc::new(to) as ArrayRef)
 }
 
 fn numeric_to_bool_cast<T>(from: &PrimitiveArray<T>) -> Result<BooleanArray, ArrowError>
@@ -3537,10 +3529,7 @@ where
 {
     // attempt to cast the source array values to the target value type (the dictionary values type)
     let cast_values = cast_with_options(array, dict_value_type, cast_options)?;
-    let values = cast_values
-        .as_any()
-        .downcast_ref::<PrimitiveArray<V>>()
-        .unwrap();
+    let values = cast_values.as_primitive::<V>();
 
     let mut b =
         PrimitiveDictionaryBuilder::<K, V>::with_capacity(values.len(), values.len());
@@ -7106,7 +7095,7 @@ mod tests {
         T: ArrowPrimitiveType,
     {
         let c = cast(array, dt).unwrap();
-        let a = c.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+        let a = c.as_primitive::<T>();
         let mut v: Vec<String> = vec![];
         for i in 0..array.len() {
             if a.is_null(i) {

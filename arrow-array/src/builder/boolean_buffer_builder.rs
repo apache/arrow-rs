@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{bit_util, Buffer, MutableBuffer};
+use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer};
 use arrow_data::bit_mask;
 use std::ops::Range;
 
@@ -214,12 +214,12 @@ impl BooleanBufferBuilder {
         self.buffer.as_slice_mut()
     }
 
-    /// Creates a [`Buffer`]
+    /// Creates a [`BooleanBuffer`]
     #[inline]
-    pub fn finish(&mut self) -> Buffer {
+    pub fn finish(&mut self) -> BooleanBuffer {
         let buf = std::mem::replace(&mut self.buffer, MutableBuffer::new(0));
-        self.len = 0;
-        buf.into()
+        let len = std::mem::replace(&mut self.len, 0);
+        BooleanBuffer::new(buf.into(), 0, len)
     }
 }
 
@@ -227,6 +227,13 @@ impl From<BooleanBufferBuilder> for Buffer {
     #[inline]
     fn from(builder: BooleanBufferBuilder) -> Self {
         builder.buffer.into()
+    }
+}
+
+impl From<BooleanBufferBuilder> for BooleanBuffer {
+    #[inline]
+    fn from(builder: BooleanBufferBuilder) -> Self {
+        BooleanBuffer::new(builder.buffer.into(), 0, builder.len)
     }
 }
 
@@ -244,7 +251,7 @@ mod tests {
         assert_eq!(4, b.len());
         assert_eq!(512, b.capacity());
         let buffer = b.finish();
-        assert_eq!(1, buffer.len());
+        assert_eq!(4, buffer.len());
 
         // Overallocate capacity
         let mut b = BooleanBufferBuilder::new(8);
@@ -252,7 +259,7 @@ mod tests {
         assert_eq!(4, b.len());
         assert_eq!(512, b.capacity());
         let buffer = b.finish();
-        assert_eq!(1, buffer.len());
+        assert_eq!(4, buffer.len());
     }
 
     #[test]
@@ -264,7 +271,7 @@ mod tests {
         buffer.append(true);
         buffer.set_bit(0, false);
         assert_eq!(buffer.len(), 4);
-        assert_eq!(buffer.finish().as_slice(), &[0b1010_u8]);
+        assert_eq!(buffer.finish().values(), &[0b1010_u8]);
     }
 
     #[test]
@@ -276,7 +283,7 @@ mod tests {
         buffer.append(true);
         buffer.set_bit(3, false);
         assert_eq!(buffer.len(), 4);
-        assert_eq!(buffer.finish().as_slice(), &[0b0011_u8]);
+        assert_eq!(buffer.finish().values(), &[0b0011_u8]);
     }
 
     #[test]
@@ -288,7 +295,7 @@ mod tests {
         buffer.append(true);
         buffer.set_bit(1, false);
         assert_eq!(buffer.len(), 4);
-        assert_eq!(buffer.finish().as_slice(), &[0b1001_u8]);
+        assert_eq!(buffer.finish().values(), &[0b1001_u8]);
     }
 
     #[test]
@@ -302,7 +309,7 @@ mod tests {
         buffer.set_bit(1, false);
         buffer.set_bit(2, false);
         assert_eq!(buffer.len(), 5);
-        assert_eq!(buffer.finish().as_slice(), &[0b10001_u8]);
+        assert_eq!(buffer.finish().values(), &[0b10001_u8]);
     }
 
     #[test]
@@ -313,7 +320,7 @@ mod tests {
         buffer.set_bit(3, false);
         buffer.set_bit(9, false);
         assert_eq!(buffer.len(), 10);
-        assert_eq!(buffer.finish().as_slice(), &[0b11110110_u8, 0b01_u8]);
+        assert_eq!(buffer.finish().values(), &[0b11110110_u8, 0b01_u8]);
     }
 
     #[test]
@@ -329,7 +336,7 @@ mod tests {
         buffer.set_bit(14, true);
         buffer.set_bit(13, false);
         assert_eq!(buffer.len(), 15);
-        assert_eq!(buffer.finish().as_slice(), &[0b01010110_u8, 0b1011100_u8]);
+        assert_eq!(buffer.finish().values(), &[0b01010110_u8, 0b1011100_u8]);
     }
 
     #[test]
@@ -394,7 +401,7 @@ mod tests {
             let start = a.min(b);
             let end = a.max(b);
 
-            buffer.append_packed_range(start..end, compacted_src.as_slice());
+            buffer.append_packed_range(start..end, compacted_src.values());
             all_bools.extend_from_slice(&src[start..end]);
         }
 
@@ -430,14 +437,14 @@ mod tests {
         let mut builder = BooleanBufferBuilder::new_from_buffer(b, 2);
         builder.advance(2);
         let finished = builder.finish();
-        assert_eq!(finished.as_slice(), &[0b00000011]);
+        assert_eq!(finished.values(), &[0b00000011]);
 
         let mut builder = BooleanBufferBuilder::new(10);
         builder.append_n(5, true);
         builder.resize(3);
         builder.advance(2);
         let finished = builder.finish();
-        assert_eq!(finished.as_slice(), &[0b00000111]);
+        assert_eq!(finished.values(), &[0b00000111]);
 
         let mut builder = BooleanBufferBuilder::new(10);
         builder.append_n(16, true);
@@ -478,7 +485,7 @@ mod tests {
         }
         let buf2 = builder.finish();
 
-        assert_eq!(buf.len(), buf2.len());
-        assert_eq!(buf.as_slice(), buf2.as_slice());
+        assert_eq!(buf.len(), buf2.inner().len());
+        assert_eq!(buf.as_slice(), buf2.values());
     }
 }

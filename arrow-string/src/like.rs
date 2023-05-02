@@ -607,7 +607,7 @@ where
         ArrayDataBuilder::new(DataType::Boolean)
             .len(left.len())
             .nulls(nulls)
-            .buffers(vec![result.finish()])
+            .buffers(vec![result.into()])
             .build_unchecked()
     };
     Ok(BooleanArray::from(data))

@@ -433,7 +433,7 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 builder.append_packed_range(start + offset..end + offset, src)
             }
-            builder.finish()
+            builder.into()
         }
         IterationStrategy::Slices(slices) => {
             let mut builder =
@@ -441,7 +441,7 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             for (start, end) in slices {
                 builder.append_packed_range(*start + offset..*end + offset, src)
             }
-            builder.finish()
+            builder.into()
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }

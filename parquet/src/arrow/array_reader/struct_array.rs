@@ -17,7 +17,7 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{builder::BooleanBufferBuilder, ArrayRef, StructArray, Array};
+use arrow_array::{builder::BooleanBufferBuilder, Array, ArrayRef, StructArray};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
@@ -170,7 +170,7 @@ impl ArrayReader for StructArrayReader {
             }
 
             array_data_builder =
-                array_data_builder.null_bit_buffer(Some(bitmap_builder.finish()));
+                array_data_builder.null_bit_buffer(Some(bitmap_builder.into()));
         }
 
         let array_data = unsafe { array_data_builder.build_unchecked() };

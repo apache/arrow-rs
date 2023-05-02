@@ -331,7 +331,7 @@ impl WriterBuilder {
 mod tests {
     use super::*;
 
-    use crate::Reader;
+    use crate::ReaderBuilder;
     use arrow_array::builder::{Decimal128Builder, Decimal256Builder};
     use arrow_array::types::*;
     use arrow_buffer::i256;
@@ -560,17 +560,11 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         }
         buf.set_position(0);
 
-        let mut reader = Reader::new(
-            buf,
-            Arc::new(schema),
-            false,
-            None,
-            3,
-            // starting at row 2 and up to row 6.
-            None,
-            None,
-            None,
-        );
+        let mut reader = ReaderBuilder::new(Arc::new(schema))
+            .with_batch_size(3)
+            .build_buffered(buf)
+            .unwrap();
+
         let rb = reader.next().unwrap().unwrap();
         let c1 = rb.column(0).as_any().downcast_ref::<Date32Array>().unwrap();
         let c2 = rb.column(1).as_any().downcast_ref::<Date64Array>().unwrap();
