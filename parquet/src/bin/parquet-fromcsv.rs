@@ -659,7 +659,7 @@ mod tests {
 
         let mut input_file = NamedTempFile::new().unwrap();
 
-        fn wirte_tmp_file<T: Write>(w: &mut T) {
+        fn write_tmp_file<T: Write>(w: &mut T) {
             for index in 1..2000 {
                 write!(w, "{index},\"name_{index}\"\r\n").unwrap();
             }
@@ -669,12 +669,12 @@ mod tests {
         // make sure the input_file's lifetime being long enough
         input_file = match csv_compression {
             Compression::UNCOMPRESSED => {
-                wirte_tmp_file(&mut input_file);
+                write_tmp_file(&mut input_file);
                 input_file
             }
             Compression::SNAPPY => {
                 let mut encoder = FrameEncoder::new(input_file);
-                wirte_tmp_file(&mut encoder);
+                write_tmp_file(&mut encoder);
                 encoder.into_inner().unwrap()
             }
             Compression::GZIP(level) => {
@@ -682,13 +682,13 @@ mod tests {
                     input_file,
                     flate2::Compression::new(level.compression_level()),
                 );
-                wirte_tmp_file(&mut encoder);
+                write_tmp_file(&mut encoder);
                 encoder.finish().unwrap()
             }
             Compression::BROTLI(level) => {
                 let mut encoder =
                     CompressorWriter::new(input_file, 0, level.compression_level(), 0);
-                wirte_tmp_file(&mut encoder);
+                write_tmp_file(&mut encoder);
                 encoder.into_inner()
             }
             Compression::LZ4 => {
@@ -701,7 +701,7 @@ mod tests {
                         )
                     })
                     .unwrap();
-                wirte_tmp_file(&mut encoder);
+                write_tmp_file(&mut encoder);
                 let (inner, err) = encoder.finish();
                 err.unwrap();
                 inner
@@ -717,10 +717,10 @@ mod tests {
                             )
                         })
                         .unwrap();
-                wirte_tmp_file(&mut encoder);
+                write_tmp_file(&mut encoder);
                 encoder.finish().unwrap()
             }
-            _ => panic!("compression type not support yet"),
+            d => unimplemented!("compression type {d}"),
         };
 
         let output_parquet = NamedTempFile::new().unwrap();
