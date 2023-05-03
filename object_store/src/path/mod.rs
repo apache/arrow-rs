@@ -265,20 +265,14 @@ impl Path {
         &self,
         prefix: &Self,
     ) -> Option<impl Iterator<Item = PathPart<'_>> + '_> {
-        let diff = itertools::diff_with(self.parts(), prefix.parts(), |a, b| a == b);
-
-        match diff {
-            // Both were equal
-            None => Some(itertools::Either::Left(std::iter::empty())),
-            // Mismatch or prefix was longer => None
-            Some(
-                itertools::Diff::FirstMismatch(_, _, _) | itertools::Diff::Longer(_, _),
-            ) => None,
-            // Match with remaining
-            Some(itertools::Diff::Shorter(_, back)) => {
-                Some(itertools::Either::Right(back))
-            }
+        let mut stripped = self.raw.strip_prefix(&prefix.raw)?;
+        if !stripped.is_empty() && !prefix.raw.is_empty() {
+            stripped = stripped.strip_prefix(DELIMITER)?;
         }
+        let iter = stripped
+            .split_terminator(DELIMITER)
+            .map(|x| PathPart { raw: x.into() });
+        Some(iter)
     }
 
     /// Returns true if this [`Path`] starts with `prefix`
