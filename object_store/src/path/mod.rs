@@ -227,14 +227,9 @@ impl Path {
 
     /// Returns the [`PathPart`] of this [`Path`]
     pub fn parts(&self) -> impl Iterator<Item = PathPart<'_>> {
-        match self.raw.is_empty() {
-            true => itertools::Either::Left(std::iter::empty()),
-            false => itertools::Either::Right(
-                self.raw
-                    .split(DELIMITER)
-                    .map(|s| PathPart { raw: s.into() }),
-            ),
-        }
+        self.raw
+            .split_terminator(DELIMITER)
+            .map(|s| PathPart { raw: s.into() })
     }
 
     /// Returns the last path segment containing the filename stored in this [`Path`]
@@ -447,6 +442,8 @@ mod tests {
 
         let prefix = existing_path.clone();
         assert_eq!(existing_path.prefix_match(&prefix).unwrap().count(), 0);
+
+        assert_eq!(Path::default().parts().count(), 0);
     }
 
     #[test]
