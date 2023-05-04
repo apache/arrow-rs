@@ -1075,8 +1075,8 @@ impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
 
 /// Arrow Stream reader
 pub struct StreamReader<R: Read> {
-    /// Buffered stream reader
-    reader: BufReader<R>,
+    /// Stream reader
+    reader: R,
 
     /// The schema that is read from the stream's first message
     schema: SchemaRef,
@@ -1107,8 +1107,8 @@ impl<R: Read> fmt::Debug for StreamReader<R> {
     }
 }
 
-impl<R: Read> StreamReader<R> {
-    /// Try to create a new stream reader
+impl<R: Read> StreamReader<BufReader<R>> {
+    /// Try to create a new stream reader with the reader wrapped in a BufReader
     ///
     /// The first message in the stream is the schema, the reader will fail if it does not
     /// encounter a schema.
@@ -1117,7 +1117,29 @@ impl<R: Read> StreamReader<R> {
         reader: R,
         projection: Option<Vec<usize>>,
     ) -> Result<Self, ArrowError> {
-        let mut reader = BufReader::new(reader);
+        Self::try_new_unbuffered(BufReader::new(reader), projection)
+    }
+
+    /// Gets a reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        self.reader.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_mut(&mut self) -> &mut R {
+        self.reader.get_mut()
+    }
+}
+
+impl<R: Read> StreamReader<R> {
+    pub fn try_new_unbuffered(
+        mut reader: R,
+        projection: Option<Vec<usize>>,
+    ) -> Result<StreamReader<R>, ArrowError> {
         // determine metadata length
         let mut meta_size: [u8; 4] = [0; 4];
         reader.read_exact(&mut meta_size)?;
@@ -1257,20 +1279,6 @@ impl<R: Read> StreamReader<R> {
             )),
         }
     }
-
-    /// Gets a reference to the underlying reader.
-    ///
-    /// It is inadvisable to directly read from the underlying reader.
-    pub fn get_ref(&self) -> &R {
-        self.reader.get_ref()
-    }
-
-    /// Gets a mutable reference to the underlying reader.
-    ///
-    /// It is inadvisable to directly read from the underlying reader.
-    pub fn get_mut(&mut self) -> &mut R {
-        self.reader.get_mut()
-    }
 }
 
 impl<R: Read> Iterator for StreamReader<R> {
@@ -1289,6 +1297,9 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::Cursor;
+
     use crate::writer::unslice_run_array;
 
     use super::*;
@@ -1504,7 +1515,8 @@ mod tests {
         file.rewind().unwrap();
 
         // read stream back
-        let reader = StreamReader::try_new(&mut file, None).unwrap();
+        let reader =
+            StreamReader::<BufReader<&mut File>>::try_new(&mut file, None).unwrap();
 
         reader.for_each(|batch| {
             let batch = batch.unwrap();
@@ -1563,8 +1575,11 @@ mod tests {
         drop(writer);
 
         let mut reader =
-            crate::reader::StreamReader::try_new(std::io::Cursor::new(buf), None)
-                .unwrap();
+            crate::reader::StreamReader::<BufReader<Cursor<Vec<u8>>>>::try_new(
+                std::io::Cursor::new(buf),
+                None,
+            )
+            .unwrap();
         reader.next().unwrap().unwrap()
     }
 
