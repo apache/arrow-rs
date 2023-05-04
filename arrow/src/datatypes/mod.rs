@@ -24,7 +24,8 @@
 
 pub use arrow_array::types::*;
 pub use arrow_array::{
-    ArrowFloatNumericType, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType,
+    ArrowFloatNumericType, ArrowIntegerNumericType, ArrowNativeTypeOp, ArrowNumericType,
+    ArrowPrimitiveType,
 };
 pub use arrow_buffer::{i256, ArrowNativeType, ToByteSlice};
 pub use arrow_data::decimal::*;

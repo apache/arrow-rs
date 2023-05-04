@@ -1342,6 +1342,19 @@ pub fn negate_checked<T: ArrowNumericType>(
     try_unary(array, |value| value.neg_checked())
 }
 
+/// Perform `left ^ right` operation on two float arrays (`Float*Array`, except `Float16Array`). If either left or right value is null
+/// then the result is also null.
+pub fn powf<T: ArrowNumericType>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: ArrowFloatNumericType,
+    T::Native: Pow<T::Native, Output = T::Native>,
+{
+    math_op(left, right, |a, b| a.pow(b))
+}
+
 /// Raise array with floating point values to the power of a scalar.
 pub fn powf_scalar<T>(
     array: &PrimitiveArray<T>,
@@ -1350,6 +1363,31 @@ pub fn powf_scalar<T>(
 where
     T: ArrowFloatNumericType,
     T::Native: Pow<T::Native, Output = T::Native>,
+{
+    Ok(unary(array, |x| x.pow(raise)))
+}
+
+/// Perform `left ^ right` operation on integer array (`Int*Array`, `UInt*Array`) and `UInt32Array`. If either left or right value is null
+/// then the result is also null.
+pub fn powi<T: ArrowNumericType>(
+    left: &PrimitiveArray<T>,
+    right: &UInt32Array,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: ArrowIntegerNumericType,
+    T::Native: Pow<u32, Output = T::Native>,
+{
+    math_op(left, right, |a, b| a.pow(b))
+}
+
+/// Raise array with integer values to the power of a scalar (`u32`).
+pub fn powi_scalar<T>(
+    array: &PrimitiveArray<T>,
+    raise: u32,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: ArrowIntegerNumericType,
+    T::Native: Pow<u32, Output = T::Native>,
 {
     Ok(unary(array, |x| x.pow(raise)))
 }
@@ -3218,7 +3256,60 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_array_raise_power_scalar() {
+    fn test_primitive_array_raise_integer_power_array() {
+        // Int64Array
+        let a = Int64Array::from(vec![1, 2, 3]);
+        let b = UInt32Array::from(vec![1, 2, 3]);
+        let actual = powi(&a, &b).unwrap();
+        let expected = Int64Array::from(vec![1, 4, 27]);
+        assert_eq!(expected, actual);
+        let a = Int64Array::from(vec![Some(1), None, Some(3)]);
+        let b = UInt32Array::from(vec![None, Some(2), Some(3)]);
+        let actual = powi(&a, &b).unwrap();
+        let expected = Int64Array::from(vec![None, None, Some(27)]);
+        assert_eq!(expected, actual);
+
+        // UInt64Array
+        let a = UInt64Array::from(vec![1, 2, 3]);
+        let b = UInt32Array::from(vec![1, 2, 3]);
+        let actual = powi(&a, &b).unwrap();
+        let expected = UInt64Array::from(vec![1, 4, 27]);
+        assert_eq!(expected, actual);
+        let a = UInt64Array::from(vec![Some(1), None, Some(3)]);
+        let b = UInt32Array::from(vec![None, Some(2), Some(3)]);
+        let actual = powi(&a, &b).unwrap();
+        let expected = UInt64Array::from(vec![None, None, Some(27)]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_primitive_array_raise_float_power_array() {
+        let a = Float64Array::from(vec![1.0, 2.0, 3.0]);
+        let b = Float64Array::from(vec![1.0, 2.0, 3.0]);
+        let actual = powf(&a, &b).unwrap();
+        let expected = Float64Array::from(vec![1.0, 4.0, 27.0]);
+        assert_eq!(expected, actual);
+        let a = Float64Array::from(vec![Some(1.0), None, Some(3.0)]);
+        let b = Float64Array::from(vec![None, Some(2.0), Some(3.0)]);
+        let actual = powf(&a, &b).unwrap();
+        let expected = Float64Array::from(vec![None, None, Some(27.0)]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_primitive_array_raise_integer_power_scalar() {
+        let a = Int64Array::from(vec![1, 2, 3]);
+        let actual = powi_scalar(&a, 2_u32).unwrap();
+        let expected = Int64Array::from(vec![1, 4, 9]);
+        assert_eq!(expected, actual);
+        let a = Int64Array::from(vec![Some(1), None, Some(3)]);
+        let actual = powi_scalar(&a, 2_u32).unwrap();
+        let expected = Int64Array::from(vec![Some(1), None, Some(9)]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_primitive_array_raise_float_power_scalar() {
         let a = Float64Array::from(vec![1.0, 2.0, 3.0]);
         let actual = powf_scalar(&a, 2.0).unwrap();
         let expected = Float64Array::from(vec![1.0, 4.0, 9.0]);
