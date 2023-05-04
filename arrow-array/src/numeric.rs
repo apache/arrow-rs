@@ -560,38 +560,11 @@ impl ArrowNumericType for Decimal256Type {
 
 /// A subtype of primitive type that represents numeric integer values
 #[cfg(feature = "simd")]
-pub trait ArrowIntegerNumericType: ArrowNumericType {
-    /// SIMD version of pow
-    fn pow(base: Self::Simd, raise: u32x16) -> Self::Simd;
-}
+pub trait ArrowIntegerNumericType: ArrowNumericType {}
 
 /// A subtype of primitive type that represents numeric integer values
 #[cfg(not(feature = "simd"))]
 pub trait ArrowIntegerNumericType: ArrowNumericType {}
-
-macro_rules! make_integer_numeric_type {
-    ($impl_ty:ty, $simd_ty:ident) => {
-        #[cfg(feature = "simd")]
-        impl ArrowIntegerNumericType for $impl_ty {
-            #[inline]
-            fn pow(base: Self::Simd, raise: u32x16) -> Self::Simd {
-                base.pow(raise)
-            }
-        }
-
-        #[cfg(not(feature = "simd"))]
-        impl ArrowIntegerNumericType for $impl_ty {}
-    };
-}
-
-make_integer_numeric_type!(Int8Type, i8x64);
-make_integer_numeric_type!(Int16Type, i16x32);
-make_integer_numeric_type!(Int32Type, i32x16);
-make_integer_numeric_type!(Int64Type, i64x8);
-make_integer_numeric_type!(UInt8Type, u8x64);
-make_integer_numeric_type!(UInt16Type, u16x32);
-make_integer_numeric_type!(UInt32Type, u32x16);
-make_integer_numeric_type!(UInt64Type, u64x8);
 
 /// A subtype of primitive type that represents numeric float values
 #[cfg(feature = "simd")]
