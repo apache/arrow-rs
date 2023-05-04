@@ -1297,9 +1297,6 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::io::Cursor;
-
     use crate::writer::unslice_run_array;
 
     use super::*;
@@ -1515,8 +1512,7 @@ mod tests {
         file.rewind().unwrap();
 
         // read stream back
-        let reader =
-            StreamReader::<BufReader<&mut File>>::try_new(&mut file, None).unwrap();
+        let reader = StreamReader::try_new(&mut file, None).unwrap();
 
         reader.for_each(|batch| {
             let batch = batch.unwrap();
@@ -1575,11 +1571,8 @@ mod tests {
         drop(writer);
 
         let mut reader =
-            crate::reader::StreamReader::<BufReader<Cursor<Vec<u8>>>>::try_new(
-                std::io::Cursor::new(buf),
-                None,
-            )
-            .unwrap();
+            crate::reader::StreamReader::try_new(std::io::Cursor::new(buf), None)
+                .unwrap();
         reader.next().unwrap().unwrap()
     }
 
