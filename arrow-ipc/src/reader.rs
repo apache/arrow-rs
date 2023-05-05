@@ -1119,23 +1119,12 @@ impl<R: Read> StreamReader<BufReader<R>> {
     ) -> Result<Self, ArrowError> {
         Self::try_new_unbuffered(BufReader::new(reader), projection)
     }
-
-    /// Gets a reference to the underlying reader.
-    ///
-    /// It is inadvisable to directly read from the underlying reader.
-    pub fn get_ref(&self) -> &R {
-        self.reader.get_ref()
-    }
-
-    /// Gets a mutable reference to the underlying reader.
-    ///
-    /// It is inadvisable to directly read from the underlying reader.
-    pub fn get_mut(&mut self) -> &mut R {
-        self.reader.get_mut()
-    }
 }
 
 impl<R: Read> StreamReader<R> {
+    /// Try to create a new stream reader but do not wrap the reader in a BufReader.
+    ///
+    /// Unless you need the StreamReader to be unbuffered you likely want to use `StreamReader::try_new` instead.
     pub fn try_new_unbuffered(
         mut reader: R,
         projection: Option<Vec<usize>>,
@@ -1278,6 +1267,20 @@ impl<R: Read> StreamReader<R> {
                 format!("Reading types other than record batches not yet supported, unable to read {t:?} ")
             )),
         }
+    }
+
+    /// Gets a reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        &self.reader
+    }
+
+    /// Gets a mutable reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_mut(&mut self) -> &mut R {
+        &mut self.reader
     }
 }
 
