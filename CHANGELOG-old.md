@@ -19,9 +19,9 @@
 
 # Historical Changelog
 
-## [39.0.0](https://github.com/apache/arrow-rs/tree/39.0.0) (2023-04-07)
+## [37.0.0](https://github.com/apache/arrow-rs/tree/37.0.0) (2023-04-07)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/36.0.0...39.0.0)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/36.0.0...37.0.0)
 
 **Breaking changes:**
 
@@ -62,7 +62,7 @@
 
 **Merged pull requests:**
 
-- Prep for 39.0.0 [\#4031](https://github.com/apache/arrow-rs/pull/4031) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([iajoiner](https://github.com/iajoiner))
+- Prep for 37.0.0 [\#4031](https://github.com/apache/arrow-rs/pull/4031) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([iajoiner](https://github.com/iajoiner))
 - Add RecordBatch::with\_schema [\#4028](https://github.com/apache/arrow-rs/pull/4028) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Only require compatible batch schema in ArrowWriter [\#4027](https://github.com/apache/arrow-rs/pull/4027) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 - Add Fields::contains [\#4026](https://github.com/apache/arrow-rs/pull/4026) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
