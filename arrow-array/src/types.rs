@@ -433,7 +433,7 @@ impl TimestampSecondType {
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_year_months(
         timestamp: <TimestampSecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -452,7 +452,7 @@ impl TimestampSecondType {
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_day_time(
         timestamp: <TimestampSecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -480,7 +480,7 @@ impl TimestampSecondType {
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_month_day_nano(
         timestamp: <TimestampSecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -590,7 +590,7 @@ impl TimestampMicrosecondType {
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_year_months(
         timestamp: <TimestampMicrosecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -610,7 +610,7 @@ impl TimestampMicrosecondType {
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_day_time(
         timestamp: <TimestampMicrosecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -639,7 +639,7 @@ impl TimestampMicrosecondType {
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_month_day_nano(
         timestamp: <TimestampMicrosecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -750,7 +750,7 @@ impl TimestampMillisecondType {
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_year_months(
         timestamp: <TimestampMillisecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -770,7 +770,7 @@ impl TimestampMillisecondType {
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_day_time(
         timestamp: <TimestampMillisecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -799,7 +799,7 @@ impl TimestampMillisecondType {
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_month_day_nano(
         timestamp: <TimestampMillisecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -909,12 +909,12 @@ impl TimestampNanosecondType {
             .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))
     }
 
-    /// Subtracs the given IntervalYearMonthType to an arrow TimestampNanosecondType
+    /// Subtracts the given IntervalYearMonthType to an arrow TimestampNanosecondType
     ///
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_year_months(
         timestamp: <TimestampNanosecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -930,12 +930,12 @@ impl TimestampNanosecondType {
             .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))
     }
 
-    /// Subtracs the given IntervalDayTimeType to an arrow TimestampNanosecondType
+    /// Subtracts the given IntervalDayTimeType to an arrow TimestampNanosecondType
     ///
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_day_time(
         timestamp: <TimestampNanosecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -961,12 +961,12 @@ impl TimestampNanosecondType {
             .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))
     }
 
-    /// Subtracs the given IntervalMonthDayNanoType to an arrow TimestampNanosecondType
+    /// Subtracts the given IntervalMonthDayNanoType to an arrow TimestampNanosecondType
     ///
     /// # Arguments
     ///
     /// * `timestamp` - The date on which to perform the operation
-    /// * `delta` - The interval to add
+    /// * `delta` - The interval to subtract
     pub fn subtract_month_day_nano(
         timestamp: <TimestampNanosecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -1018,6 +1018,134 @@ impl IntervalYearMonthType {
     pub fn to_months(i: <IntervalYearMonthType as ArrowPrimitiveType>::Native) -> i32 {
         i
     }
+
+    /// Adds the given IntervalDayTimeType to an arrow IntervalYearMonthType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn add_day_time(
+        interval: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let months = IntervalYearMonthType::to_months(interval);
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months,
+            days,
+            (ms as i64) * 10_i64.pow(6),
+        ))
+    }
+
+    /// Adds the given IntervalYearMonthType to an arrow IntervalYearMonthType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// # Returns
+    /// `IntervalYearMonthType`
+    pub fn add_year_months(
+        interval: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalYearMonthType as ArrowPrimitiveType>::Native, ArrowError> {
+        let months = IntervalYearMonthType::to_months(interval)
+            + IntervalYearMonthType::to_months(delta);
+        Ok(IntervalYearMonthType::make_value(months / 12, months % 12))
+    }
+
+    /// Adds the given IntervalMonthDayNanoType to an arrow IntervalYearMonthType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn add_month_day_nano(
+        interval: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let months1 = IntervalYearMonthType::to_months(interval);
+        let (months2, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months1 + months2,
+            days,
+            nanos,
+        ))
+    }
+
+    /// Subtracts the given IntervalDayTimeType to an arrow IntervalYearMonthType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn subtract_day_time(
+        interval: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let months = IntervalYearMonthType::to_months(interval);
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months,
+            -days,
+            -(ms as i64) * 10_i64.pow(6),
+        ))
+    }
+
+    /// Subtracts the given IntervalYearMonthType to an arrow IntervalYearMonthType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// # Returns
+    /// `IntervalYearMonthType`
+    pub fn subtract_year_months(
+        interval: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalYearMonthType as ArrowPrimitiveType>::Native, ArrowError> {
+        let months = IntervalYearMonthType::to_months(interval)
+            - IntervalYearMonthType::to_months(delta);
+        Ok(IntervalYearMonthType::make_value(months / 12, months % 12))
+    }
+
+    /// Subtracts the given IntervalMonthDayNanoType to an arrow IntervalYearMonthType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn subtract_month_day_nano(
+        interval: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let months1 = IntervalYearMonthType::to_months(interval);
+        let (months2, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months1 - months2,
+            -days,
+            -nanos,
+        ))
+    }
 }
 
 impl IntervalDayTimeType {
@@ -1059,6 +1187,134 @@ impl IntervalDayTimeType {
         let days = (i >> 32) as i32;
         let ms = i as i32;
         (days, ms)
+    }
+
+    /// Adds the given IntervalDayTimeType to an arrow IntervalDayTimeType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// # Returns
+    /// `IntervalDayTimeType`
+    pub fn add_day_time(
+        interval: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalDayTimeType as ArrowPrimitiveType>::Native, ArrowError> {
+        let (days1, ms1) = IntervalDayTimeType::to_parts(interval);
+        let (days2, ms2) = IntervalDayTimeType::to_parts(delta);
+        Ok(IntervalDayTimeType::make_value(days1 + days2, ms1 + ms2))
+    }
+
+    /// Adds the given IntervalYearMonthType to an arrow IntervalDayTimeType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn add_year_months(
+        interval: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let (days, ms) = IntervalDayTimeType::to_parts(interval);
+        let months = IntervalYearMonthType::to_months(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months,
+            days,
+            (ms as i64) * 10_i64.pow(6),
+        ))
+    }
+
+    /// Adds the given IntervalMonthDayNanoType to an arrow IntervalDayTimeType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn add_month_day_nano(
+        interval: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let (days1, ms) = IntervalDayTimeType::to_parts(interval);
+        let (months, days2, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months,
+            days1 + days2,
+            (ms as i64) * 10_i64.pow(6) + nanos,
+        ))
+    }
+
+    /// Subtracts the given IntervalDayTimeType to an arrow IntervalDayTimeType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// # Returns
+    /// `IntervalDayTimeType`
+    pub fn subtract_day_time(
+        interval: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalDayTimeType as ArrowPrimitiveType>::Native, ArrowError> {
+        let (days1, ms1) = IntervalDayTimeType::to_parts(interval);
+        let (days2, ms2) = IntervalDayTimeType::to_parts(delta);
+        Ok(IntervalDayTimeType::make_value(days1 - days2, ms1 - ms2))
+    }
+
+    /// Subtracts the given IntervalYearMonthType to an arrow IntervalDayTimeType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn subtract_year_months(
+        interval: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let (days, ms) = IntervalDayTimeType::to_parts(interval);
+        let months = IntervalYearMonthType::to_months(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            -months,
+            days,
+            (ms as i64) * 10_i64.pow(6),
+        ))
+    }
+
+    /// Subtracts the given IntervalMonthDayNanoType to an arrow IntervalDayTimeType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn subtract_month_day_nano(
+        interval: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let (days1, ms) = IntervalDayTimeType::to_parts(interval);
+        let (months, days2, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months,
+            days1 - days2,
+            (ms as i64) * 10_i64.pow(6) - nanos,
+        ))
     }
 }
 
@@ -1105,6 +1361,144 @@ impl IntervalMonthDayNanoType {
         let days = (i >> 64) as i32;
         let nanos = i as i64;
         (months, days, nanos)
+    }
+
+    /// Adds the given IntervalDayTimeType to an arrow IntervalMonthDayNanoType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn add_day_time(
+        interval: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let (months, days1, nanos) = IntervalMonthDayNanoType::to_parts(interval);
+        let (days2, ms) = IntervalDayTimeType::to_parts(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months,
+            days1 + days2,
+            (ms as i64) * 10_i64.pow(6) + nanos,
+        ))
+    }
+
+    /// Adds the given IntervalYearMonthType to an arrow IntervalMonthDayNanoType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn add_year_months(
+        interval: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let (months1, days, nanos) = IntervalMonthDayNanoType::to_parts(interval);
+        let months2 = IntervalYearMonthType::to_months(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months1 + months2,
+            days,
+            nanos,
+        ))
+    }
+
+    /// Adds the given IntervalMonthDayNanoType to an arrow IntervalMonthDayNanoType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn add_month_day_nano(
+        interval: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let (months1, days1, nanos1) = IntervalMonthDayNanoType::to_parts(interval);
+        let (months2, days2, nanos2) = IntervalMonthDayNanoType::to_parts(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months1 + months2,
+            days1 + days2,
+            nanos1 + nanos2,
+        ))
+    }
+
+    /// Subtracts the given IntervalDayTimeType to an arrow IntervalMonthDayNanoType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn subtract_day_time(
+        interval: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let (months, days1, nanos) = IntervalMonthDayNanoType::to_parts(interval);
+        let (days2, ms) = IntervalDayTimeType::to_parts(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months,
+            days1 - days2,
+            nanos - (ms as i64) * 10_i64.pow(6),
+        ))
+    }
+
+    /// Subtracts the given IntervalYearMonthType to an arrow IntervalMonthDayNanoType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn subtract_year_months(
+        interval: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let (months1, days, nanos) = IntervalMonthDayNanoType::to_parts(interval);
+        let months2 = IntervalYearMonthType::to_months(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months1 - months2,
+            days,
+            nanos,
+        ))
+    }
+
+    /// Subtracts the given IntervalMonthDayNanoType to an arrow IntervalMonthDayNanoType
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` - The interval on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// # Returns
+    /// `IntervalMonthDayNanoType`
+    pub fn subtract_month_day_nano(
+        interval: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError>
+    {
+        let (months1, days1, nanos1) = IntervalMonthDayNanoType::to_parts(interval);
+        let (months2, days2, nanos2) = IntervalMonthDayNanoType::to_parts(delta);
+        Ok(IntervalMonthDayNanoType::make_value(
+            months1 - months2,
+            days1 - days2,
+            nanos1 - nanos2,
+        ))
     }
 }
 
@@ -1180,7 +1574,7 @@ impl Date32Type {
         Date32Type::from_naive_date(res)
     }
 
-    /// Subtract the given IntervalYearMonthType to an arrow Date32Type
+    /// Subtracts the given IntervalYearMonthType to an arrow Date32Type
     ///
     /// # Arguments
     ///
@@ -1196,7 +1590,7 @@ impl Date32Type {
         Date32Type::from_naive_date(posterior)
     }
 
-    /// Subtract the given IntervalDayTimeType to an arrow Date32Type
+    /// Subtracts the given IntervalDayTimeType to an arrow Date32Type
     ///
     /// # Arguments
     ///
@@ -1213,7 +1607,7 @@ impl Date32Type {
         Date32Type::from_naive_date(res)
     }
 
-    /// Subtract the given IntervalMonthDayNanoType to an arrow Date32Type
+    /// Subtracts the given IntervalMonthDayNanoType to an arrow Date32Type
     ///
     /// # Arguments
     ///
@@ -1304,7 +1698,7 @@ impl Date64Type {
         Date64Type::from_naive_date(res)
     }
 
-    /// Subtract the given IntervalYearMonthType to an arrow Date64Type
+    /// Subtracts the given IntervalYearMonthType to an arrow Date64Type
     ///
     /// # Arguments
     ///
@@ -1320,7 +1714,7 @@ impl Date64Type {
         Date64Type::from_naive_date(posterior)
     }
 
-    /// Subtract the given IntervalDayTimeType to an arrow Date64Type
+    /// Subtracts the given IntervalDayTimeType to an arrow Date64Type
     ///
     /// # Arguments
     ///
@@ -1337,7 +1731,7 @@ impl Date64Type {
         Date64Type::from_naive_date(res)
     }
 
-    /// Subtract the given IntervalMonthDayNanoType to an arrow Date64Type
+    /// Subtracts the given IntervalMonthDayNanoType to an arrow Date64Type
     ///
     /// # Arguments
     ///

@@ -839,14 +839,99 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
             }
         }
 
-        DataType::Interval(_)
-            if matches!(
-                right.data_type(),
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
-            ) =>
-        {
-            add_dyn(right, left)
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            let l = left.as_primitive::<IntervalYearMonthType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_checked_op(l, r, IntervalYearMonthType::add_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalYearMonthType::add_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalYearMonthType::add_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ if matches!(
+                    right.data_type(),
+                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+                ) => {
+                    add_dyn(right, left)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
         }
+
+        DataType::Interval(IntervalUnit::DayTime) => {
+            let l = left.as_primitive::<IntervalDayTimeType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalDayTimeType::add_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_checked_op(l, r, IntervalDayTimeType::add_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalDayTimeType::add_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ if matches!(
+                    right.data_type(),
+                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+                ) => {
+                    add_dyn(right, left)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let l = left.as_primitive::<IntervalMonthDayNanoType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalMonthDayNanoType::add_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalMonthDayNanoType::add_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_checked_op(l, r, IntervalMonthDayNanoType::add_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ if matches!(
+                    right.data_type(),
+                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+                ) => {
+                    add_dyn(right, left)
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
@@ -1177,6 +1262,82 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 ))),
             }
         }
+
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            let l = left.as_primitive::<IntervalYearMonthType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res = math_checked_op(l, r, IntervalYearMonthType::subtract_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalYearMonthType::subtract_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalYearMonthType::subtract_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
+        DataType::Interval(IntervalUnit::DayTime) => {
+            let l = left.as_primitive::<IntervalDayTimeType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalDayTimeType::subtract_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res = math_checked_op(l, r, IntervalDayTimeType::subtract_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalDayTimeType::subtract_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let l = left.as_primitive::<IntervalMonthDayNanoType>();
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_primitive::<IntervalYearMonthType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalMonthDayNanoType::subtract_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_primitive::<IntervalDayTimeType>();
+                    let res: IntervalMonthDayNanoArray = try_binary(l, r, IntervalMonthDayNanoType::subtract_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
+                    let res = math_checked_op(l, r, IntervalMonthDayNanoType::subtract_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+
         _ => {
             downcast_primitive_array!(
                 (left, right) => {
@@ -4100,6 +4261,564 @@ mod tests {
                 .unwrap(),
         ) as ArrayRef;
         assert_eq!(&expected, &result);
+    }
+
+    #[test]
+    fn test_interval_year_month_add_interval() {
+        // interval year month + interval year month
+        let a = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 3)),
+            Some(IntervalYearMonthType::make_value(1, 5)),
+            Some(IntervalYearMonthType::make_value(2, 2)),
+            Some(IntervalYearMonthType::make_value(4, 2)),
+        ]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 4)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(4, 11)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalYearMonthType>();
+
+        let expected = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(2, 6)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(3, 10)),
+            Some(IntervalYearMonthType::make_value(4, 7)),
+            Some(IntervalYearMonthType::make_value(9, 1)),
+        ]);
+        assert_eq!(result, &expected);
+
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<IntervalYearMonthType>();
+        assert_eq!(result, &expected);
+
+        // interval year month + interval day time
+        let a = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 3)),
+            Some(IntervalYearMonthType::make_value(1, 5)),
+            Some(IntervalYearMonthType::make_value(2, 2)),
+            Some(IntervalYearMonthType::make_value(4, 2)),
+        ]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 4)),
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(4, 27)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(14, 1, 4000000)),
+            Some(IntervalMonthDayNanoType::make_value(15, 1, 2000000)),
+            Some(IntervalMonthDayNanoType::make_value(17, 2, 5000000)),
+            Some(IntervalMonthDayNanoType::make_value(26, 2, 5000000)),
+            Some(IntervalMonthDayNanoType::make_value(50, 4, 27000000)),
+        ]);
+        assert_eq!(result, &expected);
+
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+        assert_eq!(result, &expected);
+
+        // interval year month + interval day time
+        let a = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 3)),
+            Some(IntervalYearMonthType::make_value(1, 5)),
+            Some(IntervalYearMonthType::make_value(2, 2)),
+            Some(IntervalYearMonthType::make_value(4, 2)),
+        ]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 4, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 3)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 4)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 6)),
+            Some(IntervalMonthDayNanoType::make_value(4, 27, 23)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(15, 4, 1)),
+            Some(IntervalMonthDayNanoType::make_value(16, 2, 3)),
+            Some(IntervalMonthDayNanoType::make_value(19, 5, 4)),
+            Some(IntervalMonthDayNanoType::make_value(28, 5, 6)),
+            Some(IntervalMonthDayNanoType::make_value(54, 27, 23)),
+        ]);
+        assert_eq!(result, &expected);
+
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_interval_day_time_add_interval() {
+        // interval day time + interval year month
+        let a = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(1, 3)),
+            Some(IntervalDayTimeType::make_value(1, 5)),
+            Some(IntervalDayTimeType::make_value(2, 2)),
+            Some(IntervalDayTimeType::make_value(4, 2)),
+        ]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 4)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(4, 11)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(16, 1, 2000000)),
+            Some(IntervalMonthDayNanoType::make_value(14, 1, 3000000)),
+            Some(IntervalMonthDayNanoType::make_value(29, 1, 5000000)),
+            Some(IntervalMonthDayNanoType::make_value(29, 2, 2000000)),
+            Some(IntervalMonthDayNanoType::make_value(59, 4, 2000000)),
+        ]);
+        assert_eq!(result, &expected);
+
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+        assert_eq!(result, &expected);
+
+        // interval day time + interval day time
+        let a = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(1, 3)),
+            Some(IntervalDayTimeType::make_value(1, 5)),
+            Some(IntervalDayTimeType::make_value(2, 2)),
+            Some(IntervalDayTimeType::make_value(4, 2)),
+        ]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 4)),
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(4, 27)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalDayTimeType>();
+
+        let expected = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(2, 6)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(3, 10)),
+            Some(IntervalDayTimeType::make_value(4, 7)),
+            Some(IntervalDayTimeType::make_value(8, 29)),
+        ]);
+        assert_eq!(result, &expected);
+
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<IntervalDayTimeType>();
+        assert_eq!(result, &expected);
+
+        // interval year month + interval day time
+        let a = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(1, 3)),
+            Some(IntervalDayTimeType::make_value(1, 5)),
+            Some(IntervalDayTimeType::make_value(2, 2)),
+            Some(IntervalDayTimeType::make_value(4, 2)),
+        ]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 4, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 3)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 4)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 6)),
+            Some(IntervalMonthDayNanoType::make_value(4, 27, 23)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 5, 2000001)),
+            Some(IntervalMonthDayNanoType::make_value(1, 3, 3000003)),
+            Some(IntervalMonthDayNanoType::make_value(2, 6, 5000004)),
+            Some(IntervalMonthDayNanoType::make_value(2, 7, 2000006)),
+            Some(IntervalMonthDayNanoType::make_value(4, 31, 2000023)),
+        ]);
+        assert_eq!(result, &expected);
+
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_interval_month_day_nano_add_interval() {
+        // interval month day nano + interval year month
+        let a = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 3, 3)),
+            Some(IntervalMonthDayNanoType::make_value(1, 5, 2)),
+            Some(IntervalMonthDayNanoType::make_value(2, 2, 6)),
+            Some(IntervalMonthDayNanoType::make_value(4, 2, 0)),
+        ]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 4)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(4, 11)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(17, 2, 1)),
+            Some(IntervalMonthDayNanoType::make_value(15, 3, 3)),
+            Some(IntervalMonthDayNanoType::make_value(30, 5, 2)),
+            Some(IntervalMonthDayNanoType::make_value(31, 2, 6)),
+            Some(IntervalMonthDayNanoType::make_value(63, 2, 0)),
+        ]);
+        assert_eq!(result, &expected);
+
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+        assert_eq!(result, &expected);
+
+        // interval month day nano + interval day time
+        let a = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 3, 2)),
+            Some(IntervalMonthDayNanoType::make_value(1, 5, 6)),
+            Some(IntervalMonthDayNanoType::make_value(2, 2, 8)),
+            Some(IntervalMonthDayNanoType::make_value(4, 2, 4)),
+        ]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 4)),
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(4, 27)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 3, 4000001)),
+            Some(IntervalMonthDayNanoType::make_value(1, 4, 2000002)),
+            Some(IntervalMonthDayNanoType::make_value(1, 7, 5000006)),
+            Some(IntervalMonthDayNanoType::make_value(2, 4, 5000008)),
+            Some(IntervalMonthDayNanoType::make_value(4, 6, 27000004)),
+        ]);
+        assert_eq!(result, &expected);
+
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+        assert_eq!(result, &expected);
+
+        // interval year month + interval day time
+        let a = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 3, 3)),
+            Some(IntervalMonthDayNanoType::make_value(1, 5, 4)),
+            Some(IntervalMonthDayNanoType::make_value(2, 2, 2)),
+            Some(IntervalMonthDayNanoType::make_value(4, 2, 7)),
+        ]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 4, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 3)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 4)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 6)),
+            Some(IntervalMonthDayNanoType::make_value(4, 27, 23)),
+        ]);
+
+        let result = add_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(2, 6, 2)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 6)),
+            Some(IntervalMonthDayNanoType::make_value(3, 10, 8)),
+            Some(IntervalMonthDayNanoType::make_value(4, 7, 8)),
+            Some(IntervalMonthDayNanoType::make_value(8, 29, 30)),
+        ]);
+        assert_eq!(result, &expected);
+
+        let result = add_dyn(&b, &a).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_interval_year_month_subtract_interval() {
+        // interval year month - interval year month
+        let a = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 3)),
+            Some(IntervalYearMonthType::make_value(1, 5)),
+            Some(IntervalYearMonthType::make_value(2, 2)),
+            Some(IntervalYearMonthType::make_value(4, 2)),
+        ]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 4)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(4, 11)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalYearMonthType>();
+
+        let expected = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(0, -2)),
+            Some(IntervalYearMonthType::make_value(0, 1)),
+            Some(IntervalYearMonthType::make_value(-1, 0)),
+            Some(IntervalYearMonthType::make_value(0, -3)),
+            Some(IntervalYearMonthType::make_value(0, -9)),
+        ]);
+        assert_eq!(result, &expected);
+
+        // interval year month - interval day time
+        let a = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 3)),
+            Some(IntervalYearMonthType::make_value(1, 5)),
+            Some(IntervalYearMonthType::make_value(2, 2)),
+            Some(IntervalYearMonthType::make_value(4, 2)),
+        ]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 4)),
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(4, 27)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(14, -1, -4000000)),
+            Some(IntervalMonthDayNanoType::make_value(15, -1, -2000000)),
+            Some(IntervalMonthDayNanoType::make_value(17, -2, -5000000)),
+            Some(IntervalMonthDayNanoType::make_value(26, -2, -5000000)),
+            Some(IntervalMonthDayNanoType::make_value(50, -4, -27000000)),
+        ]);
+        assert_eq!(result, &expected);
+
+        // interval year month - interval day time
+        let a = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(1, 3)),
+            Some(IntervalYearMonthType::make_value(1, 5)),
+            Some(IntervalYearMonthType::make_value(2, 2)),
+            Some(IntervalYearMonthType::make_value(4, 2)),
+        ]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 4, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 3)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 4)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 6)),
+            Some(IntervalMonthDayNanoType::make_value(4, 27, 23)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(13, -4, -1)),
+            Some(IntervalMonthDayNanoType::make_value(14, -2, -3)),
+            Some(IntervalMonthDayNanoType::make_value(15, -5, -4)),
+            Some(IntervalMonthDayNanoType::make_value(24, -5, -6)),
+            Some(IntervalMonthDayNanoType::make_value(46, -27, -23)),
+        ]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_interval_day_time_subtract_interval() {
+        // interval day time - interval year month
+        let a = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(1, 3)),
+            Some(IntervalDayTimeType::make_value(1, 5)),
+            Some(IntervalDayTimeType::make_value(2, 2)),
+            Some(IntervalDayTimeType::make_value(4, 2)),
+        ]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 4)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(4, 11)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(-16, 1, 2000000)),
+            Some(IntervalMonthDayNanoType::make_value(-14, 1, 3000000)),
+            Some(IntervalMonthDayNanoType::make_value(-29, 1, 5000000)),
+            Some(IntervalMonthDayNanoType::make_value(-29, 2, 2000000)),
+            Some(IntervalMonthDayNanoType::make_value(-59, 4, 2000000)),
+        ]);
+        assert_eq!(result, &expected);
+
+        // interval day time - interval day time
+        let a = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(1, 3)),
+            Some(IntervalDayTimeType::make_value(1, 5)),
+            Some(IntervalDayTimeType::make_value(2, 2)),
+            Some(IntervalDayTimeType::make_value(4, 2)),
+        ]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 4)),
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(4, 27)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalDayTimeType>();
+
+        let expected = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(0, -2)),
+            Some(IntervalDayTimeType::make_value(0, 1)),
+            Some(IntervalDayTimeType::make_value(-1, 0)),
+            Some(IntervalDayTimeType::make_value(0, -3)),
+            Some(IntervalDayTimeType::make_value(0, -25)),
+        ]);
+        assert_eq!(result, &expected);
+
+        // interval year month - interval day time
+        let a = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(1, 3)),
+            Some(IntervalDayTimeType::make_value(1, 5)),
+            Some(IntervalDayTimeType::make_value(2, 2)),
+            Some(IntervalDayTimeType::make_value(4, 2)),
+        ]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 4, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 3)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 4)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 6)),
+            Some(IntervalMonthDayNanoType::make_value(4, 27, 23)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, -3, 1999999)),
+            Some(IntervalMonthDayNanoType::make_value(1, -1, 2999997)),
+            Some(IntervalMonthDayNanoType::make_value(2, -4, 4999996)),
+            Some(IntervalMonthDayNanoType::make_value(2, -3, 1999994)),
+            Some(IntervalMonthDayNanoType::make_value(4, -23, 1999977)),
+        ]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_interval_month_day_nano_subtract_interval() {
+        // interval month day nano - interval year month
+        let a = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 3, 3)),
+            Some(IntervalMonthDayNanoType::make_value(1, 5, 2)),
+            Some(IntervalMonthDayNanoType::make_value(2, 2, 6)),
+            Some(IntervalMonthDayNanoType::make_value(4, 2, 0)),
+        ]);
+        let b = IntervalYearMonthArray::from(vec![
+            Some(IntervalYearMonthType::make_value(1, 4)),
+            Some(IntervalYearMonthType::make_value(1, 2)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(2, 5)),
+            Some(IntervalYearMonthType::make_value(4, 11)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(-15, 2, 1)),
+            Some(IntervalMonthDayNanoType::make_value(-13, 3, 3)),
+            Some(IntervalMonthDayNanoType::make_value(-28, 5, 2)),
+            Some(IntervalMonthDayNanoType::make_value(-27, 2, 6)),
+            Some(IntervalMonthDayNanoType::make_value(-55, 2, 0)),
+        ]);
+        assert_eq!(result, &expected);
+
+        // interval month day nano - interval day time
+        let a = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 3, 3)),
+            Some(IntervalMonthDayNanoType::make_value(1, 5, 7)),
+            Some(IntervalMonthDayNanoType::make_value(2, 2, 2)),
+            Some(IntervalMonthDayNanoType::make_value(4, 2, 9)),
+        ]);
+        let b = IntervalDayTimeArray::from(vec![
+            Some(IntervalDayTimeType::make_value(1, 4)),
+            Some(IntervalDayTimeType::make_value(1, 2)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(2, 5)),
+            Some(IntervalDayTimeType::make_value(4, 27)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 1, -3999999)),
+            Some(IntervalMonthDayNanoType::make_value(1, 2, -1999997)),
+            Some(IntervalMonthDayNanoType::make_value(1, 3, -4999993)),
+            Some(IntervalMonthDayNanoType::make_value(2, 0, -4999998)),
+            Some(IntervalMonthDayNanoType::make_value(4, -2, -26999991)),
+        ]);
+        assert_eq!(result, &expected);
+
+        // interval year month - interval day time
+        let a = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 3, 3)),
+            Some(IntervalMonthDayNanoType::make_value(1, 5, 4)),
+            Some(IntervalMonthDayNanoType::make_value(2, 2, 2)),
+            Some(IntervalMonthDayNanoType::make_value(4, 2, 7)),
+        ]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(1, 4, 1)),
+            Some(IntervalMonthDayNanoType::make_value(1, 2, 3)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 4)),
+            Some(IntervalMonthDayNanoType::make_value(2, 5, 6)),
+            Some(IntervalMonthDayNanoType::make_value(4, 27, 23)),
+        ]);
+
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<IntervalMonthDayNanoType>();
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(0, -2, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),
+            Some(IntervalMonthDayNanoType::make_value(-1, 0, 0)),
+            Some(IntervalMonthDayNanoType::make_value(0, -3, -4)),
+            Some(IntervalMonthDayNanoType::make_value(0, -25, -16)),
+        ]);
+        assert_eq!(result, &expected);
     }
 
     #[test]
