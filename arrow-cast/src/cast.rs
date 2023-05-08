@@ -51,6 +51,7 @@ use arrow_buffer::{i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
+use half::f16;
 use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
 
@@ -81,6 +82,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | UInt8
             | Int16
             | UInt16
+            | Float16
             | Int32
             | UInt32
             | Float32
@@ -137,14 +139,14 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (UInt8 | UInt16 | UInt32 | UInt64, Decimal128(_, _)) |
         (UInt8 | UInt16 | UInt32 | UInt64, Decimal256(_, _)) |
         // signed numeric to decimal
-        (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal128(_, _)) |
-        (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal256(_, _)) |
+        (Null | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64, Decimal128(_, _)) |
+        (Null | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64, Decimal256(_, _)) |
         // decimal to unsigned numeric
         (Decimal128(_, _), UInt8 | UInt16 | UInt32 | UInt64) |
         (Decimal256(_, _), UInt8 | UInt16 | UInt32 | UInt64) |
         // decimal to signed numeric
-        (Decimal128(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) |
-        (Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) => true,
+        (Decimal128(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64) |
+        (Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64) => true,
         // decimal to Utf8
         (Decimal128(_, _), Utf8 | LargeUtf8) => true,
         (Decimal256(_, _), Utf8 | LargeUtf8) => true,
@@ -202,52 +204,57 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // start numeric casts
         (
             UInt8,
-            UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+            UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64,
         ) => true,
 
         (
             UInt16,
-            UInt8 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+            UInt8 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64,
         ) => true,
 
         (
             UInt32,
-            UInt8 | UInt16 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+            UInt8 | UInt16 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64,
         ) => true,
 
         (
             UInt64,
-            UInt8 | UInt16 | UInt32 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64,
         ) => true,
 
         (
             Int8,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int16 | Int32 | Int64 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64,
         ) => true,
 
         (
             Int16,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int32 | Int64 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int32 | Int64 | Float16 | Float32 | Float64,
         ) => true,
 
         (
             Int32,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int64 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int64 | Float16 | Float32 | Float64,
         ) => true,
 
         (
             Int64,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Float16 | Float32 | Float64,
+        ) => true,
+
+        (
+            Float16,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
         ) => true,
 
         (
             Float32,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float64,
         ) => true,
 
         (
             Float64,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32,
         ) => true,
         // end numeric casts
 
@@ -325,7 +332,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 /// * Time32 and Time64: precision lost when going to higher interval
 /// * Timestamp and Date{32|64}: precision lost when going to higher interval
 /// * Temporal to/from backing primitive: zero-copy with data type change
-/// * Casting from `float32/float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
+/// * Casting from `float16/float32/float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
 ///   (i.e. casting 6.4999 to Decimal(10, 1) becomes 6.5). This is the breaking change from `26.0.0`.
 ///   It used to truncate it instead of round (i.e. outputs 6.4 instead)
 ///
@@ -762,6 +769,7 @@ pub fn cast_with_options(
             | UInt8
             | Int16
             | UInt16
+            | Float16
             | Int32
             | UInt32
             | Float32
@@ -937,6 +945,11 @@ pub fn cast_with_options(
                     *scale,
                     cast_options,
                 ),
+                Float16 => {
+                    cast_decimal_to_float::<Decimal128Type, Float16Type, _>(array, |x| {
+                        f16::from_f64(x as f64 / 10_f64.powi(*scale as i32))
+                    })
+                }
                 Float32 => {
                     cast_decimal_to_float::<Decimal128Type, Float32Type, _>(array, |x| {
                         (x as f64 / 10_f64.powi(*scale as i32)) as f32
@@ -1006,6 +1019,11 @@ pub fn cast_with_options(
                     *scale,
                     cast_options,
                 ),
+                Float16 => {
+                    cast_decimal_to_float::<Decimal256Type, Float16Type, _>(array, |x| {
+                        f16::from_f64(x.to_f64().unwrap() / 10_f64.powi(*scale as i32))
+                    })
+                }
                 Float32 => {
                     cast_decimal_to_float::<Decimal256Type, Float32Type, _>(array, |x| {
                         (x.to_f64().unwrap() / 10_f64.powi(*scale as i32)) as f32
@@ -1081,6 +1099,12 @@ pub fn cast_with_options(
                     *precision,
                     *scale,
                     10_i128,
+                    cast_options,
+                ),
+                Float16 => cast_floating_point_to_decimal128(
+                    array.as_primitive::<Float16Type>(),
+                    *precision,
+                    *scale,
                     cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal128(
@@ -1170,6 +1194,12 @@ pub fn cast_with_options(
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
+                    cast_options,
+                ),
+                Float16 => cast_floating_point_to_decimal256(
+                    array.as_primitive::<Float16Type>(),
+                    *precision,
+                    *scale,
                     cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal256(
@@ -1435,6 +1465,9 @@ pub fn cast_with_options(
         (UInt8, Int64) => {
             cast_numeric_arrays::<UInt8Type, Int64Type>(array, cast_options)
         }
+        (UInt8, Float16) => {
+            cast_numeric_arrays::<UInt8Type, Float16Type>(array, cast_options)
+        }
         (UInt8, Float32) => {
             cast_numeric_arrays::<UInt8Type, Float32Type>(array, cast_options)
         }
@@ -1462,6 +1495,9 @@ pub fn cast_with_options(
         }
         (UInt16, Int64) => {
             cast_numeric_arrays::<UInt16Type, Int64Type>(array, cast_options)
+        }
+        (UInt16, Float16) => {
+            cast_numeric_arrays::<UInt16Type, Float16Type>(array, cast_options)
         }
         (UInt16, Float32) => {
             cast_numeric_arrays::<UInt16Type, Float32Type>(array, cast_options)
@@ -1491,6 +1527,9 @@ pub fn cast_with_options(
         (UInt32, Int64) => {
             cast_numeric_arrays::<UInt32Type, Int64Type>(array, cast_options)
         }
+        (UInt32, Float16) => {
+            cast_numeric_arrays::<UInt32Type, Float16Type>(array, cast_options)
+        }
         (UInt32, Float32) => {
             cast_numeric_arrays::<UInt32Type, Float32Type>(array, cast_options)
         }
@@ -1519,6 +1558,9 @@ pub fn cast_with_options(
         (UInt64, Int64) => {
             cast_numeric_arrays::<UInt64Type, Int64Type>(array, cast_options)
         }
+        (UInt64, Float16) => {
+            cast_numeric_arrays::<UInt64Type, Float16Type>(array, cast_options)
+        }
         (UInt64, Float32) => {
             cast_numeric_arrays::<UInt64Type, Float32Type>(array, cast_options)
         }
@@ -1539,6 +1581,9 @@ pub fn cast_with_options(
         (Int8, Int16) => cast_numeric_arrays::<Int8Type, Int16Type>(array, cast_options),
         (Int8, Int32) => cast_numeric_arrays::<Int8Type, Int32Type>(array, cast_options),
         (Int8, Int64) => cast_numeric_arrays::<Int8Type, Int64Type>(array, cast_options),
+        (Int8, Float16) => {
+            cast_numeric_arrays::<Int8Type, Float16Type>(array, cast_options)
+        }
         (Int8, Float32) => {
             cast_numeric_arrays::<Int8Type, Float32Type>(array, cast_options)
         }
@@ -1564,6 +1609,9 @@ pub fn cast_with_options(
         }
         (Int16, Int64) => {
             cast_numeric_arrays::<Int16Type, Int64Type>(array, cast_options)
+        }
+        (Int16, Float16) => {
+            cast_numeric_arrays::<Int16Type, Float16Type>(array, cast_options)
         }
         (Int16, Float32) => {
             cast_numeric_arrays::<Int16Type, Float32Type>(array, cast_options)
@@ -1591,6 +1639,9 @@ pub fn cast_with_options(
         (Int32, Int64) => {
             cast_numeric_arrays::<Int32Type, Int64Type>(array, cast_options)
         }
+        (Int32, Float16) => {
+            cast_numeric_arrays::<Int32Type, Float16Type>(array, cast_options)
+        }
         (Int32, Float32) => {
             cast_numeric_arrays::<Int32Type, Float32Type>(array, cast_options)
         }
@@ -1617,11 +1668,45 @@ pub fn cast_with_options(
         (Int64, Int32) => {
             cast_numeric_arrays::<Int64Type, Int32Type>(array, cast_options)
         }
+        (Int64, Float16) => {
+            cast_numeric_arrays::<Int64Type, Float16Type>(array, cast_options)
+        }
         (Int64, Float32) => {
             cast_numeric_arrays::<Int64Type, Float32Type>(array, cast_options)
         }
         (Int64, Float64) => {
             cast_numeric_arrays::<Int64Type, Float64Type>(array, cast_options)
+        }
+
+        (Float16, UInt8) => {
+            cast_numeric_arrays::<Float16Type, UInt8Type>(array, cast_options)
+        }
+        (Float16, UInt16) => {
+            cast_numeric_arrays::<Float16Type, UInt16Type>(array, cast_options)
+        }
+        (Float16, UInt32) => {
+            cast_numeric_arrays::<Float16Type, UInt32Type>(array, cast_options)
+        }
+        (Float16, UInt64) => {
+            cast_numeric_arrays::<Float16Type, UInt64Type>(array, cast_options)
+        }
+        (Float16, Int8) => {
+            cast_numeric_arrays::<Float16Type, Int8Type>(array, cast_options)
+        }
+        (Float16, Int16) => {
+            cast_numeric_arrays::<Float16Type, Int16Type>(array, cast_options)
+        }
+        (Float16, Int32) => {
+            cast_numeric_arrays::<Float16Type, Int32Type>(array, cast_options)
+        }
+        (Float16, Int64) => {
+            cast_numeric_arrays::<Float16Type, Int64Type>(array, cast_options)
+        }
+        (Float16, Float32) => {
+            cast_numeric_arrays::<Float16Type, Float32Type>(array, cast_options)
+        }
+        (Float16, Float64) => {
+            cast_numeric_arrays::<Float16Type, Float64Type>(array, cast_options)
         }
 
         (Float32, UInt8) => {
@@ -1647,6 +1732,9 @@ pub fn cast_with_options(
         }
         (Float32, Int64) => {
             cast_numeric_arrays::<Float32Type, Int64Type>(array, cast_options)
+        }
+        (Float32, Float16) => {
+            cast_numeric_arrays::<Float32Type, Float16Type>(array, cast_options)
         }
         (Float32, Float64) => {
             cast_numeric_arrays::<Float32Type, Float64Type>(array, cast_options)
@@ -1675,6 +1763,9 @@ pub fn cast_with_options(
         }
         (Float64, Int64) => {
             cast_numeric_arrays::<Float64Type, Int64Type>(array, cast_options)
+        }
+        (Float64, Float16) => {
+            cast_numeric_arrays::<Float64Type, Float16Type>(array, cast_options)
         }
         (Float64, Float32) => {
             cast_numeric_arrays::<Float64Type, Float32Type>(array, cast_options)
@@ -4256,6 +4347,19 @@ mod tests {
             &DataType::Int64,
             vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
         );
+        // f16
+        generate_cast_test_case!(
+            &array,
+            Float16Array,
+            &DataType::Float16,
+            vec![
+                Some(f16::from_f32(1.25_f32)),
+                Some(f16::from_f32(2.25_f32)),
+                Some(f16::from_f32(3.25_f32)),
+                None,
+                Some(f16::from_f32(5.25_f32))
+            ]
+        );
         // f32
         generate_cast_test_case!(
             &array,
@@ -4313,7 +4417,34 @@ mod tests {
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
 
-        // loss the precision: convert decimal to f32、f64
+        // loss the precision: convert decimal to f16, f32、f64
+        // f16
+        // 112345678_f32 and 112345679_f32 are same, so the 112345679_f32 will lose precision.
+        let value_array: Vec<Option<i128>> = vec![
+            Some(125),
+            Some(225),
+            Some(325),
+            None,
+            Some(525),
+            Some(112345678),
+            Some(112345679),
+        ];
+        let array = create_decimal_array(value_array, 38, 2).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Float16Array,
+            &DataType::Float16,
+            vec![
+                Some(f16::from_f32(1.25_f32)),
+                Some(f16::from_f32(2.25_f32)),
+                Some(f16::from_f32(3.25_f32)),
+                None,
+                Some(f16::from_f32(5.25_f32)),
+                Some(f16::from_f32(1_123_456.7_f32)),
+                Some(f16::from_f32(1_123_456.7_f32))
+            ]
+        );
+
         // f32
         // 112345678_f32 and 112345679_f32 are same, so the 112345679_f32 will lose precision.
         let value_array: Vec<Option<i128>> = vec![
@@ -4435,6 +4566,19 @@ mod tests {
             &DataType::Int64,
             vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
         );
+        // f16
+        generate_cast_test_case!(
+            &array,
+            Float16Array,
+            &DataType::Float16,
+            vec![
+                Some(f16::from_f32(1.25_f32)),
+                Some(f16::from_f32(2.25_f32)),
+                Some(f16::from_f32(3.25_f32)),
+                None,
+                Some(f16::from_f32(5.25_f32))
+            ]
+        );
         // f32
         generate_cast_test_case!(
             &array,
@@ -4477,7 +4621,34 @@ mod tests {
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
 
-        // loss the precision: convert decimal to f32、f64
+        // loss the precision: convert decimal to f16, f32、f64
+        // f16
+        // 112345678_f16 and 112345679_f16 are same, so the 112345679_f16 will lose precision.
+        let value_array: Vec<Option<i256>> = vec![
+            Some(i256::from_i128(125)),
+            Some(i256::from_i128(225)),
+            Some(i256::from_i128(325)),
+            None,
+            Some(i256::from_i128(525)),
+            Some(i256::from_i128(112345678)),
+            Some(i256::from_i128(112345679)),
+        ];
+        let array = create_decimal256_array(value_array, 76, 2).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Float16Array,
+            &DataType::Float16,
+            vec![
+                Some(f16::from_f32(1.25_f32)),
+                Some(f16::from_f32(2.25_f32)),
+                Some(f16::from_f32(3.25_f32)),
+                None,
+                Some(f16::from_f32(5.25_f32)),
+                Some(f16::from_f32(1_123_456.7_f32)),
+                Some(f16::from_f32(1_123_456.7_f32))
+            ]
+        );
+
         // f32
         // 112345678_f32 and 112345679_f32 are same, so the 112345679_f32 will lose precision.
         let value_array: Vec<Option<i256>> = vec![
@@ -4647,6 +4818,30 @@ mod tests {
         let array: &Decimal128Array = array.as_primitive();
         assert!(array.is_null(4));
 
+        // test f16 to decimal type
+        let array = Float16Array::from(vec![
+            Some(f16::from_f32(1.1)),
+            Some(f16::from_f32(2.2)),
+            Some(f16::from_f32(4.4)),
+            None,
+            Some(f16::from_f32(1.123_456_4)), // round down
+            Some(f16::from_f32(1.123_456_7)), // round up
+        ]);
+        let array = Arc::new(array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &decimal_type,
+            vec![
+                Some(1099609_i128), // round down
+                Some(2199219_i128), // round down
+                Some(4398438_i128), // round down
+                None,
+                Some(1123047_i128), // round down
+                Some(1123047_i128), // round down
+            ]
+        );
+
         // test f32 to decimal type
         let array = Float32Array::from(vec![
             Some(1.1),
@@ -4804,6 +4999,29 @@ mod tests {
         let array = casted_array.unwrap();
         let array: &Decimal256Array = array.as_primitive();
         assert!(array.is_null(4));
+
+        // test f16 to decimal type
+        let array = Float16Array::from(vec![
+            Some(f16::from_f32(1.1)),
+            Some(f16::from_f32(2.2)),
+            Some(f16::from_f32(4.4)),
+            None,
+            Some(f16::from_f32(1.123_456_4)), // round down
+            Some(f16::from_f32(1.123_456_7)), // round up
+        ]);
+        generate_cast_test_case!(
+            &array,
+            Decimal256Array,
+            &decimal_type,
+            vec![
+                Some(i256::from_i128(1099609_i128)), // round down
+                Some(i256::from_i128(2199219_i128)), // round down
+                Some(i256::from_i128(4398438_i128)), // round down
+                None,
+                Some(i256::from_i128(1123047_i128)), // round down
+                Some(i256::from_i128(1123047_i128)), // round down
+            ]
+        );
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
@@ -6166,6 +6384,25 @@ mod tests {
                 .collect::<Vec<f32>>()
         );
 
+        let f16_expected = vec![
+            f16::from_f64(-9223372000000000000.0),
+            f16::from_f64(-2147483600.0),
+            f16::from_f64(-32768.0),
+            f16::from_f64(-128.0),
+            f16::from_f64(0.0),
+            f16::from_f64(255.0),
+            f16::from_f64(65535.0),
+            f16::from_f64(4294967300.0),
+            f16::from_f64(18446744000000000000.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&f64_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
+        );
+
         let i64_expected = vec![
             "-9223372036854775808",
             "-2147483648",
@@ -6310,6 +6547,14 @@ mod tests {
             get_cast_values::<Float32Type>(&f32_array, &DataType::Float32)
         );
 
+        let f16_expected = vec![
+            "-inf", "-inf", "-32768.0", "-128.0", "0.0", "255.0", "inf", "inf", "inf",
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&f32_array, &DataType::Float16)
+        );
+
         let i64_expected = vec![
             "-2147483648",
             "-2147483648",
@@ -6400,6 +6645,110 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_from_f16() {
+        let f16_values: Vec<f16> = vec![
+            f16::from_f32(i32::MIN as f32),
+            f16::from_f32(i32::MIN as f32),
+            f16::from_f32(i16::MIN as f32),
+            f16::from_f32(i8::MIN as f32),
+            f16::from_f32(0_f32),
+            f16::from_f32(u8::MAX as f32),
+            f16::from_f32(u16::MAX as f32),
+            f16::from_f32(u32::MAX as f32),
+            f16::from_f32(u32::MAX as f32),
+        ];
+        let f16_array: ArrayRef = Arc::new(Float16Array::from(f16_values));
+
+        let f64_expected = vec![
+            "-inf", "-inf", "-32768.0", "-128.0", "0.0", "255.0", "inf", "inf", "inf",
+        ];
+        assert_eq!(
+            f64_expected,
+            get_cast_values::<Float64Type>(&f16_array, &DataType::Float64)
+        );
+
+        let f32_expected = vec![
+            "-inf", "-inf", "-32768.0", "-128.0", "0.0", "255.0", "inf", "inf", "inf",
+        ];
+        assert_eq!(
+            f32_expected,
+            get_cast_values::<Float32Type>(&f16_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec![
+            "-inf", "-inf", "-32768.0", "-128.0", "0.0", "255.0", "inf", "inf", "inf",
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&f16_array, &DataType::Float16)
+        );
+
+        let i64_expected = vec![
+            "null", "null", "-32768", "-128", "0", "255", "null", "null", "null",
+        ];
+        assert_eq!(
+            i64_expected,
+            get_cast_values::<Int64Type>(&f16_array, &DataType::Int64)
+        );
+
+        let i32_expected = vec![
+            "null", "null", "-32768", "-128", "0", "255", "null", "null", "null",
+        ];
+        assert_eq!(
+            i32_expected,
+            get_cast_values::<Int32Type>(&f16_array, &DataType::Int32)
+        );
+
+        let i16_expected = vec![
+            "null", "null", "-32768", "-128", "0", "255", "null", "null", "null",
+        ];
+        assert_eq!(
+            i16_expected,
+            get_cast_values::<Int16Type>(&f16_array, &DataType::Int16)
+        );
+
+        let i8_expected = vec![
+            "null", "null", "null", "-128", "0", "null", "null", "null", "null",
+        ];
+        assert_eq!(
+            i8_expected,
+            get_cast_values::<Int8Type>(&f16_array, &DataType::Int8)
+        );
+
+        let u64_expected = vec![
+            "null", "null", "null", "null", "0", "255", "null", "null", "null",
+        ];
+        assert_eq!(
+            u64_expected,
+            get_cast_values::<UInt64Type>(&f16_array, &DataType::UInt64)
+        );
+
+        let u32_expected = vec![
+            "null", "null", "null", "null", "0", "255", "null", "null", "null",
+        ];
+        assert_eq!(
+            u32_expected,
+            get_cast_values::<UInt32Type>(&f16_array, &DataType::UInt32)
+        );
+
+        let u16_expected = vec![
+            "null", "null", "null", "null", "0", "255", "null", "null", "null",
+        ];
+        assert_eq!(
+            u16_expected,
+            get_cast_values::<UInt16Type>(&f16_array, &DataType::UInt16)
+        );
+
+        let u8_expected = vec![
+            "null", "null", "null", "null", "0", "255", "null", "null", "null",
+        ];
+        assert_eq!(
+            u8_expected,
+            get_cast_values::<UInt8Type>(&f16_array, &DataType::UInt8)
+        );
+    }
+
+    #[test]
     fn test_cast_from_uint64() {
         let u64_values: Vec<u64> = vec![
             0,
@@ -6428,6 +6777,21 @@ mod tests {
                 .iter()
                 .map(|i| i.parse::<f32>().unwrap())
                 .collect::<Vec<f32>>()
+        );
+
+        let f16_expected = vec![
+            f16::from_f64(0.0),
+            f16::from_f64(255.0),
+            f16::from_f64(65535.0),
+            f16::from_f64(4294967300.0),
+            f16::from_f64(18446744000000000000.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u64_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
         );
 
         let i64_expected = vec!["0", "255", "65535", "4294967295", "null"];
@@ -6497,6 +6861,12 @@ mod tests {
             get_cast_values::<Float32Type>(&u32_array, &DataType::Float32)
         );
 
+        let f16_expected = vec!["0.0", "255.0", "inf", "inf"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u32_array, &DataType::Float16)
+        );
+
         let i64_expected = vec!["0", "255", "65535", "4294967295"];
         assert_eq!(
             i64_expected,
@@ -6563,6 +6933,12 @@ mod tests {
             get_cast_values::<Float32Type>(&u16_array, &DataType::Float32)
         );
 
+        let f16_expected = vec!["0.0", "255.0", "inf"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u16_array, &DataType::Float16)
+        );
+
         let i64_expected = vec!["0", "255", "65535"];
         assert_eq!(
             i64_expected,
@@ -6627,6 +7003,12 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&u8_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec!["0.0", "255.0"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u8_array, &DataType::Float16)
         );
 
         let i64_expected = vec!["0", "255"];
@@ -6729,6 +7111,25 @@ mod tests {
                 .iter()
                 .map(|i| i.parse::<f32>().unwrap())
                 .collect::<Vec<f32>>()
+        );
+
+        let f16_expected = vec![
+            f16::from_f64(-9223372000000000000.0),
+            f16::from_f64(-2147483600.0),
+            f16::from_f64(-32768.0),
+            f16::from_f64(-128.0),
+            f16::from_f64(0.0),
+            f16::from_f64(127.0),
+            f16::from_f64(32767.0),
+            f16::from_f64(2147483600.0),
+            f16::from_f64(9223372000000000000.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i64_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
         );
 
         let i64_expected = vec![
@@ -6874,6 +7275,14 @@ mod tests {
             get_cast_values::<Float32Type>(&i32_array, &DataType::Float32)
         );
 
+        let f16_expected = vec![
+            "-inf", "-32768.0", "-128.0", "0.0", "127.0", "32768.0", "inf",
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i32_array, &DataType::Float16)
+        );
+
         let i16_expected = vec!["null", "-32768", "-128", "0", "127", "32767", "null"];
         assert_eq!(
             i16_expected,
@@ -6944,6 +7353,12 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&i16_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec!["-32768.0", "-128.0", "0.0", "127.0", "32768.0"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i16_array, &DataType::Float16)
         );
 
         let i64_expected = vec!["-32768", "-128", "0", "127", "32767"];
@@ -7038,6 +7453,12 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&i8_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec!["-128.0", "0.0", "127.0"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i8_array, &DataType::Float16)
         );
 
         let i64_expected = vec!["-128", "0", "127"];
@@ -7328,6 +7749,7 @@ mod tests {
         typed_test!(UInt32Array, UInt32, UInt32Type);
         typed_test!(UInt64Array, UInt64, UInt64Type);
 
+        typed_test!(Float16Array, Float16, Float16Type);
         typed_test!(Float32Array, Float32, Float32Type);
         typed_test!(Float64Array, Float64, Float64Type);
 

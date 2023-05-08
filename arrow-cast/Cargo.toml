@@ -45,6 +45,7 @@ arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
+half = { version = "2.1", default-features = false }
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
 lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
