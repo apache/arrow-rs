@@ -956,8 +956,8 @@ pub fn cast_with_options(
                         x as f64 / 10_f64.powi(*scale as i32)
                     })
                 }
-                Utf8 => value_to_string::<i32>(array, None),
-                LargeUtf8 => value_to_string::<i64>(array, None),
+                Utf8 => value_to_string::<i32>(array, Some(&cast_options.format_options)),
+                LargeUtf8 => value_to_string::<i64>(array, Some(&cast_options.format_options)),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {from_type:?} to {to_type:?} not supported"
@@ -1025,8 +1025,8 @@ pub fn cast_with_options(
                         x.to_f64().unwrap() / 10_f64.powi(*scale as i32)
                     })
                 }
-                Utf8 => value_to_string::<i32>(array, None),
-                LargeUtf8 => value_to_string::<i64>(array, None),
+                Utf8 => value_to_string::<i32>(array, Some(&cast_options.format_options)),
+                LargeUtf8 => value_to_string::<i64>(array, Some(&cast_options.format_options)),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {from_type:?} to {to_type:?} not supported"
