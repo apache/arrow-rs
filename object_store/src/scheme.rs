@@ -51,9 +51,9 @@ impl ObjectStoreScheme {
             }
             ("http", Some(_)) => Ok(Self::Http),
             ("https", Some(host)) => {
-                if host.ends_with("dfs.core.windows.net") {
-                    Ok(Self::MicrosoftAzure)
-                } else if host.ends_with("blob.core.windows.net") {
+                if host.ends_with("dfs.core.windows.net")
+                    || host.ends_with("blob.core.windows.net")
+                {
                     Ok(Self::MicrosoftAzure)
                 } else if host.ends_with("amazonaws.com") {
                     Ok(Self::AmazonS3)
