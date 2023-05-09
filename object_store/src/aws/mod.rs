@@ -38,7 +38,7 @@ use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, Snafu};
+use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::str::FromStr;
@@ -144,6 +144,15 @@ enum Error {
 
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
+
+    #[snafu(display("Bucket '{}' not found", bucket))]
+    BucketNotFound { bucket: String },
+
+    #[snafu(display("Failed to resolve region for bucket '{}'", bucket))]
+    ResolveRegionUnsuccessful {
+        bucket: String,
+        source: reqwest::Error,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -979,6 +988,39 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Attempt to set the region using the [HeadBucket API], failing if the bucket does not exist.
+    /// This will overwrite the current region if one has been set.
+    /// [HeadBucket API]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
+    pub async fn with_resolved_region(mut self) -> Result<Self> {
+        use reqwest::StatusCode;
+
+        let bucket = self.bucket_name.clone().context(MissingBucketNameSnafu)?;
+
+        let endpoint = format!("https://{}.s3.amazonaws.com", &bucket);
+
+        let client = reqwest::Client::new();
+
+        let response = client.head(&endpoint).send().await.context(
+            ResolveRegionUnsuccessfulSnafu {
+                bucket: bucket.clone(),
+            },
+        )?;
+
+        ensure!(
+            response.status() != StatusCode::NOT_FOUND,
+            BucketNotFoundSnafu {
+                bucket: bucket.clone()
+            }
+        );
+
+        self.region = response
+            .headers()
+            .get("x-amz-bucket-region")
+            .map(|h| h.to_str().unwrap().to_string());
+
+        Ok(self)
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -1561,5 +1603,38 @@ mod tests {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+}
+
+#[cfg(test)]
+mod s3_resolved_region_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_private_bucket() {
+        let bucket_name = "bloxbender";
+
+        let builder = AmazonS3Builder::new()
+            .with_bucket_name(bucket_name)
+            .with_resolved_region()
+            .await
+            .unwrap();
+
+        let actual = builder.get_config_value(&AmazonS3ConfigKey::Region);
+        let expected = Some("us-west-2".to_string());
+
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn test_bucket_does_not_exist() {
+        let bucket_name = "please-dont-exist";
+
+        let result = AmazonS3Builder::new()
+            .with_bucket_name(bucket_name)
+            .with_resolved_region()
+            .await;
+
+        assert!(result.is_err());
     }
 }
