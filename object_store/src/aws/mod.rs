@@ -149,13 +149,13 @@ enum Error {
     BucketNotFound { bucket: String },
 
     #[snafu(display("Failed to resolve region for bucket '{}'", bucket))]
-    ResolveRegionError {
+    ResolveRegion {
         bucket: String,
         source: reqwest::Error,
     },
 
     #[snafu(display("Failed to parse the region for bucket '{}'", bucket))]
-    RegionParseError { bucket: String },
+    RegionParse { bucket: String },
 }
 
 impl From<Error> for super::Error {
