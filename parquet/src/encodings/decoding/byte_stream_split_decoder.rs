@@ -31,26 +31,15 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
         self.total_num_values = num_values;
         self.values_decoded = 0;
 
-        println!();
         Ok(())
     }
 
     fn get(&mut self, buffer: &mut [<T as DataType>::T]) -> Result<usize> {
         let total_remaining_values = self.values_left();
         let num_values = buffer.len().min(total_remaining_values);
-        dbg!(
-            self.total_num_values,
-            total_remaining_values,
-            self.values_decoded,
-            num_values,
-        );
 
-        // TODO explain safety
+        // SAFETY: f32 and f64 has no constraints on their internal representation, so we can modify it as we want
         let raw_out_bytes = unsafe { <T as DataType>::T::slice_as_bytes_mut(buffer) };
-
-        // For each value, compute a chunk that is the indexes into self.encoded_bytes to fetch and combine into the output byte
-
-        // TODO it might be better to go through one byte stream at a time for memory locality
 
         let num_values = num_values;
         let num_streams = T::get_type_size();
@@ -68,40 +57,6 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
                     self.encoded_bytes[idx_in_encoded_data];
             }
         }
-
-        // let encoded_indices_iter = (0..num_values).cartesian_product(0..num_streams).map(
-        //     |(value_idx, byte_idx)| {
-        //         (start
-        //             + value_idx
-        //             + (byte_idx * (num_streams - 1)) % self.encoded_bytes.len())
-        //     },
-        // );
-        // for (out_byte_idx, encoded_idx) in (0..num_bytes).zip(encoded_indices_iter) {
-        //     println!("{out_byte_idx} {encoded_idx}");
-        //     raw_out_bytes[out_byte_idx] = self.encoded_bytes[encoded_idx];
-        // }
-
-        // for out_index in (0..raw_out_bytes.len()).step_by(T::get_type_size()) {
-        //     for i in 0..T::get_type_size() {
-        //         raw_out_bytes[out_index + i] =
-        //             self.encoded_bytes[self.cur_byte_idx + (i * T::get_type_size())];
-        //     }
-        // }
-
-        // // TODO will it be better to take iterate stream first, because of locality?
-        // for i in self.cur_byte_idx..self.cur_byte_idx + num_values_to_decode {
-        //     for b in 0..num_streams {
-        //         // dbg!(byte_index);
-        //         // TODO avoid get_type_size mul every iteration
-        //         let encoded_byte_index = (b * byte_stride) + i;
-        //         let out_byte_index = i * num_streams + b;
-        //         // dbg!(encoded_byte_index, out_byte_index, b, byte_stride);
-        //         raw_out_bytes[out_byte_index] = self.encoded_bytes[encoded_byte_index];
-        //     }
-        // }
-
-        // TODO I think there's an inherent flaw in the design of Decoding, where the
-        // Or maybe we can actually do it by remember the byte we are at in self.buffer
 
         self.values_decoded += num_values;
 
