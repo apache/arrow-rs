@@ -249,7 +249,10 @@ pub use client::{backoff::BackoffConfig, retry::RetryConfig};
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
 mod multipart;
+mod scheme;
 mod util;
+
+pub use scheme::ObjectStoreScheme;
 
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
