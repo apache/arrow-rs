@@ -56,12 +56,21 @@ use num::{NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CastOptions {
+pub struct CastOptions<'a> {
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     pub safe: bool,
+    /// Formatting options when casting from temporal types to string
+    pub format_options: FormatOptions<'a>,
 }
 
-pub const DEFAULT_CAST_OPTIONS: CastOptions = CastOptions { safe: true };
+impl<'a> Default for CastOptions<'a> {
+    fn default() -> Self {
+        Self {
+            safe: true,
+            format_options: FormatOptions::default(),
+        }
+    }
+}
 
 /// Return true if a value of type `from_type` can be cast into a
 /// value of `to_type`. Note that such as cast may be lossy.
@@ -334,7 +343,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 /// * List to primitive
 /// * Interval and duration
 pub fn cast(array: &dyn Array, to_type: &DataType) -> Result<ArrayRef, ArrowError> {
-    cast_with_options(array, to_type, &DEFAULT_CAST_OPTIONS)
+    cast_with_options(array, to_type, &CastOptions::default())
 }
 
 fn cast_integer_to_decimal<
@@ -947,8 +956,8 @@ pub fn cast_with_options(
                         x as f64 / 10_f64.powi(*scale as i32)
                     })
                 }
-                Utf8 => value_to_string::<i32>(array),
-                LargeUtf8 => value_to_string::<i64>(array),
+                Utf8 => value_to_string::<i32>(array, Some(&cast_options.format_options)),
+                LargeUtf8 => value_to_string::<i64>(array, Some(&cast_options.format_options)),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {from_type:?} to {to_type:?} not supported"
@@ -1016,8 +1025,8 @@ pub fn cast_with_options(
                         x.to_f64().unwrap() / 10_f64.powi(*scale as i32)
                     })
                 }
-                Utf8 => value_to_string::<i32>(array),
-                LargeUtf8 => value_to_string::<i64>(array),
+                Utf8 => value_to_string::<i32>(array, Some(&cast_options.format_options)),
+                LargeUtf8 => value_to_string::<i64>(array, Some(&cast_options.format_options)),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {from_type:?} to {to_type:?} not supported"
@@ -1413,8 +1422,8 @@ pub fn cast_with_options(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
-        (from_type, LargeUtf8) if from_type.is_primitive() => value_to_string::<i64>(array),
-        (from_type, Utf8) if from_type.is_primitive() => value_to_string::<i32>(array),
+        (from_type, LargeUtf8) if from_type.is_primitive() => value_to_string::<i64>(array, Some(&cast_options.format_options)),
+        (from_type, Utf8) if from_type.is_primitive() => value_to_string::<i32>(array, Some(&cast_options.format_options)),
         // start numeric casts
         (UInt8, UInt16) => {
             cast_numeric_arrays::<UInt8Type, UInt16Type>(array, cast_options)
@@ -2450,10 +2459,14 @@ where
 
 fn value_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,
+    options: Option<&FormatOptions>,
 ) -> Result<ArrayRef, ArrowError> {
     let mut builder = GenericStringBuilder::<O>::new();
-    let options = FormatOptions::default();
-    let formatter = ArrayFormatter::try_new(array, &options)?;
+    let mut fmt_options = &FormatOptions::default();
+    if let Some(fmt_opts) = options {
+        fmt_options = fmt_opts;
+    };
+    let formatter = ArrayFormatter::try_new(array, fmt_options)?;
     let nulls = array.nulls();
     for i in 0..array.len() {
         match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
@@ -3871,7 +3884,10 @@ mod tests {
                 }
             }
 
-            let cast_option = CastOptions { safe: false };
+            let cast_option = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let casted_array_with_option =
                 cast_with_options($INPUT_ARRAY, $OUTPUT_TYPE, &cast_option).unwrap();
             let result_array = casted_array_with_option
@@ -4079,8 +4095,14 @@ mod tests {
 
         let array = vec![Some(i128::MAX)];
         let array = create_decimal_array(array, 38, 3).unwrap();
-        let result =
-            cast_with_options(&array, &output_type, &CastOptions { safe: false });
+        let result = cast_with_options(
+            &array,
+            &output_type,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!("Cast error: Cannot cast to Decimal128(38, 38). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
@@ -4093,8 +4115,14 @@ mod tests {
 
         let array = vec![Some(i128::MAX)];
         let array = create_decimal_array(array, 38, 3).unwrap();
-        let result =
-            cast_with_options(&array, &output_type, &CastOptions { safe: false });
+        let result = cast_with_options(
+            &array,
+            &output_type,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!("Cast error: Cannot cast to Decimal256(76, 76). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
@@ -4126,8 +4154,14 @@ mod tests {
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(i256::from_i128(i128::MAX))];
         let array = create_decimal256_array(array, 76, 5).unwrap();
-        let result =
-            cast_with_options(&array, &output_type, &CastOptions { safe: false });
+        let result = cast_with_options(
+            &array,
+            &output_type,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!("Cast error: Cannot cast to Decimal128(38, 7). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
@@ -4139,8 +4173,14 @@ mod tests {
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(i256::from_i128(i128::MAX))];
         let array = create_decimal256_array(array, 76, 5).unwrap();
-        let result =
-            cast_with_options(&array, &output_type, &CastOptions { safe: false });
+        let result = cast_with_options(
+            &array,
+            &output_type,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!("Cast error: Cannot cast to Decimal256(76, 55). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
@@ -4286,30 +4326,54 @@ mod tests {
         // overflow test: out of range of max u8
         let value_array: Vec<Option<i128>> = vec![Some(51300)];
         let array = create_decimal_array(value_array, 38, 2).unwrap();
-        let casted_array =
-            cast_with_options(&array, &DataType::UInt8, &CastOptions { safe: false });
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::UInt8,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!(
             "Cast error: value of 513 is out of range UInt8".to_string(),
             casted_array.unwrap_err().to_string()
         );
 
-        let casted_array =
-            cast_with_options(&array, &DataType::UInt8, &CastOptions { safe: true });
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::UInt8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
 
         // overflow test: out of range of max i8
         let value_array: Vec<Option<i128>> = vec![Some(24400)];
         let array = create_decimal_array(value_array, 38, 2).unwrap();
-        let casted_array =
-            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: false });
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!(
             "Cast error: value of 244 is out of range Int8".to_string(),
             casted_array.unwrap_err().to_string()
         );
 
-        let casted_array =
-            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: true });
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
 
@@ -4465,15 +4529,27 @@ mod tests {
         // overflow test: out of range of max i8
         let value_array: Vec<Option<i256>> = vec![Some(i256::from_i128(24400))];
         let array = create_decimal256_array(value_array, 38, 2).unwrap();
-        let casted_array =
-            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: false });
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!(
             "Cast error: value of 244 is out of range Int8".to_string(),
             casted_array.unwrap_err().to_string()
         );
 
-        let casted_array =
-            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: true });
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
 
@@ -4886,7 +4962,10 @@ mod tests {
     fn test_cast_int32_to_u8_with_error() {
         let array = Int32Array::from(vec![-5, 6, -7, 8, 100000000]);
         // overflow with the error
-        let cast_option = CastOptions { safe: false };
+        let cast_option = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
         let result = cast_with_options(&array, &DataType::UInt8, &cast_option);
         assert!(result.is_err());
         result.unwrap();
@@ -5010,8 +5089,14 @@ mod tests {
     #[test]
     fn test_cast_with_options_utf8_to_i32() {
         let array = StringArray::from(vec!["5", "6", "seven", "8", "9.1"]);
-        let result =
-            cast_with_options(&array, &DataType::Int32, &CastOptions { safe: false });
+        let result = cast_with_options(
+            &array,
+            &DataType::Int32,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         match result {
             Ok(_) => panic!("expected error"),
             Err(e) => {
@@ -5037,8 +5122,14 @@ mod tests {
     #[test]
     fn test_cast_with_options_utf8_to_bool() {
         let strings = StringArray::from(vec!["true", "false", "invalid", " Y ", ""]);
-        let casted =
-            cast_with_options(&strings, &DataType::Boolean, &CastOptions { safe: false });
+        let casted = cast_with_options(
+            &strings,
+            &DataType::Boolean,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         match casted {
             Ok(_) => panic!("expected error"),
             Err(e) => {
@@ -5244,7 +5335,10 @@ mod tests {
                     }
                 }
 
-                let options = CastOptions { safe: false };
+                let options = CastOptions {
+                    safe: false,
+                    format_options: FormatOptions::default(),
+                };
                 let err = cast_with_options(array, &to_type, &options).unwrap_err();
                 assert_eq!(
                     err.to_string(),
@@ -5282,7 +5376,10 @@ mod tests {
             assert!(c.is_null(1));
             assert!(c.is_null(2));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid date' to value of Date32 type");
         }
@@ -5314,7 +5411,10 @@ mod tests {
             assert!(c.is_null(3));
             assert!(c.is_null(4));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(Second) type");
         }
@@ -5346,7 +5446,10 @@ mod tests {
             assert!(c.is_null(3));
             assert!(c.is_null(4));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(Millisecond) type");
         }
@@ -5372,7 +5475,10 @@ mod tests {
             assert!(c.is_null(1));
             assert!(c.is_null(2));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of Time64(Microsecond) type");
         }
@@ -5398,7 +5504,10 @@ mod tests {
             assert!(c.is_null(1));
             assert!(c.is_null(2));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of Time64(Nanosecond) type");
         }
@@ -5424,7 +5533,10 @@ mod tests {
             assert!(c.is_null(1));
             assert!(c.is_null(2));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid date' to value of Date64 type");
         }
@@ -5435,7 +5547,10 @@ mod tests {
             let source_string_array =
                 Arc::new(StringArray::from($data_vec.clone())) as ArrayRef;
 
-            let options = CastOptions { safe: true };
+            let options = CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            };
 
             let target_interval_array = cast_with_options(
                 &source_string_array.clone(),
@@ -5559,7 +5674,10 @@ mod tests {
     macro_rules! test_unsafe_string_to_interval_err {
         ($data_vec:expr, $interval_unit:expr, $error_msg:expr) => {
             let string_array = Arc::new(StringArray::from($data_vec.clone())) as ArrayRef;
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let arrow_err = cast_with_options(
                 &string_array.clone(),
                 &DataType::Interval($interval_unit),
@@ -5659,14 +5777,20 @@ mod tests {
         let array_ref = cast_with_options(
             &a1,
             &DataType::FixedSizeBinary(5),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(array_ref.is_err());
 
         let array_ref = cast_with_options(
             &a2,
             &DataType::FixedSizeBinary(5),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(array_ref.is_err());
     }
@@ -5751,7 +5875,10 @@ mod tests {
         assert!(b.is_null(0));
         // test overflow, unsafe cast
         let array = TimestampSecondArray::from(vec![Some(i64::MAX)]);
-        let options = CastOptions { safe: false };
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
         let b = cast_with_options(&array, &DataType::Date64, &options);
         assert!(b.is_err());
     }
@@ -5998,6 +6125,136 @@ mod tests {
         assert_eq!(&DataType::Utf8, c.data_type());
         assert_eq!("1997-05-19T00:00:00", c.value(0));
         assert_eq!("2018-12-25T00:00:00", c.value(1));
+    }
+
+    #[test]
+    fn test_cast_timestamp_to_strings() {
+        // "2018-12-25T00:00:02.001", "1997-05-19T00:00:03.005", None
+        let array = TimestampMillisecondArray::from(vec![
+            Some(864000003005),
+            Some(1545696002001),
+            None,
+        ]);
+        let out = cast(&array, &DataType::Utf8).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19T00:00:03.005"),
+                Some("2018-12-25T00:00:02.001"),
+                None
+            ]
+        );
+        let out = cast(&array, &DataType::LargeUtf8).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19T00:00:03.005"),
+                Some("2018-12-25T00:00:02.001"),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cast_timestamp_to_strings_opt() {
+        let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default()
+                .with_timestamp_format(Some(ts_format))
+                .with_timestamp_tz_format(Some(ts_format)),
+        };
+        // "2018-12-25T00:00:02.001", "1997-05-19T00:00:03.005", None
+        let array_without_tz = TimestampMillisecondArray::from(vec![
+            Some(864000003005),
+            Some(1545696002001),
+            None,
+        ]);
+        let out =
+            cast_with_options(&array_without_tz, &DataType::Utf8, &cast_options).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19 00:00:03.005000"),
+                Some("2018-12-25 00:00:02.001000"),
+                None
+            ]
+        );
+        let out =
+            cast_with_options(&array_without_tz, &DataType::LargeUtf8, &cast_options)
+                .unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19 00:00:03.005000"),
+                Some("2018-12-25 00:00:02.001000"),
+                None
+            ]
+        );
+
+        let array_with_tz = TimestampMillisecondArray::from(vec![
+            Some(864000003005),
+            Some(1545696002001),
+            None,
+        ])
+        .with_timezone(tz.to_string());
+        let out =
+            cast_with_options(&array_with_tz, &DataType::Utf8, &cast_options).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19 05:45:03.005000"),
+                Some("2018-12-25 05:45:02.001000"),
+                None
+            ]
+        );
+        let out = cast_with_options(&array_with_tz, &DataType::LargeUtf8, &cast_options)
+            .unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19 05:45:03.005000"),
+                Some("2018-12-25 05:45:02.001000"),
+                None
+            ]
+        );
     }
 
     #[test]
@@ -7698,7 +7955,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal128(38, 30),
-            &CastOptions { safe: true },
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
@@ -7706,7 +7966,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal128(38, 30),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
     }
@@ -7718,7 +7981,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal256(76, 76),
-            &CastOptions { safe: true },
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
@@ -7726,7 +7992,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal256(76, 76),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
     }
@@ -7738,7 +8007,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal128(38, 30),
-            &CastOptions { safe: true },
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
@@ -7746,7 +8018,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal128(38, 30),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         let err = casted_array.unwrap_err().to_string();
         let expected_error = "Cast error: Cannot cast to Decimal128(38, 30)";
@@ -7763,7 +8038,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal256(76, 50),
-            &CastOptions { safe: true },
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
@@ -7771,7 +8049,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal256(76, 50),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         let err = casted_array.unwrap_err().to_string();
         let expected_error = "Cast error: Cannot cast to Decimal256(76, 50)";
@@ -8097,7 +8378,10 @@ mod tests {
         let output_type = DataType::Decimal128(38, 2);
         let str_array = StringArray::from(vec!["4.4.5"]);
         let array = Arc::new(str_array) as ArrayRef;
-        let option = CastOptions { safe: false };
+        let option = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
         assert!(casted_err
             .to_string()
@@ -8324,7 +8608,10 @@ mod tests {
             let b = cast_with_options(
                 &array,
                 &DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.clone())),
-                &CastOptions { safe: false },
+                &CastOptions {
+                    safe: false,
+                    format_options: FormatOptions::default(),
+                },
             )
             .unwrap();
 
@@ -8373,7 +8660,10 @@ mod tests {
         let v1: &[u8] = b"\xFF invalid";
         let v2: &[u8] = b"\x00 Foo";
         let s = BinaryArray::from(vec![v1, v2]);
-        let options = CastOptions { safe: true };
+        let options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default(),
+        };
         let array = cast_with_options(&s, &DataType::Utf8, &options).unwrap();
         let a = array.as_string::<i32>();
         a.to_data().validate_full().unwrap();
@@ -8467,7 +8757,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal128(7, 3),
-            &CastOptions { safe: true },
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
@@ -8475,7 +8768,10 @@ mod tests {
         let err = cast_with_options(
             &array,
             &DataType::Decimal128(7, 3),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal128 of precision 7. Max is 9999999", err.unwrap_err().to_string());
     }
@@ -8487,7 +8783,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal256(7, 3),
-            &CastOptions { safe: true },
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
@@ -8495,7 +8794,10 @@ mod tests {
         let err = cast_with_options(
             &array,
             &DataType::Decimal256(7, 3),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal256 of precision 7. Max is 9999999", err.unwrap_err().to_string());
     }
@@ -8532,7 +8834,7 @@ mod tests {
         let array = vec![1234567];
         let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
             array,
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(
@@ -8544,14 +8846,17 @@ mod tests {
         let array = vec![i64::MAX];
         let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
             array.clone(),
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
             array,
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
 
@@ -8559,7 +8864,7 @@ mod tests {
         let array = vec![1234567];
         let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
             array,
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(
@@ -8571,14 +8876,17 @@ mod tests {
         let array = vec![i64::MAX];
         let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
             array.clone(),
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
             array,
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
 
@@ -8586,7 +8894,7 @@ mod tests {
         let array = vec![1234567];
         let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
             array,
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(
@@ -8598,14 +8906,17 @@ mod tests {
         let array = vec![i64::MAX];
         let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
             array.clone(),
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
             array,
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
 
@@ -8613,7 +8924,7 @@ mod tests {
         let array = vec![1234567];
         let casted_array = cast_from_duration_to_interval::<DurationNanosecondType>(
             array,
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(
@@ -8625,7 +8936,10 @@ mod tests {
         let array = vec![i64::MAX];
         let casted_array = cast_from_duration_to_interval::<DurationNanosecondType>(
             array,
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         )
         .unwrap();
         assert_eq!(casted_array.value(0), 9223372036854775807);
@@ -8657,7 +8971,7 @@ mod tests {
         let array = vec![1234567];
         let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
             array,
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(
@@ -8669,14 +8983,17 @@ mod tests {
         let array = vec![i128::MAX];
         let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
             array.clone(),
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_interval_to_duration::<DurationSecondType>(
             array,
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
 
@@ -8684,7 +9001,7 @@ mod tests {
         let array = vec![1234567];
         let casted_array = cast_from_interval_to_duration::<DurationMillisecondType>(
             array,
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(casted_array.value(0), 1);
@@ -8692,14 +9009,17 @@ mod tests {
         let array = vec![i128::MAX];
         let casted_array = cast_from_interval_to_duration::<DurationMillisecondType>(
             array.clone(),
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_interval_to_duration::<DurationMillisecondType>(
             array,
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
 
@@ -8707,7 +9027,7 @@ mod tests {
         let array = vec![1234567];
         let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
             array,
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(
@@ -8719,14 +9039,17 @@ mod tests {
         let array = vec![i128::MAX];
         let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
             array.clone(),
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert!(!casted_array.is_valid(0));
 
         let casted_array = cast_from_interval_to_duration::<DurationMicrosecondType>(
             array,
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
 
@@ -8734,7 +9057,7 @@ mod tests {
         let array = vec![1234567];
         let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
             array,
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(
@@ -8746,7 +9069,7 @@ mod tests {
         let array = vec![i128::MAX];
         let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
             array.clone(),
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(
@@ -8757,7 +9080,10 @@ mod tests {
 
         let casted_array = cast_from_interval_to_duration::<DurationNanosecondType>(
             array,
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
     }
