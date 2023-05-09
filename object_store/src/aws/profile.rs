@@ -1,6 +1,7 @@
 #![cfg(feature = "aws_profile")]
 
 use aws_config::meta::region::ProvideRegion;
+use aws_config::profile::profile_file::ProfileFiles;
 use aws_config::profile::ProfileFileCredentialsProvider;
 use aws_config::profile::ProfileFileRegionProvider;
 use aws_config::provider_config::ProviderConfig;
@@ -15,6 +16,12 @@ use crate::aws::credential::CredentialProvider;
 use crate::aws::AwsCredential;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::Result;
+
+#[cfg(test)]
+pub static TEST_PROFILE_NAME: &str = "object_store:fake_profile";
+
+#[cfg(test)]
+pub static TEST_PROFILE_REGION: &str = "object_store:fake_region_from_profile";
 
 #[derive(Debug)]
 pub struct ProfileProvider {
@@ -33,29 +40,22 @@ impl ProfileProvider {
     }
 
     #[cfg(test)]
-    fn get_region_provider(&self) -> ProfileFileRegionProvider {
-        use aws_config::profile::profile_file::{ProfileFileKind, ProfileFiles};
+    fn profile_files(&self) -> ProfileFiles {
+        use aws_config::profile::profile_file::ProfileFileKind;
 
-        let profile_name = &self.name;
-        let profile_region = "object_store:fake_region_from_profile";
+        let config = format!(
+            "[profile {}]\nregion = {}",
+            TEST_PROFILE_NAME, TEST_PROFILE_REGION
+        );
 
-        let config = format!("[profile {}]\nregion = {}", &profile_name, &profile_region);
-
-        let profile_files = ProfileFiles::builder()
+        ProfileFiles::builder()
             .with_contents(ProfileFileKind::Config, config)
-            .build();
-
-        ProfileFileRegionProvider::builder()
-            .profile_files(profile_files)
-            .profile_name(&self.name)
             .build()
     }
 
     #[cfg(not(test))]
-    fn get_region_provider(&self) -> ProfileFileRegionProvider {
-        ProfileFileRegionProvider::builder()
-            .profile_name(&self.name)
-            .build()
+    fn profile_files(&self) -> ProfileFiles {
+        ProfileFiles::default()
     }
 
     pub async fn get_region(&self) -> Option<String> {
@@ -63,11 +63,14 @@ impl ProfileProvider {
             return Some(region);
         }
 
-        let provider = self.get_region_provider();
+        let provider = ProfileFileRegionProvider::builder()
+            .profile_files(self.profile_files())
+            .profile_name(&self.name)
+            .build();
 
         let region = provider.region().await;
 
-        region.map(|region| region.as_ref().to_owned())
+        region.map(|r| r.as_ref().to_owned())
     }
 }
 

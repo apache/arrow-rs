@@ -1602,34 +1602,29 @@ mod profile_tests {
     use super::*;
     use std::env;
 
+    use super::profile::{TEST_PROFILE_NAME, TEST_PROFILE_REGION};
+
     #[tokio::test]
     async fn s3_test_region_from_profile() {
         let s3_url = "s3://bucket/prefix".to_owned();
 
-        let aws_profile = env::var("AWS_PROFILE")
-            .unwrap_or_else(|_| "object_store:fake_profile".into());
-
-        env::set_var("AWS_PROFILE", &aws_profile);
-        env::remove_var("AWS_REGION");
-        env::remove_var("AWS_DEFAULT_REGION");
-
-        let s3 = AmazonS3Builder::from_env()
+        let s3 = AmazonS3Builder::new()
             .with_url(s3_url)
+            .with_profile(TEST_PROFILE_NAME)
             .build()
             .unwrap();
 
-        let actual = s3.client.config().region.clone();
-        let expected = "object_store:fake_region_from_profile";
+        let region = &s3.client.config().region;
 
-        assert_eq!(actual, expected);
+        assert_eq!(region, TEST_PROFILE_REGION);
     }
 
     #[test]
     fn s3_test_region_override() {
         let s3_url = "s3://bucket/prefix".to_owned();
 
-        let aws_profile = env::var("AWS_PROFILE")
-            .unwrap_or_else(|_| "object_store:fake_profile".into());
+        let aws_profile =
+            env::var("AWS_PROFILE").unwrap_or_else(|_| TEST_PROFILE_NAME.into());
 
         let aws_region =
             env::var("AWS_REGION").unwrap_or_else(|_| "object_store:fake_region".into());
@@ -1642,8 +1637,8 @@ mod profile_tests {
             .build()
             .unwrap();
 
-        let actual = s3.client.config().region.clone();
-        let expected = aws_region.clone();
+        let actual = &s3.client.config().region;
+        let expected = &aws_region;
 
         assert_eq!(actual, expected);
     }
