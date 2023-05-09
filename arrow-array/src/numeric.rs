@@ -558,35 +558,6 @@ impl ArrowNumericType for Decimal256Type {
     }
 }
 
-/// A subtype of primitive type that represents numeric float values
-#[cfg(feature = "simd")]
-pub trait ArrowFloatNumericType: ArrowNumericType {
-    /// SIMD version of pow
-    fn pow(base: Self::Simd, raise: Self::Simd) -> Self::Simd;
-}
-
-/// A subtype of primitive type that represents numeric float values
-#[cfg(not(feature = "simd"))]
-pub trait ArrowFloatNumericType: ArrowNumericType {}
-
-macro_rules! make_float_numeric_type {
-    ($impl_ty:ty, $simd_ty:ident) => {
-        #[cfg(feature = "simd")]
-        impl ArrowFloatNumericType for $impl_ty {
-            #[inline]
-            fn pow(base: Self::Simd, raise: Self::Simd) -> Self::Simd {
-                base.powf(raise)
-            }
-        }
-
-        #[cfg(not(feature = "simd"))]
-        impl ArrowFloatNumericType for $impl_ty {}
-    };
-}
-
-make_float_numeric_type!(Float32Type, f32x16);
-make_float_numeric_type!(Float64Type, f64x8);
-
 #[cfg(all(test, feature = "simd"))]
 mod tests {
     use super::*;
