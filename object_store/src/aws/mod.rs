@@ -149,10 +149,13 @@ enum Error {
     BucketNotFound { bucket: String },
 
     #[snafu(display("Failed to resolve region for bucket '{}'", bucket))]
-    ResolveRegionUnsuccessful {
+    ResolveRegionError {
         bucket: String,
         source: reqwest::Error,
     },
+
+    #[snafu(display("Failed to parse the region for bucket '{}'", bucket))]
+    RegionParseError { bucket: String },
 }
 
 impl From<Error> for super::Error {
@@ -167,6 +170,48 @@ impl From<Error> for super::Error {
             },
         }
     }
+}
+
+/// Get the bucket region using the [HeadBucket API]. This will fail if the bucket does not exist.
+/// [HeadBucket API]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
+pub async fn resolve_bucket_region(
+    bucket: &str,
+    client_options: &ClientOptions,
+) -> Result<String> {
+    use reqwest::StatusCode;
+
+    let endpoint = format!("https://{}.s3.amazonaws.com", bucket);
+
+    let client = client_options.client()?;
+
+    let response = client
+        .head(&endpoint)
+        .send()
+        .await
+        .context(ResolveRegionSnafu {
+            bucket: bucket.to_owned(),
+        })?;
+
+    ensure!(
+        response.status() != StatusCode::NOT_FOUND,
+        BucketNotFoundSnafu {
+            bucket: bucket.to_owned()
+        }
+    );
+
+    let region = response
+        .headers()
+        .get("x-amz-bucket-region")
+        .map(|h| h.to_str().unwrap().to_string());
+
+    ensure!(
+        region.is_some(),
+        RegionParseSnafu {
+            bucket: bucket.to_owned()
+        }
+    );
+
+    Ok(region.unwrap())
 }
 
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
@@ -988,39 +1033,6 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Attempt to set the region using the [HeadBucket API], failing if the bucket does not exist.
-    /// This will overwrite the current region if one has been set.
-    /// [HeadBucket API]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
-    pub async fn with_resolved_region(mut self) -> Result<Self> {
-        use reqwest::StatusCode;
-
-        let bucket = self.bucket_name.clone().context(MissingBucketNameSnafu)?;
-
-        let endpoint = format!("https://{}.s3.amazonaws.com", &bucket);
-
-        let client = reqwest::Client::new();
-
-        let response = client.head(&endpoint).send().await.context(
-            ResolveRegionUnsuccessfulSnafu {
-                bucket: bucket.clone(),
-            },
-        )?;
-
-        ensure!(
-            response.status() != StatusCode::NOT_FOUND,
-            BucketNotFoundSnafu {
-                bucket: bucket.clone()
-            }
-        );
-
-        self.region = response
-            .headers()
-            .get("x-amz-bucket-region")
-            .map(|h| h.to_str().unwrap().to_string());
-
-        Ok(self)
-    }
-
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -1607,33 +1619,27 @@ mod tests {
 }
 
 #[cfg(test)]
-mod s3_resolved_region_tests {
+mod s3_resolve_bucket_region_tests {
     use super::*;
 
     #[tokio::test]
     async fn test_private_bucket() {
-        let bucket_name = "bloxbender";
+        let bucket = "bloxbender";
 
-        let builder = AmazonS3Builder::new()
-            .with_bucket_name(bucket_name)
-            .with_resolved_region()
+        let region = resolve_bucket_region(bucket, &ClientOptions::new())
             .await
             .unwrap();
 
-        let actual = builder.get_config_value(&AmazonS3ConfigKey::Region);
-        let expected = Some("us-west-2".to_string());
+        let expected = "us-west-2".to_string();
 
-        assert_eq!(actual, expected);
+        assert_eq!(region, expected);
     }
 
     #[tokio::test]
     async fn test_bucket_does_not_exist() {
-        let bucket_name = "please-dont-exist";
+        let bucket = "please-dont-exist";
 
-        let result = AmazonS3Builder::new()
-            .with_bucket_name(bucket_name)
-            .with_resolved_region()
-            .await;
+        let result = resolve_bucket_region(bucket, &ClientOptions::new()).await;
 
         assert!(result.is_err());
     }
