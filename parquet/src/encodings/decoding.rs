@@ -1095,7 +1095,6 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
 
 #[cfg(test)]
 mod tests {
-
     use super::{super::encoding::*, *};
 
     use std::f32::consts::PI as PI_f32;
