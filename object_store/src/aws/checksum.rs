@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::config::Parse;
 use ring::digest::{self, digest as ring_digest};
 use std::str::FromStr;
 
@@ -64,5 +65,14 @@ impl TryFrom<&String> for Checksum {
 
     fn try_from(value: &String) -> Result<Self, Self::Error> {
         value.parse()
+    }
+}
+
+impl Parse for Checksum {
+    fn parse(v: &str) -> crate::Result<Self> {
+        v.parse().map_err(|_| crate::Error::Generic {
+            store: "Config",
+            source: format!("\"{v}\" is not a valid checksum algorithm").into(),
+        })
     }
 }

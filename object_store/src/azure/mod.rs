@@ -51,7 +51,9 @@ use std::{collections::BTreeSet, str::FromStr};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::util::{str_is_truthy, RFC1123_FMT};
+use crate::client::ClientConfigKey;
+use crate::config::ConfigValue;
+use crate::util::RFC1123_FMT;
 pub use credential::authority_hosts;
 
 mod client;
@@ -417,7 +419,7 @@ pub struct MicrosoftAzureBuilder {
     /// Url
     url: Option<String>,
     /// When set to true, azurite storage emulator has to be used
-    use_emulator: bool,
+    use_emulator: ConfigValue<bool>,
     /// Msi endpoint for acquiring managed identity token
     msi_endpoint: Option<String>,
     /// Object id for use with managed identity authentication
@@ -427,7 +429,7 @@ pub struct MicrosoftAzureBuilder {
     /// File containing token for Azure AD workload identity federation
     federated_token_file: Option<String>,
     /// When set to true, azure cli has to be used for acquiring access token
-    use_azure_cli: bool,
+    use_azure_cli: ConfigValue<bool>,
     /// Retry config
     retry_config: RetryConfig,
     /// Client options
@@ -672,8 +674,9 @@ impl MicrosoftAzureBuilder {
         }
 
         if let Ok(text) = std::env::var("AZURE_ALLOW_HTTP") {
-            builder.client_options =
-                builder.client_options.with_allow_http(str_is_truthy(&text));
+            builder.client_options = builder
+                .client_options
+                .with_config(ClientConfigKey::AllowHttp, text)
         }
 
         if let Ok(text) = std::env::var(MSI_ENDPOINT_ENV_KEY) {
@@ -726,12 +729,8 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FederatedTokenFile => {
                 self.federated_token_file = Some(value.into())
             }
-            AzureConfigKey::UseAzureCli => {
-                self.use_azure_cli = str_is_truthy(&value.into())
-            }
-            AzureConfigKey::UseEmulator => {
-                self.use_emulator = str_is_truthy(&value.into())
-            }
+            AzureConfigKey::UseAzureCli => self.use_azure_cli.parse(value),
+            AzureConfigKey::UseEmulator => self.use_emulator.parse(value),
         };
         self
     }
@@ -898,7 +897,7 @@ impl MicrosoftAzureBuilder {
 
     /// Set if the Azure emulator should be used (defaults to false)
     pub fn with_use_emulator(mut self, use_emulator: bool) -> Self {
-        self.use_emulator = use_emulator;
+        self.use_emulator = use_emulator.into();
         self
     }
 
@@ -956,7 +955,7 @@ impl MicrosoftAzureBuilder {
     /// Set if the Azure Cli should be used for acquiring access token
     /// <https://learn.microsoft.com/en-us/cli/azure/account?view=azure-cli-latest#az-account-get-access-token>
     pub fn with_use_azure_cli(mut self, use_azure_cli: bool) -> Self {
-        self.use_azure_cli = use_azure_cli;
+        self.use_azure_cli = use_azure_cli.into();
         self
     }
 
@@ -969,7 +968,7 @@ impl MicrosoftAzureBuilder {
 
         let container = self.container_name.ok_or(Error::MissingContainerName {})?;
 
-        let (is_emulator, storage_url, auth, account) = if self.use_emulator {
+        let (is_emulator, storage_url, auth, account) = if self.use_emulator.get()? {
             let account_name = self
                 .account_name
                 .unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
@@ -1022,7 +1021,7 @@ impl MicrosoftAzureBuilder {
                 credential::CredentialProvider::SASToken(query_pairs)
             } else if let Some(sas) = self.sas_key {
                 credential::CredentialProvider::SASToken(split_sas(&sas)?)
-            } else if self.use_azure_cli {
+            } else if self.use_azure_cli.get()? {
                 credential::CredentialProvider::TokenCredential(
                     TokenCache::default(),
                     Box::new(credential::AzureCliCredential::new()),

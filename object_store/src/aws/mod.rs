@@ -53,8 +53,9 @@ use crate::aws::credential::{
     AwsCredential, CredentialProvider, InstanceCredentialProvider,
     StaticCredentialProvider, WebIdentityProvider,
 };
+use crate::client::ClientConfigKey;
+use crate::config::ConfigValue;
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
-use crate::util::str_is_truthy;
 use crate::{
     ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path,
     Result, RetryConfig, StreamExt,
@@ -102,9 +103,6 @@ enum Error {
         content_length: String,
         source: std::num::ParseIntError,
     },
-
-    #[snafu(display("Invalid Checksum algorithm"))]
-    InvalidChecksumAlgorithm,
 
     #[snafu(display("Missing region"))]
     MissingRegion,
@@ -461,13 +459,13 @@ pub struct AmazonS3Builder {
     /// Retry config
     retry_config: RetryConfig,
     /// When set to true, fallback to IMDSv1
-    imdsv1_fallback: bool,
+    imdsv1_fallback: ConfigValue<bool>,
     /// When set to true, virtual hosted style request has to be used
-    virtual_hosted_style_request: bool,
+    virtual_hosted_style_request: ConfigValue<bool>,
     /// When set to true, unsigned payload option has to be used
-    unsigned_payload: bool,
+    unsigned_payload: ConfigValue<bool>,
     /// Checksum algorithm which has to be used for object integrity check during upload
-    checksum_algorithm: Option<String>,
+    checksum_algorithm: Option<ConfigValue<Checksum>>,
     /// Metadata endpoint, see <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html>
     metadata_endpoint: Option<String>,
     /// Profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
@@ -709,8 +707,9 @@ impl AmazonS3Builder {
         }
 
         if let Ok(text) = std::env::var("AWS_ALLOW_HTTP") {
-            builder.client_options =
-                builder.client_options.with_allow_http(str_is_truthy(&text));
+            builder.client_options = builder
+                .client_options
+                .with_config(ClientConfigKey::AllowHttp, text);
         }
 
         builder
@@ -756,11 +755,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Bucket => self.bucket_name = Some(value.into()),
             AmazonS3ConfigKey::Endpoint => self.endpoint = Some(value.into()),
             AmazonS3ConfigKey::Token => self.token = Some(value.into()),
-            AmazonS3ConfigKey::ImdsV1Fallback => {
-                self.imdsv1_fallback = str_is_truthy(&value.into())
-            }
+            AmazonS3ConfigKey::ImdsV1Fallback => self.imdsv1_fallback.parse(value),
             AmazonS3ConfigKey::VirtualHostedStyleRequest => {
-                self.virtual_hosted_style_request = str_is_truthy(&value.into())
+                self.virtual_hosted_style_request.parse(value)
             }
             AmazonS3ConfigKey::DefaultRegion => {
                 self.region = self.region.or_else(|| Some(value.into()))
@@ -769,10 +766,10 @@ impl AmazonS3Builder {
                 self.metadata_endpoint = Some(value.into())
             }
             AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
-            AmazonS3ConfigKey::UnsignedPayload => {
-                self.unsigned_payload = str_is_truthy(&value.into())
+            AmazonS3ConfigKey::UnsignedPayload => self.unsigned_payload.parse(value),
+            AmazonS3ConfigKey::Checksum => {
+                self.checksum_algorithm = Some(ConfigValue::Deferred(value.into()))
             }
-            AmazonS3ConfigKey::Checksum => self.checksum_algorithm = Some(value.into()),
         };
         self
     }
@@ -834,7 +831,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::MetadataEndpoint => self.metadata_endpoint.clone(),
             AmazonS3ConfigKey::Profile => self.profile.clone(),
             AmazonS3ConfigKey::UnsignedPayload => Some(self.unsigned_payload.to_string()),
-            AmazonS3ConfigKey::Checksum => self.checksum_algorithm.clone(),
+            AmazonS3ConfigKey::Checksum => {
+                self.checksum_algorithm.as_ref().map(ToString::to_string)
+            }
         }
     }
 
@@ -858,7 +857,7 @@ impl AmazonS3Builder {
                 Some((bucket, "s3", region, "amazonaws.com")) => {
                     self.bucket_name = Some(bucket.to_string());
                     self.region = Some(region.to_string());
-                    self.virtual_hosted_style_request = true;
+                    self.virtual_hosted_style_request = true.into();
                 }
                 Some((account, "r2", "cloudflarestorage", "com")) => {
                     self.region = Some("auto".to_string());
@@ -944,7 +943,7 @@ impl AmazonS3Builder {
         mut self,
         virtual_hosted_style_request: bool,
     ) -> Self {
-        self.virtual_hosted_style_request = virtual_hosted_style_request;
+        self.virtual_hosted_style_request = virtual_hosted_style_request.into();
         self
     }
 
@@ -967,7 +966,7 @@ impl AmazonS3Builder {
     /// [SSRF attack]: https://aws.amazon.com/blogs/security/defense-in-depth-open-firewalls-reverse-proxies-ssrf-vulnerabilities-ec2-instance-metadata-service/
     ///
     pub fn with_imdsv1_fallback(mut self) -> Self {
-        self.imdsv1_fallback = true;
+        self.imdsv1_fallback = true.into();
         self
     }
 
@@ -976,7 +975,7 @@ impl AmazonS3Builder {
     /// * false (default): Signed payload option is used, where the checksum for the request body is computed and included when constructing a canonical request.
     /// * true: Unsigned payload option is used. `UNSIGNED-PAYLOAD` literal is included when constructing a canonical request,
     pub fn with_unsigned_payload(mut self, unsigned_payload: bool) -> Self {
-        self.unsigned_payload = unsigned_payload;
+        self.unsigned_payload = unsigned_payload.into();
         self
     }
 
@@ -985,7 +984,7 @@ impl AmazonS3Builder {
     /// [checksum algorithm]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
     pub fn with_checksum_algorithm(mut self, checksum_algorithm: Checksum) -> Self {
         // Convert to String to enable deferred parsing of config
-        self.checksum_algorithm = Some(checksum_algorithm.to_string());
+        self.checksum_algorithm = Some(checksum_algorithm.into());
         self
     }
 
@@ -1038,11 +1037,7 @@ impl AmazonS3Builder {
 
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
         let region = self.region.context(MissingRegionSnafu)?;
-        let checksum = self
-            .checksum_algorithm
-            .map(|c| c.parse())
-            .transpose()
-            .map_err(|_| Error::InvalidChecksumAlgorithm)?;
+        let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
 
         let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
             (Some(key_id), Some(secret_key), token) => {
@@ -1103,7 +1098,7 @@ impl AmazonS3Builder {
                             cache: Default::default(),
                             client: client_options.client()?,
                             retry_config: self.retry_config.clone(),
-                            imdsv1_fallback: self.imdsv1_fallback,
+                            imdsv1_fallback: self.imdsv1_fallback.get()?,
                             metadata_endpoint: self
                                 .metadata_endpoint
                                 .unwrap_or_else(|| METADATA_ENDPOINT.into()),
@@ -1119,7 +1114,7 @@ impl AmazonS3Builder {
         // If `endpoint` is provided then its assumed to be consistent with
         // `virtual_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
         // `endpoint` should have bucket name included.
-        if self.virtual_hosted_style_request {
+        if self.virtual_hosted_style_request.get()? {
             endpoint = self
                 .endpoint
                 .unwrap_or_else(|| format!("https://{bucket}.s3.{region}.amazonaws.com"));
@@ -1139,7 +1134,7 @@ impl AmazonS3Builder {
             credentials,
             retry_config: self.retry_config,
             client_options: self.client_options,
-            sign_payload: !self.unsigned_payload,
+            sign_payload: !self.unsigned_payload.get()?,
             checksum,
         };
 
@@ -1315,10 +1310,10 @@ mod tests {
         let metadata_uri = format!("{METADATA_ENDPOINT}{container_creds_relative_uri}");
         assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
         assert_eq!(
-            builder.checksum_algorithm.unwrap(),
-            Checksum::SHA256.to_string()
+            builder.checksum_algorithm.unwrap().get().unwrap(),
+            Checksum::SHA256
         );
-        assert!(builder.unsigned_payload);
+        assert!(builder.unsigned_payload.get().unwrap());
     }
 
     #[test]
@@ -1351,10 +1346,10 @@ mod tests {
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
         assert_eq!(
-            builder.checksum_algorithm.unwrap(),
-            Checksum::SHA256.to_string()
+            builder.checksum_algorithm.unwrap().get().unwrap(),
+            Checksum::SHA256
         );
-        assert!(builder.unsigned_payload);
+        assert!(builder.unsigned_payload.get().unwrap());
     }
 
     #[test]
@@ -1564,7 +1559,7 @@ mod tests {
             .unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
         assert_eq!(builder.region, Some("region".to_string()));
-        assert!(builder.virtual_hosted_style_request);
+        assert!(builder.virtual_hosted_style_request.get().unwrap());
 
         let mut builder = AmazonS3Builder::new();
         builder
@@ -1590,6 +1585,35 @@ mod tests {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+
+    #[test]
+    fn test_invalid_config() {
+        let err = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::ImdsV1Fallback, "enabled")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            err,
+            "Generic Config error: failed to parse \"enabled\" as boolean"
+        );
+
+        let err = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::Checksum, "md5")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            err,
+            "Generic Config error: \"md5\" is not a valid checksum algorithm"
+        );
     }
 }
 
