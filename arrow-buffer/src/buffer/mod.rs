@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains two main structs: [Buffer] and [MutableBuffer]. A buffer represents
-//! a contiguous memory region that can be shared via `offsets`.
+//! Types of shared memory region
 
 mod offset;
 pub use offset::*;

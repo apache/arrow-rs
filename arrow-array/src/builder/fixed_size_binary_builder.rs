@@ -24,11 +24,11 @@ use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-/// A fixed size binary array builder
+/// Builder for [`FixedSizeBinaryArray`]
 /// ```
-/// use arrow_array::builder::FixedSizeBinaryBuilder;
-/// use arrow_array::Array;
-///
+/// # use arrow_array::builder::FixedSizeBinaryBuilder;
+/// # use arrow_array::Array;
+/// #
 /// let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
 /// // [b"hello", null, b"arrow"]
 /// builder.append_value(b"hello").unwrap();

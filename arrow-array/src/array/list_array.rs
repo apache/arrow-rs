@@ -28,7 +28,7 @@ use num::Integer;
 use std::any::Any;
 use std::sync::Arc;
 
-/// trait declaring an offset size, relevant for i32 vs i64 array types.
+/// A type that can be used within a variable-size array to encode offset information
 pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
     /// True for 64 bit offset size and false for 32 bit offset size
     const IS_LARGE: bool;
@@ -46,12 +46,9 @@ impl OffsetSizeTrait for i64 {
     const PREFIX: &'static str = "Large";
 }
 
-/// Generic struct for a variable-size list array.
+/// An array of [variable length arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout)
 ///
-/// Columnar format in Apache Arrow:
-/// <https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout>
-///
-/// For non generic lists, you may wish to consider using [`ListArray`] or [`LargeListArray`]`
+/// See [`ListArray`] and [`LargeListArray`]`
 pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
@@ -447,8 +444,7 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
     }
 }
 
-/// A list array where each element is a variable-sized sequence of values with the same
-/// type whose memory offsets between elements are represented by a i32.
+/// An array of variable size arrays, storing offsets as `i32`.
 ///
 /// # Example
 ///
@@ -475,8 +471,8 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
 /// ```
 pub type ListArray = GenericListArray<i32>;
 
-/// A list array where each element is a variable-sized sequence of values with the same
-/// type whose memory offsets between elements are represented by a i64.
+/// An array of variable size arrays, storing offsets as `i64`.
+///
 /// # Example
 ///
 /// ```

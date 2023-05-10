@@ -23,7 +23,7 @@ use super::{ArrayBuilder, PrimitiveBuilder};
 
 use arrow_buffer::ArrowNativeType;
 
-/// Array builder for [`RunArray`] that encodes primitive values.
+/// Builder for [`RunArray`] of [`PrimitiveArray`](crate::array::PrimitiveArray)
 ///
 /// # Example:
 ///

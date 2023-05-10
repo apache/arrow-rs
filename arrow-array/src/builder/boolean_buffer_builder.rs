@@ -19,7 +19,7 @@ use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer};
 use arrow_data::bit_mask;
 use std::ops::Range;
 
-/// A builder for creating a boolean [`Buffer`]
+/// Builder for [`BooleanBuffer`]
 #[derive(Debug)]
 pub struct BooleanBufferBuilder {
     buffer: MutableBuffer,

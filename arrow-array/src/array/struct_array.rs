@@ -22,9 +22,9 @@ use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, SchemaBuilder}
 use std::sync::Arc;
 use std::{any::Any, ops::Index};
 
-/// A nested array type where each child (called *field*) is represented by a separate
-/// array.
+/// An array of [tuples](https://arrow.apache.org/docs/format/Columnar.html#struct-layout)
 ///
+/// Each child (called *field*) is represented by a separate array.
 ///
 /// # Comparison with [RecordBatch]
 ///
