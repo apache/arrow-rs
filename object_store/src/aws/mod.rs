@@ -724,6 +724,7 @@ impl AmazonS3Builder {
     /// - `s3a://<bucket>/<path>`
     /// - `https://s3.<bucket>.amazonaws.com`
     /// - `https://<bucket>.s3.<region>.amazonaws.com`
+    /// - `https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket`
     ///
     /// Note: Settings derived from the URL will override any others set on this builder
     ///
@@ -849,9 +850,8 @@ impl AmazonS3Builder {
             "https" => match host.splitn(4, '.').collect_tuple() {
                 Some(("s3", region, "amazonaws", "com")) => {
                     self.region = Some(region.to_string());
-                    if let Some(bucket) =
-                        parsed.path_segments().and_then(|mut path| path.next())
-                    {
+                    let bucket = parsed.path_segments().into_iter().flatten().next();
+                    if let Some(bucket) = bucket {
                         self.bucket_name = Some(bucket.into());
                     }
                 }
@@ -859,6 +859,16 @@ impl AmazonS3Builder {
                     self.bucket_name = Some(bucket.to_string());
                     self.region = Some(region.to_string());
                     self.virtual_hosted_style_request = true;
+                }
+                Some((account, "r2", "cloudflarestorage", "com")) => {
+                    self.region = Some("auto".to_string());
+                    let endpoint = format!("https://{account}.r2.cloudflarestorage.com");
+                    self.endpoint = Some(endpoint);
+
+                    let bucket = parsed.path_segments().into_iter().flatten().next();
+                    if let Some(bucket) = bucket {
+                        self.bucket_name = Some(bucket.into());
+                    }
                 }
                 _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
             },
@@ -1555,6 +1565,18 @@ mod tests {
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
         assert_eq!(builder.region, Some("region".to_string()));
         assert!(builder.virtual_hosted_style_request);
+
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://account123.r2.cloudflarestorage.com/bucket-123")
+            .unwrap();
+
+        assert_eq!(builder.bucket_name, Some("bucket-123".to_string()));
+        assert_eq!(builder.region, Some("auto".to_string()));
+        assert_eq!(
+            builder.endpoint,
+            Some("https://account123.r2.cloudflarestorage.com".to_string())
+        );
 
         let err_cases = [
             "mailto://bucket/path",
