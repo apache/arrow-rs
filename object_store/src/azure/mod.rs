@@ -1035,7 +1035,7 @@ impl MicrosoftAzureBuilder {
             } else {
                 let client =
                     self.client_options.clone().with_allow_http(true).client()?;
-                let msi_credential = credential::ImdsManagedIdentityOAuthProvider::new(
+                let msi_credential = credential::ImdsManagedIdentityProvider::new(
                     self.client_id,
                     self.object_id,
                     self.msi_resource_id,

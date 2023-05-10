@@ -50,7 +50,16 @@ pub(crate) const RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 const CONTENT_TYPE_JSON: &str = "application/json";
 const MSI_SECRET_ENV_KEY: &str = "IDENTITY_HEADER";
 const MSI_API_VERSION: &str = "2019-08-01";
+
+/// OIDC scope used when interacting with OAuth2 APIs
+///
+/// <https://learn.microsoft.com/en-us/azure/active-directory/develop/scopes-oidc#the-default-scope>
 const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
+
+/// Resource ID used when obtaining an access token from the metadata endpoint
+///
+/// <https://learn.microsoft.com/en-us/azure/storage/blobs/authorize-access-azure-active-directory#microsoft-authentication-library-msal>
+const AZURE_STORAGE_RESOURCE: &str = "https://storage.azure.com";
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -383,7 +392,7 @@ struct MsiTokenResponse {
 /// This authentication type works in Azure VMs, App Service and Azure Functions applications, as well as the Azure Cloud Shell
 /// <https://learn.microsoft.com/en-gb/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http>
 #[derive(Debug)]
-pub struct ImdsManagedIdentityOAuthProvider {
+pub struct ImdsManagedIdentityProvider {
     msi_endpoint: String,
     client_id: Option<String>,
     object_id: Option<String>,
@@ -391,8 +400,8 @@ pub struct ImdsManagedIdentityOAuthProvider {
     client: Client,
 }
 
-impl ImdsManagedIdentityOAuthProvider {
-    /// Create a new [`ImdsManagedIdentityOAuthProvider`] for an azure backed store
+impl ImdsManagedIdentityProvider {
+    /// Create a new [`ImdsManagedIdentityProvider`] for an azure backed store
     pub fn new(
         client_id: Option<String>,
         object_id: Option<String>,
@@ -415,7 +424,7 @@ impl ImdsManagedIdentityOAuthProvider {
 }
 
 #[async_trait::async_trait]
-impl TokenCredential for ImdsManagedIdentityOAuthProvider {
+impl TokenCredential for ImdsManagedIdentityProvider {
     /// Fetch a token
     async fn fetch_token(
         &self,
@@ -424,7 +433,7 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
     ) -> Result<TemporaryToken<String>> {
         let mut query_items = vec![
             ("api-version", MSI_API_VERSION),
-            ("resource", AZURE_STORAGE_SCOPE),
+            ("resource", AZURE_STORAGE_RESOURCE),
         ];
 
         let mut identity = None;
@@ -709,7 +718,7 @@ mod tests {
             ))
         });
 
-        let credential = ImdsManagedIdentityOAuthProvider::new(
+        let credential = ImdsManagedIdentityProvider::new(
             Some("client_id".into()),
             None,
             None,
