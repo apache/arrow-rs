@@ -22,9 +22,9 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use reqwest::header::LOCATION;
 use reqwest::{Response, StatusCode};
+use snafu::Error as SnafuError;
 use std::time::{Duration, Instant};
 use tracing::info;
-use snafu::Error as SnafuError;
 
 /// Retry request error
 #[derive(Debug)]
@@ -365,13 +365,13 @@ mod tests {
         assert_eq!(e.message, "502 Bad Gateway");
 
         // Panic results in an incomplete message error in the client
-        mock.push_fn(|_| {panic!()});
+        mock.push_fn(|_| panic!());
         let r = do_request().await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
 
         // Gives up after retrying mulitiple panics
         for _ in 0..=retry.max_retries {
-            mock.push_fn(|_| {panic!()});
+            mock.push_fn(|_| panic!());
         }
         let e = do_request().await.unwrap_err();
         assert_eq!(e.retries, retry.max_retries);
