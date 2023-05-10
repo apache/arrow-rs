@@ -38,7 +38,7 @@ use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, Snafu};
+use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::str::FromStr;
@@ -144,6 +144,18 @@ enum Error {
 
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
+
+    #[snafu(display("Bucket '{}' not found", bucket))]
+    BucketNotFound { bucket: String },
+
+    #[snafu(display("Failed to resolve region for bucket '{}'", bucket))]
+    ResolveRegion {
+        bucket: String,
+        source: reqwest::Error,
+    },
+
+    #[snafu(display("Failed to parse the region for bucket '{}'", bucket))]
+    RegionParse { bucket: String },
 }
 
 impl From<Error> for super::Error {
@@ -158,6 +170,38 @@ impl From<Error> for super::Error {
             },
         }
     }
+}
+
+/// Get the bucket region using the [HeadBucket API]. This will fail if the bucket does not exist.
+/// [HeadBucket API]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
+pub async fn resolve_bucket_region(
+    bucket: &str,
+    client_options: &ClientOptions,
+) -> Result<String> {
+    use reqwest::StatusCode;
+
+    let endpoint = format!("https://{}.s3.amazonaws.com", bucket);
+
+    let client = client_options.client()?;
+
+    let response = client
+        .head(&endpoint)
+        .send()
+        .await
+        .context(ResolveRegionSnafu { bucket })?;
+
+    ensure!(
+        response.status() != StatusCode::NOT_FOUND,
+        BucketNotFoundSnafu { bucket }
+    );
+
+    let region = response
+        .headers()
+        .get("x-amz-bucket-region")
+        .and_then(|x| x.to_str().ok())
+        .context(RegionParseSnafu { bucket })?;
+
+    Ok(region.to_string())
 }
 
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
@@ -1561,5 +1605,32 @@ mod tests {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+}
+
+#[cfg(test)]
+mod s3_resolve_bucket_region_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_private_bucket() {
+        let bucket = "bloxbender";
+
+        let region = resolve_bucket_region(bucket, &ClientOptions::new())
+            .await
+            .unwrap();
+
+        let expected = "us-west-2".to_string();
+
+        assert_eq!(region, expected);
+    }
+
+    #[tokio::test]
+    async fn test_bucket_does_not_exist() {
+        let bucket = "please-dont-exist";
+
+        let result = resolve_bucket_region(bucket, &ClientOptions::new()).await;
+
+        assert!(result.is_err());
     }
 }
