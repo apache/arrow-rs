@@ -29,7 +29,6 @@ use arrow_array::*;
 use arrow_buffer::i256;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
-use num::traits::Pow;
 use std::cmp::min;
 use std::sync::Arc;
 
@@ -1340,18 +1339,6 @@ pub fn negate_checked<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
     try_unary(array, |value| value.neg_checked())
-}
-
-/// Raise array with floating point values to the power of a scalar.
-pub fn powf_scalar<T>(
-    array: &PrimitiveArray<T>,
-    raise: T::Native,
-) -> Result<PrimitiveArray<T>, ArrowError>
-where
-    T: ArrowFloatNumericType,
-    T::Native: Pow<T::Native, Output = T::Native>,
-{
-    Ok(unary(array, |x| x.pow(raise)))
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -3214,18 +3201,6 @@ mod tests {
         let actual: Vec<Option<u8>> = actual.iter().collect();
         let expected: Vec<Option<u8>> =
             (63..63_u8 + 65_u8).map(|i| Some(i + i)).collect();
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn test_primitive_array_raise_power_scalar() {
-        let a = Float64Array::from(vec![1.0, 2.0, 3.0]);
-        let actual = powf_scalar(&a, 2.0).unwrap();
-        let expected = Float64Array::from(vec![1.0, 4.0, 9.0]);
-        assert_eq!(expected, actual);
-        let a = Float64Array::from(vec![Some(1.0), None, Some(3.0)]);
-        let actual = powf_scalar(&a, 2.0).unwrap();
-        let expected = Float64Array::from(vec![Some(1.0), None, Some(9.0)]);
         assert_eq!(expected, actual);
     }
 
