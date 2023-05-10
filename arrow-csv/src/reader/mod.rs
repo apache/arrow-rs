@@ -490,6 +490,12 @@ impl<R: BufRead> Iterator for BufReader<R> {
     }
 }
 
+impl<R: BufRead> RecordBatchReader for BufReader<R> {
+    fn schema(&self) -> SchemaRef {
+        self.decoder.schema.clone()
+    }
+}
+
 /// A push-based interface for decoding CSV data from an arbitrary byte stream
 ///
 /// See [`Reader`] for a higher-level interface for interface with [`Read`]
