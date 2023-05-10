@@ -188,30 +188,20 @@ pub async fn resolve_bucket_region(
         .head(&endpoint)
         .send()
         .await
-        .context(ResolveRegionSnafu {
-            bucket: bucket.to_owned(),
-        })?;
+        .context(ResolveRegionSnafu { bucket })?;
 
     ensure!(
         response.status() != StatusCode::NOT_FOUND,
-        BucketNotFoundSnafu {
-            bucket: bucket.to_owned()
-        }
+        BucketNotFoundSnafu { bucket }
     );
 
     let region = response
         .headers()
         .get("x-amz-bucket-region")
-        .map(|h| h.to_str().unwrap().to_string());
+        .and_then(|x| x.to_str().ok())
+        .context(RegionParseSnafu { bucket })?;
 
-    ensure!(
-        region.is_some(),
-        RegionParseSnafu {
-            bucket: bucket.to_owned()
-        }
-    );
-
-    Ok(region.unwrap())
+    Ok(region.to_string())
 }
 
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
