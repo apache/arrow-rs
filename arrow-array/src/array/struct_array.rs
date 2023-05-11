@@ -22,7 +22,7 @@ use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, SchemaBuilder}
 use std::sync::Arc;
 use std::{any::Any, ops::Index};
 
-/// An array of [tuples](https://arrow.apache.org/docs/format/Columnar.html#struct-layout)
+/// An array of [structs](https://arrow.apache.org/docs/format/Columnar.html#struct-layout)
 ///
 /// Each child (called *field*) is represented by a separate array.
 ///

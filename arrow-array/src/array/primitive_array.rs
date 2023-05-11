@@ -133,8 +133,7 @@ pub type Float32Array = PrimitiveArray<Float32Type>;
 /// ```
 pub type Float64Array = PrimitiveArray<Float64Type>;
 
-/// An array of 64-bit values representing the elapsed time
-/// since UNIX epoch in seconds
+/// An array of seconds since UNIX epoch stored as `i64`
 ///
 /// This type is similar to the [`chrono::DateTime`] type and can hold
 /// values such as `1970-05-09 14:25:11 +01:00`
@@ -182,63 +181,54 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 ///
 pub type TimestampSecondArray = PrimitiveArray<TimestampSecondType>;
 
-/// An array of 64-bit values representing the elapsed time
-/// since UNIX epoch in milliseconds
+/// An array of milliseconds since UNIX epoch stored as `i64`
 ///
 /// See examples for [`TimestampSecondArray`]
 pub type TimestampMillisecondArray = PrimitiveArray<TimestampMillisecondType>;
 
-/// An array of 64-bit values representing the elapsed time
-/// since UNIX epoch in microseconds
+/// An array of microseconds since UNIX epoch stored as `i64`
 ///
 /// See examples for [`TimestampSecondArray`]
 pub type TimestampMicrosecondArray = PrimitiveArray<TimestampMicrosecondType>;
 
-/// An array of 64-bit values representing the elapsed time
-/// since UNIX epoch in nanoseconds
+/// An array of nanoseconds since UNIX epoch stored as `i64`
 ///
 /// See examples for [`TimestampSecondArray`]
 pub type TimestampNanosecondArray = PrimitiveArray<TimestampNanosecondType>;
 
 // TODO: give examples for the below types
 
-/// An array of 32-bit values representing the elapsed time
-/// since UNIX epoch in days
+/// An array of days since UNIX epoch stored as `i32`
 ///
 /// This type is similar to the [`chrono::NaiveDate`] type and can hold
 /// values such as `2018-11-13`
 pub type Date32Array = PrimitiveArray<Date32Type>;
 
-/// An array of 64-bit values representing the elapsed time
-/// since UNIX epoch in milliseconds
+/// An array of milliseconds since UNIX epoch stored as `i64`
 ///
 /// This type is similar to the [`chrono::NaiveDate`] type and can hold
 /// values such as `2018-11-13`
 pub type Date64Array = PrimitiveArray<Date64Type>;
 
-/// An array of 32-bit values representing the elapsed time
-/// since midnight in seconds
+/// An array of seconds since midnight stored as `i32`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00`
 pub type Time32SecondArray = PrimitiveArray<Time32SecondType>;
 
-/// An array of 32-bit values representing the elapsed time
-/// since midnight in milliseconds
+/// An array of milliseconds since midnight stored as `i32`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00.123`
 pub type Time32MillisecondArray = PrimitiveArray<Time32MillisecondType>;
 
-/// An array of 64-bit values representing the elapsed time
-/// since midnight in microseconds
+/// An array of microseconds since midnight stored as `i64`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00.123456`
 pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
 
-/// An array of 64-bit values representing the elapsed time
-/// since midnight in nanoseconds
+/// An array of nanoseconds since midnight stored as `i64`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00.123456789`

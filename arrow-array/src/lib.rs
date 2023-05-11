@@ -70,19 +70,19 @@
 //!
 //! # Low-level API
 //!
-//! Internally, arrays consist of one or more shared memory regions backed by [`Buffer`],
+//! Internally, arrays consist of one or more shared memory regions backed by a [`Buffer`],
 //! the number and meaning of which depend on the array’s data type, as documented in
 //! the [Arrow specification].
 //!
 //! For example, the type [`Int16Array`] represents an array of 16-bit integers and consists of:
 //!
 //! * An optional [`NullBuffer`] identifying any null values
-//! * A contiguous [`ScalarBuffer<i16>`]
+//! * A contiguous [`ScalarBuffer<i16>`] of values
 //!
 //! Similarly, the type [`StringArray`] represents an array of UTF-8 strings and consists of:
 //!
 //! * An optional [`NullBuffer`] identifying any null values
-//! * An offsets [`ScalarBuffer<i32>`] identifying valid UTF-8 sequences within the values buffer
+//! * An offsets [`OffsetBuffer<i32>`] identifying valid UTF-8 sequences within the values buffer
 //! * A values [`Buffer`] of UTF-8 encoded string data
 //!
 //! Array constructors such as [`PrimitiveArray::try_new`] provide the ability to cheaply
@@ -136,12 +136,15 @@
 //! ```
 //! # use arrow_array::{Array, Float32Array, Int32Array};
 //!
+//! // Safely downcast an `Array` to an `Int32Array` and compute the sum
+//! // using native i32 values
 //! fn sum_int32(array: &dyn Array) -> i32 {
 //!     let integers: &Int32Array = array.as_any().downcast_ref().unwrap();
 //!     integers.iter().map(|val| val.unwrap_or_default()).sum()
 //! }
 //!
-//! // Note: the values for positions corresponding to nulls will be arbitrary
+//! // Safely downcasts the array to a `Float32Array` and returns a &[f32] view of the data
+//! // Note: the values for positions corresponding to nulls will be arbitrary (but still valid f32)
 //! fn as_f32_slice(array: &dyn Array) -> &[f32] {
 //!     array.as_any().downcast_ref::<Float32Array>().unwrap().values()
 //! }
@@ -161,7 +164,7 @@
 //!
 //! [`ScalarBuffer<T>`]: arrow_buffer::ScalarBuffer
 //! [`ScalarBuffer<i16>`]: arrow_buffer::ScalarBuffer
-//! [`ScalarBuffer<i32>`]: arrow_buffer::ScalarBuffer
+//! [`OffsetBuffer<i32>`]: arrow_buffer::OffsetBuffer
 //! [`NullBuffer`]: arrow_buffer::NullBuffer
 //! [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html
 //! [`&dyn Array`]: Array

@@ -29,6 +29,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// A type that can be used within a variable-size array to encode offset information
+///
+/// See [`ListArray`], [`LargeListArray`], [`BinaryArray`], [`LargeBinaryArray`],
+/// [`StringArray`] and [`LargeStringArray`]
+///
+/// [`BinaryArray`]: crate::array::BinaryArray
+/// [`LargeBinaryArray`]: crate::array::LargeBinaryArray
+/// [`StringArray`]: crate::array::StringArray
+/// [`LargeStringArray`]: crate::array::LargeStringArray
 pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
     /// True for 64 bit offset size and false for 32 bit offset size
     const IS_LARGE: bool;
@@ -444,7 +452,7 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
     }
 }
 
-/// An array of variable size arrays, storing offsets as `i32`.
+/// An array of variable size lists, storing offsets as `i32`.
 ///
 /// # Example
 ///
@@ -471,7 +479,7 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
 /// ```
 pub type ListArray = GenericListArray<i32>;
 
-/// An array of variable size arrays, storing offsets as `i64`.
+/// An array of variable size lists, storing offsets as `i64`.
 ///
 /// # Example
 ///
