@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::local::LocalFileSystem;
 use crate::memory::InMemory;
 use crate::ObjectStore;
