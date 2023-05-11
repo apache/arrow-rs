@@ -1714,7 +1714,7 @@ mod profile_tests {
         let aws_region =
             env::var("AWS_REGION").unwrap_or_else(|_| "object_store:fake_region".into());
 
-        env::set_var("AWS_PROFILE", &aws_profile);
+        env::set_var("AWS_PROFILE", aws_profile);
 
         let s3 = AmazonS3Builder::from_env()
             .with_url(s3_url)
