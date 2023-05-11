@@ -31,6 +31,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, ClientBuilder, Proxy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::time::Duration;
 
 use crate::path::Path;
@@ -51,6 +52,28 @@ static DEFAULT_USER_AGENT: &str =
 pub enum ClientConfigKey {
     /// Allow non-TLS, i.e. non-HTTPS connections
     AllowHttp,
+}
+
+impl AsRef<str> for ClientConfigKey {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::AllowHttp => "allow_http",
+        }
+    }
+}
+
+impl FromStr for ClientConfigKey {
+    type Err = super::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "allow_http" => Ok(Self::AllowHttp),
+            _ => Err(super::Error::UnknownConfigurationKey {
+                store: "HTTP",
+                key: s.into(),
+            }),
+        }
+    }
 }
 
 /// HTTP client configuration for remote object stores

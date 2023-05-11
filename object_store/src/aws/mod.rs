@@ -604,6 +604,9 @@ pub enum AmazonS3ConfigKey {
     /// - `aws_profile`
     /// - `profile`
     Profile,
+
+    /// Client options
+    Client(ClientConfigKey),
 }
 
 impl AsRef<str> for AmazonS3ConfigKey {
@@ -622,6 +625,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::Profile => "aws_profile",
             Self::UnsignedPayload => "aws_unsigned_payload",
             Self::Checksum => "aws_checksum_algorithm",
+            Self::Client(opt) => opt.as_ref(),
         }
     }
 }
@@ -652,7 +656,12 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
             "aws_checksum_algorithm" | "checksum_algorithm" => Ok(Self::Checksum),
-            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            // Backwards compatibility
+            "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
+            _ => match s.parse() {
+                Ok(key) => Ok(Self::Client(key)),
+                Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            },
         }
     }
 }
@@ -688,9 +697,7 @@ impl AmazonS3Builder {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("AWS_") {
-                    if let Ok(config_key) =
-                        AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
+                    if let Ok(config_key) = key.to_ascii_lowercase().parse() {
                         builder = builder.with_config(config_key, value);
                     }
                 }
@@ -704,12 +711,6 @@ impl AmazonS3Builder {
         {
             builder.metadata_endpoint =
                 Some(format!("{METADATA_ENDPOINT}{metadata_relative_uri}"));
-        }
-
-        if let Ok(text) = std::env::var("AWS_ALLOW_HTTP") {
-            builder.client_options = builder
-                .client_options
-                .with_config(ClientConfigKey::AllowHttp, text);
         }
 
         builder
@@ -769,6 +770,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::UnsignedPayload => self.unsigned_payload.parse(value),
             AmazonS3ConfigKey::Checksum => {
                 self.checksum_algorithm = Some(ConfigValue::Deferred(value.into()))
+            }
+            AmazonS3ConfigKey::Client(key) => {
+                self.client_options = self.client_options.with_config(key, value)
             }
         };
         self
@@ -834,6 +838,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Checksum => {
                 self.checksum_algorithm.as_ref().map(ToString::to_string)
             }
+            AmazonS3ConfigKey::Client(key) => self.client_options.get_config_value(key),
         }
     }
 

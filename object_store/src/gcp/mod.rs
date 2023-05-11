@@ -49,6 +49,7 @@ use url::Url;
 
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
+use crate::client::ClientConfigKey;
 use crate::{
     client::token::TokenCache,
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
@@ -829,6 +830,9 @@ pub enum GoogleConfigKey {
     ///
     /// See [`GoogleCloudStorageBuilder::with_application_credentials`].
     ApplicationCredentials,
+
+    /// Client options
+    Client(ClientConfigKey),
 }
 
 impl AsRef<str> for GoogleConfigKey {
@@ -838,6 +842,7 @@ impl AsRef<str> for GoogleConfigKey {
             Self::ServiceAccountKey => "google_service_account_key",
             Self::Bucket => "google_bucket",
             Self::ApplicationCredentials => "google_application_credentials",
+            Self::Client(key) => key.as_ref(),
         }
     }
 }
@@ -858,7 +863,10 @@ impl FromStr for GoogleConfigKey {
                 Ok(Self::Bucket)
             }
             "google_application_credentials" => Ok(Self::ApplicationCredentials),
-            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            _ => match s.parse() {
+                Ok(key) => Ok(Self::Client(key)),
+                Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            },
         }
     }
 }
@@ -911,9 +919,7 @@ impl GoogleCloudStorageBuilder {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("GOOGLE_") {
-                    if let Ok(config_key) =
-                        GoogleConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
+                    if let Ok(config_key) = key.to_ascii_lowercase().parse() {
                         builder = builder.with_config(config_key, value);
                     }
                 }
@@ -956,6 +962,9 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::Bucket => self.bucket_name = Some(value.into()),
             GoogleConfigKey::ApplicationCredentials => {
                 self.application_credentials_path = Some(value.into())
+            }
+            GoogleConfigKey::Client(key) => {
+                self.client_options = self.client_options.with_config(key, value)
             }
         };
         self
@@ -1005,6 +1014,7 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::ApplicationCredentials => {
                 self.application_credentials_path.clone()
             }
+            GoogleConfigKey::Client(key) => self.client_options.get_config_value(key),
         }
     }
 
