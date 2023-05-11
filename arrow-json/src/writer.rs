@@ -35,7 +35,7 @@
 //! let a = Int32Array::from(vec![1, 2, 3]);
 //! let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 //!
-//! let json_rows = arrow_json::writer::record_batches_to_json_rows(&[batch]).unwrap();
+//! let json_rows = arrow_json::writer::record_batches_to_json_rows(&[&batch]).unwrap();
 //! assert_eq!(
 //!     serde_json::Value::Object(json_rows[1].clone()),
 //!     serde_json::json!({"a": 2}),
@@ -59,7 +59,7 @@
 //! // Write the record batch out as JSON
 //! let buf = Vec::new();
 //! let mut writer = arrow_json::LineDelimitedWriter::new(buf);
-//! writer.write_batches(&vec![batch]).unwrap();
+//! writer.write_batches(&vec![&batch]).unwrap();
 //! writer.finish().unwrap();
 //!
 //! // Get the underlying buffer back,
@@ -85,7 +85,7 @@
 //! // Write the record batch out as a JSON array
 //! let buf = Vec::new();
 //! let mut writer = arrow_json::ArrayWriter::new(buf);
-//! writer.write_batches(&vec![batch]).unwrap();
+//! writer.write_batches(&vec![&batch]).unwrap();
 //! writer.finish().unwrap();
 //!
 //! // Get the underlying buffer back,
@@ -390,7 +390,7 @@ fn set_column_for_json_rows(
 /// Converts an arrow [`RecordBatch`] into a `Vec` of Serde JSON
 /// [`JsonMap`]s (objects)
 pub fn record_batches_to_json_rows(
-    batches: &[RecordBatch],
+    batches: &[&RecordBatch],
 ) -> Result<Vec<JsonMap<String, Value>>, ArrowError> {
     let mut rows: Vec<JsonMap<String, Value>> = iter::repeat(JsonMap::new())
         .take(batches.iter().map(|b| b.num_rows()).sum())
@@ -554,7 +554,7 @@ where
     }
 
     /// Convert the `RecordBatch` into JSON rows, and write them to the output
-    pub fn write(&mut self, batch: RecordBatch) -> Result<(), ArrowError> {
+    pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         for row in record_batches_to_json_rows(&[batch])? {
             self.write_row(&Value::Object(row))?;
         }
@@ -562,7 +562,7 @@ where
     }
 
     /// Convert the [`RecordBatch`] into JSON rows, and write them to the output
-    pub fn write_batches(&mut self, batches: &[RecordBatch]) -> Result<(), ArrowError> {
+    pub fn write_batches(&mut self, batches: &[&RecordBatch]) -> Result<(), ArrowError> {
         for row in record_batches_to_json_rows(batches)? {
             self.write_row(&Value::Object(row))?;
         }
@@ -583,6 +583,16 @@ where
     /// Unwraps this `Writer<W>`, returning the underlying writer
     pub fn into_inner(self) -> W {
         self.writer
+    }
+}
+
+impl<W, F> RecordBatchWriter for Writer<W, F>
+where
+    W: Write,
+    F: JsonFormat,
+{
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        self.write(batch)
     }
 }
 
@@ -631,7 +641,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -662,7 +672,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -704,7 +714,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -759,7 +769,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -818,7 +828,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -864,7 +874,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -907,7 +917,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -950,7 +960,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -1010,7 +1020,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -1053,7 +1063,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -1113,7 +1123,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -1192,7 +1202,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -1217,7 +1227,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         let result = String::from_utf8(buf).unwrap();
@@ -1315,7 +1325,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         // NOTE: The last value should technically be {"list": [null]} but it appears
@@ -1378,7 +1388,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[batch]).unwrap();
+            writer.write_batches(&[&batch]).unwrap();
         }
 
         assert_json_eq(
@@ -1408,7 +1418,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write(batch).unwrap();
+            writer.write(&batch).unwrap();
         }
 
         let result = String::from_utf8(buf).unwrap();
@@ -1445,7 +1455,7 @@ mod tests {
         let batch = reader.next().unwrap().unwrap();
 
         // test batches = an empty batch + 2 same batches, finally result should be eq to 2 same batches
-        let batches = [RecordBatch::new_empty(schema), batch.clone(), batch];
+        let batches = [&RecordBatch::new_empty(schema), &batch, &batch];
 
         let mut buf = Vec::new();
         {

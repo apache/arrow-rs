@@ -857,6 +857,12 @@ impl<W: Write> FileWriter<W> {
     }
 }
 
+impl<W: Write> RecordBatchWriter for FileWriter<W> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        self.write(batch)
+    }
+}
+
 pub struct StreamWriter<W: Write> {
     /// The object to write to
     writer: BufWriter<W>,
@@ -988,6 +994,12 @@ impl<W: Write> StreamWriter<W> {
             self.finish()?;
         }
         self.writer.into_inner().map_err(ArrowError::from)
+    }
+}
+
+impl<W: Write> RecordBatchWriter for StreamWriter<W> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        self.write(batch)
     }
 }
 
