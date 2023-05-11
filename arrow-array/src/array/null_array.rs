@@ -24,7 +24,7 @@ use arrow_schema::DataType;
 use std::any::Any;
 use std::sync::Arc;
 
-/// An Array where all elements are nulls
+/// An array of [null values](https://arrow.apache.org/docs/format/Columnar.html#null-layout)
 ///
 /// A `NullArray` is a simplified array where all values are null.
 ///

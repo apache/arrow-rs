@@ -25,7 +25,7 @@ use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 
-///  Array builder for [`GenericByteArray`]
+/// Builder for [`GenericByteArray`]
 pub struct GenericByteBuilder<T: ByteArrayType> {
     value_builder: UInt8BufferBuilder,
     offsets_builder: BufferBuilder<T::Offset>,

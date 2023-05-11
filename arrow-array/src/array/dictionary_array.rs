@@ -30,8 +30,7 @@ use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-///
-/// A dictionary array where each element is a single value indexed by an integer key.
+/// A dictionary array indexed by `i8`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -44,8 +43,8 @@ use std::sync::Arc;
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type Int8DictionaryArray = DictionaryArray<Int8Type>;
-///
-/// A dictionary array where each element is a single value indexed by an integer key.
+
+/// A dictionary array indexed by `i16`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -58,8 +57,8 @@ pub type Int8DictionaryArray = DictionaryArray<Int8Type>;
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type Int16DictionaryArray = DictionaryArray<Int16Type>;
-///
-/// A dictionary array where each element is a single value indexed by an integer key.
+
+/// A dictionary array indexed by `i32`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -72,8 +71,8 @@ pub type Int16DictionaryArray = DictionaryArray<Int16Type>;
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type Int32DictionaryArray = DictionaryArray<Int32Type>;
-///
-/// A dictionary array where each element is a single value indexed by an integer key.
+
+/// A dictionary array indexed by `i64`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -86,8 +85,8 @@ pub type Int32DictionaryArray = DictionaryArray<Int32Type>;
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type Int64DictionaryArray = DictionaryArray<Int64Type>;
-///
-/// A dictionary array where each element is a single value indexed by an integer key.
+
+/// A dictionary array indexed by `u8`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -100,8 +99,8 @@ pub type Int64DictionaryArray = DictionaryArray<Int64Type>;
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type UInt8DictionaryArray = DictionaryArray<UInt8Type>;
-///
-/// A dictionary array where each element is a single value indexed by an integer key.
+
+/// A dictionary array indexed by `u16`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -114,8 +113,8 @@ pub type UInt8DictionaryArray = DictionaryArray<UInt8Type>;
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type UInt16DictionaryArray = DictionaryArray<UInt16Type>;
-///
-/// A dictionary array where each element is a single value indexed by an integer key.
+
+/// A dictionary array indexed by `u32`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -128,8 +127,8 @@ pub type UInt16DictionaryArray = DictionaryArray<UInt16Type>;
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
-///
-/// A dictionary array where each element is a single value indexed by an integer key.
+
+/// A dictionary array indexed by `u64`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -143,7 +142,8 @@ pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 /// ```
 pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 
-/// A dictionary array where each element is a single value indexed by an integer key.
+/// An array of [dictionary encoded values](https://arrow.apache.org/docs/format/Columnar.html#dictionary-encoded-layout)
+///
 /// This is mostly used to represent strings or a limited set of primitive types as integers,
 /// for example when doing NLP analysis or representing chromosomes by name.
 ///
@@ -695,8 +695,9 @@ impl<T: ArrowDictionaryKeyType> std::fmt::Debug for DictionaryArray<T> {
     }
 }
 
-/// A strongly-typed wrapper around a [`DictionaryArray`] that implements [`ArrayAccessor`]
-/// allowing fast access to its elements
+/// A [`DictionaryArray`] typed on its child values array
+///
+/// Implements [`ArrayAccessor`] allowing fast access to its elements
 ///
 /// ```
 /// use arrow_array::{DictionaryArray, StringArray, types::Int32Type};

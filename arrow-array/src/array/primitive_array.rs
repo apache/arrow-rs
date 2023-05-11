@@ -34,6 +34,7 @@ use half::f16;
 use std::any::Any;
 use std::sync::Arc;
 
+/// An array of `i8`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -41,6 +42,8 @@ use std::sync::Arc;
 /// let arr : Int8Array = [Some(1), Some(2)].into_iter().collect();
 /// ```
 pub type Int8Array = PrimitiveArray<Int8Type>;
+
+/// An array of `i16`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -48,6 +51,8 @@ pub type Int8Array = PrimitiveArray<Int8Type>;
 /// let arr : Int16Array = [Some(1), Some(2)].into_iter().collect();
 /// ```
 pub type Int16Array = PrimitiveArray<Int16Type>;
+
+/// An array of `i32`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -55,6 +60,8 @@ pub type Int16Array = PrimitiveArray<Int16Type>;
 /// let arr : Int32Array = [Some(1), Some(2)].into_iter().collect();
 /// ```
 pub type Int32Array = PrimitiveArray<Int32Type>;
+
+/// An array of `i64`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -62,13 +69,16 @@ pub type Int32Array = PrimitiveArray<Int32Type>;
 /// let arr : Int64Array = [Some(1), Some(2)].into_iter().collect();
 /// ```
 pub type Int64Array = PrimitiveArray<Int64Type>;
-///
+
+/// An array of `u8`
 /// # Example: Using `collect`
 /// ```
 /// # use arrow_array::UInt8Array;
 /// let arr : UInt8Array = [Some(1), Some(2)].into_iter().collect();
 /// ```
 pub type UInt8Array = PrimitiveArray<UInt8Type>;
+
+/// An array of `u16`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -76,6 +86,8 @@ pub type UInt8Array = PrimitiveArray<UInt8Type>;
 /// let arr : UInt16Array = [Some(1), Some(2)].into_iter().collect();
 /// ```
 pub type UInt16Array = PrimitiveArray<UInt16Type>;
+
+/// An array of `u32`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -83,6 +95,8 @@ pub type UInt16Array = PrimitiveArray<UInt16Type>;
 /// let arr : UInt32Array = [Some(1), Some(2)].into_iter().collect();
 /// ```
 pub type UInt32Array = PrimitiveArray<UInt32Type>;
+
+/// An array of `u64`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -90,6 +104,8 @@ pub type UInt32Array = PrimitiveArray<UInt32Type>;
 /// let arr : UInt64Array = [Some(1), Some(2)].into_iter().collect();
 /// ```
 pub type UInt64Array = PrimitiveArray<UInt64Type>;
+
+/// An array of `f16`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -98,6 +114,8 @@ pub type UInt64Array = PrimitiveArray<UInt64Type>;
 /// let arr : Float16Array = [Some(f16::from_f64(1.0)), Some(f16::from_f64(2.0))].into_iter().collect();
 /// ```
 pub type Float16Array = PrimitiveArray<Float16Type>;
+
+/// An array of `f32`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -105,6 +123,8 @@ pub type Float16Array = PrimitiveArray<Float16Type>;
 /// let arr : Float32Array = [Some(1.0), Some(2.0)].into_iter().collect();
 /// ```
 pub type Float32Array = PrimitiveArray<Float32Type>;
+
+/// An array of `f64`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -113,8 +133,11 @@ pub type Float32Array = PrimitiveArray<Float32Type>;
 /// ```
 pub type Float64Array = PrimitiveArray<Float64Type>;
 
+/// An array of seconds since UNIX epoch stored as `i64`
 ///
-/// A primitive array where each element is of type [TimestampSecondType].
+/// This type is similar to the [`chrono::DateTime`] type and can hold
+/// values such as `1970-05-09 14:25:11 +01:00`
+///
 /// See also [`Timestamp`](arrow_schema::DataType::Timestamp).
 ///
 /// # Example: UTC timestamps post epoch
@@ -157,82 +180,90 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// ```
 ///
 pub type TimestampSecondArray = PrimitiveArray<TimestampSecondType>;
-/// A primitive array where each element is of type `TimestampMillisecondType.`
-/// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
+
+/// An array of milliseconds since UNIX epoch stored as `i64`
+///
+/// See examples for [`TimestampSecondArray`]
 pub type TimestampMillisecondArray = PrimitiveArray<TimestampMillisecondType>;
-/// A primitive array where each element is of type `TimestampMicrosecondType.`
-/// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
+
+/// An array of microseconds since UNIX epoch stored as `i64`
+///
+/// See examples for [`TimestampSecondArray`]
 pub type TimestampMicrosecondArray = PrimitiveArray<TimestampMicrosecondType>;
-/// A primitive array where each element is of type `TimestampNanosecondType.`
-/// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
+
+/// An array of nanoseconds since UNIX epoch stored as `i64`
+///
+/// See examples for [`TimestampSecondArray`]
 pub type TimestampNanosecondArray = PrimitiveArray<TimestampNanosecondType>;
 
 // TODO: give examples for the below types
 
-/// A primitive array where each element is of 32-bit value
-/// representing the elapsed time since UNIX epoch in days."
+/// An array of days since UNIX epoch stored as `i32`
 ///
 /// This type is similar to the [`chrono::NaiveDate`] type and can hold
 /// values such as `2018-11-13`
 pub type Date32Array = PrimitiveArray<Date32Type>;
-/// A primitive array where each element is a 64-bit value
-/// representing the elapsed time since the UNIX epoch in milliseconds.
+
+/// An array of milliseconds since UNIX epoch stored as `i64`
 ///
-/// This type is similar to the [`chrono::NaiveDateTime`] type and can hold
-/// values such as `2018-11-13T17:11:10.011`
+/// This type is similar to the [`chrono::NaiveDate`] type and can hold
+/// values such as `2018-11-13`
 pub type Date64Array = PrimitiveArray<Date64Type>;
 
-/// An array where each element is of 32-bit type representing time elapsed in seconds
-/// since midnight.
+/// An array of seconds since midnight stored as `i32`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00`
 pub type Time32SecondArray = PrimitiveArray<Time32SecondType>;
-/// An array where each element is of 32-bit type representing time elapsed in milliseconds
-/// since midnight.
+
+/// An array of milliseconds since midnight stored as `i32`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00.123`
 pub type Time32MillisecondArray = PrimitiveArray<Time32MillisecondType>;
-/// An array where each element is of 64-bit type representing time elapsed in microseconds
-/// since midnight.
+
+/// An array of microseconds since midnight stored as `i64`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00.123456`
 pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
-/// An array where each element is of 64-bit type representing time elapsed in nanoseconds
-/// since midnight.
+
+/// An array of nanoseconds since midnight stored as `i64`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00.123456789`
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 
-/// An array where each element is a “calendar” interval in months.
+/// An array of “calendar” intervals in months
 pub type IntervalYearMonthArray = PrimitiveArray<IntervalYearMonthType>;
-/// An array where each element is a “calendar” interval days and milliseconds.
+
+/// An array of “calendar” intervals in days and milliseconds
 pub type IntervalDayTimeArray = PrimitiveArray<IntervalDayTimeType>;
-/// An array where each element is a “calendar” interval in  months, days, and nanoseconds.
+
+/// An array of “calendar” intervals in  months, days, and nanoseconds
 pub type IntervalMonthDayNanoArray = PrimitiveArray<IntervalMonthDayNanoType>;
 
-/// An array where each element is an elapsed time type in seconds.
+/// An array of elapsed durations in seconds
 pub type DurationSecondArray = PrimitiveArray<DurationSecondType>;
-/// An array where each element is an elapsed time type in milliseconds.
+
+/// An array of elapsed durations in milliseconds
 pub type DurationMillisecondArray = PrimitiveArray<DurationMillisecondType>;
-/// An array where each element is an elapsed time type in microseconds.
+
+/// An array of elapsed durations in microseconds
 pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
-/// An array where each element is an elapsed time type in nanoseconds.
+
+/// An array of elapsed durations in nanoseconds
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
-/// An array where each element is a 128-bits decimal with precision in [1, 38] and
-/// scale less or equal to 38.
+/// An array of 128-bit fixed point decimals
 pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
-/// An array where each element is a 256-bits decimal with precision in [1, 76] and
-/// scale less or equal to 76.
+
+/// An array of 256-bit fixed point decimals
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
 pub use crate::types::ArrowPrimitiveType;
 
-/// Array whose elements are of primitive types.
+/// An array of [primitive values](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout)
 ///
 /// # Example: From an iterator of values
 ///
@@ -890,6 +921,8 @@ impl<'a, T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 }
 
+/// An optional primitive value
+///
 /// This struct is used as an adapter when creating `PrimitiveArray` from an iterator.
 /// `FromIterator` for `PrimitiveArray` takes an iterator where the elements can be `into`
 /// this struct. So once implementing `From` or `Into` trait for a type, an iterator of

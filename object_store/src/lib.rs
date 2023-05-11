@@ -247,6 +247,9 @@ mod client;
 #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
 pub use client::{backoff::BackoffConfig, retry::RetryConfig};
 
+#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
+mod config;
+
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
 mod multipart;
 mod util;

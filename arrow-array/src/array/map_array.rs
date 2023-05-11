@@ -23,7 +23,8 @@ use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
 
-/// A nested array type where each record is a key-value map.
+/// An array of key-value maps
+///
 /// Keys should always be non-null, but values can be null.
 ///
 /// [MapArray] is physically a [crate::array::ListArray] that has a

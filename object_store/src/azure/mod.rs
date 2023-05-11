@@ -51,7 +51,9 @@ use std::{collections::BTreeSet, str::FromStr};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::util::{str_is_truthy, RFC1123_FMT};
+use crate::client::ClientConfigKey;
+use crate::config::ConfigValue;
+use crate::util::RFC1123_FMT;
 pub use credential::authority_hosts;
 
 mod client;
@@ -417,7 +419,7 @@ pub struct MicrosoftAzureBuilder {
     /// Url
     url: Option<String>,
     /// When set to true, azurite storage emulator has to be used
-    use_emulator: bool,
+    use_emulator: ConfigValue<bool>,
     /// Msi endpoint for acquiring managed identity token
     msi_endpoint: Option<String>,
     /// Object id for use with managed identity authentication
@@ -427,7 +429,7 @@ pub struct MicrosoftAzureBuilder {
     /// File containing token for Azure AD workload identity federation
     federated_token_file: Option<String>,
     /// When set to true, azure cli has to be used for acquiring access token
-    use_azure_cli: bool,
+    use_azure_cli: ConfigValue<bool>,
     /// Retry config
     retry_config: RetryConfig,
     /// Client options
@@ -436,30 +438,17 @@ pub struct MicrosoftAzureBuilder {
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
 ///
-/// Configuration via keys can be dome via the [`try_with_option`](MicrosoftAzureBuilder::try_with_option)
-/// or [`with_options`](MicrosoftAzureBuilder::try_with_options) methods on the builder.
+/// Configuration via keys can be done via [`MicrosoftAzureBuilder::with_config`]
 ///
 /// # Example
 /// ```
-/// use std::collections::HashMap;
-/// use object_store::azure::{MicrosoftAzureBuilder, AzureConfigKey};
-///
-/// let options = HashMap::from([
-///     ("azure_client_id", "my-client-id"),
-///     ("azure_client_secret", "my-account-name"),
-/// ]);
-/// let typed_options = vec![
-///     (AzureConfigKey::AccountName, "my-account-name"),
-/// ];
-/// let azure = MicrosoftAzureBuilder::new()
-///     .try_with_options(options)
-///     .unwrap()
-///     .try_with_options(typed_options)
-///     .unwrap()
-///     .try_with_option(AzureConfigKey::AuthorityId, "my-tenant-id")
-///     .unwrap();
+/// # use object_store::azure::{MicrosoftAzureBuilder, AzureConfigKey};
+/// let builder = MicrosoftAzureBuilder::new()
+///     .with_config("azure_client_id".parse().unwrap(), "my-client-id")
+///     .with_config(AzureConfigKey::AuthorityId, "my-tenant-id");
 /// ```
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Deserialize, Serialize)]
+#[non_exhaustive]
 pub enum AzureConfigKey {
     /// The name of the azure storage account
     ///
@@ -570,6 +559,9 @@ pub enum AzureConfigKey {
     /// - `azure_use_azure_cli`
     /// - `use_azure_cli`
     UseAzureCli,
+
+    /// Client options
+    Client(ClientConfigKey),
 }
 
 impl AsRef<str> for AzureConfigKey {
@@ -588,6 +580,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::MsiResourceId => "azure_msi_resource_id",
             Self::FederatedTokenFile => "azure_federated_token_file",
             Self::UseAzureCli => "azure_use_azure_cli",
+            Self::Client(key) => key.as_ref(),
         }
     }
 }
@@ -632,7 +625,12 @@ impl FromStr for AzureConfigKey {
                 Ok(Self::FederatedTokenFile)
             }
             "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
-            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            // Backwards compatibility
+            "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
+            _ => match s.parse() {
+                Ok(key) => Ok(Self::Client(key)),
+                Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            },
         }
     }
 }
@@ -675,18 +673,11 @@ impl MicrosoftAzureBuilder {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("AZURE_") {
-                    if let Ok(config_key) =
-                        AzureConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
-                        builder = builder.try_with_option(config_key, value).unwrap();
+                    if let Ok(config_key) = key.to_ascii_lowercase().parse() {
+                        builder = builder.with_config(config_key, value);
                     }
                 }
             }
-        }
-
-        if let Ok(text) = std::env::var("AZURE_ALLOW_HTTP") {
-            builder.client_options =
-                builder.client_options.with_allow_http(str_is_truthy(&text));
         }
 
         if let Ok(text) = std::env::var(MSI_ENDPOINT_ENV_KEY) {
@@ -724,12 +715,8 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set an option on the builder via a key - value pair.
-    pub fn try_with_option(
-        mut self,
-        key: impl AsRef<str>,
-        value: impl Into<String>,
-    ) -> Result<Self> {
-        match AzureConfigKey::from_str(key.as_ref())? {
+    pub fn with_config(mut self, key: AzureConfigKey, value: impl Into<String>) -> Self {
+        match key {
             AzureConfigKey::AccessKey => self.access_key = Some(value.into()),
             AzureConfigKey::AccountName => self.account_name = Some(value.into()),
             AzureConfigKey::ClientId => self.client_id = Some(value.into()),
@@ -743,17 +730,28 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FederatedTokenFile => {
                 self.federated_token_file = Some(value.into())
             }
-            AzureConfigKey::UseAzureCli => {
-                self.use_azure_cli = str_is_truthy(&value.into())
-            }
-            AzureConfigKey::UseEmulator => {
-                self.use_emulator = str_is_truthy(&value.into())
+            AzureConfigKey::UseAzureCli => self.use_azure_cli.parse(value),
+            AzureConfigKey::UseEmulator => self.use_emulator.parse(value),
+            AzureConfigKey::Client(key) => {
+                self.client_options = self.client_options.with_config(key, value)
             }
         };
-        Ok(self)
+        self
+    }
+
+    /// Set an option on the builder via a key - value pair.
+    #[deprecated(note = "Use with_config")]
+    pub fn try_with_option(
+        self,
+        key: impl AsRef<str>,
+        value: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(self.with_config(key.as_ref().parse()?, value))
     }
 
     /// Hydrate builder from key value pairs
+    #[deprecated(note = "Use with_config")]
+    #[allow(deprecated)]
     pub fn try_with_options<
         I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
     >(
@@ -792,6 +790,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::MsiResourceId => self.msi_resource_id.clone(),
             AzureConfigKey::FederatedTokenFile => self.federated_token_file.clone(),
             AzureConfigKey::UseAzureCli => Some(self.use_azure_cli.to_string()),
+            AzureConfigKey::Client(key) => self.client_options.get_config_value(key),
         }
     }
 
@@ -903,7 +902,7 @@ impl MicrosoftAzureBuilder {
 
     /// Set if the Azure emulator should be used (defaults to false)
     pub fn with_use_emulator(mut self, use_emulator: bool) -> Self {
-        self.use_emulator = use_emulator;
+        self.use_emulator = use_emulator.into();
         self
     }
 
@@ -961,7 +960,7 @@ impl MicrosoftAzureBuilder {
     /// Set if the Azure Cli should be used for acquiring access token
     /// <https://learn.microsoft.com/en-us/cli/azure/account?view=azure-cli-latest#az-account-get-access-token>
     pub fn with_use_azure_cli(mut self, use_azure_cli: bool) -> Self {
-        self.use_azure_cli = use_azure_cli;
+        self.use_azure_cli = use_azure_cli.into();
         self
     }
 
@@ -974,7 +973,7 @@ impl MicrosoftAzureBuilder {
 
         let container = self.container_name.ok_or(Error::MissingContainerName {})?;
 
-        let (is_emulator, storage_url, auth, account) = if self.use_emulator {
+        let (is_emulator, storage_url, auth, account) = if self.use_emulator.get()? {
             let account_name = self
                 .account_name
                 .unwrap_or_else(|| EMULATOR_ACCOUNT.to_string());
@@ -1027,7 +1026,7 @@ impl MicrosoftAzureBuilder {
                 credential::CredentialProvider::SASToken(query_pairs)
             } else if let Some(sas) = self.sas_key {
                 credential::CredentialProvider::SASToken(split_sas(&sas)?)
-            } else if self.use_azure_cli {
+            } else if self.use_azure_cli.get()? {
                 credential::CredentialProvider::TokenCredential(
                     TokenCache::default(),
                     Box::new(credential::AzureCliCredential::new()),
@@ -1035,7 +1034,7 @@ impl MicrosoftAzureBuilder {
             } else {
                 let client =
                     self.client_options.clone().with_allow_http(true).client()?;
-                let msi_credential = credential::ImdsManagedIdentityOAuthProvider::new(
+                let msi_credential = credential::ImdsManagedIdentityProvider::new(
                     self.client_id,
                     self.object_id,
                     self.msi_resource_id,
@@ -1270,31 +1269,11 @@ mod tests {
             ("azure_storage_token", azure_storage_token),
         ]);
 
-        let builder = MicrosoftAzureBuilder::new()
-            .try_with_options(options)
-            .unwrap();
-        assert_eq!(builder.client_id.unwrap(), azure_client_id);
-        assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
-        assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
-    }
-
-    #[test]
-    fn azure_test_config_from_typed_map() {
-        let azure_client_id = "object_store:fake_access_key_id".to_string();
-        let azure_storage_account_name = "object_store:fake_secret_key".to_string();
-        let azure_storage_token = "object_store:fake_default_region".to_string();
-        let options = HashMap::from([
-            (AzureConfigKey::ClientId, azure_client_id.clone()),
-            (
-                AzureConfigKey::AccountName,
-                azure_storage_account_name.clone(),
-            ),
-            (AzureConfigKey::Token, azure_storage_token.clone()),
-        ]);
-
-        let builder = MicrosoftAzureBuilder::new()
-            .try_with_options(&options)
-            .unwrap();
+        let builder = options
+            .into_iter()
+            .fold(MicrosoftAzureBuilder::new(), |builder, (key, value)| {
+                builder.with_config(key.parse().unwrap(), value)
+            });
         assert_eq!(builder.client_id.unwrap(), azure_client_id);
         assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
         assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
@@ -1305,18 +1284,11 @@ mod tests {
         let azure_client_id = "object_store:fake_access_key_id".to_string();
         let azure_storage_account_name = "object_store:fake_secret_key".to_string();
         let azure_storage_token = "object_store:fake_default_region".to_string();
-        let options = HashMap::from([
-            (AzureConfigKey::ClientId, azure_client_id.clone()),
-            (
-                AzureConfigKey::AccountName,
-                azure_storage_account_name.clone(),
-            ),
-            (AzureConfigKey::Token, azure_storage_token.clone()),
-        ]);
-
         let builder = MicrosoftAzureBuilder::new()
-            .try_with_options(&options)
-            .unwrap();
+            .with_config(AzureConfigKey::ClientId, &azure_client_id)
+            .with_config(AzureConfigKey::AccountName, &azure_storage_account_name)
+            .with_config(AzureConfigKey::Token, &azure_storage_token);
+
         assert_eq!(
             builder.get_config_value(&AzureConfigKey::ClientId).unwrap(),
             azure_client_id
@@ -1331,19 +1303,6 @@ mod tests {
             builder.get_config_value(&AzureConfigKey::Token).unwrap(),
             azure_storage_token
         );
-    }
-
-    #[test]
-    fn azure_test_config_fallible_options() {
-        let azure_client_id = "object_store:fake_access_key_id".to_string();
-        let azure_storage_token = "object_store:fake_default_region".to_string();
-        let options = HashMap::from([
-            ("azure_client_id", azure_client_id),
-            ("invalid-key", azure_storage_token),
-        ]);
-
-        let builder = MicrosoftAzureBuilder::new().try_with_options(&options);
-        assert!(builder.is_err());
     }
 
     #[test]

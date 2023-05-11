@@ -26,9 +26,12 @@ pub mod retry;
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod token;
 
+use crate::config::ConfigValue;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, ClientBuilder, Proxy};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::time::Duration;
 
 use crate::path::Path;
@@ -43,6 +46,36 @@ fn map_client_error(e: reqwest::Error) -> super::Error {
 static DEFAULT_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
+/// Configuration keys for [`ClientOptions`]
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Deserialize, Serialize)]
+#[non_exhaustive]
+pub enum ClientConfigKey {
+    /// Allow non-TLS, i.e. non-HTTPS connections
+    AllowHttp,
+}
+
+impl AsRef<str> for ClientConfigKey {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::AllowHttp => "allow_http",
+        }
+    }
+}
+
+impl FromStr for ClientConfigKey {
+    type Err = super::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "allow_http" => Ok(Self::AllowHttp),
+            _ => Err(super::Error::UnknownConfigurationKey {
+                store: "HTTP",
+                key: s.into(),
+            }),
+        }
+    }
+}
+
 /// HTTP client configuration for remote object stores
 #[derive(Debug, Clone, Default)]
 pub struct ClientOptions {
@@ -51,7 +84,7 @@ pub struct ClientOptions {
     default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
-    allow_http: bool,
+    allow_http: ConfigValue<bool>,
     allow_insecure: bool,
     timeout: Option<Duration>,
     connect_timeout: Option<Duration>,
@@ -68,6 +101,21 @@ impl ClientOptions {
     /// Create a new [`ClientOptions`] with default values
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Set an option by key
+    pub fn with_config(mut self, key: ClientConfigKey, value: impl Into<String>) -> Self {
+        match key {
+            ClientConfigKey::AllowHttp => self.allow_http.parse(value),
+        }
+        self
+    }
+
+    /// Get an option by key
+    pub fn get_config_value(&self, key: &ClientConfigKey) -> Option<String> {
+        match key {
+            ClientConfigKey::AllowHttp => Some(self.allow_http.to_string()),
+        }
     }
 
     /// Sets the User-Agent header to be used by this client
@@ -104,7 +152,7 @@ impl ClientOptions {
     /// * false (default):  Only HTTPS are allowed
     /// * true:  HTTP and HTTPS are allowed
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
-        self.allow_http = allow_http;
+        self.allow_http = allow_http.into();
         self
     }
     /// Allows connections to invalid SSL certificates
@@ -280,7 +328,7 @@ impl ClientOptions {
         }
 
         builder
-            .https_only(!self.allow_http)
+            .https_only(!self.allow_http.get()?)
             .build()
             .map_err(map_client_error)
     }

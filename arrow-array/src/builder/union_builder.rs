@@ -99,7 +99,7 @@ impl FieldData {
     }
 }
 
-/// Builder type for creating a new `UnionArray`.
+/// Builder for [`UnionArray`]
 ///
 /// Example: **Dense Memory Layout**
 ///

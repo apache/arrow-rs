@@ -1075,8 +1075,8 @@ impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
 
 /// Arrow Stream reader
 pub struct StreamReader<R: Read> {
-    /// Buffered stream reader
-    reader: BufReader<R>,
+    /// Stream reader
+    reader: R,
 
     /// The schema that is read from the stream's first message
     schema: SchemaRef,
@@ -1107,8 +1107,8 @@ impl<R: Read> fmt::Debug for StreamReader<R> {
     }
 }
 
-impl<R: Read> StreamReader<R> {
-    /// Try to create a new stream reader
+impl<R: Read> StreamReader<BufReader<R>> {
+    /// Try to create a new stream reader with the reader wrapped in a BufReader
     ///
     /// The first message in the stream is the schema, the reader will fail if it does not
     /// encounter a schema.
@@ -1117,7 +1117,18 @@ impl<R: Read> StreamReader<R> {
         reader: R,
         projection: Option<Vec<usize>>,
     ) -> Result<Self, ArrowError> {
-        let mut reader = BufReader::new(reader);
+        Self::try_new_unbuffered(BufReader::new(reader), projection)
+    }
+}
+
+impl<R: Read> StreamReader<R> {
+    /// Try to create a new stream reader but do not wrap the reader in a BufReader.
+    ///
+    /// Unless you need the StreamReader to be unbuffered you likely want to use `StreamReader::try_new` instead.
+    pub fn try_new_unbuffered(
+        mut reader: R,
+        projection: Option<Vec<usize>>,
+    ) -> Result<StreamReader<R>, ArrowError> {
         // determine metadata length
         let mut meta_size: [u8; 4] = [0; 4];
         reader.read_exact(&mut meta_size)?;
@@ -1262,14 +1273,14 @@ impl<R: Read> StreamReader<R> {
     ///
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_ref(&self) -> &R {
-        self.reader.get_ref()
+        &self.reader
     }
 
     /// Gets a mutable reference to the underlying reader.
     ///
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_mut(&mut self) -> &mut R {
-        self.reader.get_mut()
+        &mut self.reader
     }
 }
 

@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines memory-related functions, such as allocate/deallocate/reallocate memory
-//! regions, cache and allocation alignments.
+//! Defines the low-level [`Allocation`] API for shared memory regions
 
 use std::alloc::Layout;
 use std::fmt::{Debug, Formatter};

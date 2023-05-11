@@ -46,7 +46,7 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
 
     let mut footer = [0_u8; 8];
     chunk_reader
-        .get_read(file_size - 8, 8)?
+        .get_read(file_size - 8)?
         .read_exact(&mut footer)?;
 
     let metadata_len = decode_footer(&footer)?;

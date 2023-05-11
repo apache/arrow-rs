@@ -24,7 +24,7 @@ use arrow_schema::Field;
 use std::any::Any;
 use std::sync::Arc;
 
-/// Array builder for [`GenericListArray`]s.
+/// Builder for [`GenericListArray`]
 ///
 /// Use [`ListBuilder`] to build [`ListArray`]s and [`LargeListBuilder`] to build [`LargeListArray`]s.
 ///

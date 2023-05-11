@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines builders that can be used to safely build arrays
+//! Defines push-based APIs for constructing arrays
 //!
 //! # Basic Usage
 //!
@@ -81,7 +81,9 @@
 //! # Custom Builders
 //!
 //! It is common to have a collection of statically defined Rust types that
-//! you want to convert to Arrow arrays. An example of doing so is below
+//! you want to convert to Arrow arrays.
+//!
+//! An example of doing so is below
 //!
 //! ```
 //! # use std::any::Any;
@@ -261,26 +263,20 @@ pub trait ArrayBuilder: Any + Send {
     fn into_box_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
-/// Builder for [`ListArray`]s (i32 offsets)
-///
-/// See [`GenericListBuilder`] for usage examples
-///
-/// [`ListArray`]: crate::array::ListArray
+/// Builder for [`ListArray`](crate::array::ListArray)
 pub type ListBuilder<T> = GenericListBuilder<i32, T>;
 
-/// Builder for [`LargeListArray`]s (i64 offsets)
-///
-/// See [`GenericListBuilder`] for usage examples
-///
-/// [`LargeListArray`]: crate::array::LargeListArray
+/// Builder for [`LargeListArray`](crate::array::LargeListArray)
 pub type LargeListBuilder<T> = GenericListBuilder<i64, T>;
 
-/// A binary array builder with i32 offsets
+/// Builder for [`BinaryArray`](crate::array::BinaryArray)
 pub type BinaryBuilder = GenericBinaryBuilder<i32>;
-/// A binary array builder with i64 offsets
+
+/// Builder for [`LargeBinaryArray`](crate::array::LargeBinaryArray)
 pub type LargeBinaryBuilder = GenericBinaryBuilder<i64>;
 
-/// A string array builder with i32 offsets
+/// Builder for [`StringArray`](crate::array::StringArray)
 pub type StringBuilder = GenericStringBuilder<i32>;
-/// A string array builder with i64 offsets
+
+/// Builder for [`LargeStringArray`](crate::array::LargeStringArray)
 pub type LargeStringBuilder = GenericStringBuilder<i64>;

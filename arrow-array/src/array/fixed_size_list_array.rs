@@ -24,8 +24,7 @@ use arrow_schema::DataType;
 use std::any::Any;
 use std::sync::Arc;
 
-/// A list array where each element is a fixed-size sequence of values with the same
-/// type whose maximum length is represented by a i32.
+/// An array of [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout)
 ///
 /// # Example
 ///
@@ -59,9 +58,6 @@ use std::sync::Arc;
 /// assert_eq!( &[3, 4, 5], list1.as_any().downcast_ref::<Int32Array>().unwrap().values());
 /// assert_eq!( &[6, 7, 8], list2.as_any().downcast_ref::<Int32Array>().unwrap().values());
 /// ```
-///
-/// For non generic lists, you may wish to consider using
-/// [crate::array::FixedSizeBinaryArray]
 #[derive(Clone)]
 pub struct FixedSizeListArray {
     data_type: DataType, // Must be DataType::FixedSizeList(value_length)

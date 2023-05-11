@@ -21,10 +21,7 @@ use arrow_buffer::{bit_util, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
-/// Generic struct for \[Large\]StringArray
-///
-/// See [`StringArray`] and [`LargeStringArray`] for storing
-/// specific string data.
+/// See [`StringArray`] and [`LargeStringArray`] for storing string data
 pub type GenericStringArray<OffsetSize> = GenericByteArray<GenericStringType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
@@ -211,8 +208,7 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<Offse
     }
 }
 
-/// An array where each element is a variable-sized sequence of bytes representing a string
-/// whose maximum length (in bytes) is represented by a i32.
+/// An array of `str` using `i32` offsets
 ///
 /// Example
 ///
@@ -223,8 +219,7 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<Offse
 /// ```
 pub type StringArray = GenericStringArray<i32>;
 
-/// An array where each element is a variable-sized sequence of bytes representing a string
-/// whose maximum length (in bytes) is represented by a i64.
+/// An array of `str` using `i64` offsets
 ///
 /// Example
 ///
