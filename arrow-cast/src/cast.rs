@@ -1770,7 +1770,7 @@ pub fn cast_with_options(
             tz.clone(),
         )),
 
-        (Timestamp(from_unit, _), Timestamp(to_unit, to_tz)) => {
+        (Timestamp(from_unit, from_tz), Timestamp(to_unit, to_tz)) => {
             let array = cast_with_options(array, &Int64, cast_options)?;
             let time_array = array.as_primitive::<Int64Type>();
             let from_size = time_unit_multiple(from_unit);
@@ -1792,6 +1792,23 @@ pub fn cast_with_options(
                     }
                 }
             };
+            // Adjust for timezone difference
+            let from_tz = from_tz
+                .as_ref()
+                .map(|tz| parse_offset(tz))
+                .transpose()?
+                .unwrap_or(0);
+            let to_tz = to_tz
+                .as_ref()
+                .map(|tz| parse_offset(tz))
+                .transpose()?
+                .unwrap_or(0);
+            let tz_diff = to_tz - from_tz;
+            if cast_options.safe {
+                converted.unary_opt::<_, Int64Type>(|o| o.checked_add(tz_diff))
+            } else {
+                converted.try_unary::<_, Int64Type, _>(|o| o.checked_add(tz_diff))?
+            }
             Ok(make_timestamp_array(
                 &converted,
                 to_unit.clone(),
