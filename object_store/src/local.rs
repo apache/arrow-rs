@@ -1132,11 +1132,6 @@ mod tests {
     #[tokio::test]
     #[cfg(target_os = "linux")]
     async fn test_list_root() {
-        if std::fs::read_dir("/").is_err() {
-            println!("Cannot list root, skipping test");
-            return;
-        }
-
         let fs = LocalFileSystem::new();
         fs.list_with_delimiter(None).await.unwrap();
     }
