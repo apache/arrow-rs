@@ -18,6 +18,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use crate::local::LocalFileSystem;
 use crate::memory::InMemory;
+use crate::path::Path;
 use crate::ObjectStore;
 use snafu::Snafu;
 use url::Url;
@@ -32,6 +33,9 @@ enum Error {
 
     #[snafu(display("Feature {scheme:?} not enabled"))]
     NotEnabled { scheme: ObjectStoreScheme },
+
+    #[snafu(context(false))]
+    Path { source: crate::path::Error },
 }
 
 impl From<Error> for super::Error {
@@ -45,7 +49,7 @@ impl From<Error> for super::Error {
 
 /// Recognises various URL formats, identifying the relevant [`ObjectStore`](crate::ObjectStore)
 #[derive(Debug, Eq, PartialEq)]
-pub enum ObjectStoreScheme {
+enum ObjectStoreScheme {
     /// Url corresponding to [`LocalFileSystem`](crate::local::LocalFileSystem)
     Local,
     /// Url corresponding to [`InMemory`](crate::memory::InMemory)
@@ -62,31 +66,41 @@ pub enum ObjectStoreScheme {
 
 impl ObjectStoreScheme {
     /// Create an [`ObjectStoreScheme`] from the provided [`Url`]
-    fn parse(url: &Url) -> Result<Self, Error> {
-        match (url.scheme(), url.host_str()) {
-            ("file", None) => Ok(Self::Local),
-            ("memory", None) => Ok(Self::Memory),
-            ("s3" | "s3a", Some(_)) => Ok(Self::AmazonS3),
-            ("gs", Some(_)) => Ok(Self::GoogleCloudStorage),
+    ///
+    /// Returns the [`ObjectStoreScheme`] and the remaining [`Path`]
+    fn parse(url: &Url) -> Result<(Self, Path), Error> {
+        let strip_bucket = || Some(url.path().strip_prefix('/')?.split_once('/')?.1);
+
+        let (scheme, path) = match (url.scheme(), url.host_str()) {
+            ("file", None) => (Self::Local, url.path()),
+            ("memory", None) => (Self::Memory, url.path()),
+            ("s3" | "s3a", Some(_)) => (Self::AmazonS3, url.path()),
+            ("gs", Some(_)) => (Self::GoogleCloudStorage, url.path()),
             ("az" | "adl" | "azure" | "abfs" | "abfss", Some(_)) => {
-                Ok(Self::MicrosoftAzure)
+                (Self::MicrosoftAzure, url.path())
             }
-            ("http", Some(_)) => Ok(Self::Http),
+            ("http", Some(_)) => (Self::Http, url.path()),
             ("https", Some(host)) => {
                 if host.ends_with("dfs.core.windows.net")
                     || host.ends_with("blob.core.windows.net")
                 {
-                    Ok(Self::MicrosoftAzure)
-                } else if host.ends_with("amazonaws.com")
-                    || host.ends_with("r2.cloudflarestorage.com")
-                {
-                    Ok(Self::AmazonS3)
+                    (Self::MicrosoftAzure, url.path())
+                } else if host.ends_with("amazonaws.com") {
+                    match host.starts_with("s3") {
+                        true => (Self::AmazonS3, strip_bucket().unwrap_or_default()),
+                        false => (Self::AmazonS3, url.path()),
+                    }
+                } else if host.ends_with("r2.cloudflarestorage.com") {
+                    (Self::AmazonS3, strip_bucket().unwrap_or_default())
                 } else {
-                    Ok(Self::Http)
+                    (Self::Http, url.path())
                 }
             }
-            _ => Err(Error::Unrecognised { url: url.clone() }),
-        }
+            _ => return Err(Error::Unrecognised { url: url.clone() }),
+        };
+
+        let path = Path::parse(path)?;
+        Ok((scheme, path))
     }
 }
 
@@ -100,40 +114,41 @@ macro_rules! builder_opts {
                 Err(_) => builder,
             },
         );
-        Ok(Box::new(builder.build()?))
+        Box::new(builder.build()?) as _
     }};
 }
 
-/// Returns a [`ObjectStore`] for the provided `url`
-pub fn parse_url(url: &Url) -> Result<Box<dyn ObjectStore>, super::Error> {
+/// Create an [`ObjectStore`] based on the provided `url`
+///
+/// Returns
+/// - An [`ObjectStore`] of the corresponding type
+/// - The [`Path`] into the [`ObjectStore`] of the addressed resource
+pub fn parse_url(url: &Url) -> Result<(Box<dyn ObjectStore>, Path), super::Error> {
     parse_url_opts(url, std::iter::empty::<(&str, &str)>())
 }
 
-/// Returns a [`ObjectStore`] for the provided `url` and options
+/// Create an [`ObjectStore`] based on the provided `url` and options
+///
+/// Returns
+/// - An [`ObjectStore`] of the corresponding type
+/// - The [`Path`] into the [`ObjectStore`] of the addressed resource
 pub fn parse_url_opts<I, K, V>(
     url: &Url,
     options: I,
-) -> Result<Box<dyn ObjectStore>, super::Error>
+) -> Result<(Box<dyn ObjectStore>, Path), super::Error>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str>,
     V: Into<String>,
 {
     let _options = options;
-    let scheme = ObjectStoreScheme::parse(url)?;
+    let (scheme, path) = ObjectStoreScheme::parse(url)?;
+    let path = Path::parse(path)?;
 
-    match scheme {
+    let store = match scheme {
         #[cfg(not(target_arch = "wasm32"))]
-        ObjectStoreScheme::Local => match url.path_segments().is_some() {
-            true => {
-                let path = url
-                    .to_file_path()
-                    .map_err(|_| Error::InvalidUrl { url: url.clone() })?;
-                Ok(Box::new(LocalFileSystem::new_with_prefix(path)?))
-            }
-            false => Ok(Box::new(LocalFileSystem::new())),
-        },
-        ObjectStoreScheme::Memory => Ok(Box::new(InMemory::new())),
+        ObjectStoreScheme::Local => Box::new(LocalFileSystem::new()) as _,
+        ObjectStoreScheme::Memory => Box::new(InMemory::new()) as _,
         #[cfg(feature = "aws")]
         ObjectStoreScheme::AmazonS3 => {
             builder_opts!(crate::aws::AmazonS3Builder, url, _options)
@@ -147,87 +162,94 @@ where
             builder_opts!(crate::azure::MicrosoftAzureBuilder, url, _options)
         }
         #[cfg(feature = "http")]
-        ObjectStoreScheme::Http => Ok(Box::new(
-            crate::http::HttpBuilder::new()
-                .with_url(url.as_str())
-                .build()?,
-        )),
+        ObjectStoreScheme::Http => {
+            let url = &url[..url::Position::BeforePath];
+            Box::new(crate::http::HttpBuilder::new().with_url(url).build()?) as _
+        }
         #[cfg(not(all(
             feature = "aws",
             feature = "azure",
             feature = "gcp",
             feature = "http"
         )))]
-        s => Err(super::Error::Generic {
-            store: "parse_url",
-            source: format!("feature for {s:?} not enabled").into(),
-        }),
-    }
+        s => {
+            return Err(super::Error::Generic {
+                store: "parse_url",
+                source: format!("feature for {s:?} not enabled").into(),
+            })
+        }
+    };
+
+    Ok((store, path))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
-    #[tokio::test]
-    async fn test_local_prefix() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("test.txt"), "test").unwrap();
-        let url = Url::from_file_path(dir.path()).unwrap();
-        let store = parse_url(&url).unwrap();
-        let result = store.list_with_delimiter(None).await.unwrap();
-
-        assert_eq!(result.objects.len(), 1);
-        assert_eq!(result.objects[0].location, "test.txt".into());
-    }
 
     #[test]
     fn test_parse() {
         let cases = [
-            ("file:/path", ObjectStoreScheme::Local),
-            ("file:///path", ObjectStoreScheme::Local),
-            ("memory:/foo", ObjectStoreScheme::Memory),
-            ("memory:///", ObjectStoreScheme::Memory),
-            ("s3://bucket/path", ObjectStoreScheme::AmazonS3),
-            ("s3a://bucket/path", ObjectStoreScheme::AmazonS3),
+            ("file:/path", (ObjectStoreScheme::Local, "path")),
+            ("file:///path", (ObjectStoreScheme::Local, "path")),
+            ("memory:/path", (ObjectStoreScheme::Memory, "path")),
+            ("memory:///", (ObjectStoreScheme::Memory, "")),
+            ("s3://bucket/path", (ObjectStoreScheme::AmazonS3, "path")),
+            ("s3a://bucket/path", (ObjectStoreScheme::AmazonS3, "path")),
             (
-                "https://s3.bucket.amazonaws.com",
-                ObjectStoreScheme::AmazonS3,
+                "https://s3.region.amazonaws.com/bucket",
+                (ObjectStoreScheme::AmazonS3, ""),
+            ),
+            (
+                "https://s3.region.amazonaws.com/bucket/path",
+                (ObjectStoreScheme::AmazonS3, "path"),
             ),
             (
                 "https://bucket.s3.region.amazonaws.com",
-                ObjectStoreScheme::AmazonS3,
+                (ObjectStoreScheme::AmazonS3, ""),
             ),
             (
                 "https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket",
-                ObjectStoreScheme::AmazonS3,
+                (ObjectStoreScheme::AmazonS3, ""),
             ),
-            ("abfs://container/path", ObjectStoreScheme::MicrosoftAzure),
+            (
+                "https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/path",
+                (ObjectStoreScheme::AmazonS3, "path"),
+            ),
+            (
+                "abfs://container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
             (
                 "abfs://file_system@account_name.dfs.core.windows.net/path",
-                ObjectStoreScheme::MicrosoftAzure,
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
             ),
             (
                 "abfss://file_system@account_name.dfs.core.windows.net/path",
-                ObjectStoreScheme::MicrosoftAzure,
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
             ),
             (
                 "https://account.dfs.core.windows.net",
-                ObjectStoreScheme::MicrosoftAzure,
+                (ObjectStoreScheme::MicrosoftAzure, ""),
             ),
             (
                 "https://account.blob.core.windows.net",
-                ObjectStoreScheme::MicrosoftAzure,
+                (ObjectStoreScheme::MicrosoftAzure, ""),
             ),
-            ("gs://bucket/path", ObjectStoreScheme::GoogleCloudStorage),
-            ("http://mydomain/path", ObjectStoreScheme::Http),
-            ("https://mydomain/path", ObjectStoreScheme::Http),
+            (
+                "gs://bucket/path",
+                (ObjectStoreScheme::GoogleCloudStorage, "path"),
+            ),
+            ("http://mydomain/path", (ObjectStoreScheme::Http, "path")),
+            ("https://mydomain/path", (ObjectStoreScheme::Http, "path")),
         ];
 
-        for (s, expected) in cases {
+        for (s, (expected_scheme, expected_path)) in cases {
             let url = Url::parse(s).unwrap();
-            assert_eq!(ObjectStoreScheme::parse(&url).unwrap(), expected);
+            let (scheme, path) = ObjectStoreScheme::parse(&url).unwrap();
+
+            assert_eq!(scheme, expected_scheme, "{s}");
+            assert_eq!(path, Path::parse(expected_path).unwrap(), "{s}");
         }
 
         let neg_cases = [
