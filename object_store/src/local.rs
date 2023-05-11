@@ -1117,19 +1117,23 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(target_family = "windows")]
     async fn test_list_root() {
-        let integration = LocalFileSystem::new();
-        let result = integration.list_with_delimiter(None).await;
-        if cfg!(target_family = "windows") {
-            let r = result.unwrap_err().to_string();
-            assert!(
-                r.contains("Unable to convert URL \"file:///\" to filesystem path"),
-                "{}",
-                r
-            );
-        } else {
-            result.unwrap();
-        }
+        let fs = LocalFileSystem::new();
+        let r = fs.list_with_delimiter(None).await.unwrap_err().to_string();
+
+        assert!(
+            r.contains("Unable to convert URL \"file:///\" to filesystem path"),
+            "{}",
+            r
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn test_list_root() {
+        let fs = LocalFileSystem::new();
+        fs.list_with_delimiter(None).await.unwrap();
     }
 
     async fn check_list(
