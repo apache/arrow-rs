@@ -20,12 +20,13 @@ use crate::aws::credential::{AwsCredential, CredentialExt, CredentialProvider};
 use crate::aws::STRICT_PATH_ENCODE_SET;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
+use crate::client::GetOptionsExt;
 use crate::multipart::UploadPart;
 use crate::path::DELIMITER;
-use crate::util::{format_http_range, format_prefix};
+use crate::util::format_prefix;
 use crate::{
-    BoxStream, ClientOptions, ListResult, MultipartId, ObjectMeta, Path, Result,
-    RetryConfig, StreamExt,
+    BoxStream, ClientOptions, GetOptions, ListResult, MultipartId, ObjectMeta, Path,
+    Result, RetryConfig, StreamExt,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -37,7 +38,6 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
-use std::ops::Range;
 use std::sync::Arc;
 
 /// A specialized `Error` for object store-related errors
@@ -102,14 +102,24 @@ impl From<Error> for crate::Error {
             Error::GetRequest { source, path }
             | Error::DeleteRequest { source, path }
             | Error::CopyRequest { source, path }
-            | Error::PutRequest { source, path }
-                if matches!(source.status(), Some(StatusCode::NOT_FOUND)) =>
-            {
-                Self::NotFound {
+            | Error::PutRequest { source, path } => match source.status() {
+                Some(StatusCode::NOT_FOUND) => Self::NotFound {
                     path,
                     source: Box::new(source),
-                }
-            }
+                },
+                Some(StatusCode::NOT_MODIFIED) => Self::NotModified {
+                    path,
+                    source: Box::new(source),
+                },
+                Some(StatusCode::PRECONDITION_FAILED) => Self::Precondition {
+                    path,
+                    source: Box::new(source),
+                },
+                _ => Self::Generic {
+                    store: "S3",
+                    source: Box::new(source),
+                },
+            },
             _ => Self::Generic {
                 store: "S3",
                 source: Box::new(err),
@@ -245,11 +255,9 @@ impl S3Client {
     pub async fn get_request(
         &self,
         path: &Path,
-        range: Option<Range<usize>>,
+        options: GetOptions,
         head: bool,
     ) -> Result<Response> {
-        use reqwest::header::RANGE;
-
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
         let method = match head {
@@ -257,13 +265,10 @@ impl S3Client {
             false => Method::GET,
         };
 
-        let mut builder = self.client.request(method, url);
-
-        if let Some(range) = range {
-            builder = builder.header(RANGE, format_http_range(range));
-        }
+        let builder = self.client.request(method, url);
 
         let response = builder
+            .with_get_options(options)
             .with_aws_sigv4(
                 credential.as_ref(),
                 &self.config.region,

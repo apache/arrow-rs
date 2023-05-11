@@ -31,11 +31,12 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, Proxy};
+use reqwest::{Client, ClientBuilder, Proxy, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{fmt_duration, ConfigValue};
 use crate::path::Path;
+use crate::GetOptions;
 
 fn map_client_error(e: reqwest::Error) -> super::Error {
     super::Error::Generic {
@@ -459,6 +460,40 @@ impl ClientOptions {
             .https_only(!self.allow_http.get()?)
             .build()
             .map_err(map_client_error)
+    }
+}
+
+pub trait GetOptionsExt {
+    fn with_get_options(self, options: GetOptions) -> Self;
+}
+
+impl GetOptionsExt for RequestBuilder {
+    fn with_get_options(mut self, options: GetOptions) -> Self {
+        use hyper::header::*;
+
+        if let Some(range) = options.range {
+            let range = format!("bytes={}-{}", range.start, range.end.saturating_sub(1));
+            self = self.header(RANGE, range);
+        }
+
+        if let Some(tag) = options.if_match {
+            self = self.header(IF_MATCH, tag);
+        }
+
+        if let Some(tag) = options.if_none_match {
+            self = self.header(IF_NONE_MATCH, tag);
+        }
+
+        const DATE_FORMAT: &str = "%a, %d %b %Y %H:%M:%S GMT";
+        if let Some(date) = options.if_unmodified_since {
+            self = self.header(IF_UNMODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
+        }
+
+        if let Some(date) = options.if_modified_since {
+            self = self.header(IF_MODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
+        }
+
+        self
     }
 }
 

@@ -19,11 +19,12 @@ use super::credential::{AzureCredential, CredentialProvider};
 use crate::azure::credential::*;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
+use crate::client::GetOptionsExt;
 use crate::path::DELIMITER;
-use crate::util::{deserialize_rfc1123, format_http_range, format_prefix};
+use crate::util::{deserialize_rfc1123, format_prefix};
 use crate::{
-    BoxStream, ClientOptions, ListResult, ObjectMeta, Path, Result, RetryConfig,
-    StreamExt,
+    BoxStream, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, Result,
+    RetryConfig, StreamExt,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -32,13 +33,12 @@ use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{
-    header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH, RANGE},
+    header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH},
     Client as ReqwestClient, Method, Response, StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
-use std::ops::Range;
 use url::Url;
 
 /// A specialized `Error` for object store-related errors
@@ -95,15 +95,24 @@ impl From<Error> for crate::Error {
         match err {
             Error::GetRequest { source, path }
             | Error::DeleteRequest { source, path }
-            | Error::CopyRequest { source, path }
-            | Error::PutRequest { source, path }
-                if matches!(source.status(), Some(StatusCode::NOT_FOUND)) =>
-            {
-                Self::NotFound {
+            | Error::PutRequest { source, path } => match source.status() {
+                Some(StatusCode::NOT_FOUND) => Self::NotFound {
                     path,
                     source: Box::new(source),
-                }
-            }
+                },
+                Some(StatusCode::NOT_MODIFIED) => Self::NotModified {
+                    path,
+                    source: Box::new(source),
+                },
+                Some(StatusCode::PRECONDITION_FAILED) => Self::Precondition {
+                    path,
+                    source: Box::new(source),
+                },
+                _ => Self::Generic {
+                    store: "S3",
+                    source: Box::new(source),
+                },
+            },
             Error::CopyRequest { source, path }
                 if matches!(source.status(), Some(StatusCode::CONFLICT)) =>
             {
@@ -253,7 +262,7 @@ impl AzureClient {
     pub async fn get_request(
         &self,
         path: &Path,
-        range: Option<Range<usize>>,
+        options: GetOptions,
         head: bool,
     ) -> Result<Response> {
         let credential = self.get_credential().await?;
@@ -263,17 +272,14 @@ impl AzureClient {
             false => Method::GET,
         };
 
-        let mut builder = self
+        let builder = self
             .client
             .request(method, url)
             .header(CONTENT_LENGTH, HeaderValue::from_static("0"))
             .body(Bytes::new());
 
-        if let Some(range) = range {
-            builder = builder.header(RANGE, format_http_range(range));
-        }
-
         let response = builder
+            .with_get_options(options)
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config)
             .await

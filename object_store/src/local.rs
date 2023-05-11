@@ -19,7 +19,7 @@
 use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -56,7 +56,7 @@ pub(crate) enum Error {
     },
 
     #[snafu(display("Unable to access metadata for {}: {}", path, source))]
-    UnableToAccessMetadata {
+    Metadata {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
         path: String,
     },
@@ -360,10 +360,27 @@ impl ObjectStore for LocalFileSystem {
         Err(super::Error::NotImplemented)
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let path = self.config.path_to_filesystem(location)?;
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        if options.if_match.is_some() || options.if_none_match.is_some() {
+            return Err(super::Error::NotSupported {
+                source: "ETags not supported by LocalFileSystem".to_string().into(),
+            });
+        }
+
+        let location = location.clone();
+        let path = self.config.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
             let file = open_file(&path)?;
+            if options.if_unmodified_since.is_some()
+                || options.if_modified_since.is_some()
+            {
+                let metadata = file.metadata().map_err(|e| Error::Metadata {
+                    source: e.into(),
+                    path: location.to_string(),
+                })?;
+                options.check_modified(&location, last_modified(&metadata))?;
+            }
+
             Ok(GetResult::File(file, path))
         })
         .await
@@ -408,7 +425,7 @@ impl ObjectStore for LocalFileSystem {
                         source: e,
                     }
                 } else {
-                    Error::UnableToAccessMetadata {
+                    Error::Metadata {
                         source: e.into(),
                         path: location.to_string(),
                     }
@@ -878,21 +895,22 @@ fn open_file(path: &PathBuf) -> Result<File> {
 }
 
 fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
-    let metadata = entry
-        .metadata()
-        .map_err(|e| Error::UnableToAccessMetadata {
-            source: e.into(),
-            path: location.to_string(),
-        })?;
+    let metadata = entry.metadata().map_err(|e| Error::Metadata {
+        source: e.into(),
+        path: location.to_string(),
+    })?;
     convert_metadata(metadata, location)
 }
 
-fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<ObjectMeta> {
-    let last_modified: DateTime<Utc> = metadata
+fn last_modified(metadata: &std::fs::Metadata) -> DateTime<Utc> {
+    metadata
         .modified()
         .expect("Modified file time should be supported on this platform")
-        .into();
+        .into()
+}
 
+fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<ObjectMeta> {
+    let last_modified = last_modified(&metadata);
     let size = usize::try_from(metadata.len()).context(FileSizeOverflowedUsizeSnafu {
         path: location.as_ref(),
     })?;
@@ -956,13 +974,7 @@ fn convert_walkdir_result(
 mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
-    use crate::{
-        tests::{
-            copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
-            list_with_delimiter, put_get_delete_list, rename_and_copy, stream_get,
-        },
-        Error as ObjectStoreError, ObjectStore,
-    };
+    use crate::tests::*;
     use futures::TryStreamExt;
     use tempfile::{NamedTempFile, TempDir};
     use tokio::io::AsyncWriteExt;
@@ -973,6 +985,7 @@ mod tests {
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
         put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
@@ -1085,7 +1098,7 @@ mod tests {
         let err = get_nonexistent_object(&integration, Some(location))
             .await
             .unwrap_err();
-        if let ObjectStoreError::NotFound { path, source } = err {
+        if let crate::Error::NotFound { path, source } = err {
             let source_variant = source.downcast_ref::<std::io::Error>();
             assert!(
                 matches!(source_variant, Some(std::io::Error { .. }),),
