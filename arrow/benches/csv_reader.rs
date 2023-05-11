@@ -23,7 +23,7 @@ use criterion::*;
 use arrow::array::*;
 use arrow::csv;
 use arrow::datatypes::*;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchWriter};
 use arrow::util::bench_util::{create_primitive_array, create_string_array_with_len};
 use std::io::Cursor;
 use std::sync::Arc;

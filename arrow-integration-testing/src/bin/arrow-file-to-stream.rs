@@ -18,6 +18,7 @@
 use arrow::error::Result;
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::StreamWriter;
+use arrow::record_batch::RecordBatchWriter;
 use clap::Parser;
 use std::fs::File;
 use std::io::{self, BufReader};

@@ -21,7 +21,7 @@ use arrow::datatypes::*;
 use arrow::util::bench_util::{
     create_primitive_array, create_string_array, create_string_array_with_len,
 };
-use arrow_array::RecordBatch;
+use arrow_array::{RecordBatch, RecordBatchWriter};
 use arrow_json::{LineDelimitedWriter, ReaderBuilder};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -92,7 +92,7 @@ fn large_bench_primitive(c: &mut Criterion) {
     .unwrap();
 
     let mut out = Vec::with_capacity(1024);
-    LineDelimitedWriter::new(&mut out).write(batch).unwrap();
+    LineDelimitedWriter::new(&mut out).write(&batch).unwrap();
 
     let json = std::str::from_utf8(&out).unwrap();
     do_bench(c, "large_bench_primitive", json, schema)

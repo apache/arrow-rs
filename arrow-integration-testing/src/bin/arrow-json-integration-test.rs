@@ -20,6 +20,7 @@ use arrow::datatypes::{Fields, Schema};
 use arrow::error::{ArrowError, Result};
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::FileWriter;
+use arrow::record_batch::RecordBatchWriter;
 use arrow_integration_test::*;
 use arrow_integration_testing::read_json_file;
 use clap::Parser;

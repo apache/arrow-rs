@@ -431,7 +431,7 @@ mod tests {
     use arrow_array::{Array, Decimal128Array, ListArray};
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
-    use arrow_array::RecordBatch;
+    use arrow_array::{RecordBatch, RecordBatchWriter};
     use bytes::Bytes;
     use std::sync::Arc;
 

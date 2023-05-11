@@ -119,8 +119,16 @@ impl<W: Write> Writer<W> {
         }
     }
 
+    /// Unwraps this `Writer<W>`, returning the underlying writer.
+    pub fn into_inner(self) -> W {
+        // Safe to call `unwrap` since `write` always flushes the writer.
+        self.writer.into_inner().unwrap()
+    }
+}
+
+impl<W: Write> RecordBatchWriter for Writer<W> {
     /// Write a vector of record batches to a writable object
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         let num_columns = batch.num_columns();
         if self.beginning {
             if self.has_headers {
@@ -184,12 +192,6 @@ impl<W: Write> Writer<W> {
         self.writer.flush()?;
 
         Ok(())
-    }
-
-    /// Unwraps this `Writer<W>`, returning the underlying writer.
-    pub fn into_inner(self) -> W {
-        // Safe to call `unwrap` since `write` always flushes the writer.
-        self.writer.into_inner().unwrap()
     }
 }
 

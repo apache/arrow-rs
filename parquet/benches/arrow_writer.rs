@@ -28,7 +28,10 @@ extern crate parquet;
 use std::sync::Arc;
 
 use arrow::datatypes::*;
-use arrow::{record_batch::RecordBatch, util::data_gen::*};
+use arrow::{
+    record_batch::{RecordBatch, RecordBatchWriter},
+    util::data_gen::*,
+};
 use parquet::file::properties::WriterProperties;
 use parquet::{arrow::ArrowWriter, errors::Result};
 

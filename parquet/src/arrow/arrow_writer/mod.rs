@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Decimal128Type, Int32Type, Int64Type, UInt32Type, UInt64Type};
-use arrow_array::{types, Array, ArrayRef, RecordBatch};
-use arrow_schema::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
+use arrow_array::{types, Array, ArrayRef, RecordBatch, RecordBatchWriter};
+use arrow_schema::{ArrowError, DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
 use super::schema::{
     add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
@@ -125,32 +125,6 @@ impl<W: Write> ArrowWriter<W> {
         self.writer.flushed_row_groups()
     }
 
-    /// Enqueues the provided `RecordBatch` to be written
-    ///
-    /// If following this there are more than `max_row_group_size` rows buffered,
-    /// this will flush out one or more row groups with `max_row_group_size` rows,
-    /// and drop any fully written `RecordBatch`
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        // validate batch schema against writer's supplied schema
-        let batch_schema = batch.schema();
-        if !(Arc::ptr_eq(&self.arrow_schema, &batch_schema)
-            || self.arrow_schema.contains(&batch_schema))
-        {
-            return Err(ParquetError::ArrowError(
-                "Record batch schema does not match writer schema".to_string(),
-            ));
-        }
-
-        for (buffer, column) in self.buffer.iter_mut().zip(batch.columns()) {
-            buffer.push_back(column.clone())
-        }
-
-        self.buffered_rows += batch.num_rows();
-        self.flush_completed()?;
-
-        Ok(())
-    }
-
     /// Flushes buffered data until there are less than `max_row_group_size` rows buffered
     fn flush_completed(&mut self) -> Result<()> {
         while self.buffered_rows >= self.max_row_group_size {
@@ -243,6 +217,34 @@ impl<W: Write> ArrowWriter<W> {
     pub fn close(mut self) -> Result<crate::format::FileMetaData> {
         self.flush()?;
         self.writer.close()
+    }
+}
+
+impl<W: Write> RecordBatchWriter for ArrowWriter<W> {
+    /// Enqueues the provided `RecordBatch` to be written
+    ///
+    /// If following this there are more than `max_row_group_size` rows buffered,
+    /// this will flush out one or more row groups with `max_row_group_size` rows,
+    /// and drop any fully written `RecordBatch`
+    fn write(&mut self, batch: &RecordBatch) -> core::result::Result<(), ArrowError> {
+        // validate batch schema against writer's supplied schema
+        let batch_schema = batch.schema();
+        if !(Arc::ptr_eq(&self.arrow_schema, &batch_schema)
+            || self.arrow_schema.contains(&batch_schema))
+        {
+            return Err(ArrowError::SchemaError(
+                "Record batch schema does not match writer schema".to_string(),
+            ));
+        }
+
+        for (buffer, column) in self.buffer.iter_mut().zip(batch.columns()) {
+            buffer.push_back(column.clone())
+        }
+
+        self.buffered_rows += batch.num_rows();
+        self.flush_completed()?;
+
+        Ok(())
     }
 }
 

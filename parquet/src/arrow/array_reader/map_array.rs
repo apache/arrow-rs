@@ -128,7 +128,7 @@ mod tests {
     use arrow::datatypes::{Field, Int32Type, Schema};
     use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
     use arrow_array::cast::*;
-    use arrow_array::RecordBatch;
+    use arrow_array::{RecordBatch, RecordBatchWriter};
     use arrow_schema::Fields;
     use bytes::Bytes;
 

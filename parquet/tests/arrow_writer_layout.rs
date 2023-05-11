@@ -18,7 +18,7 @@
 //! Tests that the ArrowWriter correctly lays out values into multiple pages
 
 use arrow::array::{Int32Array, StringArray};
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchWriter};
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;

@@ -754,43 +754,6 @@ impl<W: Write> FileWriter<W> {
         self.custom_metadata.insert(key.into(), value.into());
     }
 
-    /// Write a record batch to the file
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
-        if self.finished {
-            return Err(ArrowError::IoError(
-                "Cannot write record batch to file writer as it is closed".to_string(),
-            ));
-        }
-
-        let (encoded_dictionaries, encoded_message) = self.data_gen.encoded_batch(
-            batch,
-            &mut self.dictionary_tracker,
-            &self.write_options,
-        )?;
-
-        for encoded_dictionary in encoded_dictionaries {
-            let (meta, data) =
-                write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
-
-            let block =
-                crate::Block::new(self.block_offsets as i64, meta as i32, data as i64);
-            self.dictionary_blocks.push(block);
-            self.block_offsets += meta + data;
-        }
-
-        let (meta, data) =
-            write_message(&mut self.writer, encoded_message, &self.write_options)?;
-        // add a record block for the footer
-        let block = crate::Block::new(
-            self.block_offsets as i64,
-            meta as i32, // TODO: is this still applicable?
-            data as i64,
-        );
-        self.record_blocks.push(block);
-        self.block_offsets += meta + data;
-        Ok(())
-    }
-
     /// Write footer and closing tag, then mark the writer as done
     pub fn finish(&mut self) -> Result<(), ArrowError> {
         if self.finished {
@@ -857,6 +820,45 @@ impl<W: Write> FileWriter<W> {
     }
 }
 
+impl<W: Write> RecordBatchWriter for FileWriter<W> {
+    /// Write a record batch to the file
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        if self.finished {
+            return Err(ArrowError::IoError(
+                "Cannot write record batch to file writer as it is closed".to_string(),
+            ));
+        }
+
+        let (encoded_dictionaries, encoded_message) = self.data_gen.encoded_batch(
+            batch,
+            &mut self.dictionary_tracker,
+            &self.write_options,
+        )?;
+
+        for encoded_dictionary in encoded_dictionaries {
+            let (meta, data) =
+                write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
+
+            let block =
+                crate::Block::new(self.block_offsets as i64, meta as i32, data as i64);
+            self.dictionary_blocks.push(block);
+            self.block_offsets += meta + data;
+        }
+
+        let (meta, data) =
+            write_message(&mut self.writer, encoded_message, &self.write_options)?;
+        // add a record block for the footer
+        let block = crate::Block::new(
+            self.block_offsets as i64,
+            meta as i32, // TODO: is this still applicable?
+            data as i64,
+        );
+        self.record_blocks.push(block);
+        self.block_offsets += meta + data;
+        Ok(())
+    }
+}
+
 pub struct StreamWriter<W: Write> {
     /// The object to write to
     writer: BufWriter<W>,
@@ -894,27 +896,6 @@ impl<W: Write> StreamWriter<W> {
             dictionary_tracker: DictionaryTracker::new(false),
             data_gen,
         })
-    }
-
-    /// Write a record batch to the stream
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
-        if self.finished {
-            return Err(ArrowError::IoError(
-                "Cannot write record batch to stream writer as it is closed".to_string(),
-            ));
-        }
-
-        let (encoded_dictionaries, encoded_message) = self
-            .data_gen
-            .encoded_batch(batch, &mut self.dictionary_tracker, &self.write_options)
-            .expect("StreamWriter is configured to not error on dictionary replacement");
-
-        for encoded_dictionary in encoded_dictionaries {
-            write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
-        }
-
-        write_message(&mut self.writer, encoded_message, &self.write_options)?;
-        Ok(())
     }
 
     /// Write continuation bytes, and mark the stream as done
@@ -988,6 +969,29 @@ impl<W: Write> StreamWriter<W> {
             self.finish()?;
         }
         self.writer.into_inner().map_err(ArrowError::from)
+    }
+}
+
+impl<W: Write> RecordBatchWriter for StreamWriter<W> {
+    /// Write a record batch to the stream
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        if self.finished {
+            return Err(ArrowError::IoError(
+                "Cannot write record batch to stream writer as it is closed".to_string(),
+            ));
+        }
+
+        let (encoded_dictionaries, encoded_message) = self
+            .data_gen
+            .encoded_batch(batch, &mut self.dictionary_tracker, &self.write_options)
+            .expect("StreamWriter is configured to not error on dictionary replacement");
+
+        for encoded_dictionary in encoded_dictionaries {
+            write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
+        }
+
+        write_message(&mut self.writer, encoded_message, &self.write_options)?;
+        Ok(())
     }
 }
 

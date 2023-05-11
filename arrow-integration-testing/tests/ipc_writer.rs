@@ -18,6 +18,7 @@
 use arrow::ipc;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
+use arrow::record_batch::RecordBatchWriter;
 use arrow::util::test_util::arrow_test_data;
 use arrow_integration_testing::read_gzip_json;
 use std::fs::File;

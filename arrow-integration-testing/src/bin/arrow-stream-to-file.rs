@@ -20,6 +20,7 @@ use std::io;
 use arrow::error::Result;
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::FileWriter;
+use arrow::record_batch::RecordBatchWriter;
 
 fn main() -> Result<()> {
     let mut arrow_stream_reader = StreamReader::try_new(io::stdin(), None)?;
