@@ -559,6 +559,9 @@ pub enum AzureConfigKey {
     /// - `azure_use_azure_cli`
     /// - `use_azure_cli`
     UseAzureCli,
+
+    /// Client options
+    Client(ClientConfigKey),
 }
 
 impl AsRef<str> for AzureConfigKey {
@@ -577,6 +580,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::MsiResourceId => "azure_msi_resource_id",
             Self::FederatedTokenFile => "azure_federated_token_file",
             Self::UseAzureCli => "azure_use_azure_cli",
+            Self::Client(key) => key.as_ref(),
         }
     }
 }
@@ -621,7 +625,12 @@ impl FromStr for AzureConfigKey {
                 Ok(Self::FederatedTokenFile)
             }
             "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
-            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            // Backwards compatibility
+            "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
+            _ => match s.parse() {
+                Ok(key) => Ok(Self::Client(key)),
+                Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            },
         }
     }
 }
@@ -664,19 +673,11 @@ impl MicrosoftAzureBuilder {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("AZURE_") {
-                    if let Ok(config_key) =
-                        AzureConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
+                    if let Ok(config_key) = key.to_ascii_lowercase().parse() {
                         builder = builder.with_config(config_key, value);
                     }
                 }
             }
-        }
-
-        if let Ok(text) = std::env::var("AZURE_ALLOW_HTTP") {
-            builder.client_options = builder
-                .client_options
-                .with_config(ClientConfigKey::AllowHttp, text)
         }
 
         if let Ok(text) = std::env::var(MSI_ENDPOINT_ENV_KEY) {
@@ -731,6 +732,9 @@ impl MicrosoftAzureBuilder {
             }
             AzureConfigKey::UseAzureCli => self.use_azure_cli.parse(value),
             AzureConfigKey::UseEmulator => self.use_emulator.parse(value),
+            AzureConfigKey::Client(key) => {
+                self.client_options = self.client_options.with_config(key, value)
+            }
         };
         self
     }
@@ -786,6 +790,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::MsiResourceId => self.msi_resource_id.clone(),
             AzureConfigKey::FederatedTokenFile => self.federated_token_file.clone(),
             AzureConfigKey::UseAzureCli => Some(self.use_azure_cli.to_string()),
+            AzureConfigKey::Client(key) => self.client_options.get_config_value(key),
         }
     }
 
