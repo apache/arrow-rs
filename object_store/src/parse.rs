@@ -17,7 +17,6 @@
 
 use crate::local::LocalFileSystem;
 use crate::memory::InMemory;
-use crate::path::Path;
 use crate::ObjectStore;
 use snafu::Snafu;
 use url::Url;
@@ -147,7 +146,9 @@ where
         }
         #[cfg(feature = "http")]
         ObjectStoreScheme::Http => Ok(Box::new(
-            crate::http::HttpBuilder::new().with_url(url).build()?,
+            crate::http::HttpBuilder::new()
+                .with_url(url.as_str())
+                .build()?,
         )),
         #[cfg(not(all(
             feature = "aws",
@@ -176,7 +177,7 @@ mod tests {
         let result = store.list_with_delimiter(None).await.unwrap();
 
         assert_eq!(result.objects.len(), 1);
-        assert_eq!(result.objects[0].location, Path::from("test.txt"));
+        assert_eq!(result.objects[0].location, "test.txt".into());
     }
 
     #[test]
