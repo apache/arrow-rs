@@ -1130,7 +1130,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(target_family = "windows"))]
+    #[cfg(target_os = "linux")]
     async fn test_list_root() {
         if std::fs::read_dir("/").is_err() {
             println!("Cannot list root, skipping test");
