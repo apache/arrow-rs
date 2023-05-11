@@ -134,7 +134,7 @@ where
         ObjectStoreScheme::Memory => Ok(Box::new(InMemory::new())),
         #[cfg(feature = "aws")]
         ObjectStoreScheme::AmazonS3 => {
-            builder_opts!(crate::gcp::GoogleCloudStorageBuilder, url, _options)
+            builder_opts!(crate::aws::AmazonS3Builder, url, _options)
         }
         #[cfg(feature = "gcp")]
         ObjectStoreScheme::GoogleCloudStorage => {
