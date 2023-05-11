@@ -37,9 +37,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::RANGE;
 use reqwest::{header, Client, Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -47,6 +46,8 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
+use crate::client::header::header_meta;
+use crate::client::list::ListResponse;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::client::ClientConfigKey;
@@ -81,6 +82,9 @@ enum Error {
 
     #[snafu(display("Error getting list response body: {}", source))]
     ListResponseBody { source: reqwest::Error },
+
+    #[snafu(display("Got invalid list response: {}", source))]
+    InvalidListResponse { source: quick_xml::de::DeError },
 
     #[snafu(display("Error performing get request {}: {}", path, source))]
     GetRequest {
@@ -152,6 +156,11 @@ enum Error {
 
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
+
+    #[snafu(display("Failed to parse headers: {}", source))]
+    Header {
+        source: crate::client::header::Error,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -180,25 +189,6 @@ impl From<Error> for super::Error {
             },
         }
     }
-}
-
-#[derive(serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct ListResponse {
-    next_page_token: Option<String>,
-    #[serde(default)]
-    prefixes: Vec<String>,
-    #[serde(default)]
-    items: Vec<Object>,
-}
-
-#[derive(serde::Deserialize, Debug)]
-struct Object {
-    name: String,
-    size: String,
-    updated: DateTime<Utc>,
-    #[serde(rename = "etag")]
-    e_tag: Option<String>,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -268,15 +258,11 @@ impl GoogleCloudStorageClient {
     }
 
     fn object_url(&self, path: &Path) -> String {
-        let encoded =
-            percent_encoding::utf8_percent_encode(path.as_ref(), NON_ALPHANUMERIC);
-        format!(
-            "{}/storage/v1/b/{}/o/{}",
-            self.base_url, self.bucket_name_encoded, encoded
-        )
+        let encoded = utf8_percent_encode(path.as_ref(), NON_ALPHANUMERIC);
+        format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, encoded)
     }
 
-    /// Perform a get request <https://cloud.google.com/storage/docs/json_api/v1/objects/get>
+    /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
     async fn get_request(
         &self,
         path: &Path,
@@ -286,20 +272,19 @@ impl GoogleCloudStorageClient {
         let token = self.get_token().await?;
         let url = self.object_url(path);
 
-        let mut builder = self.client.request(Method::GET, url);
+        let method = match head {
+            true => Method::HEAD,
+            false => Method::GET,
+        };
+
+        let mut builder = self.client.request(method, url);
 
         if let Some(range) = range {
             builder = builder.header(RANGE, format_http_range(range));
         }
 
-        let alt = match head {
-            true => "json",
-            false => "media",
-        };
-
         let response = builder
             .bearer_auth(token)
-            .query(&[("alt", alt)])
             .send_retry(&self.retry_config)
             .await
             .context(GetRequestSnafu {
@@ -309,13 +294,10 @@ impl GoogleCloudStorageClient {
         Ok(response)
     }
 
-    /// Perform a put request <https://cloud.google.com/storage/docs/json_api/v1/objects/insert>
+    /// Perform a put request <https://cloud.google.com/storage/docs/xml-api/put-object-upload>
     async fn put_request(&self, path: &Path, payload: Bytes) -> Result<()> {
         let token = self.get_token().await?;
-        let url = format!(
-            "{}/upload/storage/v1/b/{}/o",
-            self.base_url, self.bucket_name_encoded
-        );
+        let url = self.object_url(path);
 
         let content_type = self
             .client_options
@@ -323,11 +305,10 @@ impl GoogleCloudStorageClient {
             .unwrap_or("application/octet-stream");
 
         self.client
-            .request(Method::POST, url)
+            .request(Method::PUT, url)
             .bearer_auth(token)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, payload.len())
-            .query(&[("uploadType", "media"), ("name", path.as_ref())])
             .body(payload)
             .send_retry(&self.retry_config)
             .await
@@ -392,7 +373,7 @@ impl GoogleCloudStorageClient {
         Ok(())
     }
 
-    /// Perform a delete request <https://cloud.google.com/storage/docs/json_api/v1/objects/delete>
+    /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
     async fn delete_request(&self, path: &Path) -> Result<()> {
         let token = self.get_token().await?;
         let url = self.object_url(path);
@@ -409,7 +390,7 @@ impl GoogleCloudStorageClient {
         Ok(())
     }
 
-    /// Perform a copy request <https://cloud.google.com/storage/docs/json_api/v1/objects/copy>
+    /// Perform a copy request <https://cloud.google.com/storage/docs/xml-api/put-object-copy>
     async fn copy_request(
         &self,
         from: &Path,
@@ -417,24 +398,18 @@ impl GoogleCloudStorageClient {
         if_not_exists: bool,
     ) -> Result<()> {
         let token = self.get_token().await?;
+        let url = self.object_url(to);
 
-        let source =
-            percent_encoding::utf8_percent_encode(from.as_ref(), NON_ALPHANUMERIC);
-        let destination =
-            percent_encoding::utf8_percent_encode(to.as_ref(), NON_ALPHANUMERIC);
-        let url = format!(
-            "{}/storage/v1/b/{}/o/{}/copyTo/b/{}/o/{}",
-            self.base_url,
-            self.bucket_name_encoded,
-            source,
-            self.bucket_name_encoded,
-            destination
-        );
+        let from = utf8_percent_encode(from.as_ref(), NON_ALPHANUMERIC);
+        let source = format!("{}/{}", self.bucket_name_encoded, from);
 
-        let mut builder = self.client.request(Method::POST, url);
+        let mut builder = self
+            .client
+            .request(Method::PUT, url)
+            .header("x-goog-copy-source", source);
 
         if if_not_exists {
-            builder = builder.query(&[("ifGenerationMatch", "0")]);
+            builder = builder.header("x-goog-if-generation-match", 0);
         }
 
         builder
@@ -465,7 +440,7 @@ impl GoogleCloudStorageClient {
         Ok(())
     }
 
-    /// Perform a list request <https://cloud.google.com/storage/docs/json_api/v1/objects/list>
+    /// Perform a list request <https://cloud.google.com/storage/docs/xml-api/get-bucket-list>
     async fn list_request(
         &self,
         prefix: Option<&str>,
@@ -473,13 +448,10 @@ impl GoogleCloudStorageClient {
         page_token: Option<&str>,
     ) -> Result<ListResponse> {
         let token = self.get_token().await?;
+        let url = format!("{}/{}", self.base_url, self.bucket_name_encoded);
 
-        let url = format!(
-            "{}/storage/v1/b/{}/o",
-            self.base_url, self.bucket_name_encoded
-        );
-
-        let mut query = Vec::with_capacity(4);
+        let mut query = Vec::with_capacity(5);
+        query.push(("list-type", "2"));
         if delimiter {
             query.push(("delimiter", DELIMITER))
         }
@@ -489,14 +461,14 @@ impl GoogleCloudStorageClient {
         }
 
         if let Some(page_token) = page_token {
-            query.push(("pageToken", page_token))
+            query.push(("continuation-token", page_token))
         }
 
         if let Some(max_results) = &self.max_list_results {
-            query.push(("maxResults", max_results))
+            query.push(("max-keys", max_results))
         }
 
-        let response: ListResponse = self
+        let response = self
             .client
             .request(Method::GET, url)
             .query(&query)
@@ -504,9 +476,12 @@ impl GoogleCloudStorageClient {
             .send_retry(&self.retry_config)
             .await
             .context(ListRequestSnafu)?
-            .json()
+            .bytes()
             .await
             .context(ListResponseBodySnafu)?;
+
+        let response: ListResponse = quick_xml::de::from_reader(response.reader())
+            .context(InvalidListResponseSnafu)?;
 
         Ok(response)
     }
@@ -516,14 +491,14 @@ impl GoogleCloudStorageClient {
         &self,
         prefix: Option<&Path>,
         delimiter: bool,
-    ) -> BoxStream<'_, Result<ListResponse>> {
+    ) -> BoxStream<'_, Result<ListResult>> {
         let prefix = format_prefix(prefix);
         stream_paginated(prefix, move |prefix, token| async move {
             let mut r = self
                 .list_request(prefix.as_deref(), delimiter, token.as_deref())
                 .await?;
-            let next_token = r.next_page_token.take();
-            Ok((r, prefix, next_token))
+            let next_token = r.next_continuation_token.take();
+            Ok((r.try_into()?, prefix, next_token))
         })
         .boxed()
     }
@@ -692,10 +667,7 @@ impl ObjectStore for GoogleCloudStorage {
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let response = self.client.get_request(location, None, true).await?;
-        let object = response.json().await.context(GetResponseBodySnafu {
-            path: location.as_ref(),
-        })?;
-        convert_object_meta(&object)
+        Ok(header_meta(location, response.headers()).context(HeaderSnafu)?)
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
@@ -709,11 +681,7 @@ impl ObjectStore for GoogleCloudStorage {
         let stream = self
             .client
             .list_paginated(prefix, false)
-            .map_ok(|r| {
-                futures::stream::iter(
-                    r.items.into_iter().map(|x| convert_object_meta(&x)),
-                )
-            })
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
             .boxed();
 
@@ -728,15 +696,8 @@ impl ObjectStore for GoogleCloudStorage {
 
         while let Some(result) = stream.next().await {
             let response = result?;
-
-            for p in response.prefixes {
-                common_prefixes.insert(Path::parse(p)?);
-            }
-
-            objects.reserve(response.items.len());
-            for object in &response.items {
-                objects.push(convert_object_meta(object)?);
-            }
+            common_prefixes.extend(response.common_prefixes.into_iter());
+            objects.extend(response.objects.into_iter());
         }
 
         Ok(ListResult {
@@ -1200,20 +1161,6 @@ impl GoogleCloudStorageBuilder {
             }),
         })
     }
-}
-
-fn convert_object_meta(object: &Object) -> Result<ObjectMeta> {
-    let location = Path::parse(&object.name)?;
-    let last_modified = object.updated;
-    let size = object.size.parse().context(InvalidSizeSnafu)?;
-    let e_tag = object.e_tag.clone();
-
-    Ok(ObjectMeta {
-        location,
-        last_modified,
-        size,
-        e_tag,
-    })
 }
 
 #[cfg(test)]

@@ -26,6 +26,12 @@ pub mod retry;
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod token;
 
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub mod header;
+
+#[cfg(any(feature = "aws", feature = "gcp"))]
+pub mod list;
+
 use crate::config::ConfigValue;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, ClientBuilder, Proxy};

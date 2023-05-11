@@ -33,7 +33,6 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -53,6 +52,7 @@ use crate::aws::credential::{
     AwsCredential, CredentialProvider, InstanceCredentialProvider,
     StaticCredentialProvider, WebIdentityProvider,
 };
+use crate::client::header::header_meta;
 use crate::client::ClientConfigKey;
 use crate::config::ConfigValue;
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
@@ -86,24 +86,6 @@ static METADATA_ENDPOINT: &str = "http://169.254.169.254";
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
 enum Error {
-    #[snafu(display("Last-Modified Header missing from response"))]
-    MissingLastModified,
-
-    #[snafu(display("Content-Length Header missing from response"))]
-    MissingContentLength,
-
-    #[snafu(display("Invalid last modified '{}': {}", last_modified, source))]
-    InvalidLastModified {
-        last_modified: String,
-        source: chrono::ParseError,
-    },
-
-    #[snafu(display("Invalid content length '{}': {}", content_length, source))]
-    InvalidContentLength {
-        content_length: String,
-        source: std::num::ParseIntError,
-    },
-
     #[snafu(display("Missing region"))]
     MissingRegion,
 
@@ -154,6 +136,11 @@ enum Error {
 
     #[snafu(display("Failed to parse the region for bucket '{}'", bucket))]
     RegionParse { bucket: String },
+
+    #[snafu(display("Failed to parse headers: {}", source))]
+    Header {
+        source: crate::client::header::Error,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -274,40 +261,10 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        use reqwest::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
-
         // Extract meta from headers
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html#API_HeadObject_ResponseSyntax
         let response = self.client.get_request(location, None, true).await?;
-        let headers = response.headers();
-
-        let last_modified = headers
-            .get(LAST_MODIFIED)
-            .context(MissingLastModifiedSnafu)?;
-
-        let content_length = headers
-            .get(CONTENT_LENGTH)
-            .context(MissingContentLengthSnafu)?;
-
-        let last_modified = last_modified.to_str().context(BadHeaderSnafu)?;
-        let last_modified = DateTime::parse_from_rfc2822(last_modified)
-            .context(InvalidLastModifiedSnafu { last_modified })?
-            .with_timezone(&Utc);
-
-        let content_length = content_length.to_str().context(BadHeaderSnafu)?;
-        let content_length = content_length
-            .parse()
-            .context(InvalidContentLengthSnafu { content_length })?;
-
-        let e_tag = headers.get(ETAG).context(MissingEtagSnafu)?;
-        let e_tag = e_tag.to_str().context(BadHeaderSnafu)?;
-
-        Ok(ObjectMeta {
-            location: location.clone(),
-            last_modified,
-            size: content_length,
-            e_tag: Some(e_tag.to_string()),
-        })
+        Ok(header_meta(location, response.headers()).context(HeaderSnafu)?)
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
