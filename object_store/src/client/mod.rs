@@ -57,7 +57,7 @@ pub enum ClientConfigKey {
 impl AsRef<str> for ClientConfigKey {
     fn as_ref(&self) -> &str {
         match self {
-            ClientConfigKey::AllowHttp => "allow_http",
+            Self::AllowHttp => "allow_http",
         }
     }
 }
