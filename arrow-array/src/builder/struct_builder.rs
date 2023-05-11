@@ -24,7 +24,7 @@ use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
 
-/// Array builder for Struct types.
+/// Builder for [`StructArray`]
 ///
 /// Note that callers should make sure that methods of all the child field builders are
 /// properly called to maintain the consistency of the data structure.

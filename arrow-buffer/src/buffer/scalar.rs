@@ -22,12 +22,24 @@ use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-/// Provides a safe API for interpreting a [`Buffer`] as a slice of [`ArrowNativeType`]
+/// A strongly-typed [`Buffer`] supporting zero-copy cloning and slicing
 ///
-/// # Safety
+/// The easiest way to think about `ScalarBuffer<T>` is being equivalent to a `Arc<Vec<T>>`,
+/// with the following differences:
 ///
-/// All [`ArrowNativeType`] are valid for all possible backing byte representations, and as
-/// a result they are "trivially safely transmutable".
+/// - slicing and cloning is O(1).
+/// - it supports external allocated memory
+///
+/// ```
+/// # use arrow_buffer::ScalarBuffer;
+/// // Zero-copy conversion from Vec
+/// let buffer = ScalarBuffer::from(vec![1, 2, 3]);
+/// assert_eq!(&buffer, &[1, 2, 3]);
+///
+/// // Zero-copy slicing
+/// let sliced = buffer.slice(1, 2);
+/// assert_eq!(&sliced, &[2, 3]);
+/// ```
 #[derive(Clone)]
 pub struct ScalarBuffer<T: ArrowNativeType> {
     /// Underlying data buffer

@@ -25,7 +25,7 @@ use arrow_schema::DataType;
 use std::any::Any;
 use std::sync::Arc;
 
-/// Array of bools
+/// An array of [boolean values](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout)
 ///
 /// # Example
 ///

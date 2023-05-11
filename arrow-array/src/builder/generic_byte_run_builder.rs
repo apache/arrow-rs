@@ -30,7 +30,7 @@ use super::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
 
 use arrow_buffer::ArrowNativeType;
 
-/// Array builder for [`RunArray`] for String and Binary types.
+/// Builder for [`RunArray`] of [`GenericByteArray`](crate::array::GenericByteArray)
 ///
 /// # Example:
 ///
@@ -309,7 +309,7 @@ where
     }
 }
 
-/// Array builder for [`RunArray`] that encodes strings ([`Utf8Type`]).
+/// Builder for [`RunArray`] of [`StringArray`](crate::array::StringArray)
 ///
 /// ```
 /// // Create a run-end encoded array with run-end indexes data type as `i16`.
@@ -319,7 +319,7 @@ where
 /// # use arrow_array::{Int16Array, StringArray};
 /// # use arrow_array::types::Int16Type;
 /// # use arrow_array::cast::AsArray;
-///
+/// #
 /// let mut builder = StringRunBuilder::<Int16Type>::new();
 ///
 /// // The builder builds the dictionary value by value
@@ -342,10 +342,10 @@ where
 /// ```
 pub type StringRunBuilder<K> = GenericByteRunBuilder<K, Utf8Type>;
 
-/// Array builder for [`RunArray`] that encodes large strings ([`LargeUtf8Type`]). See [`StringRunBuilder`] for an example.
+/// Builder for [`RunArray`] of [`LargeStringArray`](crate::array::LargeStringArray)
 pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 
-/// Array builder for [`RunArray`] that encodes binary values([`BinaryType`]).
+/// Builder for [`RunArray`] of [`BinaryArray`](crate::array::BinaryArray)
 ///
 /// ```
 /// // Create a run-end encoded array with run-end indexes data type as `i16`.
@@ -378,8 +378,7 @@ pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 /// ```
 pub type BinaryRunBuilder<K> = GenericByteRunBuilder<K, BinaryType>;
 
-/// Array builder for [`RunArray`] that encodes large binary values([`LargeBinaryType`]).
-/// See documentation of [`BinaryRunBuilder`] for an example.
+/// Builder for [`RunArray`] of [`LargeBinaryArray`](crate::array::LargeBinaryArray)
 pub type LargeBinaryRunBuilder<K> = GenericByteRunBuilder<K, LargeBinaryType>;
 
 #[cfg(test)]

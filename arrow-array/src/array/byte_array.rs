@@ -28,7 +28,7 @@ use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-/// Generic struct for variable-size byte arrays
+/// An array of [variable length byte arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-layout)
 ///
 /// See [`StringArray`] and [`LargeStringArray`] for storing utf8 encoded string data
 ///

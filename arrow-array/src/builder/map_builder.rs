@@ -24,7 +24,8 @@ use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
 
-/// Creates a new `MapBuilder`
+/// Builder for [`MapArray`]
+///
 /// ```
 /// # use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
 /// # use arrow_array::{Int32Array, StringArray};
@@ -62,7 +63,7 @@ pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     value_builder: V,
 }
 
-/// Contains details of the mapping
+/// The [`Field`] names for a [`MapArray`]
 #[derive(Debug, Clone)]
 pub struct MapFieldNames {
     /// [`Field`] name for map entries

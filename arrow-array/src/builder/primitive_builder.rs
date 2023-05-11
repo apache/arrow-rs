@@ -92,7 +92,7 @@ pub type Decimal128Builder = PrimitiveBuilder<Decimal128Type>;
 /// A decimal 256 array builder
 pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 
-///  Array builder for fixed-width primitive types
+/// Builder for [`PrimitiveArray`]
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     values_builder: BufferBuilder<T::Native>,

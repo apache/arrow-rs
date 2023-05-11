@@ -19,6 +19,13 @@ use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
 use crate::buffer::BooleanBuffer;
 use crate::{Buffer, MutableBuffer};
 
+/// A [`BooleanBuffer`] used to encode validity for arrow arrays
+///
+/// As per the [Arrow specification], array validity is encoded in a packed bitmask with a
+/// `true` value indicating the corresponding slot is not null, and `false` indicating
+/// that it is null.
+///
+/// [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html#validity-bitmaps
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct NullBuffer {
     buffer: BooleanBuffer,

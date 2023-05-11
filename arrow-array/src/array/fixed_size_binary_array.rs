@@ -25,7 +25,7 @@ use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-/// An array where each element is a fixed-size sequence of bytes.
+/// An array of [fixed size binary arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout)
 ///
 /// # Examples
 ///
