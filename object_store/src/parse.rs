@@ -122,6 +122,7 @@ where
     let scheme = ObjectStoreScheme::parse(url)?;
 
     match scheme {
+        #[cfg(not(target_arch = "wasm32"))]
         ObjectStoreScheme::Local => match url.path_segments().is_some() {
             true => {
                 let path = url
