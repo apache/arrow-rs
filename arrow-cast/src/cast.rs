@@ -1792,25 +1792,32 @@ pub fn cast_with_options(
                     }
                 }
             };
-            // Adjust for timezone difference
-            let from_tz = from_tz
-                .as_ref()
-                .map(|tz| parse_offset(tz))
-                .transpose()?
-                .unwrap_or(0);
-            let to_tz = to_tz
-                .as_ref()
-                .map(|tz| parse_offset(tz))
-                .transpose()?
-                .unwrap_or(0);
-            let tz_diff = to_tz - from_tz;
-            if cast_options.safe {
-                converted.unary_opt::<_, Int64Type>(|o| o.checked_add(tz_diff))
-            } else {
-                converted.try_unary::<_, Int64Type, _>(|o| o.checked_add(tz_diff))?
-            }
+            // Normalize timezone
+            let adjusted = match (from_tz, to_tz) {
+                // Only this case needs to be adjusted because we're casting from
+                // unknown time offset to some time offset, we want the time to be
+                // unchanged.
+                //
+                // i.e. Timestamp('2001-01-01T00:00', None) -> Timestamp('2001-01-01T00:00', '+0700')
+                (None, Some(to_tz)) => {
+                    let offset_diff_secs = if cast_options.safe {
+                        - parse_offset_secs(to_tz).ok().unwrap_or(0)
+                    } else {
+                        - parse_offset_secs(to_tz)?
+                    };
+                    let offset_diff = offset_diff_secs * time_unit_multiple(to_unit);
+                    if cast_options.safe {
+                        converted.unary_opt::<_, Int64Type>(|o| o.checked_add(offset_diff))
+                    } else {
+                        converted.try_unary::<_, Int64Type, _>(|o| o.add_checked(offset_diff))?
+                    }
+                }
+                _ => {
+                    converted
+                }
+            };
             Ok(make_timestamp_array(
-                &converted,
+                &adjusted,
                 to_unit.clone(),
                 to_tz.clone(),
             ))
@@ -2136,6 +2143,41 @@ pub fn cast_with_options(
         }
         (_, _) => Err(ArrowError::CastError(format!(
             "Casting from {from_type:?} to {to_type:?} not supported",
+        ))),
+    }
+}
+
+/// Parses a fixed offset of the form "+09:00", "-09" or "+0930"
+fn parse_offset_secs(tz: &str) -> Result<i64, ArrowError> {
+    let bytes = tz.as_bytes();
+
+    let mut values = match bytes.len() {
+        // [+-]XX:XX
+        6 if bytes[3] == b':' => [bytes[1], bytes[2], bytes[4], bytes[5]],
+        // [+-]XXXX
+        5 => [bytes[1], bytes[2], bytes[3], bytes[4]],
+        // [+-]XX
+        3 => [bytes[1], bytes[2], b'0', b'0'],
+        _ => {
+            return Err(ArrowError::ParseError(format!(
+                "Error parsing time offset from '{tz}': invalid format"
+            )))
+        }
+    };
+    values.iter_mut().for_each(|x| *x = x.wrapping_sub(b'0'));
+    if values.iter().any(|x| *x > 9) {
+        return Err(ArrowError::ParseError(format!(
+            "Error parsing time offset: invalid character"
+        )));
+    }
+    let secs = (values[0] * 10 + values[1]) as i64 * 60 * 60
+        + (values[2] * 10 + values[3]) as i64 * 60;
+
+    match bytes[0] {
+        b'+' => Ok(secs),
+        b'-' => Ok(-secs),
+        _ => Err(ArrowError::ParseError(format!(
+            "Error parsing time offset from '{tz}': must start with '+' or '-'"
         ))),
     }
 }
@@ -5993,6 +6035,83 @@ mod tests {
         assert!(b.is_err());
         let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond));
         assert!(b.is_err());
+    }
+
+    // Cast Timestamp(_, None) -> Timestamp(_, Some(timezone))
+    #[test]
+    fn test_cast_timestamp_with_timezone_1() {
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+            Some("2000-01-01T00:00:00.123456789"),
+            Some("2010-01-01T00:00:00.123456789"),
+            None,
+        ]));
+        let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+        let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("+0700".into()));
+        let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+        let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+        let result = string_array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!("2000-01-01T00:00:00.123456+07:00", result.value(0));
+        assert_eq!("2010-01-01T00:00:00.123456+07:00", result.value(1));
+        assert!(result.is_null(2));
+    }
+
+    // Cast Timestamp(_, Some(timezone)) -> Timestamp(_, None)
+    #[test]
+    fn test_case_timestamp_with_timezone_2() {
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+            Some("2000-01-01T07:00:00.123456789"),
+            Some("2010-01-01T07:00:00.123456789"),
+            None,
+        ]));
+        let to_type = DataType::Timestamp(TimeUnit::Millisecond, Some("+0700".into()));
+        let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+        // Check immediate representation is correct
+        let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+        let result = string_array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!("2000-01-01T07:00:00.123+07:00", result.value(0));
+        assert_eq!("2010-01-01T07:00:00.123+07:00", result.value(1));
+        assert!(result.is_null(2));
+
+        let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+        let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+        let result = string_array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!("2000-01-01T00:00:00.123", result.value(0));
+        assert_eq!("2010-01-01T00:00:00.123", result.value(1));
+        assert!(result.is_null(2));
+    }
+
+    // Cast Timestamp(_, Some(timezone)) -> Timestamp(_, Some(timezone))
+    #[test]
+    fn test_cast_timestamp_with_timezone_3() {
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+            Some("2000-01-01T07:00:00.123456789"),
+            Some("2010-01-01T07:00:00.123456789"),
+            None,
+        ]));
+        let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("+0700".into()));
+        let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+        // Check immediate representation is correct
+        let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+        let result = string_array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!("2000-01-01T07:00:00.123456+07:00", result.value(0));
+        assert_eq!("2010-01-01T07:00:00.123456+07:00", result.value(1));
+        assert!(result.is_null(2));
+
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("-08:00".into()));
+        let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+        let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+        let result = string_array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!("1999-12-31T16:00:00-08:00", result.value(0));
+        assert_eq!("2009-12-31T16:00:00-08:00", result.value(1));
+        assert!(result.is_null(2));
     }
 
     #[test]
