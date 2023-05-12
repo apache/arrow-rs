@@ -252,7 +252,10 @@ mod config;
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
 mod multipart;
+mod parse;
 mod util;
+
+pub use parse::{parse_url, parse_url_opts};
 
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
