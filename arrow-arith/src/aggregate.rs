@@ -24,6 +24,7 @@ use arrow_buffer::ArrowNativeType;
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_schema::ArrowError;
 use arrow_schema::*;
+use std::ops::{BitAnd, BitOr, BitXor};
 
 /// Generic test for NaN, the optimizer should be able to remove this for integer types.
 #[inline]
@@ -324,6 +325,196 @@ where
             Some(sum)
         }
     }
+}
+
+/// Returns the bitwise AND of all non-null input values.
+///
+/// Returns `None` if the array is empty or only contains null values.
+pub fn bit_and<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
+where
+    T: ArrowNumericType,
+    T::Native: BitAnd<Output = T::Native> + ArrowNativeTypeOp,
+{
+    let null_count = array.null_count();
+
+    if null_count == array.len() {
+        return None;
+    }
+
+    let data: &[T::Native] = array.values();
+
+    match array.nulls() {
+        None => {
+            let bit_and = data
+                .iter()
+                .fold(T::Native::ONE.neg_wrapping(), |accumulator, value| {
+                    accumulator & *value
+                });
+
+            Some(bit_and)
+        }
+        Some(nulls) => {
+            let mut bit_and = T::Native::ONE.neg_wrapping();
+            let data_chunks = data.chunks_exact(64);
+            let remainder = data_chunks.remainder();
+
+            let bit_chunks = nulls.inner().bit_chunks();
+            data_chunks
+                .zip(bit_chunks.iter())
+                .for_each(|(chunk, mask)| {
+                    // index_mask has value 1 << i in the loop
+                    let mut index_mask = 1;
+                    chunk.iter().for_each(|value| {
+                        if (mask & index_mask) != 0 {
+                            bit_and = bit_and & *value;
+                        }
+                        index_mask <<= 1;
+                    });
+                });
+
+            let remainder_bits = bit_chunks.remainder_bits();
+
+            remainder.iter().enumerate().for_each(|(i, value)| {
+                if remainder_bits & (1 << i) != 0 {
+                    bit_and = bit_and & *value;
+                }
+            });
+
+            Some(bit_and)
+        }
+    }
+}
+
+/// Returns the bitwise OR of all non-null input values.
+///
+/// Returns `None` if the array is empty or only contains null values.
+pub fn bit_or<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
+where
+    T: ArrowNumericType,
+    T::Native: BitOr<Output = T::Native> + ArrowNativeTypeOp,
+{
+    let null_count = array.null_count();
+
+    if null_count == array.len() {
+        return None;
+    }
+
+    let data: &[T::Native] = array.values();
+
+    match array.nulls() {
+        None => {
+            let bit_or = data.iter().fold(T::default_value(), |accumulator, value| {
+                accumulator | *value
+            });
+
+            Some(bit_or)
+        }
+        Some(nulls) => {
+            let mut bit_or = T::default_value();
+            let data_chunks = data.chunks_exact(64);
+            let remainder = data_chunks.remainder();
+
+            let bit_chunks = nulls.inner().bit_chunks();
+            data_chunks
+                .zip(bit_chunks.iter())
+                .for_each(|(chunk, mask)| {
+                    // index_mask has value 1 << i in the loop
+                    let mut index_mask = 1;
+                    chunk.iter().for_each(|value| {
+                        if (mask & index_mask) != 0 {
+                            bit_or = bit_or | *value;
+                        }
+                        index_mask <<= 1;
+                    });
+                });
+
+            let remainder_bits = bit_chunks.remainder_bits();
+
+            remainder.iter().enumerate().for_each(|(i, value)| {
+                if remainder_bits & (1 << i) != 0 {
+                    bit_or = bit_or | *value;
+                }
+            });
+
+            Some(bit_or)
+        }
+    }
+}
+
+/// Returns the bitwise exclusive OR of all non-null input values.
+///
+/// Returns `None` if the array is empty or only contains null values.
+pub fn bit_xor<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
+where
+    T: ArrowNumericType,
+    T::Native: BitXor<Output = T::Native> + ArrowNativeTypeOp,
+{
+    let null_count = array.null_count();
+
+    if null_count == array.len() {
+        return None;
+    }
+
+    let data: &[T::Native] = array.values();
+
+    match array.nulls() {
+        None => {
+            let bit_xor = data.iter().fold(T::default_value(), |accumulator, value| {
+                accumulator ^ *value
+            });
+
+            Some(bit_xor)
+        }
+        Some(nulls) => {
+            let mut bit_xor = T::default_value();
+            let data_chunks = data.chunks_exact(64);
+            let remainder = data_chunks.remainder();
+
+            let bit_chunks = nulls.inner().bit_chunks();
+            data_chunks
+                .zip(bit_chunks.iter())
+                .for_each(|(chunk, mask)| {
+                    // index_mask has value 1 << i in the loop
+                    let mut index_mask = 1;
+                    chunk.iter().for_each(|value| {
+                        if (mask & index_mask) != 0 {
+                            bit_xor = bit_xor ^ *value;
+                        }
+                        index_mask <<= 1;
+                    });
+                });
+
+            let remainder_bits = bit_chunks.remainder_bits();
+
+            remainder.iter().enumerate().for_each(|(i, value)| {
+                if remainder_bits & (1 << i) != 0 {
+                    bit_xor = bit_xor ^ *value;
+                }
+            });
+
+            Some(bit_xor)
+        }
+    }
+}
+
+/// Returns true if all non-null input values are true, otherwise false.
+///
+/// Returns `None` if the array is empty or only contains null values.
+pub fn bool_and(array: &BooleanArray) -> Option<bool> {
+    if array.null_count() == array.len() {
+        return None;
+    }
+    Some(array.false_count() == 0)
+}
+
+/// Returns true if any non-null input value is true, otherwise false.
+///
+/// Returns `None` if the array is empty or only contains null values.
+pub fn bool_or(array: &BooleanArray) -> Option<bool> {
+    if array.null_count() == array.len() {
+        return None;
+    }
+    Some(array.true_count() != 0)
 }
 
 /// Returns the sum of values in the primitive array.
@@ -836,6 +1027,97 @@ mod tests {
         // create an array that actually has non-zero values at the invalid indices
         let c = add(&a, &b).unwrap();
         assert_eq!(Some((1..=100).filter(|i| i % 33 == 0).sum()), sum(&c));
+    }
+
+    #[test]
+    fn test_primitive_array_bit_and() {
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(0, bit_and(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_and_with_nulls() {
+        let a = Int32Array::from(vec![None, Some(2), Some(3), None, None]);
+        assert_eq!(2, bit_and(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_and_all_nulls() {
+        let a = Int32Array::from(vec![None, None, None]);
+        assert_eq!(None, bit_and(&a));
+    }
+
+    #[test]
+    fn test_primitive_array_bit_or() {
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(7, bit_or(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_or_with_nulls() {
+        let a = Int32Array::from(vec![None, Some(2), Some(3), None, Some(5)]);
+        assert_eq!(7, bit_or(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_or_all_nulls() {
+        let a = Int32Array::from(vec![None, None, None]);
+        assert_eq!(None, bit_or(&a));
+    }
+
+    #[test]
+    fn test_primitive_array_bit_xor() {
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(1, bit_xor(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_xor_with_nulls() {
+        let a = Int32Array::from(vec![None, Some(2), Some(3), None, Some(5)]);
+        assert_eq!(4, bit_xor(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_xor_all_nulls() {
+        let a = Int32Array::from(vec![None, None, None]);
+        assert_eq!(None, bit_xor(&a));
+    }
+
+    #[test]
+    fn test_primitive_array_bool_and() {
+        let a = BooleanArray::from(vec![true, false, true, false, true]);
+        assert_eq!(false, bool_and(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bool_and_with_nulls() {
+        let a = BooleanArray::from(vec![None, Some(true), Some(true), None, Some(true)]);
+        assert_eq!(true, bool_and(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bool_and_all_nulls() {
+        let a = BooleanArray::from(vec![None, None, None]);
+        assert_eq!(None, bool_and(&a));
+    }
+
+    #[test]
+    fn test_primitive_array_bool_or() {
+        let a = BooleanArray::from(vec![true, false, true, false, true]);
+        assert_eq!(true, bool_or(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bool_or_with_nulls() {
+        let a =
+            BooleanArray::from(vec![None, Some(false), Some(false), None, Some(false)]);
+        assert_eq!(false, bool_or(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bool_or_all_nulls() {
+        let a = BooleanArray::from(vec![None, None, None]);
+        assert_eq!(None, bool_or(&a));
     }
 
     #[test]
