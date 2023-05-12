@@ -92,7 +92,7 @@ fn large_bench_primitive(c: &mut Criterion) {
     .unwrap();
 
     let mut out = Vec::with_capacity(1024);
-    LineDelimitedWriter::new(&mut out).write(batch).unwrap();
+    LineDelimitedWriter::new(&mut out).write(&batch).unwrap();
 
     let json = std::str::from_utf8(&out).unwrap();
     do_bench(c, "large_bench_primitive", json, schema)

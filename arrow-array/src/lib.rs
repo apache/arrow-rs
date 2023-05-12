@@ -183,6 +183,7 @@ pub use array::*;
 mod record_batch;
 pub use record_batch::{
     RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader,
+    RecordBatchWriter,
 };
 
 mod arithmetic;
