@@ -1086,13 +1086,13 @@ mod tests {
     #[test]
     fn test_primitive_array_bool_and() {
         let a = BooleanArray::from(vec![true, false, true, false, true]);
-        assert_eq!(false, bool_and(&a).unwrap());
+        assert!(!bool_and(&a).unwrap());
     }
 
     #[test]
     fn test_primitive_array_bool_and_with_nulls() {
         let a = BooleanArray::from(vec![None, Some(true), Some(true), None, Some(true)]);
-        assert_eq!(true, bool_and(&a).unwrap());
+        assert!(bool_and(&a).unwrap());
     }
 
     #[test]
@@ -1104,14 +1104,14 @@ mod tests {
     #[test]
     fn test_primitive_array_bool_or() {
         let a = BooleanArray::from(vec![true, false, true, false, true]);
-        assert_eq!(true, bool_or(&a).unwrap());
+        assert!(bool_or(&a).unwrap());
     }
 
     #[test]
     fn test_primitive_array_bool_or_with_nulls() {
         let a =
             BooleanArray::from(vec![None, Some(false), Some(false), None, Some(false)]);
-        assert_eq!(false, bool_or(&a).unwrap());
+        assert!(!bool_or(&a).unwrap());
     }
 
     #[test]
