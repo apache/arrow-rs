@@ -14,9 +14,14 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+use std::fmt::{Debug, Display, Formatter};
+use std::str::FromStr;
+use std::time::Duration;
+
+use humantime::{format_duration, parse_duration};
+use reqwest::header::HeaderValue;
 
 use crate::{Error, Result};
-use std::fmt::{Debug, Display, Formatter};
 
 /// Provides deferred parsing of a value
 ///
@@ -77,5 +82,53 @@ impl Parse for bool {
                 source: format!("failed to parse \"{v}\" as boolean").into(),
             }),
         }
+    }
+}
+
+impl Parse for Duration {
+    fn parse(v: &str) -> Result<Self> {
+        parse_duration(v).map_err(|_| Error::Generic {
+            store: "Config",
+            source: format!("failed to parse \"{v}\" as Duration").into(),
+        })
+    }
+}
+
+impl Parse for usize {
+    fn parse(v: &str) -> Result<Self> {
+        Self::from_str(v).map_err(|_| Error::Generic {
+            store: "Config",
+            source: format!("failed to parse \"{v}\" as usize").into(),
+        })
+    }
+}
+
+impl Parse for HeaderValue {
+    fn parse(v: &str) -> Result<Self> {
+        Self::from_str(v).map_err(|_| Error::Generic {
+            store: "Config",
+            source: format!("failed to parse \"{v}\" as HeaderValue").into(),
+        })
+    }
+}
+
+pub(crate) fn fmt_duration(duration: &ConfigValue<Duration>) -> String {
+    match duration {
+        ConfigValue::Parsed(v) => format_duration(*v).to_string(),
+        ConfigValue::Deferred(v) => v.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_parse_duration() {
+        let duration = Duration::from_secs(60);
+        assert_eq!(Duration::parse("60 seconds").unwrap(), duration);
+        assert_eq!(Duration::parse("60 s").unwrap(), duration);
+        assert_eq!(Duration::parse("60s").unwrap(), duration)
     }
 }
