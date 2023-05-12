@@ -329,7 +329,6 @@ where
 
 macro_rules! bit_operation {
     ($NAME:ident, $OP:ident, $NATIVE:ident, $DEFAULT:expr, $DOC:expr) => {
-        #[cfg(not(feature = "simd"))]
         #[doc = $DOC]
         ///
         /// Returns `None` if the array is empty or only contains null values.
@@ -400,21 +399,21 @@ bit_operation!(
     bitand,
     BitAnd,
     -1,
-    "Returns the bitwise AND of all non-null input values."
+    "Returns the bitwise and of all non-null input values."
 );
 bit_operation!(
     bit_or,
     bitor,
     BitOr,
     0,
-    "Returns the bitwise OR of all non-null input values."
+    "Returns the bitwise or of all non-null input values."
 );
 bit_operation!(
     bit_xor,
     bitxor,
     BitXor,
     0,
-    "Returns the bitwise exclusive OR of all non-null input values."
+    "Returns the bitwise xor of all non-null input values."
 );
 
 /// Returns true if all non-null input values are true, otherwise false.
