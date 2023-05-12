@@ -108,7 +108,7 @@ impl ObjectStoreScheme {
 macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(
-            <$builder>::from_env().with_url($url.as_str()),
+            <$builder>::new().with_url($url.as_str()),
             |builder, (key, value)| match key.as_ref().parse() {
                 Ok(k) => builder.with_config(k, value),
                 Err(_) => builder,
