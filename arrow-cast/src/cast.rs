@@ -1806,28 +1806,28 @@ pub fn cast_with_options(
                             adjust_timestamp_to_timezone::<TimestampSecondType>(
                                 converted,
                                 &to_tz,
-                                &cast_options,
+                                cast_options,
                             )?
                         }
                         TimeUnit::Millisecond => {
                             adjust_timestamp_to_timezone::<TimestampMillisecondType>(
                                 converted,
                                 &to_tz,
-                                &cast_options,
+                                cast_options,
                             )?
                         }
                         TimeUnit::Microsecond => {
                             adjust_timestamp_to_timezone::<TimestampMicrosecondType>(
                                 converted,
                                 &to_tz,
-                                &cast_options,
+                                cast_options,
                             )?
                         }
                         TimeUnit::Nanosecond => {
                             adjust_timestamp_to_timezone::<TimestampNanosecondType>(
                                 converted,
                                 &to_tz,
-                                &cast_options,
+                                cast_options,
                             )?
                         }
                     }

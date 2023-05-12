@@ -69,7 +69,6 @@ fn test_cast_timestamp_to_string() {
 // timezones
 
 // Cast Timestamp(_, None) -> Timestamp(_, Some(timezone))
-#[cfg(feature = "chrono-tz")]
 #[test]
 fn test_cast_timestamp_with_timezone_daylight_1() {
     let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
@@ -96,7 +95,6 @@ fn test_cast_timestamp_with_timezone_daylight_1() {
 }
 
 // Cast Timestamp(_, Some(timezone)) -> Timestamp(_, None)
-#[cfg(feature = "chrono-tz")]
 #[test]
 fn test_cast_timestamp_with_timezone_daylight_2() {
     let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
@@ -126,7 +124,6 @@ fn test_cast_timestamp_with_timezone_daylight_2() {
 }
 
 // Cast Timestamp(_, Some(timezone)) -> Timestamp(_, Some(timezone))
-#[cfg(feature = "chrono-tz")]
 #[test]
 fn test_cast_timestamp_with_timezone_daylight_3() {
     let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
