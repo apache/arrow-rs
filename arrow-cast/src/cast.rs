@@ -6063,7 +6063,7 @@ mod tests {
         let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
 
         let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
-        let result = string_array.as_any().downcast_ref::<StringArray>().unwrap();
+        let result = string_array.as_string::<i32>();
         assert_eq!("2000-01-01T00:00:00.123456+07:00", result.value(0));
         assert_eq!("2010-01-01T00:00:00.123456+07:00", result.value(1));
         assert!(result.is_null(2));
