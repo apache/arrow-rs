@@ -18,6 +18,7 @@
 use arrow_array::builder::{
     PrimitiveDictionaryBuilder, StringDictionaryBuilder, UnionBuilder,
 };
+use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowDictionaryKeyType, Decimal128Type, Decimal256Type, Int16Type, Int32Type,
     Int64Type, Int8Type, TimestampMicrosecondType, UInt16Type, UInt32Type, UInt64Type,
@@ -62,6 +63,97 @@ fn test_cast_timestamp_to_string() {
     assert_eq!("1997-05-19T00:00:00.005Z", c.value(0));
     assert_eq!("2018-12-25T00:00:00.001Z", c.value(1));
     assert!(c.is_null(2));
+}
+
+// See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones for list of valid
+// timezones
+
+// Cast Timestamp(_, None) -> Timestamp(_, Some(timezone))
+#[cfg(feature = "chrono-tz")]
+#[test]
+fn test_cast_timestamp_with_timezone_daylight_1() {
+    let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+        // This is winter in New York so daylight saving is not in effect
+        // UTC offset is -05:00
+        Some("2000-01-01T00:00:00.123456789"),
+        // This is summer in New York so daylight saving is in effect
+        // UTC offset is -04:00
+        Some("2010-07-01T00:00:00.123456789"),
+        None,
+    ]));
+    let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+    let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+    let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
+    let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+    let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+    let result = string_array.as_string::<i32>();
+    assert_eq!("2000-01-01T00:00:00.123456-05:00", result.value(0));
+    assert_eq!("2010-07-01T00:00:00.123456-04:00", result.value(1));
+    assert!(result.is_null(2));
+}
+
+// Cast Timestamp(_, Some(timezone)) -> Timestamp(_, None)
+#[cfg(feature = "chrono-tz")]
+#[test]
+fn test_cast_timestamp_with_timezone_daylight_2() {
+    let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+        Some("2000-01-01T07:00:00.123456789"),
+        Some("2010-07-01T07:00:00.123456789"),
+        None,
+    ]));
+    let to_type = DataType::Timestamp(TimeUnit::Millisecond, Some("America/New_York".into()));
+    let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+    // Check intermediate representation is correct
+    let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+    let result = string_array.as_string::<i32>();
+    assert_eq!("2000-01-01T07:00:00.123-05:00", result.value(0));
+    assert_eq!("2010-07-01T07:00:00.123-04:00", result.value(1));
+    assert!(result.is_null(2));
+
+    let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+    let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+    let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+    let result = string_array.as_string::<i32>();
+    assert_eq!("2000-01-01T12:00:00.123", result.value(0));
+    assert_eq!("2010-07-01T11:00:00.123", result.value(1));
+    assert!(result.is_null(2));
+}
+
+// Cast Timestamp(_, Some(timezone)) -> Timestamp(_, Some(timezone))
+#[cfg(feature = "chrono-tz")]
+#[test]
+fn test_cast_timestamp_with_timezone_daylight_3() {
+    let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+        // Winter in New York, summer in Sydney
+        // UTC offset is -05:00 (New York) and +11:00 (Sydney)
+        Some("2000-01-01T00:00:00.123456789"),
+        // Summer in New York, winter in Sydney
+        // UTC offset is -04:00 (New York) and +10:00 (Sydney)
+        Some("2010-07-01T00:00:00.123456789"),
+        None,
+    ]));
+    let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
+    let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+    // Check intermediate representation is correct
+    let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+    let result = string_array.as_string::<i32>();
+    assert_eq!("2000-01-01T00:00:00.123456-05:00", result.value(0));
+    assert_eq!("2010-07-01T00:00:00.123456-04:00", result.value(1));
+    assert!(result.is_null(2));
+
+    let to_type = DataType::Timestamp(TimeUnit::Second, Some("Australia/Sydney".into()));
+    let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+    let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+    let result = string_array.as_string::<i32>();
+    assert_eq!("2000-01-01T16:00:00+11:00", result.value(0));
+    assert_eq!("2010-07-01T14:00:00+10:00", result.value(1));
+    assert!(result.is_null(2));
 }
 
 #[test]
