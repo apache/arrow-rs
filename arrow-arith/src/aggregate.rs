@@ -327,175 +327,95 @@ where
     }
 }
 
-/// Returns the bitwise AND of all non-null input values.
-///
-/// Returns `None` if the array is empty or only contains null values.
-pub fn bit_and<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: BitAnd<Output = T::Native> + ArrowNativeTypeOp,
-{
-    let null_count = array.null_count();
+macro_rules! bit_operation {
+    ($NAME:ident, $OP:ident, $NATIVE:ident, $DEFAULT:expr, $DOC:expr) => {
+        #[cfg(not(feature = "simd"))]
+        #[doc = $DOC]
+        ///
+        /// Returns `None` if the array is empty or only contains null values.
+        pub fn $NAME<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
+        where
+            T: ArrowNumericType,
+            T::Native: $NATIVE<Output = T::Native> + ArrowNativeTypeOp,
+        {
+            let default;
+            if $DEFAULT == -1 {
+                default = T::Native::ONE.neg_wrapping();
+            } else {
+                default = T::default_value();
+            }
 
-    if null_count == array.len() {
-        return None;
-    }
+            let null_count = array.null_count();
 
-    let data: &[T::Native] = array.values();
+            if null_count == array.len() {
+                return None;
+            }
 
-    match array.nulls() {
-        None => {
-            let bit_and = data
-                .iter()
-                .fold(T::Native::ONE.neg_wrapping(), |accumulator, value| {
-                    accumulator & *value
-                });
+            let data: &[T::Native] = array.values();
 
-            Some(bit_and)
-        }
-        Some(nulls) => {
-            let mut bit_and = T::Native::ONE.neg_wrapping();
-            let data_chunks = data.chunks_exact(64);
-            let remainder = data_chunks.remainder();
+            match array.nulls() {
+                None => {
+                    let result = data
+                        .iter()
+                        .fold(default, |accumulator, value| accumulator.$OP(*value));
 
-            let bit_chunks = nulls.inner().bit_chunks();
-            data_chunks
-                .zip(bit_chunks.iter())
-                .for_each(|(chunk, mask)| {
-                    // index_mask has value 1 << i in the loop
-                    let mut index_mask = 1;
-                    chunk.iter().for_each(|value| {
-                        if (mask & index_mask) != 0 {
-                            bit_and = bit_and & *value;
-                        }
-                        index_mask <<= 1;
-                    });
-                });
-
-            let remainder_bits = bit_chunks.remainder_bits();
-
-            remainder.iter().enumerate().for_each(|(i, value)| {
-                if remainder_bits & (1 << i) != 0 {
-                    bit_and = bit_and & *value;
+                    Some(result)
                 }
-            });
+                Some(nulls) => {
+                    let mut result = default;
+                    let data_chunks = data.chunks_exact(64);
+                    let remainder = data_chunks.remainder();
 
-            Some(bit_and)
+                    let bit_chunks = nulls.inner().bit_chunks();
+                    data_chunks
+                        .zip(bit_chunks.iter())
+                        .for_each(|(chunk, mask)| {
+                            // index_mask has value 1 << i in the loop
+                            let mut index_mask = 1;
+                            chunk.iter().for_each(|value| {
+                                if (mask & index_mask) != 0 {
+                                    result = result.$OP(*value);
+                                }
+                                index_mask <<= 1;
+                            });
+                        });
+
+                    let remainder_bits = bit_chunks.remainder_bits();
+
+                    remainder.iter().enumerate().for_each(|(i, value)| {
+                        if remainder_bits & (1 << i) != 0 {
+                            result = result.$OP(*value);
+                        }
+                    });
+
+                    Some(result)
+                }
+            }
         }
-    }
+    };
 }
 
-/// Returns the bitwise OR of all non-null input values.
-///
-/// Returns `None` if the array is empty or only contains null values.
-pub fn bit_or<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: BitOr<Output = T::Native> + ArrowNativeTypeOp,
-{
-    let null_count = array.null_count();
-
-    if null_count == array.len() {
-        return None;
-    }
-
-    let data: &[T::Native] = array.values();
-
-    match array.nulls() {
-        None => {
-            let bit_or = data.iter().fold(T::default_value(), |accumulator, value| {
-                accumulator | *value
-            });
-
-            Some(bit_or)
-        }
-        Some(nulls) => {
-            let mut bit_or = T::default_value();
-            let data_chunks = data.chunks_exact(64);
-            let remainder = data_chunks.remainder();
-
-            let bit_chunks = nulls.inner().bit_chunks();
-            data_chunks
-                .zip(bit_chunks.iter())
-                .for_each(|(chunk, mask)| {
-                    // index_mask has value 1 << i in the loop
-                    let mut index_mask = 1;
-                    chunk.iter().for_each(|value| {
-                        if (mask & index_mask) != 0 {
-                            bit_or = bit_or | *value;
-                        }
-                        index_mask <<= 1;
-                    });
-                });
-
-            let remainder_bits = bit_chunks.remainder_bits();
-
-            remainder.iter().enumerate().for_each(|(i, value)| {
-                if remainder_bits & (1 << i) != 0 {
-                    bit_or = bit_or | *value;
-                }
-            });
-
-            Some(bit_or)
-        }
-    }
-}
-
-/// Returns the bitwise exclusive OR of all non-null input values.
-///
-/// Returns `None` if the array is empty or only contains null values.
-pub fn bit_xor<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: BitXor<Output = T::Native> + ArrowNativeTypeOp,
-{
-    let null_count = array.null_count();
-
-    if null_count == array.len() {
-        return None;
-    }
-
-    let data: &[T::Native] = array.values();
-
-    match array.nulls() {
-        None => {
-            let bit_xor = data.iter().fold(T::default_value(), |accumulator, value| {
-                accumulator ^ *value
-            });
-
-            Some(bit_xor)
-        }
-        Some(nulls) => {
-            let mut bit_xor = T::default_value();
-            let data_chunks = data.chunks_exact(64);
-            let remainder = data_chunks.remainder();
-
-            let bit_chunks = nulls.inner().bit_chunks();
-            data_chunks
-                .zip(bit_chunks.iter())
-                .for_each(|(chunk, mask)| {
-                    // index_mask has value 1 << i in the loop
-                    let mut index_mask = 1;
-                    chunk.iter().for_each(|value| {
-                        if (mask & index_mask) != 0 {
-                            bit_xor = bit_xor ^ *value;
-                        }
-                        index_mask <<= 1;
-                    });
-                });
-
-            let remainder_bits = bit_chunks.remainder_bits();
-
-            remainder.iter().enumerate().for_each(|(i, value)| {
-                if remainder_bits & (1 << i) != 0 {
-                    bit_xor = bit_xor ^ *value;
-                }
-            });
-
-            Some(bit_xor)
-        }
-    }
-}
+bit_operation!(
+    bit_and,
+    bitand,
+    BitAnd,
+    -1,
+    "Returns the bitwise AND of all non-null input values."
+);
+bit_operation!(
+    bit_or,
+    bitor,
+    BitOr,
+    0,
+    "Returns the bitwise OR of all non-null input values."
+);
+bit_operation!(
+    bit_xor,
+    bitxor,
+    BitXor,
+    0,
+    "Returns the bitwise exclusive OR of all non-null input values."
+);
 
 /// Returns true if all non-null input values are true, otherwise false.
 ///
