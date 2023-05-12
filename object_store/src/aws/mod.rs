@@ -679,7 +679,7 @@ impl AmazonS3Builder {
     ///
     /// - `s3://<bucket>/<path>`
     /// - `s3a://<bucket>/<path>`
-    /// - `https://s3.<bucket>.amazonaws.com`
+    /// - `https://s3.<region>.amazonaws.com/<bucket>`
     /// - `https://<bucket>.s3.<region>.amazonaws.com`
     /// - `https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket`
     ///

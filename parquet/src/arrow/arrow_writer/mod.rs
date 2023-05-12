@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Decimal128Type, Int32Type, Int64Type, UInt32Type, UInt64Type};
-use arrow_array::{types, Array, ArrayRef, RecordBatch};
-use arrow_schema::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
+use arrow_array::{types, Array, ArrayRef, RecordBatch, RecordBatchWriter};
+use arrow_schema::{ArrowError, DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
 use super::schema::{
     add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
@@ -243,6 +243,12 @@ impl<W: Write> ArrowWriter<W> {
     pub fn close(mut self) -> Result<crate::format::FileMetaData> {
         self.flush()?;
         self.writer.close()
+    }
+}
+
+impl<W: Write> RecordBatchWriter for ArrowWriter<W> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        self.write(batch).map_err(|e| e.into())
     }
 }
 
