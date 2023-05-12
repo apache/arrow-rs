@@ -3056,22 +3056,20 @@ fn adjust_timestamp_to_timezone<
     to_tz: &Tz,
     cast_options: &CastOptions,
 ) -> Result<PrimitiveArray<Int64Type>, ArrowError> {
-    let adjusted = if cast_options.safe {
-        array.unary_opt::<_, Int64Type>(|o| {
-            let local = as_datetime::<T>(o)?;
+    let adjust = |o| {
+        let local = as_datetime::<T>(o)?;
             let offset = to_tz.offset_from_local_datetime(&local).single()?;
             T::make_value(local - offset.fix())
-        })
+    };
+    let adjusted = if cast_options.safe {
+        array.unary_opt::<_, Int64Type>(adjust)
     } else {
-        let error_fn = || {
-            ArrowError::CastError(
-                "Cannot cast timezone to different timezone".to_string(),
-            )
-        };
         array.try_unary::<_, Int64Type, _>(|o| {
-            let local = as_datetime::<T>(o).ok_or_else(error_fn)?;
-            let offset = to_tz.offset_from_local_datetime(&local).single().ok_or_else(error_fn)?;
-            T::make_value(local - offset.fix()).ok_or_else(error_fn)
+            adjust(o).ok_or_else(|| {
+                ArrowError::CastError(
+                    "Cannot cast timezone to different timezone".to_string(),
+                )
+            })
         })?
     };
     Ok(adjusted)
