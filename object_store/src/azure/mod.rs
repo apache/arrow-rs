@@ -58,6 +58,8 @@ pub use credential::authority_hosts;
 mod client;
 mod credential;
 
+const STORE: &str = "MicrosoftAzure";
+
 /// The well-known account used by Azurite and the legacy Azure Storage Emulator.
 /// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
 const EMULATOR_ACCOUNT: &str = "devstoreaccount1";
@@ -149,13 +151,12 @@ enum Error {
 impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
         match source {
-
             Error::UnknownConfigurationKey { key } => Self::UnknownConfigurationKey {
-                store: "MicrosoftAzure",
+                store: STORE,
                 key,
             },
             _ => Self::Generic {
-                store: "MicrosoftAzure",
+                store: STORE,
                 source: Box::new(source),
             },
         }
@@ -214,7 +215,7 @@ impl ObjectStore for MicrosoftAzure {
         let stream = response
             .bytes_stream()
             .map_err(|source| crate::Error::Generic {
-                store: "MicrosoftAzure",
+                store: STORE,
                 source: Box::new(source),
             })
             .boxed();

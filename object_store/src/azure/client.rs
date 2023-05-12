@@ -17,6 +17,7 @@
 
 use super::credential::{AzureCredential, CredentialProvider};
 use crate::azure::credential::*;
+use crate::azure::STORE;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
@@ -69,12 +70,6 @@ pub(crate) enum Error {
         path: String,
     },
 
-    #[snafu(display("Error performing copy request {}: {}", path, source))]
-    CopyRequest {
-        source: crate::client::retry::Error,
-        path: String,
-    },
-
     #[snafu(display("Error performing list request: {}", source))]
     ListRequest { source: crate::client::retry::Error },
 
@@ -95,34 +90,9 @@ impl From<Error> for crate::Error {
         match err {
             Error::GetRequest { source, path }
             | Error::DeleteRequest { source, path }
-            | Error::PutRequest { source, path } => match source.status() {
-                Some(StatusCode::NOT_FOUND) => Self::NotFound {
-                    path,
-                    source: Box::new(source),
-                },
-                Some(StatusCode::NOT_MODIFIED) => Self::NotModified {
-                    path,
-                    source: Box::new(source),
-                },
-                Some(StatusCode::PRECONDITION_FAILED) => Self::Precondition {
-                    path,
-                    source: Box::new(source),
-                },
-                _ => Self::Generic {
-                    store: "S3",
-                    source: Box::new(source),
-                },
-            },
-            Error::CopyRequest { source, path }
-                if matches!(source.status(), Some(StatusCode::CONFLICT)) =>
-            {
-                Self::AlreadyExists {
-                    path,
-                    source: Box::new(source),
-                }
-            }
+            | Error::PutRequest { source, path } => source.error(STORE, path),
             _ => Self::Generic {
-                store: "MicrosoftAzure",
+                store: STORE,
                 source: Box::new(err),
             },
         }
@@ -184,7 +154,7 @@ impl AzureClient {
                     // and we want to use it in an infallible function
                     HeaderValue::from_str(&format!("Bearer {token}")).map_err(|err| {
                         crate::Error::Generic {
-                            store: "MicrosoftAzure",
+                            store: STORE,
                             source: Box::new(err),
                         }
                     })?,
@@ -202,7 +172,7 @@ impl AzureClient {
                     // and we want to use it in an infallible function
                     HeaderValue::from_str(&format!("Bearer {token}")).map_err(|err| {
                         crate::Error::Generic {
-                            store: "MicrosoftAzure",
+                            store: STORE,
                             source: Box::new(err),
                         }
                     })?,
@@ -344,8 +314,12 @@ impl AzureClient {
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config)
             .await
-            .context(CopyRequestSnafu {
-                path: from.as_ref(),
+            .map_err(|err| match err.status() {
+                Some(StatusCode::CONFLICT) => crate::Error::AlreadyExists {
+                    source: Box::new(err),
+                    path: to.to_string(),
+                },
+                _ => err.error(STORE, from.to_string()),
             })?;
 
         Ok(())

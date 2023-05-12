@@ -60,6 +60,27 @@ impl Error {
     pub fn status(&self) -> Option<StatusCode> {
         self.status
     }
+
+    pub fn error(self, store: &'static str, path: String) -> crate::Error {
+        match self.status {
+            Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
+                path,
+                source: Box::new(self),
+            },
+            Some(StatusCode::NOT_MODIFIED) => crate::Error::NotModified {
+                path,
+                source: Box::new(self),
+            },
+            Some(StatusCode::PRECONDITION_FAILED) => crate::Error::Precondition {
+                path,
+                source: Box::new(self),
+            },
+            _ => crate::Error::Generic {
+                store,
+                source: Box::new(self),
+            },
+        }
+    }
 }
 
 impl From<Error> for std::io::Error {

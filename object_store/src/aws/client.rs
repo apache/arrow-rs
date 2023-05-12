@@ -17,7 +17,7 @@
 
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt, CredentialProvider};
-use crate::aws::STRICT_PATH_ENCODE_SET;
+use crate::aws::{STORE, STRICT_PATH_ENCODE_SET};
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
@@ -33,9 +33,7 @@ use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
-use reqwest::{
-    header::CONTENT_TYPE, Client as ReqwestClient, Method, Response, StatusCode,
-};
+use reqwest::{header::CONTENT_TYPE, Client as ReqwestClient, Method, Response};
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
@@ -102,26 +100,9 @@ impl From<Error> for crate::Error {
             Error::GetRequest { source, path }
             | Error::DeleteRequest { source, path }
             | Error::CopyRequest { source, path }
-            | Error::PutRequest { source, path } => match source.status() {
-                Some(StatusCode::NOT_FOUND) => Self::NotFound {
-                    path,
-                    source: Box::new(source),
-                },
-                Some(StatusCode::NOT_MODIFIED) => Self::NotModified {
-                    path,
-                    source: Box::new(source),
-                },
-                Some(StatusCode::PRECONDITION_FAILED) => Self::Precondition {
-                    path,
-                    source: Box::new(source),
-                },
-                _ => Self::Generic {
-                    store: "S3",
-                    source: Box::new(source),
-                },
-            },
+            | Error::PutRequest { source, path } => source.error(STORE, path),
             _ => Self::Generic {
-                store: "S3",
+                store: STORE,
                 source: Box::new(err),
             },
         }

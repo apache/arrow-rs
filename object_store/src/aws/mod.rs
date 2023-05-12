@@ -78,6 +78,8 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
 /// This struct is used to maintain the URI path encoding
 const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 
+const STORE: &str = "S3";
+
 /// Default metadata endpoint
 static METADATA_ENDPOINT: &str = "http://169.254.169.254";
 
@@ -159,10 +161,10 @@ impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
         match source {
             Error::UnknownConfigurationKey { key } => {
-                Self::UnknownConfigurationKey { store: "S3", key }
+                Self::UnknownConfigurationKey { store: STORE, key }
             }
             _ => Self::Generic {
-                store: "S3",
+                store: STORE,
                 source: Box::new(source),
             },
         }
@@ -250,7 +252,7 @@ impl ObjectStore for AmazonS3 {
         let stream = response
             .bytes_stream()
             .map_err(|source| crate::Error::Generic {
-                store: "S3",
+                store: STORE,
                 source: Box::new(source),
             })
             .boxed();

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aws::STRICT_ENCODE_SET;
+use crate::aws::{STORE, STRICT_ENCODE_SET};
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::util::hmac_sha256;
@@ -330,7 +330,7 @@ impl CredentialProvider for InstanceCredentialProvider {
                 self.imdsv1_fallback,
             )
             .map_err(|source| crate::Error::Generic {
-                store: "S3",
+                store: STORE,
                 source,
             })
         }))
@@ -363,7 +363,7 @@ impl CredentialProvider for WebIdentityProvider {
                 &self.endpoint,
             )
             .map_err(|source| crate::Error::Generic {
-                store: "S3",
+                store: STORE,
                 source,
             })
         }))
@@ -552,7 +552,7 @@ mod profile {
                         .provide_credentials()
                         .await
                         .map_err(|source| crate::Error::Generic {
-                            store: "S3",
+                            store: STORE,
                             source: Box::new(source),
                         })?;
                 let t_now = SystemTime::now();

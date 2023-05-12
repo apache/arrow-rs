@@ -64,6 +64,8 @@ use self::credential::{
 
 mod credential;
 
+const STORE: &str = "GCS";
+
 #[derive(Debug, Snafu)]
 enum Error {
     #[snafu(display("Got invalid XML response for {} {}: {}", method, url, source))]
@@ -98,14 +100,11 @@ enum Error {
         path: String,
     },
 
-    #[snafu(display("Error performing copy request {}: {}", path, source))]
-    CopyRequest {
+    #[snafu(display("Error performing put request {}: {}", path, source))]
+    PutRequest {
         source: crate::client::retry::Error,
         path: String,
     },
-
-    #[snafu(display("Error performing put request: {}", source))]
-    PutRequest { source: crate::client::retry::Error },
 
     #[snafu(display("Error getting put response body: {}", source))]
     PutResponseBody { source: reqwest::Error },
@@ -126,12 +125,6 @@ enum Error {
 
     #[snafu(display("GCP credential error: {}", source))]
     Credential { source: credential::Error },
-
-    #[snafu(display("Already exists: {}", path))]
-    AlreadyExists {
-        source: crate::client::retry::Error,
-        path: String,
-    },
 
     #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
     UnableToParseUrl {
@@ -157,33 +150,12 @@ impl From<Error> for super::Error {
         match err {
             Error::GetRequest { source, path }
             | Error::DeleteRequest { source, path }
-            | Error::CopyRequest { source, path } => match source.status() {
-                Some(StatusCode::NOT_FOUND) => Self::NotFound {
-                    path,
-                    source: Box::new(source),
-                },
-                Some(StatusCode::NOT_MODIFIED) => Self::NotModified {
-                    path,
-                    source: Box::new(source),
-                },
-                Some(StatusCode::PRECONDITION_FAILED) => Self::Precondition {
-                    path,
-                    source: Box::new(source),
-                },
-                _ => Self::Generic {
-                    store: "GCS",
-                    source: Box::new(source),
-                },
-            },
-            Error::AlreadyExists { source, path } => Self::AlreadyExists {
-                source: Box::new(source),
-                path,
-            },
+            | Error::PutRequest { source, path } => source.error(STORE, path),
             Error::UnknownConfigurationKey { key } => {
-                Self::UnknownConfigurationKey { store: "GCS", key }
+                Self::UnknownConfigurationKey { store: STORE, key }
             }
             _ => Self::Generic {
-                store: "GCS",
+                store: STORE,
                 source: Box::new(err),
             },
         }
@@ -336,7 +308,9 @@ impl GoogleCloudStorageClient {
             .body(payload)
             .send_retry(&self.retry_config)
             .await
-            .context(PutRequestSnafu)?;
+            .context(PutRequestSnafu {
+                path: path.as_ref(),
+            })?;
 
         Ok(())
     }
@@ -360,7 +334,9 @@ impl GoogleCloudStorageClient {
             .query(&[("uploads", "")])
             .send_retry(&self.retry_config)
             .await
-            .context(PutRequestSnafu)?;
+            .context(PutRequestSnafu {
+                path: path.as_ref(),
+            })?;
 
         let data = response.bytes().await.context(PutResponseBodySnafu)?;
         let result: InitiateMultipartUploadResult = quick_xml::de::from_reader(
@@ -392,7 +368,7 @@ impl GoogleCloudStorageClient {
             .query(&[("uploadId", multipart_id)])
             .send_retry(&self.retry_config)
             .await
-            .context(PutRequestSnafu)?;
+            .context(PutRequestSnafu { path })?;
 
         Ok(())
     }
@@ -449,22 +425,12 @@ impl GoogleCloudStorageClient {
             .header(header::CONTENT_LENGTH, 0)
             .send_retry(&self.retry_config)
             .await
-            .map_err(|err| {
-                if err
-                    .status()
-                    .map(|status| status == reqwest::StatusCode::PRECONDITION_FAILED)
-                    .unwrap_or_else(|| false)
-                {
-                    Error::AlreadyExists {
-                        source: err,
-                        path: to.to_string(),
-                    }
-                } else {
-                    Error::CopyRequest {
-                        source: err,
-                        path: from.to_string(),
-                    }
-                }
+            .map_err(|err| match err.status() {
+                Some(StatusCode::PRECONDITION_FAILED) => crate::Error::AlreadyExists {
+                    source: Box::new(err),
+                    path: to.to_string(),
+                },
+                _ => err.error(STORE, from.to_string()),
             })?;
 
         Ok(())
@@ -683,7 +649,7 @@ impl ObjectStore for GoogleCloudStorage {
         let stream = response
             .bytes_stream()
             .map_err(|source| crate::Error::Generic {
-                store: "GCS",
+                store: STORE,
                 source: Box::new(source),
             })
             .boxed();
