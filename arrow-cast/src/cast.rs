@@ -3049,17 +3049,15 @@ fn cast_string_to_month_day_nano_interval<Offset: OffsetSizeTrait>(
     Ok(Arc::new(interval_array) as ArrayRef)
 }
 
-fn adjust_timestamp_to_timezone<
-    T: ArrowTimestampType,
->(
+fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
     array: PrimitiveArray<Int64Type>,
     to_tz: &Tz,
     cast_options: &CastOptions,
 ) -> Result<PrimitiveArray<Int64Type>, ArrowError> {
     let adjust = |o| {
         let local = as_datetime::<T>(o)?;
-            let offset = to_tz.offset_from_local_datetime(&local).single()?;
-            T::make_value(local - offset.fix())
+        let offset = to_tz.offset_from_local_datetime(&local).single()?;
+        T::make_value(local - offset.fix())
     };
     let adjusted = if cast_options.safe {
         array.unary_opt::<_, Int64Type>(adjust)

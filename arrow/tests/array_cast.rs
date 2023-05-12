@@ -84,7 +84,8 @@ fn test_cast_timestamp_with_timezone_daylight_1() {
     let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
     let timestamp_array = cast(&string_array, &to_type).unwrap();
 
-    let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
+    let to_type =
+        DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
     let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
 
     let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
@@ -103,7 +104,8 @@ fn test_cast_timestamp_with_timezone_daylight_2() {
         Some("2010-07-01T07:00:00.123456789"),
         None,
     ]));
-    let to_type = DataType::Timestamp(TimeUnit::Millisecond, Some("America/New_York".into()));
+    let to_type =
+        DataType::Timestamp(TimeUnit::Millisecond, Some("America/New_York".into()));
     let timestamp_array = cast(&string_array, &to_type).unwrap();
 
     // Check intermediate representation is correct
@@ -136,7 +138,8 @@ fn test_cast_timestamp_with_timezone_daylight_3() {
         Some("2010-07-01T00:00:00.123456789"),
         None,
     ]));
-    let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
+    let to_type =
+        DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
     let timestamp_array = cast(&string_array, &to_type).unwrap();
 
     // Check intermediate representation is correct
