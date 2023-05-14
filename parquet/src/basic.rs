@@ -16,7 +16,7 @@
 // under the License.
 
 //! Contains Rust mappings for Thrift definition.
-//! Refer to `parquet.thrift` file to see raw definitions.
+//! Refer to [`parquet.thrift`](https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift) file to see raw definitions.
 
 use std::{fmt, str};
 
