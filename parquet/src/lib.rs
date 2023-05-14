@@ -31,7 +31,7 @@
 //! 2. [arrow] for reading and writing parquet files to Arrow
 //! `RecordBatch`es
 //!
-//! 3. [arrow::async_reader] and [arrow::async_writer] for `async` reading 
+//! 3. [arrow::async_reader] and [arrow::async_writer] for `async` reading
 //! and writing parquet files to Arrow `RecordBatch`es (requires the `async` feature).
 
 /// Defines a an item with an experimental public API
