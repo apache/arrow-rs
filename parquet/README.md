@@ -65,7 +65,7 @@ The `parquet` crate provides the following features which may be enabled in your
   - [x] Primitive column value writers
   - [ ] Row record writer
   - [x] Arrow record writer
-  - [ ] Async support
+  - [x] Async support
 - [x] Predicate pushdown
 - [x] Parquet format 4.0.0 support
 

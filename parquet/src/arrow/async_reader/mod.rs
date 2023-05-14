@@ -482,8 +482,8 @@ impl<T> std::fmt::Debug for StreamState<T> {
     }
 }
 
-/// An asynchronous [`Stream`] of [`RecordBatch`] for a parquet file that can be
-/// constructed using [`ParquetRecordBatchStreamBuilder`]
+/// An asynchronous [`Stream`](https://docs.rs/futures/latest/futures/stream/trait.Stream.html) of [`RecordBatch`] 
+/// for a parquet file that can be constructed using [`ParquetRecordBatchStreamBuilder`].
 pub struct ParquetRecordBatchStream<T> {
     metadata: Arc<ParquetMetaData>,
 
