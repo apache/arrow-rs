@@ -1148,18 +1148,12 @@ impl AmazonS3Builder {
 
 #[cfg(feature = "aws_profile")]
 fn profile_region(profile: String) -> Option<String> {
-    use std::{panic, thread};
     use tokio::runtime::Handle;
 
     let handle = Handle::current();
     let provider = profile::ProfileProvider::new(profile, None);
 
-    let result = thread::spawn(move || handle.block_on(provider.get_region()));
-
-    match result.join() {
-        Ok(region) => region,
-        Err(e) => panic::resume_unwind(e),
-    }
+    handle.block_on(provider.get_region())
 }
 
 #[cfg(feature = "aws_profile")]
