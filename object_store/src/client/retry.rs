@@ -32,6 +32,7 @@ pub struct Error {
     retries: usize,
     message: String,
     source: Option<reqwest::Error>,
+    status: Option<StatusCode>,
 }
 
 impl std::fmt::Display for Error {
@@ -57,7 +58,28 @@ impl std::error::Error for Error {
 impl Error {
     /// Returns the status code associated with this error if any
     pub fn status(&self) -> Option<StatusCode> {
-        self.source.as_ref().and_then(|e| e.status())
+        self.status
+    }
+
+    pub fn error(self, store: &'static str, path: String) -> crate::Error {
+        match self.status {
+            Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
+                path,
+                source: Box::new(self),
+            },
+            Some(StatusCode::NOT_MODIFIED) => crate::Error::NotModified {
+                path,
+                source: Box::new(self),
+            },
+            Some(StatusCode::PRECONDITION_FAILED) => crate::Error::Precondition {
+                path,
+                source: Box::new(self),
+            },
+            _ => crate::Error::Generic {
+                store,
+                source: Box::new(self),
+            },
+        }
     }
 }
 
@@ -146,6 +168,14 @@ impl RetryExt for reqwest::RequestBuilder {
                 match s.send().await {
                     Ok(r) => match r.error_for_status_ref() {
                         Ok(_) if r.status().is_success() => return Ok(r),
+                        Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
+                            return Err(Error{
+                                message: "not modified".to_string(),
+                                retries,
+                                status: Some(r.status()),
+                                source: None,
+                            })
+                        }
                         Ok(r) => {
                             let is_bare_redirect = r.status().is_redirection() && !r.headers().contains_key(LOCATION);
                             let message = match is_bare_redirect {
@@ -157,6 +187,7 @@ impl RetryExt for reqwest::RequestBuilder {
                             return Err(Error{
                                 message,
                                 retries,
+                                status: Some(r.status()),
                                 source: None,
                             })
                         }
@@ -180,6 +211,7 @@ impl RetryExt for reqwest::RequestBuilder {
                                 return Err(Error{
                                     message,
                                     retries,
+                                    status: Some(status),
                                     source: Some(e),
                                 })
 
@@ -209,7 +241,8 @@ impl RetryExt for reqwest::RequestBuilder {
                             return Err(Error{
                                 retries,
                                 message: "request error".to_string(),
-                                source: Some(e)
+                                status: e.status(),
+                                source: Some(e),
                             })
                         }
                         let sleep = backoff.next();

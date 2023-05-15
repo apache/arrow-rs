@@ -40,7 +40,6 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
-use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
@@ -57,8 +56,8 @@ use crate::client::ClientConfigKey;
 use crate::config::ConfigValue;
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
 use crate::{
-    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path,
-    Result, RetryConfig, StreamExt,
+    ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Path, Result, RetryConfig, StreamExt,
 };
 
 mod checksum;
@@ -78,6 +77,8 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
 
 /// This struct is used to maintain the URI path encoding
 const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
+
+const STORE: &str = "S3";
 
 /// Default metadata endpoint
 static METADATA_ENDPOINT: &str = "http://169.254.169.254";
@@ -160,10 +161,10 @@ impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
         match source {
             Error::UnknownConfigurationKey { key } => {
-                Self::UnknownConfigurationKey { store: "S3", key }
+                Self::UnknownConfigurationKey { store: STORE, key }
             }
             _ => Self::Generic {
-                store: "S3",
+                store: STORE,
                 source: Box::new(source),
             },
         }
@@ -246,12 +247,12 @@ impl ObjectStore for AmazonS3 {
             .await
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let response = self.client.get_request(location, None, false).await?;
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let response = self.client.get_request(location, options, false).await?;
         let stream = response
             .bytes_stream()
             .map_err(|source| crate::Error::Generic {
-                store: "S3",
+                store: STORE,
                 source: Box::new(source),
             })
             .boxed();
@@ -259,26 +260,13 @@ impl ObjectStore for AmazonS3 {
         Ok(GetResult::Stream(stream))
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let bytes = self
-            .client
-            .get_request(location, Some(range), false)
-            .await?
-            .bytes()
-            .await
-            .map_err(|source| client::Error::GetResponseBody {
-                source,
-                path: location.to_string(),
-            })?;
-        Ok(bytes)
-    }
-
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         use reqwest::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 
+        let options = GetOptions::default();
         // Extract meta from headers
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html#API_HeadObject_ResponseSyntax
-        let response = self.client.get_request(location, None, true).await?;
+        let response = self.client.get_request(location, options, true).await?;
         let headers = response.headers();
 
         let last_modified = headers
@@ -1169,8 +1157,8 @@ fn profile_credentials(
 mod tests {
     use super::*;
     use crate::tests::{
-        get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list_opts, rename_and_copy, stream_get,
+        get_nonexistent_object, get_opts, list_uses_directories_correctly,
+        list_with_delimiter, put_get_delete_list_opts, rename_and_copy, stream_get,
     };
     use bytes::Bytes;
     use std::collections::HashMap;
@@ -1417,6 +1405,7 @@ mod tests {
 
         // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
         put_get_delete_list_opts(&integration, is_local).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

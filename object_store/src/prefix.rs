@@ -22,7 +22,9 @@ use std::ops::Range;
 use tokio::io::AsyncWrite;
 
 use crate::path::Path;
-use crate::{GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result};
+use crate::{
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
+};
 
 #[doc(hidden)]
 #[deprecated(note = "Use PrefixStore")]
@@ -117,6 +119,15 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get_range(&full_path, range).await
     }
 
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> Result<GetResult> {
+        let full_path = self.full_path(location);
+        self.inner.get_opts(&full_path, options).await
+    }
+
     async fn get_ranges(
         &self,
         location: &Path,
@@ -206,10 +217,7 @@ mod tests {
     use super::*;
     use crate::local::LocalFileSystem;
     use crate::test_util::flatten_list_stream;
-    use crate::tests::{
-        copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list, rename_and_copy, stream_get,
-    };
+    use crate::tests::*;
 
     use tempfile::TempDir;
 
@@ -220,6 +228,7 @@ mod tests {
         let integration = PrefixStore::new(inner, "prefix");
 
         put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

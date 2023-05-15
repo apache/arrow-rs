@@ -346,11 +346,24 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 
     /// Return the bytes that are stored at the specified location.
-    async fn get(&self, location: &Path) -> Result<GetResult>;
+    async fn get(&self, location: &Path) -> Result<GetResult> {
+        self.get_opts(location, GetOptions::default()).await
+    }
+
+    /// Perform a get request with options
+    ///
+    /// Note: options.range will be ignored if [`GetResult::File`]
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte range
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes>;
+    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+        let options = GetOptions {
+            range: Some(range),
+            ..Default::default()
+        };
+        self.get_opts(location, options).await?.bytes().await
+    }
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte ranges
@@ -478,6 +491,10 @@ impl ObjectStore for Box<dyn ObjectStore> {
         self.as_ref().get(location).await
     }
 
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        self.as_ref().get_opts(location, options).await
+    }
+
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         self.as_ref().get_range(location, range).await
     }
@@ -556,6 +573,66 @@ pub struct ObjectMeta {
     pub size: usize,
     /// The unique identifier for the object
     pub e_tag: Option<String>,
+}
+
+/// Options for a get request, such as range
+#[derive(Debug, Default)]
+pub struct GetOptions {
+    /// Request will succeed if the `ObjectMeta::e_tag` matches
+    /// otherwise returning [`Error::Precondition`]
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-if-match>
+    pub if_match: Option<String>,
+    /// Request will succeed if the `ObjectMeta::e_tag` does not match
+    /// otherwise returning [`Error::NotModified`]
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.2>
+    pub if_none_match: Option<String>,
+    /// Request will succeed if the object has been modified since
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.3>
+    pub if_modified_since: Option<DateTime<Utc>>,
+    /// Request will succeed if the object has not been modified since
+    /// otherwise returning [`Error::Precondition`]
+    ///
+    /// Some stores, such as S3, will only return `NotModified` for exact
+    /// timestamp matches, instead of for any timestamp greater than or equal.
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.4>
+    pub if_unmodified_since: Option<DateTime<Utc>>,
+    /// Request transfer of only the specified range of bytes
+    /// otherwise returning [`Error::NotModified`]
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
+    pub range: Option<Range<usize>>,
+}
+
+impl GetOptions {
+    /// Returns an error if the modification conditions on this request are not satisfied
+    fn check_modified(
+        &self,
+        location: &Path,
+        last_modified: DateTime<Utc>,
+    ) -> Result<()> {
+        if let Some(date) = self.if_modified_since {
+            if last_modified <= date {
+                return Err(Error::NotModified {
+                    path: location.to_string(),
+                    source: format!("{} >= {}", date, last_modified).into(),
+                });
+            }
+        }
+
+        if let Some(date) = self.if_unmodified_since {
+            if last_modified > date {
+                return Err(Error::Precondition {
+                    path: location.to_string(),
+                    source: format!("{} < {}", date, last_modified).into(),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Result for a get request
@@ -698,6 +775,18 @@ pub enum Error {
 
     #[snafu(display("Object at location {} already exists: {}", path, source))]
     AlreadyExists {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[snafu(display("Request precondition failure for path {}: {}", path, source))]
+    Precondition {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[snafu(display("Object at location {} not modified: {}", path, source))]
+    NotModified {
         path: String,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
@@ -1023,6 +1112,85 @@ mod tests {
         }
 
         delete_fixtures(storage).await;
+    }
+
+    pub(crate) async fn get_opts(storage: &dyn ObjectStore) {
+        let path = Path::from("test");
+        storage.put(&path, "foo".into()).await.unwrap();
+        let meta = storage.head(&path).await.unwrap();
+
+        let options = GetOptions {
+            if_unmodified_since: Some(meta.last_modified),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Ok(_) | Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let options = GetOptions {
+            if_unmodified_since: Some(meta.last_modified + chrono::Duration::hours(10)),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Ok(_) | Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let options = GetOptions {
+            if_unmodified_since: Some(meta.last_modified - chrono::Duration::hours(10)),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Err(Error::Precondition { .. } | Error::NotSupported { .. }) => {}
+            d => panic!("{d:?}"),
+        }
+
+        let options = GetOptions {
+            if_modified_since: Some(meta.last_modified),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Err(Error::NotModified { .. } | Error::NotSupported { .. }) => {}
+            d => panic!("{d:?}"),
+        }
+
+        let options = GetOptions {
+            if_modified_since: Some(meta.last_modified - chrono::Duration::hours(10)),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Ok(_) | Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        if let Some(tag) = meta.e_tag {
+            let options = GetOptions {
+                if_match: Some(tag.clone()),
+                ..GetOptions::default()
+            };
+            storage.get_opts(&path, options).await.unwrap();
+
+            let options = GetOptions {
+                if_match: Some("invalid".to_string()),
+                ..GetOptions::default()
+            };
+            let err = storage.get_opts(&path, options).await.unwrap_err();
+            assert!(matches!(err, Error::Precondition { .. }), "{err}");
+
+            let options = GetOptions {
+                if_none_match: Some(tag.clone()),
+                ..GetOptions::default()
+            };
+            let err = storage.get_opts(&path, options).await.unwrap_err();
+            assert!(matches!(err, Error::NotModified { .. }), "{err}");
+
+            let options = GetOptions {
+                if_none_match: Some("invalid".to_string()),
+                ..GetOptions::default()
+            };
+            storage.get_opts(&path, options).await.unwrap();
+        }
     }
 
     fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
