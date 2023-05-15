@@ -30,7 +30,7 @@ use tokio::io::AsyncWrite;
 
 use crate::path::Path;
 use crate::util::maybe_spawn_blocking;
-use crate::{GetResult, ListResult, ObjectMeta, ObjectStore};
+use crate::{GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore};
 use crate::{MultipartId, Result};
 
 /// Wraps a [`ObjectStore`] and makes its get response return chunks
@@ -81,8 +81,8 @@ impl ObjectStore for ChunkedStore {
         self.inner.abort_multipart(location, multipart_id).await
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        match self.inner.get(location).await? {
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        match self.inner.get_opts(location, options).await? {
             GetResult::File(std_file, ..) => {
                 let reader = BufReader::new(std_file);
                 let chunk_size = self.chunk_size;
@@ -245,6 +245,7 @@ mod tests {
             let integration = ChunkedStore::new(Arc::clone(integration), 100);
 
             put_get_delete_list(&integration).await;
+            get_opts(&integration).await;
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;
             rename_and_copy(&integration).await;

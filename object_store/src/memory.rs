@@ -16,8 +16,8 @@
 // under the License.
 
 //! An in-memory object store implementation
-use crate::MultipartId;
 use crate::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore, Result};
+use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -128,12 +128,17 @@ impl ObjectStore for InMemory {
         }))
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let data = self.entry(location).await?;
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        if options.if_match.is_some() || options.if_none_match.is_some() {
+            return Err(super::Error::NotSupported {
+                source: "ETags not supported by InMemory".to_string().into(),
+            });
+        }
+        let (data, last_modified) = self.entry(location).await?;
+        options.check_modified(location, last_modified)?;
 
-        Ok(GetResult::Stream(
-            futures::stream::once(async move { Ok(data.0) }).boxed(),
-        ))
+        let stream = futures::stream::once(futures::future::ready(Ok(data)));
+        Ok(GetResult::Stream(stream.boxed()))
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
@@ -391,19 +396,14 @@ mod tests {
 
     use super::*;
 
-    use crate::{
-        tests::{
-            copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
-            list_with_delimiter, put_get_delete_list, rename_and_copy, stream_get,
-        },
-        Error as ObjectStoreError, ObjectStore,
-    };
+    use crate::tests::*;
 
     #[tokio::test]
     async fn in_memory_test() {
         let integration = InMemory::new();
 
         put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
@@ -443,7 +443,7 @@ mod tests {
         let err = get_nonexistent_object(&integration, Some(location))
             .await
             .unwrap_err();
-        if let ObjectStoreError::NotFound { path, source } = err {
+        if let crate::Error::NotFound { path, source } = err {
             let source_variant = source.downcast_ref::<Error>();
             assert!(
                 matches!(source_variant, Some(Error::NoDataInMemory { .. }),),

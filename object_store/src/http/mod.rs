@@ -31,8 +31,6 @@
 //! [rfc2518]: https://datatracker.ietf.org/doc/html/rfc2518
 //! [WebDAV]: https://en.wikipedia.org/wiki/WebDAV
 
-use std::ops::Range;
-
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -45,8 +43,8 @@ use url::Url;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
-    RetryConfig,
+    ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Result, RetryConfig,
 };
 
 mod client;
@@ -119,25 +117,14 @@ impl ObjectStore for HttpStore {
         Err(super::Error::NotImplemented)
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let response = self.client.get(location, None).await?;
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let response = self.client.get(location, options).await?;
         let stream = response
             .bytes_stream()
             .map_err(|source| Error::Reqwest { source }.into())
             .boxed();
 
         Ok(GetResult::Stream(stream))
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let bytes = self
-            .client
-            .get(location, Some(range))
-            .await?
-            .bytes()
-            .await
-            .context(ReqwestSnafu)?;
-        Ok(bytes)
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {

@@ -20,8 +20,8 @@ use parking_lot::Mutex;
 use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
-use crate::MultipartId;
 use crate::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore, Result};
+use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{stream::BoxStream, FutureExt, StreamExt};
@@ -179,17 +179,18 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         // need to copy to avoid moving / referencing `self`
         let wait_get_per_byte = self.config().wait_get_per_byte;
 
-        self.inner.get(location).await.map(|result| {
-            let s = match result {
-                GetResult::Stream(s) => s,
-                GetResult::File(_, _) => unimplemented!(),
-            };
+        let result = self.inner.get(location).await?;
+        Ok(throttle_get(result, wait_get_per_byte))
+    }
 
-            GetResult::Stream(throttle_stream(s, move |bytes| {
-                let bytes_len: u32 = usize_to_u32_saturate(bytes.len());
-                wait_get_per_byte * bytes_len
-            }))
-        })
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        sleep(self.config().wait_get_per_call).await;
+
+        // need to copy to avoid moving / referencing `self`
+        let wait_get_per_byte = self.config().wait_get_per_byte;
+
+        let result = self.inner.get_opts(location, options).await?;
+        Ok(throttle_get(result, wait_get_per_byte))
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
@@ -299,6 +300,18 @@ fn usize_to_u32_saturate(x: usize) -> u32 {
     x.try_into().unwrap_or(u32::MAX)
 }
 
+fn throttle_get(result: GetResult, wait_get_per_byte: Duration) -> GetResult {
+    let s = match result {
+        GetResult::Stream(s) => s,
+        GetResult::File(_, _) => unimplemented!(),
+    };
+
+    GetResult::Stream(throttle_stream(s, move |bytes| {
+        let bytes_len: u32 = usize_to_u32_saturate(bytes.len());
+        wait_get_per_byte * bytes_len
+    }))
+}
+
 fn throttle_stream<T: Send + 'static, E: Send + 'static, F>(
     stream: BoxStream<'_, Result<T, E>>,
     delay: F,
@@ -317,13 +330,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        memory::InMemory,
-        tests::{
-            copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
-            put_get_delete_list, rename_and_copy,
-        },
-    };
+    use crate::{memory::InMemory, tests::*};
     use bytes::Bytes;
     use futures::TryStreamExt;
     use tokio::time::Duration;

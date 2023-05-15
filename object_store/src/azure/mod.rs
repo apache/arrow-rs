@@ -31,8 +31,8 @@ use crate::client::token::TokenCache;
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::Path,
-    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
-    RetryConfig,
+    ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -45,7 +45,6 @@ use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::fmt::{Debug, Formatter};
 use std::io;
-use std::ops::Range;
 use std::sync::Arc;
 use std::{collections::BTreeSet, str::FromStr};
 use tokio::io::AsyncWrite;
@@ -58,6 +57,8 @@ pub use credential::authority_hosts;
 
 mod client;
 mod credential;
+
+const STORE: &str = "MicrosoftAzure";
 
 /// The well-known account used by Azurite and the legacy Azure Storage Emulator.
 /// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
@@ -150,12 +151,11 @@ enum Error {
 impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
         match source {
-            Error::UnknownConfigurationKey { key } => Self::UnknownConfigurationKey {
-                store: "MicrosoftAzure",
-                key,
-            },
+            Error::UnknownConfigurationKey { key } => {
+                Self::UnknownConfigurationKey { store: STORE, key }
+            }
             _ => Self::Generic {
-                store: "MicrosoftAzure",
+                store: STORE,
                 source: Box::new(source),
             },
         }
@@ -209,12 +209,12 @@ impl ObjectStore for MicrosoftAzure {
         Ok(())
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let response = self.client.get_request(location, None, false).await?;
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let response = self.client.get_request(location, options, false).await?;
         let stream = response
             .bytes_stream()
             .map_err(|source| crate::Error::Generic {
-                store: "MicrosoftAzure",
+                store: STORE,
                 source: Box::new(source),
             })
             .boxed();
@@ -222,26 +222,13 @@ impl ObjectStore for MicrosoftAzure {
         Ok(GetResult::Stream(stream))
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let bytes = self
-            .client
-            .get_request(location, Some(range), false)
-            .await?
-            .bytes()
-            .await
-            .map_err(|source| client::Error::GetResponseBody {
-                source,
-                path: location.to_string(),
-            })?;
-        Ok(bytes)
-    }
-
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         use reqwest::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
+        let options = GetOptions::default();
 
         // Extract meta from headers
         // https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
-        let response = self.client.get_request(location, None, true).await?;
+        let response = self.client.get_request(location, options, true).await?;
         let headers = response.headers();
 
         let last_modified = headers
@@ -1103,8 +1090,9 @@ fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
 mod tests {
     use super::*;
     use crate::tests::{
-        copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list, put_get_delete_list_opts, rename_and_copy, stream_get,
+        copy_if_not_exists, get_opts, list_uses_directories_correctly,
+        list_with_delimiter, put_get_delete_list, put_get_delete_list_opts,
+        rename_and_copy, stream_get,
     };
     use std::collections::HashMap;
     use std::env;
@@ -1175,6 +1163,7 @@ mod tests {
     async fn azure_blob_test() {
         let integration = maybe_skip_integration!().build().unwrap();
         put_get_delete_list_opts(&integration, false).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
@@ -1203,6 +1192,7 @@ mod tests {
         let integration = builder.build().unwrap();
 
         put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
