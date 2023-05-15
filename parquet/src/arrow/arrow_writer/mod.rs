@@ -65,6 +65,7 @@ mod levels;
 /// let mut writer = ArrowWriter::try_new(&mut buffer, to_write.schema(), None).unwrap();
 /// writer.write(&to_write).unwrap();
 /// writer.close().unwrap();
+/// drop(writer);
 ///
 /// let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 1024).unwrap();
 /// let read = reader.next().unwrap().unwrap();
