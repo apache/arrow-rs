@@ -205,9 +205,10 @@ impl<W: Write> SerializedFileWriter<W> {
     }
 
     /// Closes and finalises file writer, returning the file metadata.
-    pub fn close(mut self) -> Result<parquet::FileMetaData> {
+    pub fn close(&mut self) -> Result<parquet::FileMetaData> {
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;
+        self.buf.flush()?;
         Ok(metadata)
     }
 
@@ -821,7 +822,7 @@ mod tests {
                 .unwrap(),
         );
         let props = Arc::new(WriterProperties::builder().build());
-        let writer =
+        let mut writer =
             SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
 
@@ -851,7 +852,7 @@ mod tests {
                 )]))
                 .build(),
         );
-        let writer =
+        let mut writer =
             SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
 
@@ -897,7 +898,7 @@ mod tests {
                 .set_writer_version(WriterVersion::PARQUET_2_0)
                 .build(),
         );
-        let writer =
+        let mut writer =
             SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
 
@@ -1305,6 +1306,7 @@ mod tests {
             assert_eq!(flushed[idx].as_ref(), last_group.as_ref());
         }
         let file_metadata = file_writer.close().unwrap();
+        drop(file_writer);
 
         let reader = SerializedFileReader::new(R::from(file)).unwrap();
         assert_eq!(reader.num_row_groups(), data.len());
@@ -1453,6 +1455,7 @@ mod tests {
             }
         }
         writer.close().unwrap();
+        drop(writer);
 
         let reader = SerializedFileReader::new(Bytes::from(out)).unwrap();
         let metadata = reader.metadata().file_metadata();

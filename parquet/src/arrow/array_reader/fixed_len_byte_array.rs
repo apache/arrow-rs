@@ -463,6 +463,7 @@ mod tests {
             ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
+        drop(writer);
 
         let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
             .unwrap()

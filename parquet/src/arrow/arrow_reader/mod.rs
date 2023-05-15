@@ -712,6 +712,7 @@ mod tests {
 
         writer.write(&original).unwrap();
         writer.close().unwrap();
+        drop(writer);
 
         let mut reader =
             ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024).unwrap();
@@ -953,6 +954,7 @@ mod tests {
             ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
+        drop(writer);
 
         let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
             .unwrap()
@@ -990,6 +992,7 @@ mod tests {
             ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
+        drop(writer);
 
         let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
             .unwrap()
@@ -1030,6 +1033,7 @@ mod tests {
             ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
+        drop(writer);
 
         let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
             .unwrap()
@@ -2092,6 +2096,7 @@ mod tests {
             writer.write(&batch).unwrap();
         }
         writer.close().unwrap();
+        drop(writer);
 
         let mut record_reader =
             ParquetRecordBatchReader::try_new(Bytes::from(buf), batch_size).unwrap();
@@ -2319,6 +2324,7 @@ mod tests {
         let rg_md = row_group_writer.close().unwrap();
         assert_eq!(rg_md.num_rows(), 1);
         writer.close().unwrap();
+        drop(writer);
 
         let bytes = Bytes::from(buf);
 
@@ -2492,6 +2498,7 @@ mod tests {
             ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
         writer.write(&written).unwrap();
         writer.close().unwrap();
+        drop(writer);
 
         let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 8)
             .unwrap()

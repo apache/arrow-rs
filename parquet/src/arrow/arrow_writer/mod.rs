@@ -240,7 +240,7 @@ impl<W: Write> ArrowWriter<W> {
     }
 
     /// Close and finalize the underlying Parquet writer
-    pub fn close(mut self) -> Result<crate::format::FileMetaData> {
+    pub fn close(&mut self) -> Result<crate::format::FileMetaData> {
         self.flush()?;
         self.writer.close()
     }
@@ -249,6 +249,10 @@ impl<W: Write> ArrowWriter<W> {
 impl<W: Write> RecordBatchWriter for ArrowWriter<W> {
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         self.write(batch).map_err(|e| e.into())
+    }
+
+    fn finish(&mut self) -> std::result::Result<(), ArrowError> {
+        self.close().map(|_| ()).map_err(ArrowError::from)
     }
 }
 
@@ -676,6 +680,7 @@ mod tests {
         let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
         writer.write(expected_batch).unwrap();
         writer.close().unwrap();
+        drop(writer);
 
         buffer
     }
@@ -2413,6 +2418,7 @@ mod tests {
             ArrowWriter::try_new(&mut buf, file_schema.clone(), None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
+        drop(writer);
 
         let mut read = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024).unwrap();
         let back = read.next().unwrap().unwrap();

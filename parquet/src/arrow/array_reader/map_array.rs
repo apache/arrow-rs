@@ -194,6 +194,7 @@ mod tests {
             .expect("creat file writer");
         writer.write(&batch).expect("writing file");
         writer.close().expect("close writer");
+        drop(writer);
 
         // Read file
         let reader = Bytes::from(buffer);

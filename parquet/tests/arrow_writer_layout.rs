@@ -65,6 +65,7 @@ fn do_test(test: LayoutTest) {
         writer.write(&batch).unwrap();
     }
     writer.close().unwrap();
+    drop(writer);
     let b = Bytes::from(buf);
 
     // Re-read file to decode column index

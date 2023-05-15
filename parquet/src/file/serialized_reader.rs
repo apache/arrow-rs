@@ -1735,6 +1735,7 @@ mod tests {
         c.close().unwrap();
         r.close().unwrap();
         writer.close().unwrap();
+        drop(writer);
 
         let b = Bytes::from(out);
         let options = ReadOptionsBuilder::new().with_page_index().build();
