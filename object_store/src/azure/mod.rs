@@ -128,11 +128,6 @@ enum Error {
 
     #[snafu(display("ETag Header missing from response"))]
     MissingEtag,
-
-    #[snafu(display("Failed to parse headers: {}", source))]
-    Header {
-        source: crate::client::header::Error,
-    },
 }
 
 impl From<Error> for super::Error {

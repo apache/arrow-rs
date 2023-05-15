@@ -17,7 +17,6 @@
 
 use crate::client::pagination::stream_paginated;
 use crate::path::Path;
-use crate::util::format_prefix;
 use crate::Result;
 use crate::{ListResult, ObjectMeta};
 use async_trait::async_trait;
@@ -70,7 +69,10 @@ impl<T: ListClient> ListClientExt for T {
         offset: Option<&Path>,
     ) -> BoxStream<'_, Result<ListResult>> {
         let offset = offset.map(|x| x.to_string());
-        let prefix = format_prefix(prefix);
+        let prefix = prefix
+            .filter(|x| !x.as_ref().is_empty())
+            .map(|p| format!("{}{}", p.as_ref(), crate::path::DELIMITER));
+
         stream_paginated(
             (prefix, offset),
             move |(prefix, offset), token| async move {
