@@ -18,8 +18,8 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, Result,
-    StreamExt,
+    BoxStream, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    Path, Result, StreamExt,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -107,6 +107,16 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
         match self.inner.get(location).await? {
+            r @ GetResult::File(_, _) => Ok(r),
+            GetResult::Stream(s) => {
+                Ok(GetResult::Stream(PermitWrapper::new(s, permit).boxed()))
+            }
+        }
+    }
+
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
+        match self.inner.get_opts(location, options).await? {
             r @ GetResult::File(_, _) => Ok(r),
             GetResult::Stream(s) => {
                 Ok(GetResult::Stream(PermitWrapper::new(s, permit).boxed()))
@@ -251,10 +261,7 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for PermitWrapper<T> {
 mod tests {
     use crate::limit::LimitStore;
     use crate::memory::InMemory;
-    use crate::tests::{
-        list_uses_directories_correctly, list_with_delimiter, put_get_delete_list,
-        rename_and_copy, stream_get,
-    };
+    use crate::tests::*;
     use crate::ObjectStore;
     use std::time::Duration;
     use tokio::time::timeout;
@@ -266,6 +273,7 @@ mod tests {
         let integration = LimitStore::new(memory, max_requests);
 
         put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

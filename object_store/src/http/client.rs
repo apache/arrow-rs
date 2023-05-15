@@ -16,17 +16,17 @@
 // under the License.
 
 use crate::client::retry::{self, RetryConfig, RetryExt};
+use crate::client::GetOptionsExt;
 use crate::path::{Path, DELIMITER};
-use crate::util::{deserialize_rfc1123, format_http_range};
-use crate::{ClientOptions, ObjectMeta, Result};
+use crate::util::deserialize_rfc1123;
+use crate::{ClientOptions, GetOptions, ObjectMeta, Result};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use percent_encoding::percent_decode_str;
-use reqwest::header::{CONTENT_TYPE, RANGE};
+use reqwest::header::CONTENT_TYPE;
 use reqwest::{Method, Response, StatusCode};
 use serde::Deserialize;
 use snafu::{OptionExt, ResultExt, Snafu};
-use std::ops::Range;
 use url::Url;
 
 #[derive(Debug, Snafu)]
@@ -229,19 +229,12 @@ impl Client {
         Ok(())
     }
 
-    pub async fn get(
-        &self,
-        location: &Path,
-        range: Option<Range<usize>>,
-    ) -> Result<Response> {
+    pub async fn get(&self, location: &Path, options: GetOptions) -> Result<Response> {
         let url = self.path_url(location);
-        let mut builder = self.client.get(url);
-
-        if let Some(range) = range {
-            builder = builder.header(RANGE, format_http_range(range));
-        }
+        let builder = self.client.get(url);
 
         builder
+            .with_get_options(options)
             .send_retry(&self.retry_config)
             .await
             .map_err(|source| match source.status() {
