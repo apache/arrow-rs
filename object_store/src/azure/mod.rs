@@ -151,10 +151,9 @@ enum Error {
 impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
         match source {
-            Error::UnknownConfigurationKey { key } => Self::UnknownConfigurationKey {
-                store: STORE,
-                key,
-            },
+            Error::UnknownConfigurationKey { key } => {
+                Self::UnknownConfigurationKey { store: STORE, key }
+            }
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(source),

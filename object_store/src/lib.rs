@@ -575,14 +575,16 @@ pub struct ObjectMeta {
     pub e_tag: Option<String>,
 }
 
-/// Options for a get request
+/// Options for a get request, such as range
 #[derive(Debug, Default)]
 pub struct GetOptions {
-    /// Request will succeed if the ETag matches
+    /// Request will succeed if the `ObjectMeta::e_tag` matches
+    /// otherwise returning [`Error::Precondition`]
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-if-match>
     pub if_match: Option<String>,
-    /// Request will succeed if the ETag does not match
+    /// Request will succeed if the `ObjectMeta::e_tag` does not match
+    /// otherwise returning [`Error::NotModified`]
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.2>
     pub if_none_match: Option<String>,
@@ -591,6 +593,7 @@ pub struct GetOptions {
     /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.3>
     pub if_modified_since: Option<DateTime<Utc>>,
     /// Request will succeed if the object has not been modified since
+    /// otherwise returning [`Error::Precondition`]
     ///
     /// Some stores, such as S3, will only return `NotModified` for exact
     /// timestamp matches, instead of for any timestamp greater than or equal.
@@ -598,6 +601,7 @@ pub struct GetOptions {
     /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.4>
     pub if_unmodified_since: Option<DateTime<Utc>>,
     /// Request transfer of only the specified range of bytes
+    /// otherwise returning [`Error::NotModified`]
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
     pub range: Option<Range<usize>>,
