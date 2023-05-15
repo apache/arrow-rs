@@ -38,7 +38,6 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
-use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
@@ -50,9 +49,9 @@ use std::{collections::BTreeSet, str::FromStr};
 use tokio::io::AsyncWrite;
 use url::Url;
 
+use crate::client::header::header_meta;
 use crate::client::ClientConfigKey;
 use crate::config::ConfigValue;
-use crate::util::RFC1123_FMT;
 pub use credential::authority_hosts;
 
 mod client;
@@ -75,24 +74,6 @@ const MSI_ENDPOINT_ENV_KEY: &str = "IDENTITY_ENDPOINT";
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
 enum Error {
-    #[snafu(display("Last-Modified Header missing from response"))]
-    MissingLastModified,
-
-    #[snafu(display("Content-Length Header missing from response"))]
-    MissingContentLength,
-
-    #[snafu(display("Invalid last modified '{}': {}", last_modified, source))]
-    InvalidLastModified {
-        last_modified: String,
-        source: chrono::ParseError,
-    },
-
-    #[snafu(display("Invalid content length '{}': {}", content_length, source))]
-    InvalidContentLength {
-        content_length: String,
-        source: std::num::ParseIntError,
-    },
-
     #[snafu(display("Received header containing non-ASCII data"))]
     BadHeader { source: reqwest::header::ToStrError },
 
@@ -146,6 +127,11 @@ enum Error {
 
     #[snafu(display("ETag Header missing from response"))]
     MissingEtag,
+
+    #[snafu(display("Failed to parse headers: {}", source))]
+    Header {
+        source: crate::client::header::Error,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -223,44 +209,12 @@ impl ObjectStore for MicrosoftAzure {
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        use reqwest::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
         let options = GetOptions::default();
 
         // Extract meta from headers
         // https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
         let response = self.client.get_request(location, options, true).await?;
-        let headers = response.headers();
-
-        let last_modified = headers
-            .get(LAST_MODIFIED)
-            .ok_or(Error::MissingLastModified)?
-            .to_str()
-            .context(BadHeaderSnafu)?;
-        let last_modified = Utc
-            .datetime_from_str(last_modified, RFC1123_FMT)
-            .context(InvalidLastModifiedSnafu { last_modified })?;
-
-        let content_length = headers
-            .get(CONTENT_LENGTH)
-            .ok_or(Error::MissingContentLength)?
-            .to_str()
-            .context(BadHeaderSnafu)?;
-        let content_length = content_length
-            .parse()
-            .context(InvalidContentLengthSnafu { content_length })?;
-
-        let e_tag = headers
-            .get(ETAG)
-            .ok_or(Error::MissingEtag)?
-            .to_str()
-            .context(BadHeaderSnafu)?;
-
-        Ok(ObjectMeta {
-            location: location.clone(),
-            last_modified,
-            size: content_length,
-            e_tag: Some(e_tag.to_string()),
-        })
+        Ok(header_meta(location, response.headers()).context(HeaderSnafu)?)
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {

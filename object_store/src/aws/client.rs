@@ -18,6 +18,7 @@
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt, CredentialProvider};
 use crate::aws::{STORE, STRICT_PATH_ENCODE_SET};
+use crate::client::list::ListResponse;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
@@ -25,13 +26,12 @@ use crate::multipart::UploadPart;
 use crate::path::DELIMITER;
 use crate::util::format_prefix;
 use crate::{
-    BoxStream, ClientOptions, GetOptions, ListResult, MultipartId, ObjectMeta, Path,
-    Result, RetryConfig, StreamExt,
+    BoxStream, ClientOptions, GetOptions, ListResult, MultipartId, Path, Result,
+    RetryConfig, StreamExt,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
-use chrono::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use reqwest::{header::CONTENT_TYPE, Client as ReqwestClient, Method, Response};
 use serde::{Deserialize, Serialize};
@@ -106,69 +106,6 @@ impl From<Error> for crate::Error {
                 source: Box::new(err),
             },
         }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct ListResponse {
-    #[serde(default)]
-    pub contents: Vec<ListContents>,
-    #[serde(default)]
-    pub common_prefixes: Vec<ListPrefix>,
-    #[serde(default)]
-    pub next_continuation_token: Option<String>,
-}
-
-impl TryFrom<ListResponse> for ListResult {
-    type Error = crate::Error;
-
-    fn try_from(value: ListResponse) -> Result<Self> {
-        let common_prefixes = value
-            .common_prefixes
-            .into_iter()
-            .map(|x| Ok(Path::parse(x.prefix)?))
-            .collect::<Result<_>>()?;
-
-        let objects = value
-            .contents
-            .into_iter()
-            .map(TryFrom::try_from)
-            .collect::<Result<_>>()?;
-
-        Ok(Self {
-            common_prefixes,
-            objects,
-        })
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct ListPrefix {
-    pub prefix: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct ListContents {
-    pub key: String,
-    pub size: usize,
-    pub last_modified: DateTime<Utc>,
-    #[serde(rename = "ETag")]
-    pub e_tag: Option<String>,
-}
-
-impl TryFrom<ListContents> for ObjectMeta {
-    type Error = crate::Error;
-
-    fn try_from(value: ListContents) -> Result<Self> {
-        Ok(Self {
-            location: Path::parse(value.key)?,
-            last_modified: value.last_modified,
-            size: value.size,
-            e_tag: value.e_tag,
-        })
     }
 }
 
