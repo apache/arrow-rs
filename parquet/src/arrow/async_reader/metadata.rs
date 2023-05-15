@@ -237,8 +237,6 @@ where
 }
 
 /// Fetches parquet metadata
-///
-/// See [`MetadataLoader::load`]
 pub async fn fetch_parquet_metadata<F, Fut>(
     fetch: F,
     file_size: usize,
