@@ -48,7 +48,9 @@ pub trait RecordBatchWriter {
     /// Write a single batch to the writer.
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError>;
 
-    /// TODO.
+    /// Write footer or termination data, then mark the writer as done. After this 
+    /// function has been called, no more call to [`RecordBatchWriter::write`] should be 
+    /// made.
     fn finish(&mut self) -> Result<(), ArrowError>;
 }
 
