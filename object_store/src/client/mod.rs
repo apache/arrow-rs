@@ -20,9 +20,18 @@
 pub mod backoff;
 #[cfg(test)]
 pub mod mock_server;
+
+pub mod retry;
+
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod pagination;
-pub mod retry;
+
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub mod get;
+
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub mod list;
+
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod token;
 
@@ -30,7 +39,7 @@ pub mod token;
 pub mod header;
 
 #[cfg(any(feature = "aws", feature = "gcp"))]
-pub mod list;
+pub mod list_response;
 
 use std::collections::HashMap;
 use std::str::FromStr;
