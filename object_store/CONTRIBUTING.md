@@ -103,7 +103,7 @@ To test the GCS integration, we use [Fake GCS Server](https://github.com/fsouza/
 Startup the fake server:
 
 ```shell
-docker run -p 4443:4443 fsouza/fake-gcs-server -scheme http
+docker run -p 4443:4443 tustvold/fake-gcs-server -scheme http
 ```
 
 Configure the account:
