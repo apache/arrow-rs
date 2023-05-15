@@ -47,6 +47,9 @@ pub trait RecordBatchReader: Iterator<Item = Result<RecordBatch, ArrowError>> {
 pub trait RecordBatchWriter {
     /// Write a single batch to the writer.
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError>;
+
+    /// TODO.
+    fn finish(&mut self) -> Result<(), ArrowError>;
 }
 
 /// A two-dimensional batch of column-oriented data with a defined
