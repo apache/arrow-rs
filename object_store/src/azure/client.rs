@@ -262,7 +262,7 @@ impl AzureClient {
                 Err(crate::Error::NotFound {
                     path: path.to_string(),
                     source: format!(
-                        "Not a directory, got x-ms-resource-type: {}",
+                        "Not a file, got x-ms-resource-type: {}",
                         String::from_utf8_lossy(resource.as_ref())
                     )
                     .into(),
