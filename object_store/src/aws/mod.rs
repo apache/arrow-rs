@@ -48,11 +48,13 @@ use url::Url;
 pub use crate::aws::checksum::Checksum;
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
-    AwsCredential, CredentialProvider, InstanceCredentialProvider,
-    StaticCredentialProvider, WebIdentityProvider,
+    AwsCredential, InstanceCredentialProvider, WebIdentityProvider,
 };
 use crate::client::header::header_meta;
-use crate::client::ClientConfigKey;
+use crate::client::{
+    ClientConfigKey, CredentialProvider, StaticCredentialProvider,
+    TokenCredentialProvider,
+};
 use crate::config::ConfigValue;
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
 use crate::{
@@ -79,6 +81,8 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
 const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 
 const STORE: &str = "S3";
+
+type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
 
 /// Default metadata endpoint
 static METADATA_ENDPOINT: &str = "http://169.254.169.254";
@@ -992,13 +996,12 @@ impl AmazonS3Builder {
         let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
             (Some(key_id), Some(secret_key), token) => {
                 info!("Using Static credential provider");
-                Box::new(StaticCredentialProvider {
-                    credential: Arc::new(AwsCredential {
-                        key_id,
-                        secret_key,
-                        token,
-                    }),
-                }) as _
+                let credential = AwsCredential {
+                    key_id,
+                    secret_key,
+                    token,
+                };
+                Arc::new(StaticCredentialProvider::new(credential)) as _
             }
             (None, Some(_), _) => return Err(Error::MissingAccessKeyId.into()),
             (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
@@ -1022,15 +1025,18 @@ impl AmazonS3Builder {
                         .with_allow_http(false)
                         .client()?;
 
-                    Box::new(WebIdentityProvider {
-                        cache: Default::default(),
+                    let token = WebIdentityProvider {
                         token_path,
                         session_name,
                         role_arn,
                         endpoint,
+                    };
+
+                    Arc::new(TokenCredentialProvider::new(
+                        token,
                         client,
-                        retry_config: self.retry_config.clone(),
-                    }) as _
+                        self.retry_config.clone(),
+                    )) as _
                 }
                 _ => match self.profile {
                     Some(profile) => {
@@ -1044,15 +1050,19 @@ impl AmazonS3Builder {
                         let client_options =
                             self.client_options.clone().with_allow_http(true);
 
-                        Box::new(InstanceCredentialProvider {
+                        let token = InstanceCredentialProvider {
                             cache: Default::default(),
-                            client: client_options.client()?,
-                            retry_config: self.retry_config.clone(),
                             imdsv1_fallback: self.imdsv1_fallback.get()?,
                             metadata_endpoint: self
                                 .metadata_endpoint
                                 .unwrap_or_else(|| METADATA_ENDPOINT.into()),
-                        }) as _
+                        };
+
+                        Arc::new(TokenCredentialProvider::new(
+                            token,
+                            client_options.client()?,
+                            self.retry_config.clone(),
+                        )) as _
                     }
                 },
             },
@@ -1095,18 +1105,15 @@ impl AmazonS3Builder {
 }
 
 #[cfg(feature = "aws_profile")]
-fn profile_credentials(
-    profile: String,
-    region: String,
-) -> Result<Box<dyn CredentialProvider>> {
-    Ok(Box::new(credential::ProfileProvider::new(profile, region)))
+fn profile_credentials(profile: String, region: String) -> Result<AwsCredentialProvider> {
+    Ok(Arc::new(credential::ProfileProvider::new(profile, region)))
 }
 
 #[cfg(not(feature = "aws_profile"))]
 fn profile_credentials(
     _profile: String,
     _region: String,
-) -> Result<Box<dyn CredentialProvider>> {
+) -> Result<AwsCredentialProvider> {
     Err(Error::MissingProfileFeature.into())
 }
 
