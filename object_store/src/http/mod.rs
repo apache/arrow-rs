@@ -60,15 +60,6 @@ enum Error {
         url: String,
     },
 
-    #[snafu(display("Object is a directory"))]
-    IsDirectory,
-
-    #[snafu(display("PROPFIND response contained no valid objects"))]
-    NoObjects,
-
-    #[snafu(display("PROPFIND response contained more than one object"))]
-    MultipleObjects,
-
     #[snafu(display("Request error: {}", source))]
     Reqwest { source: reqwest::Error },
 }
@@ -134,12 +125,17 @@ impl ObjectStore for HttpStore {
                 let response = status.response.into_iter().next().unwrap();
                 response.check_ok()?;
                 match response.is_dir() {
-                    true => Err(Error::IsDirectory.into()),
+                    true => Err(crate::Error::NotFound {
+                        path: location.to_string(),
+                        source: "Is directory".to_string().into(),
+                    }),
                     false => response.object_meta(self.client.base_url()),
                 }
             }
-            0 => Err(Error::NoObjects.into()),
-            _ => Err(Error::MultipleObjects.into()),
+            x => Err(crate::Error::NotFound {
+                path: location.to_string(),
+                source: format!("Expected 1 result, got {x}").into(),
+            }),
         }
     }
 
