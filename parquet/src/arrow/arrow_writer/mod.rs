@@ -252,7 +252,8 @@ impl<W: Write> RecordBatchWriter for ArrowWriter<W> {
     }
 
     fn finish(self) -> std::result::Result<(), ArrowError> {
-        self.close().map(|_| ()).map_err(ArrowError::from)
+        self.close()?;
+        Ok(())
     }
 }
 
