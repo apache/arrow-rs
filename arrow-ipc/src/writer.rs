@@ -863,7 +863,7 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
     }
 
     fn close(mut self) -> Result<(), ArrowError> {
-        FileWriter::finish(&mut self)
+        self.finish()
     }
 }
 
