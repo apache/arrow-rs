@@ -64,6 +64,9 @@ mod checksum;
 mod client;
 mod credential;
 
+#[cfg(feature = "aws_profile")]
+mod profile;
+
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 //
 // Do not URI-encode any of the unreserved characters that RFC 3986 defines:
@@ -985,8 +988,14 @@ impl AmazonS3Builder {
             self.parse_url(&url)?;
         }
 
+        let region = match (self.region.clone(), self.profile.clone()) {
+            (Some(region), _) => Some(region),
+            (None, Some(profile)) => profile_region(profile),
+            (None, None) => None,
+        };
+
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
-        let region = self.region.context(MissingRegionSnafu)?;
+        let region = region.context(MissingRegionSnafu)?;
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
 
         let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
@@ -1095,11 +1104,29 @@ impl AmazonS3Builder {
 }
 
 #[cfg(feature = "aws_profile")]
+fn profile_region(profile: String) -> Option<String> {
+    use tokio::runtime::Handle;
+
+    let handle = Handle::current();
+    let provider = profile::ProfileProvider::new(profile, None);
+
+    handle.block_on(provider.get_region())
+}
+
+#[cfg(feature = "aws_profile")]
 fn profile_credentials(
     profile: String,
     region: String,
 ) -> Result<Box<dyn CredentialProvider>> {
-    Ok(Box::new(credential::ProfileProvider::new(profile, region)))
+    Ok(Box::new(profile::ProfileProvider::new(
+        profile,
+        Some(region),
+    )))
+}
+
+#[cfg(not(feature = "aws_profile"))]
+fn profile_region(_profile: String) -> Option<String> {
+    None
 }
 
 #[cfg(not(feature = "aws_profile"))]
@@ -1592,5 +1619,52 @@ mod s3_resolve_bucket_region_tests {
         let result = resolve_bucket_region(bucket, &ClientOptions::new()).await;
 
         assert!(result.is_err());
+    }
+}
+
+#[cfg(all(test, feature = "aws_profile"))]
+mod profile_tests {
+    use super::*;
+    use std::env;
+
+    use super::profile::{TEST_PROFILE_NAME, TEST_PROFILE_REGION};
+
+    #[tokio::test]
+    async fn s3_test_region_from_profile() {
+        let s3_url = "s3://bucket/prefix".to_owned();
+
+        let s3 = AmazonS3Builder::new()
+            .with_url(s3_url)
+            .with_profile(TEST_PROFILE_NAME)
+            .build()
+            .unwrap();
+
+        let region = &s3.client.config().region;
+
+        assert_eq!(region, TEST_PROFILE_REGION);
+    }
+
+    #[test]
+    fn s3_test_region_override() {
+        let s3_url = "s3://bucket/prefix".to_owned();
+
+        let aws_profile =
+            env::var("AWS_PROFILE").unwrap_or_else(|_| TEST_PROFILE_NAME.into());
+
+        let aws_region =
+            env::var("AWS_REGION").unwrap_or_else(|_| "object_store:fake_region".into());
+
+        env::set_var("AWS_PROFILE", aws_profile);
+
+        let s3 = AmazonS3Builder::from_env()
+            .with_url(s3_url)
+            .with_region(aws_region.clone())
+            .build()
+            .unwrap();
+
+        let actual = &s3.client.config().region;
+        let expected = &aws_region;
+
+        assert_eq!(actual, expected);
     }
 }
