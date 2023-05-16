@@ -976,8 +976,6 @@ impl MicrosoftAzureBuilder {
             } else if self.use_azure_cli.get()? {
                 Arc::new(credential::AzureCliCredential::new()) as _
             } else {
-                let client =
-                    self.client_options.clone().with_allow_http(true).client()?;
                 let msi_credential = credential::ImdsManagedIdentityProvider::new(
                     self.client_id,
                     self.object_id,
@@ -986,7 +984,7 @@ impl MicrosoftAzureBuilder {
                 );
                 Arc::new(TokenCredentialProvider::new(
                     msi_credential,
-                    client,
+                    self.client_options.clone().with_allow_http(true).client()?,
                     self.retry_config.clone(),
                 )) as _
             };

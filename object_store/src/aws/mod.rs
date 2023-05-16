@@ -1046,10 +1046,6 @@ impl AmazonS3Builder {
                     None => {
                         info!("Using Instance credential provider");
 
-                        // The instance metadata endpoint is access over HTTP
-                        let client_options =
-                            self.client_options.clone().with_allow_http(true);
-
                         let token = InstanceCredentialProvider {
                             cache: Default::default(),
                             imdsv1_fallback: self.imdsv1_fallback.get()?,
@@ -1060,7 +1056,8 @@ impl AmazonS3Builder {
 
                         Arc::new(TokenCredentialProvider::new(
                             token,
-                            client_options.client()?,
+                            // The instance metadata endpoint is access over HTTP
+                            self.client_options.clone().with_allow_http(true).client()?,
                             self.retry_config.clone(),
                         )) as _
                     }

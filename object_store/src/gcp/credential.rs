@@ -476,6 +476,7 @@ impl ApplicationDefaultCredentialsFile {
 
 const DEFAULT_TOKEN_GCP_URI: &str = "https://accounts.google.com/o/oauth2/token";
 
+/// <https://google.aip.dev/auth/4113>
 #[derive(Debug)]
 struct AuthorizedUserCredentials {
     client_id: String,
