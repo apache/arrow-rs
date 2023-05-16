@@ -594,6 +594,10 @@ where
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         self.write(batch)
     }
+
+    fn finish(mut self) -> Result<(), ArrowError> {
+        Writer::finish(&mut self)
+    }
 }
 
 #[cfg(test)]
@@ -1262,15 +1266,16 @@ mod tests {
     #[test]
     fn json_writer_empty() {
         let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
-        writer.finish().unwrap();
+        ArrayWriter::finish(&mut writer).unwrap();
         assert_eq!(String::from_utf8(writer.into_inner()).unwrap(), "");
     }
+
     #[test]
     fn json_writer_one_row() {
         let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
         let v = json!({ "an": "object" });
         writer.write_row(&v).unwrap();
-        writer.finish().unwrap();
+        ArrayWriter::finish(&mut writer).unwrap();
         assert_eq!(
             String::from_utf8(writer.into_inner()).unwrap(),
             r#"[{"an":"object"}]"#
@@ -1284,7 +1289,7 @@ mod tests {
         writer.write_row(&v).unwrap();
         let v = json!({ "another": "object" });
         writer.write_row(&v).unwrap();
-        writer.finish().unwrap();
+        ArrayWriter::finish(&mut writer).unwrap();
         assert_eq!(
             String::from_utf8(writer.into_inner()).unwrap(),
             r#"[{"an":"object"},{"another":"object"}]"#
