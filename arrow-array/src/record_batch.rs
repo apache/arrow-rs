@@ -49,7 +49,7 @@ pub trait RecordBatchWriter {
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError>;
 
     /// Write footer or termination data, then mark the writer as done.
-    fn finish(self) -> Result<(), ArrowError>;
+    fn close(self) -> Result<(), ArrowError>;
 }
 
 /// A two-dimensional batch of column-oriented data with a defined

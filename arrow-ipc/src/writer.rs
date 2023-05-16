@@ -851,7 +851,7 @@ impl<W: Write> FileWriter<W> {
     /// writer.
     pub fn into_inner(mut self) -> Result<W, ArrowError> {
         if !self.finished {
-            FileWriter::finish(&mut self)?;
+            self.finish()?;
         }
         self.writer.into_inner().map_err(ArrowError::from)
     }
@@ -862,7 +862,7 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
         self.write(batch)
     }
 
-    fn finish(mut self) -> Result<(), ArrowError> {
+    fn close(mut self) -> Result<(), ArrowError> {
         FileWriter::finish(&mut self)
     }
 }
@@ -995,7 +995,7 @@ impl<W: Write> StreamWriter<W> {
     /// ```
     pub fn into_inner(mut self) -> Result<W, ArrowError> {
         if !self.finished {
-            StreamWriter::finish(&mut self)?;
+            self.finish()?;
         }
         self.writer.into_inner().map_err(ArrowError::from)
     }
@@ -1006,8 +1006,8 @@ impl<W: Write> RecordBatchWriter for StreamWriter<W> {
         self.write(batch)
     }
 
-    fn finish(mut self) -> Result<(), ArrowError> {
-        StreamWriter::finish(&mut self)
+    fn close(mut self) -> Result<(), ArrowError> {
+        self.finish()
     }
 }
 
@@ -1805,7 +1805,7 @@ mod tests {
         let buffer: Vec<u8> = Vec::new();
         let mut stream_writer = StreamWriter::try_new(buffer, &record.schema()).unwrap();
         stream_writer.write(record).unwrap();
-        StreamWriter::finish(&mut stream_writer).unwrap();
+        stream_writer.finish().unwrap();
         stream_writer.into_inner().unwrap()
     }
 
@@ -2061,7 +2061,7 @@ mod tests {
 
         let mut writer = StreamWriter::try_new(Vec::<u8>::new(), &schema).unwrap();
         writer.write(&batch).unwrap();
-        StreamWriter::finish(&mut writer).unwrap();
+        writer.finish().unwrap();
         let data = writer.into_inner().unwrap();
 
         let mut reader = StreamReader::try_new(Cursor::new(data), None).unwrap();
@@ -2154,7 +2154,7 @@ mod tests {
 
         let mut writer = FileWriter::try_new(Vec::<u8>::new(), &schema).unwrap();
         writer.write(&batch).unwrap();
-        FileWriter::finish(&mut writer).unwrap();
+        writer.finish().unwrap();
         let data = writer.into_inner().unwrap();
 
         let mut reader = FileReader::try_new(Cursor::new(data), None).unwrap();

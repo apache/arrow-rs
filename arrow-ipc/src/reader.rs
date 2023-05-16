@@ -1510,6 +1510,8 @@ mod tests {
         stream_writer.write(&batch).unwrap();
         stream_writer.finish().unwrap();
 
+        drop(stream_writer);
+
         file.rewind().unwrap();
 
         // read stream back
@@ -1556,6 +1558,7 @@ mod tests {
             crate::writer::FileWriter::try_new(&mut buf, &rb.schema()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
+        drop(writer);
 
         let mut reader =
             crate::reader::FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
@@ -1568,6 +1571,7 @@ mod tests {
             crate::writer::StreamWriter::try_new(&mut buf, &rb.schema()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
+        drop(writer);
 
         let mut reader =
             crate::reader::StreamReader::try_new(std::io::Cursor::new(buf), None)
@@ -1587,6 +1591,7 @@ mod tests {
             writer.write_metadata(k, v);
         }
         writer.finish().unwrap();
+        drop(writer);
 
         let reader =
             crate::reader::FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();

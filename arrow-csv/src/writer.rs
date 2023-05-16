@@ -198,7 +198,7 @@ impl<W: Write> RecordBatchWriter for Writer<W> {
         self.write(batch)
     }
 
-    fn finish(self) -> Result<(), ArrowError> {
+    fn close(self) -> Result<(), ArrowError> {
         Ok(())
     }
 }
