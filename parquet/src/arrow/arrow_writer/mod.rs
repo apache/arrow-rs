@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Decimal128Type, Int32Type, Int64Type, UInt32Type, UInt64Type};
-use arrow_array::{types, Array, ArrayRef, RecordBatch, RecordBatchWriter};
+use arrow_array::{types, Array, ArrayRef, RecordBatch, RecordBatchWriter, FixedSizeListArray};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
 use super::schema::{
@@ -310,6 +310,14 @@ fn write_leaves<W: Write>(
             write_leaves(row_group_writer, &arrays, levels)?;
             Ok(())
         }
+        ArrowDataType::FixedSizeList(_, _) => {
+            let arrays: Vec<_> = arrays.iter().map(|array|{
+                array.as_any().downcast_ref::<FixedSizeListArray>().unwrap().values().clone()
+            }).collect();
+
+            write_leaves(row_group_writer, &arrays, levels)?;
+            Ok(())
+        }
         ArrowDataType::LargeList(_) => {
             let arrays: Vec<_> = arrays.iter().map(|array|{
                 array.as_list::<i64>().values().clone()
@@ -375,7 +383,7 @@ fn write_leaves<W: Write>(
         ArrowDataType::Float16 => Err(ParquetError::ArrowError(
             "Float16 arrays not supported".to_string(),
         )),
-        ArrowDataType::FixedSizeList(_, _) | ArrowDataType::Union(_, _) | ArrowDataType::RunEndEncoded(_, _) => {
+        ArrowDataType::Union(_, _) | ArrowDataType::RunEndEncoded(_, _) => {
             Err(ParquetError::NYI(
                 format!(
                     "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"

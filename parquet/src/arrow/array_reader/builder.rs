@@ -62,6 +62,9 @@ fn build_reader(
             DataType::Map(_, _) => build_map_reader(field, mask, row_groups),
             DataType::Struct(_) => build_struct_reader(field, mask, row_groups),
             DataType::List(_) => build_list_reader(field, mask, false, row_groups),
+            DataType::FixedSizeList(_, _) => {
+                build_list_reader(field, mask, false, row_groups)
+            }
             DataType::LargeList(_) => build_list_reader(field, mask, true, row_groups),
             d => unimplemented!("reading group type {} not implemented", d),
         },
@@ -137,6 +140,10 @@ fn build_list_reader(
                 DataType::List(f) => {
                     DataType::List(Arc::new(f.as_ref().clone().with_data_type(item_type)))
                 }
+                DataType::FixedSizeList(f, value_length) => DataType::FixedSizeList(
+                    Arc::new(f.as_ref().clone().with_data_type(item_type)),
+                    *value_length,
+                ),
                 DataType::LargeList(f) => DataType::LargeList(Arc::new(
                     f.as_ref().clone().with_data_type(item_type),
                 )),

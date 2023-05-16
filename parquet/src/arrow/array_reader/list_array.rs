@@ -18,6 +18,7 @@
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::ParquetError;
 use crate::errors::Result;
+use arrow_array::FixedSizeListArray;
 use arrow_array::{
     builder::BooleanBufferBuilder, new_empty_array, Array, ArrayRef, GenericListArray,
     OffsetSizeTrait,
@@ -227,8 +228,13 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 
         let list_data = unsafe { data_builder.build_unchecked() };
 
-        let result_array = GenericListArray::<OffsetSize>::from(list_data);
-        Ok(Arc::new(result_array))
+        let result_array: ArrayRef = match *list_data.data_type() {
+            ArrowType::FixedSizeList(_, _) => {
+                Arc::new(FixedSizeListArray::from(list_data))
+            }
+            _ => Arc::new(GenericListArray::<OffsetSize>::from(list_data)),
+        };
+        Ok(result_array)
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {

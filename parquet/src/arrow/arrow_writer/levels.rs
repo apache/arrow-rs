@@ -42,7 +42,7 @@
 
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait, StructArray};
+use arrow_array::{Array, ArrayRef, FixedSizeListArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
@@ -143,6 +143,7 @@ impl LevelInfoBuilder {
                 Ok(Self::Struct(children, ctx))
             }
             DataType::List(child)
+            | DataType::FixedSizeList(child, _)
             | DataType::LargeList(child)
             | DataType::Map(child, _) => {
                 let def_level = match field.is_nullable() {
@@ -193,6 +194,12 @@ impl LevelInfoBuilder {
                     array.values(),
                     range,
                 )
+            }
+            DataType::FixedSizeList(_, _) => {
+                let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+                let offsets: Vec<_> =
+                    (0..=array.len()).map(|i| array.value_offset(i)).collect();
+                self.write_list(&offsets, array.nulls(), array.values(), range)
             }
             DataType::LargeList(_) => {
                 let array = array.as_list::<i64>();
