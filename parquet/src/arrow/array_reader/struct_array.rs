@@ -15,18 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::ArrayReader;
-use crate::errors::{ParquetError, Result};
-use arrow_array::{builder::BooleanBufferBuilder, Array, ArrayRef, StructArray};
-use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
+
+use arrow_array::{builder::BooleanBufferBuilder, Array, ArrayRef, StructArray};
+use arrow_buffer::NullBuffer;
+use arrow_schema::{DataType as ArrowType, DataType, Fields};
+
+use crate::arrow::array_reader::ArrayReader;
+use crate::errors::{ParquetError, Result};
 
 /// Implementation of struct array reader.
 pub struct StructArrayReader {
     children: Vec<Box<dyn ArrayReader>>,
-    data_type: ArrowType,
+    fields: Fields,
     struct_def_level: i16,
     struct_rep_level: i16,
     nullable: bool,
@@ -35,14 +37,14 @@ pub struct StructArrayReader {
 impl StructArrayReader {
     /// Construct struct array reader.
     pub fn new(
-        data_type: ArrowType,
+        fields: Fields,
         children: Vec<Box<dyn ArrayReader>>,
         def_level: i16,
         rep_level: i16,
         nullable: bool,
     ) -> Self {
         Self {
-            data_type,
+            fields,
             children,
             struct_def_level: def_level,
             struct_rep_level: rep_level,
@@ -58,8 +60,8 @@ impl ArrayReader for StructArrayReader {
 
     /// Returns data type.
     /// This must be a struct.
-    fn get_data_type(&self) -> &ArrowType {
-        &self.data_type
+    fn get_data_type(&self) -> ArrowType {
+        DataType::Struct(self.fields.clone())
     }
 
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {
@@ -124,17 +126,7 @@ impl ArrayReader for StructArrayReader {
             return Err(general_err!("Not all children array length are the same!"));
         }
 
-        // Now we can build array data
-        let mut array_data_builder = ArrayDataBuilder::new(self.data_type.clone())
-            .len(children_array_len)
-            .child_data(
-                children_array
-                    .iter()
-                    .map(|x| x.to_data())
-                    .collect::<Vec<ArrayData>>(),
-            );
-
-        if self.nullable {
+        let nulls = if self.nullable {
             // calculate struct def level data
 
             // children should have consistent view of parent, only need to inspect first child
@@ -169,12 +161,16 @@ impl ArrayReader for StructArrayReader {
                 return Err(general_err!("Failed to decode level data for struct array"));
             }
 
-            array_data_builder =
-                array_data_builder.null_bit_buffer(Some(bitmap_builder.into()));
-        }
+            Some(NullBuffer::new(bitmap_builder.finish()))
+        } else {
+            None
+        };
 
-        let array_data = unsafe { array_data_builder.build_unchecked() };
-        Ok(Arc::new(StructArray::from(array_data)))
+        // This cannot use new as the nullability check trips when nested within a nullable
+        // list, as we rely on the parent ListArrayReader to strip out the nulls (#4252)
+        Ok(Arc::new(unsafe {
+            StructArray::new_unchecked(self.fields.clone(), children_array, nulls)
+        }))
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
@@ -212,14 +208,17 @@ impl ArrayReader for StructArrayReader {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::arrow::array_reader::test_util::InMemoryArrayReader;
-    use crate::arrow::array_reader::ListArrayReader;
     use arrow::buffer::Buffer;
     use arrow::datatypes::Field;
     use arrow_array::cast::AsArray;
     use arrow_array::{Array, Int32Array, ListArray};
-    use arrow_schema::Fields;
+    use arrow_buffer::BooleanBuffer;
+    use arrow_schema::{DataType, Fields};
+
+    use crate::arrow::array_reader::test_util::InMemoryArrayReader;
+    use crate::arrow::array_reader::ListArrayReader;
+
+    use super::*;
 
     #[test]
     fn test_struct_array_reader() {
@@ -239,13 +238,13 @@ mod tests {
             Some(vec![0, 1, 1, 1, 1]),
         );
 
-        let struct_type = ArrowType::Struct(Fields::from(vec![
+        let struct_fields = Fields::from(vec![
             Field::new("f1", array_1.data_type().clone(), true),
             Field::new("f2", array_2.data_type().clone(), true),
-        ]));
+        ]);
 
         let mut struct_array_reader = StructArrayReader::new(
-            struct_type,
+            struct_fields,
             vec![Box::new(array_reader_1), Box::new(array_reader_2)],
             1,
             1,
@@ -290,12 +289,11 @@ mod tests {
                 None,
             ]));
 
-        let validity = Buffer::from([0b00000111]);
-        let struct_fields = vec![(
-            Arc::new(Field::new("foo", expected_l.data_type().clone(), true)),
-            expected_l.clone() as ArrayRef,
-        )];
-        let expected = StructArray::from((struct_fields, validity));
+        let validity = BooleanBuffer::new(Buffer::from([0b00000111]), 0, 4);
+        let nulls = Some(NullBuffer::new(validity));
+        let list_field = Field::new("foo", expected_l.data_type().clone(), true);
+        let fields = Fields::from(vec![list_field]);
+        let expected = StructArray::new(fields.clone(), vec![expected_l], nulls);
 
         let array = Arc::new(Int32Array::from_iter(vec![
             Some(1),
@@ -314,19 +312,14 @@ mod tests {
 
         let list_reader = ListArrayReader::<i32>::new(
             Box::new(reader),
-            expected_l.data_type().clone(),
+            Arc::new(Field::new("item", DataType::Int32, true)),
             3,
             1,
             true,
         );
 
-        let mut struct_reader = StructArrayReader::new(
-            expected.data_type().clone(),
-            vec![Box::new(list_reader)],
-            1,
-            0,
-            true,
-        );
+        let mut struct_reader =
+            StructArrayReader::new(fields, vec![Box::new(list_reader)], 1, 0, true);
 
         let actual = struct_reader.next_batch(1024).unwrap();
         let actual = actual.as_struct();

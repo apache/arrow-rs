@@ -19,13 +19,13 @@ use crate::arrow::array_reader::ArrayReader;
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use arrow_array::{
-    builder::BooleanBufferBuilder, new_empty_array, Array, ArrayRef, GenericListArray,
+    builder::BooleanBufferBuilder, make_array, Array, ArrayRef, GenericListArray,
     OffsetSizeTrait,
 };
-use arrow_buffer::Buffer;
-use arrow_buffer::ToByteSlice;
-use arrow_data::{transform::MutableArrayData, ArrayData};
-use arrow_schema::DataType as ArrowType;
+use arrow_buffer::NullBuffer;
+use arrow_buffer::OffsetBuffer;
+use arrow_data::transform::MutableArrayData;
+use arrow_schema::{DataType as ArrowType, FieldRef};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -34,7 +34,7 @@ use std::sync::Arc;
 /// Implementation of list array reader.
 pub struct ListArrayReader<OffsetSize: OffsetSizeTrait> {
     item_reader: Box<dyn ArrayReader>,
-    data_type: ArrowType,
+    field: FieldRef,
     /// The definition level at which this list is not null
     def_level: i16,
     /// The repetition level that corresponds to a new value in this array
@@ -48,14 +48,14 @@ impl<OffsetSize: OffsetSizeTrait> ListArrayReader<OffsetSize> {
     /// Construct list array reader.
     pub fn new(
         item_reader: Box<dyn ArrayReader>,
-        data_type: ArrowType,
+        field: FieldRef,
         def_level: i16,
         rep_level: i16,
         nullable: bool,
     ) -> Self {
         Self {
             item_reader,
-            data_type,
+            field,
             def_level,
             rep_level,
             nullable,
@@ -72,8 +72,8 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 
     /// Returns data type.
     /// This must be a List.
-    fn get_data_type(&self) -> &ArrowType {
-        &self.data_type
+    fn get_data_type(&self) -> ArrowType {
+        GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(self.field.clone())
     }
 
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {
@@ -84,7 +84,12 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let next_batch_array = self.item_reader.consume_batch()?;
         if next_batch_array.len() == 0 {
-            return Ok(new_empty_array(&self.data_type));
+            return Ok(Arc::new(GenericListArray::<OffsetSize>::new(
+                self.field.clone(),
+                OffsetBuffer::new_empty(),
+                next_batch_array,
+                None,
+            )));
         }
 
         let def_levels = self
@@ -199,7 +204,8 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 
         let child_data = if skipped == 0 {
             // No filtered values - can reuse original array
-            next_batch_array.to_data()
+            drop(child_data_builder);
+            data
         } else {
             // One or more filtered values - must build new array
             if let Some(start) = filter_start.take() {
@@ -213,21 +219,13 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             return Err(general_err!("Failed to reconstruct list from level data"));
         }
 
-        let value_offsets = Buffer::from(&list_offsets.to_byte_slice());
-
-        let mut data_builder = ArrayData::builder(self.get_data_type().clone())
-            .len(list_offsets.len() - 1)
-            .add_buffer(value_offsets)
-            .add_child_data(child_data);
-
-        if let Some(builder) = validity {
-            assert_eq!(builder.len(), list_offsets.len() - 1);
-            data_builder = data_builder.null_bit_buffer(Some(builder.into()))
-        }
-
-        let list_data = unsafe { data_builder.build_unchecked() };
-
-        let result_array = GenericListArray::<OffsetSize>::from(list_data);
+        let result_array = GenericListArray::<OffsetSize>::new(
+            self.field.clone(),
+            // Safety: offsets are monotonically increasing by construction
+            unsafe { OffsetBuffer::new_unchecked(list_offsets.into()) },
+            make_array(child_data),
+            validity.map(|builder| NullBuffer::new(builder.into())),
+        );
         Ok(Arc::new(result_array))
     }
 
@@ -258,6 +256,7 @@ mod tests {
     use crate::schema::types::SchemaDescriptor;
     use arrow::datatypes::{Field, Int32Type as ArrowInt32, Int32Type};
     use arrow_array::{Array, PrimitiveArray};
+    use arrow_buffer::Buffer;
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::Fields;
     use std::sync::Arc;
@@ -265,9 +264,12 @@ mod tests {
     fn list_type<OffsetSize: OffsetSizeTrait>(
         data_type: ArrowType,
         item_nullable: bool,
-    ) -> ArrowType {
+    ) -> (FieldRef, ArrowType) {
         let field = Arc::new(Field::new("item", data_type, item_nullable));
-        GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field)
+        (
+            field.clone(),
+            GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field),
+        )
     }
 
     fn downcast<OffsetSize: OffsetSizeTrait>(
@@ -303,13 +305,13 @@ mod tests {
         // ]
 
         let l3_item_type = ArrowType::Int32;
-        let l3_type = list_type::<OffsetSize>(l3_item_type, true);
+        let (l3_field, l3_type) = list_type::<OffsetSize>(l3_item_type, true);
 
         let l2_item_type = l3_type.clone();
-        let l2_type = list_type::<OffsetSize>(l2_item_type, true);
+        let (l2_field, l2_type) = list_type::<OffsetSize>(l2_item_type, true);
 
         let l1_item_type = l2_type.clone();
-        let l1_type = list_type::<OffsetSize>(l1_item_type, false);
+        let (l1_field, l1_type) = list_type::<OffsetSize>(l1_item_type, false);
 
         let leaf = PrimitiveArray::<Int32Type>::from_iter(vec![
             Some(1),
@@ -385,16 +387,16 @@ mod tests {
 
         let l3 = ListArrayReader::<OffsetSize>::new(
             Box::new(item_array_reader),
-            l3_type,
+            l3_field,
             5,
             3,
             true,
         );
 
-        let l2 = ListArrayReader::<OffsetSize>::new(Box::new(l3), l2_type, 3, 2, false);
+        let l2 = ListArrayReader::<OffsetSize>::new(Box::new(l3), l2_field, 3, 2, false);
 
         let mut l1 =
-            ListArrayReader::<OffsetSize>::new(Box::new(l2), l1_type, 2, 1, true);
+            ListArrayReader::<OffsetSize>::new(Box::new(l2), l1_field, 2, 1, true);
 
         let expected_1 = expected.slice(0, 2);
         let expected_2 = expected.slice(2, 2);
@@ -440,7 +442,7 @@ mod tests {
 
         let mut list_array_reader = ListArrayReader::<OffsetSize>::new(
             Box::new(item_array_reader),
-            list_type::<OffsetSize>(ArrowType::Int32, true),
+            Arc::new(Field::new("item", ArrowType::Int32, true)),
             1,
             1,
             false,
@@ -492,7 +494,7 @@ mod tests {
 
         let mut list_array_reader = ListArrayReader::<OffsetSize>::new(
             Box::new(item_array_reader),
-            list_type::<OffsetSize>(ArrowType::Int32, true),
+            Arc::new(Field::new("item", ArrowType::Int32, true)),
             2,
             1,
             true,
@@ -577,7 +579,7 @@ mod tests {
             build_array_reader(fields.as_ref(), &mask, &file_reader).unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();
-        assert_eq!(batch.data_type(), array_reader.get_data_type());
+        assert_eq!(batch.data_type(), &array_reader.get_data_type());
         assert_eq!(
             batch.data_type(),
             &ArrowType::Struct(Fields::from(vec![Field::new(

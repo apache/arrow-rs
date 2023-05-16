@@ -137,8 +137,8 @@ impl ArrayReader for InMemoryArrayReader {
         self
     }
 
-    fn get_data_type(&self) -> &ArrowType {
-        &self.data_type
+    fn get_data_type(&self) -> ArrowType {
+        self.data_type.clone()
     }
 
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {

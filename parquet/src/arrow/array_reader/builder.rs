@@ -83,8 +83,8 @@ fn build_map_reader(
     match (key_reader, value_reader) {
         (Some(key_reader), Some(value_reader)) => {
             // Need to retrieve underlying data type to handle projection
-            let key_type = key_reader.get_data_type().clone();
-            let value_type = value_reader.get_data_type().clone();
+            let key_type = key_reader.get_data_type();
+            let value_type = value_reader.get_data_type();
 
             let data_type = match &field.arrow_type {
                 DataType::Map(map_field, is_sorted) => match map_field.data_type() {
@@ -132,28 +132,25 @@ fn build_list_reader(
     let reader = match build_reader(&children[0], mask, row_groups)? {
         Some(item_reader) => {
             // Need to retrieve underlying data type to handle projection
-            let item_type = item_reader.get_data_type().clone();
-            let data_type = match &field.arrow_type {
-                DataType::List(f) => {
-                    DataType::List(Arc::new(f.as_ref().clone().with_data_type(item_type)))
+            let item_type = item_reader.get_data_type();
+            let arrow_field = match &field.arrow_type {
+                DataType::List(f) | DataType::LargeList(f) => {
+                    Arc::new(f.as_ref().clone().with_data_type(item_type))
                 }
-                DataType::LargeList(f) => DataType::LargeList(Arc::new(
-                    f.as_ref().clone().with_data_type(item_type),
-                )),
                 _ => unreachable!(),
             };
 
             let reader = match is_large {
                 false => Box::new(ListArrayReader::<i32>::new(
                     item_reader,
-                    data_type,
+                    arrow_field,
                     field.def_level,
                     field.rep_level,
                     field.nullable,
                 )) as _,
                 true => Box::new(ListArrayReader::<i64>::new(
                     item_reader,
-                    data_type,
+                    arrow_field,
                     field.def_level,
                     field.rep_level,
                     field.nullable,
@@ -276,7 +273,7 @@ fn build_struct_reader(
     for (arrow, parquet) in arrow_fields.iter().zip(children) {
         if let Some(reader) = build_reader(parquet, mask, row_groups)? {
             // Need to retrieve underlying data type to handle projection
-            let child_type = reader.get_data_type().clone();
+            let child_type = reader.get_data_type();
             builder.push(arrow.as_ref().clone().with_data_type(child_type));
             readers.push(reader);
         }
@@ -287,7 +284,7 @@ fn build_struct_reader(
     }
 
     Ok(Some(Box::new(StructArrayReader::new(
-        DataType::Struct(builder.finish().fields),
+        builder.finish().fields,
         readers,
         field.def_level,
         field.rep_level,
@@ -329,6 +326,6 @@ mod tests {
             true,
         )]));
 
-        assert_eq!(array_reader.get_data_type(), &arrow_type);
+        assert_eq!(array_reader.get_data_type(), arrow_type);
     }
 }

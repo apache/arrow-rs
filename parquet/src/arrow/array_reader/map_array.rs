@@ -45,14 +45,14 @@ impl MapArrayReader {
         };
         let struct_rep_level = rep_level + 1;
 
-        let element = match &data_type {
-            ArrowType::Map(element, _) => match element.data_type() {
+        let (entries, fields) = match &data_type {
+            ArrowType::Map(entries, _) => match entries.data_type() {
                 ArrowType::Struct(fields) if fields.len() == 2 => {
                     // Parquet cannot represent nullability at this level (#1697)
                     // and so encountering nullability here indicates some manner
                     // of schema inconsistency / inference bug
-                    assert!(!element.is_nullable(), "map struct cannot be nullable");
-                    element
+                    assert!(!entries.is_nullable(), "map struct cannot be nullable");
+                    (entries.clone(), fields.clone())
                 }
                 _ => unreachable!("expected struct with two fields"),
             },
@@ -60,7 +60,7 @@ impl MapArrayReader {
         };
 
         let struct_reader = StructArrayReader::new(
-            element.data_type().clone(),
+            fields,
             vec![key_reader, value_reader],
             struct_def_level,
             struct_rep_level,
@@ -69,7 +69,7 @@ impl MapArrayReader {
 
         let reader = ListArrayReader::new(
             Box::new(struct_reader),
-            ArrowType::List(element.clone()),
+            entries,
             def_level,
             rep_level,
             nullable,
@@ -84,8 +84,8 @@ impl ArrayReader for MapArrayReader {
         self
     }
 
-    fn get_data_type(&self) -> &ArrowType {
-        &self.data_type
+    fn get_data_type(&self) -> ArrowType {
+        self.data_type.clone()
     }
 
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {

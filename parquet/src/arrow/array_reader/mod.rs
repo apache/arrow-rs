@@ -59,7 +59,7 @@ pub trait ArrayReader: Send {
     fn as_any(&self) -> &dyn Any;
 
     /// Returns the arrow type of this array reader.
-    fn get_data_type(&self) -> &ArrowType;
+    fn get_data_type(&self) -> ArrowType;
 
     /// Reads at most `batch_size` records into an arrow array and return it.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {

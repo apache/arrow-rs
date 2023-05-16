@@ -143,7 +143,7 @@ impl StructArray {
                 )));
             }
 
-            if let Some(a) = a.nulls() {
+            if let Some(a) = a.nulls().filter(|a| a.null_count() > 0) {
                 let nulls_valid = f.is_nullable()
                     || nulls.as_ref().map(|n| n.contains(a)).unwrap_or_default();
 
@@ -714,6 +714,21 @@ mod tests {
     fn test_struct_array_from_empty() {
         let sa = StructArray::from(vec![]);
         assert!(sa.is_empty())
+    }
+
+    #[test]
+    fn test_struct_array_nullability() {
+        let validity = Buffer::from_slice_ref(&[0xFF_u8]);
+        let nulls = NullBuffer::new(BooleanBuffer::new(validity, 0, 4));
+        let array = Int32Array::new(vec![1, 2, 3, 4].into(), Some(nulls));
+        assert!(array.nulls().is_some());
+
+        // Still valid as no unmasked nulls
+        StructArray::new(
+            vec![Field::new("a", DataType::Int32, false)].into(),
+            vec![Arc::new(array)],
+            None,
+        );
     }
 
     #[test]
