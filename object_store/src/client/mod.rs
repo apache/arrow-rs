@@ -536,7 +536,7 @@ where
     type Credential = T;
 
     async fn get_credential(&self) -> Result<Arc<T>> {
-        Ok(self.credential.clone())
+        Ok(Arc::clone(&self.credential))
     }
 }
 

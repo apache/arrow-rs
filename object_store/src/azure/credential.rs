@@ -87,7 +87,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 impl From<Error> for crate::Error {
     fn from(value: Error) -> Self {
-        crate::Error::Generic {
+        Self::Generic {
             store: STORE,
             source: Box::new(value),
         }

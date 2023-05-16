@@ -52,7 +52,7 @@ use crate::client::{
     ClientConfigKey, CredentialProvider, GetOptionsExt, StaticCredentialProvider,
     TokenCredentialProvider,
 };
-use crate::gcp::credential::{application_default_credentials, GoogleCredential};
+use crate::gcp::credential::{application_default_credentials, GcpCredential};
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
@@ -69,8 +69,7 @@ mod credential;
 
 const STORE: &str = "GCS";
 
-type GoogleCredentialProvider =
-    Arc<dyn CredentialProvider<Credential = GoogleCredential>>;
+type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -211,7 +210,7 @@ struct GoogleCloudStorageClient {
     client: Client,
     base_url: String,
 
-    credentials: GoogleCredentialProvider,
+    credentials: GcpCredentialProvider,
 
     bucket_name: String,
     bucket_name_encoded: String,
@@ -224,7 +223,7 @@ struct GoogleCloudStorageClient {
 }
 
 impl GoogleCloudStorageClient {
-    async fn get_credential(&self) -> Result<Arc<GoogleCredential>> {
+    async fn get_credential(&self) -> Result<Arc<GcpCredential>> {
         self.credentials.get_credential().await
     }
 
@@ -1074,7 +1073,7 @@ impl GoogleCloudStorageBuilder {
         let audience = "https://www.googleapis.com/oauth2/v4/token";
 
         let credentials = if disable_oauth {
-            Arc::new(StaticCredentialProvider::new(GoogleCredential {
+            Arc::new(StaticCredentialProvider::new(GcpCredential {
                 bearer: "".to_string(),
             })) as _
         } else if let Some(credentials) = service_account_credentials {
