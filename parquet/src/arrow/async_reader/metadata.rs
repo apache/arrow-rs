@@ -237,10 +237,10 @@ where
 /// the last 8 bytes to determine the footer's precise length, before
 /// issuing a second request to fetch the metadata bytes
 ///
-/// If a `prefetch` is `Some`, this will read the specified number of bytes
+/// If `prefetch` is `Some`, this will read the specified number of bytes
 /// in the first request, instead of 8, and only issue further requests
-/// if additional bytes are needed. Providing a hint can therefore significantly
-/// reduce the number of `fetch` requests, and consequently latency|
+/// if additional bytes are needed. Providing a `prefetch` hint can therefore
+/// significantly reduce the number of `fetch` requests, and consequently latency
 pub async fn fetch_parquet_metadata<F, Fut>(
     fetch: F,
     file_size: usize,
