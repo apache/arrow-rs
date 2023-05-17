@@ -594,6 +594,10 @@ where
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         self.write(batch)
     }
+
+    fn close(mut self) -> Result<(), ArrowError> {
+        self.finish()
+    }
 }
 
 #[cfg(test)]
@@ -1265,6 +1269,7 @@ mod tests {
         writer.finish().unwrap();
         assert_eq!(String::from_utf8(writer.into_inner()).unwrap(), "");
     }
+
     #[test]
     fn json_writer_one_row() {
         let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
