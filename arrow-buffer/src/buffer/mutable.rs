@@ -383,8 +383,7 @@ impl MutableBuffer {
     /// ```
     #[inline]
     pub fn extend_from_slice<T: ArrowNativeType>(&mut self, items: &[T]) {
-        let len = items.len();
-        let additional = len * std::mem::size_of::<T>();
+        let additional = mem::size_of_val(items);
         self.reserve(additional);
         unsafe {
             // this assumes that `[ToByteSlice]` can be copied directly
