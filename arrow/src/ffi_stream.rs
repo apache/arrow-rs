@@ -105,6 +105,8 @@ pub struct FFI_ArrowArrayStream {
     pub private_data: *mut c_void,
 }
 
+unsafe impl Send for FFI_ArrowArrayStream {}
+
 // callback used to drop [FFI_ArrowArrayStream] when it is exported.
 unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
     if stream.is_null() {
@@ -261,9 +263,9 @@ fn get_error_code(err: &ArrowError) -> i32 {
 /// Struct used to fetch `RecordBatch` from the C Stream Interface.
 /// Its main responsibility is to expose `RecordBatchReader` functionality
 /// that requires [FFI_ArrowArrayStream].
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ArrowArrayStreamReader {
-    stream: Arc<FFI_ArrowArrayStream>,
+    stream: Box<FFI_ArrowArrayStream>,
     schema: SchemaRef,
 }
 
@@ -303,7 +305,7 @@ impl ArrowArrayStreamReader {
         let schema = get_stream_schema(stream_ptr)?;
 
         Ok(Self {
-            stream: unsafe { Arc::from_raw(stream_ptr) },
+            stream: unsafe { Box::from_raw(stream_ptr) },
             schema,
         })
     }
@@ -324,10 +326,10 @@ impl ArrowArrayStreamReader {
     }
 
     /// Get the last error from `ArrowArrayStreamReader`
-    fn get_stream_last_error(&self) -> Option<String> {
+    fn get_stream_last_error(&mut self) -> Option<String> {
         self.stream.get_last_error?;
 
-        let stream_ptr = Arc::as_ptr(&self.stream) as *mut FFI_ArrowArrayStream;
+        let stream_ptr = Box::as_mut(&mut self.stream) as *mut FFI_ArrowArrayStream;
 
         let error_str = unsafe {
             let c_str = self.stream.get_last_error.unwrap()(stream_ptr) as *mut c_char;
@@ -346,7 +348,7 @@ impl Iterator for ArrowArrayStreamReader {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let stream_ptr = Arc::as_ptr(&self.stream) as *mut FFI_ArrowArrayStream;
+        let stream_ptr = Box::as_mut(&mut self.stream) as *mut FFI_ArrowArrayStream;
 
         let empty_array = Arc::new(FFI_ArrowArray::empty());
         let array_ptr = Arc::into_raw(empty_array) as *mut FFI_ArrowArray;

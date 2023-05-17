@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module demonstrates a minimal usage of Rust's C data interface to pass
-//! arrays from and to Python.
+//! Pass Arrow objects from and to Python, using Arrow's
+//! [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
+//! and [pyo3](https://docs.rs/pyo3/latest/pyo3/).
+//! For underlying implementation, see the [ffi] module.
 
 use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
@@ -44,12 +46,25 @@ fn to_py_err(err: ArrowError) -> PyErr {
     PyArrowException::new_err(err.to_string())
 }
 
-pub trait PyArrowConvert: Sized {
+pub trait FromPyArrow: Sized {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self>;
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject>;
 }
 
-impl PyArrowConvert for DataType {
+pub trait AsPyArrow {
+    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject>;
+}
+
+pub trait IntoPyArrow {
+    fn to_pyarrow(self, py: Python) -> PyResult<PyObject>;
+}
+
+impl<T: AsPyArrow> IntoPyArrow for T {
+    fn to_pyarrow(self, py: Python) -> PyResult<PyObject> {
+        self.as_pyarrow(py)
+    }
+}
+
+impl FromPyArrow for DataType {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
@@ -57,8 +72,10 @@ impl PyArrowConvert for DataType {
         let dtype = DataType::try_from(&c_schema).map_err(to_py_err)?;
         Ok(dtype)
     }
+}
 
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl AsPyArrow for DataType {
+    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
@@ -69,7 +86,7 @@ impl PyArrowConvert for DataType {
     }
 }
 
-impl PyArrowConvert for Field {
+impl FromPyArrow for Field {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
@@ -77,8 +94,10 @@ impl PyArrowConvert for Field {
         let field = Field::try_from(&c_schema).map_err(to_py_err)?;
         Ok(field)
     }
+}
 
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl AsPyArrow for Field {
+    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
@@ -89,7 +108,7 @@ impl PyArrowConvert for Field {
     }
 }
 
-impl PyArrowConvert for Schema {
+impl FromPyArrow for Schema {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
@@ -97,8 +116,10 @@ impl PyArrowConvert for Schema {
         let schema = Schema::try_from(&c_schema).map_err(to_py_err)?;
         Ok(schema)
     }
+}
 
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl AsPyArrow for Schema {
+    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
@@ -109,7 +130,7 @@ impl PyArrowConvert for Schema {
     }
 }
 
-impl PyArrowConvert for ArrayData {
+impl FromPyArrow for ArrayData {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // prepare a pointer to receive the Array struct
         let mut array = FFI_ArrowArray::empty();
@@ -131,8 +152,10 @@ impl PyArrowConvert for ArrayData {
 
         Ok(data)
     }
+}
 
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl AsPyArrow for ArrayData {
+    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let array = FFI_ArrowArray::new(self);
         let schema = FFI_ArrowSchema::try_from(self.data_type()).map_err(to_py_err)?;
 
@@ -149,22 +172,24 @@ impl PyArrowConvert for ArrayData {
     }
 }
 
-impl<T: PyArrowConvert> PyArrowConvert for Vec<T> {
+impl<T: FromPyArrow> FromPyArrow for Vec<T> {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         let list = value.downcast::<PyList>()?;
         list.iter().map(|x| T::from_pyarrow(&x)).collect()
     }
+}
 
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl<T: AsPyArrow> AsPyArrow for Vec<T> {
+    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let values = self
             .iter()
-            .map(|v| v.to_pyarrow(py))
+            .map(|v| v.as_pyarrow(py))
             .collect::<PyResult<Vec<_>>>()?;
         Ok(values.to_object(py))
     }
 }
 
-impl PyArrowConvert for RecordBatch {
+impl FromPyArrow for RecordBatch {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // TODO(kszucs): implement the FFI conversions in arrow-rs for RecordBatches
         let schema = value.getattr("schema")?;
@@ -179,18 +204,20 @@ impl PyArrowConvert for RecordBatch {
         let batch = RecordBatch::try_new(schema, arrays).map_err(to_py_err)?;
         Ok(batch)
     }
+}
 
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl AsPyArrow for RecordBatch {
+    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let mut py_arrays = vec![];
 
         let schema = self.schema();
         let columns = self.columns().iter();
 
         for array in columns {
-            py_arrays.push(array.to_data().to_pyarrow(py)?);
+            py_arrays.push(array.to_data().as_pyarrow(py)?);
         }
 
-        let py_schema = schema.to_pyarrow(py)?;
+        let py_schema = schema.as_pyarrow(py)?;
 
         let module = py.import("pyarrow")?;
         let class = module.getattr("RecordBatch")?;
@@ -203,7 +230,7 @@ impl PyArrowConvert for RecordBatch {
     }
 }
 
-impl PyArrowConvert for ArrowArrayStreamReader {
+impl FromPyArrow for ArrowArrayStreamReader {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // prepare a pointer to receive the stream struct
         let stream = Box::new(FFI_ArrowArrayStream::empty());
@@ -224,17 +251,20 @@ impl PyArrowConvert for ArrowArrayStreamReader {
 
         Ok(stream_reader)
     }
+}
 
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl IntoPyArrow for ArrowArrayStreamReader {
+    fn to_pyarrow(self, py: Python) -> PyResult<PyObject> {
         let stream = Box::new(FFI_ArrowArrayStream::empty());
         let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
 
-        unsafe { export_reader_into_raw(Box::new(self.clone()), stream_ptr) };
+        unsafe { export_reader_into_raw(Box::new(self), stream_ptr) };
 
         let module = py.import("pyarrow")?;
         let class = module.getattr("RecordBatchReader")?;
         let args = PyTuple::new(py, &[stream_ptr as Py_uintptr_t]);
         let reader = class.call_method1("_import_from_c", args)?;
+
         Ok(PyObject::from(reader))
     }
 }
@@ -242,21 +272,21 @@ impl PyArrowConvert for ArrowArrayStreamReader {
 /// A newtype wrapper around a `T: PyArrowConvert` that implements
 /// [`FromPyObject`] and [`IntoPy`] allowing usage with pyo3 macros
 #[derive(Debug)]
-pub struct PyArrowType<T: PyArrowConvert>(pub T);
+pub struct PyArrowType<T: FromPyArrow + IntoPyArrow>(pub T);
 
-impl<'source, T: PyArrowConvert> FromPyObject<'source> for PyArrowType<T> {
+impl<'source, T: FromPyArrow + IntoPyArrow> FromPyObject<'source> for PyArrowType<T> {
     fn extract(value: &'source PyAny) -> PyResult<Self> {
         Ok(Self(T::from_pyarrow(value)?))
     }
 }
 
-impl<'a, T: PyArrowConvert> IntoPy<PyObject> for PyArrowType<T> {
+impl<'a, T: FromPyArrow + IntoPyArrow> IntoPy<PyObject> for PyArrowType<T> {
     fn into_py(self, py: Python) -> PyObject {
         self.0.to_pyarrow(py).unwrap()
     }
 }
 
-impl<T: PyArrowConvert> From<T> for PyArrowType<T> {
+impl<T: FromPyArrow + IntoPyArrow> From<T> for PyArrowType<T> {
     fn from(s: T) -> Self {
         Self(s)
     }

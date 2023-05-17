@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int32Array, StringArray};
-use arrow::pyarrow::PyArrowConvert;
+use arrow::pyarrow::{FromPyArrow, AsPyArrow};
 use arrow::record_batch::RecordBatch;
 use pyo3::Python;
 use std::sync::Arc;
@@ -31,9 +31,9 @@ fn test_to_pyarrow() {
     println!("input: {:?}", input);
 
     let res = Python::with_gil(|py| {
-        let py_input = input.to_pyarrow(py)?;
+        let py_input = input.as_pyarrow(py)?;
         let records = RecordBatch::from_pyarrow(py_input.as_ref(py))?;
-        let py_records = records.to_pyarrow(py)?;
+        let py_records = records.as_pyarrow(py)?;
         RecordBatch::from_pyarrow(py_records.as_ref(py))
     })
     .unwrap();
