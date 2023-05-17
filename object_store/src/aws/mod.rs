@@ -47,9 +47,7 @@ use url::Url;
 
 pub use crate::aws::checksum::Checksum;
 use crate::aws::client::{S3Client, S3Config};
-use crate::aws::credential::{
-    AwsCredential, InstanceCredentialProvider, WebIdentityProvider,
-};
+use crate::aws::credential::{InstanceCredentialProvider, WebIdentityProvider};
 use crate::client::header::header_meta;
 use crate::client::{
     ClientConfigKey, CredentialProvider, StaticCredentialProvider,
@@ -85,7 +83,9 @@ const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.rem
 
 const STORE: &str = "S3";
 
-type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
+/// [`CredentialProvider`] for [`AmazonS3`]
+pub type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
+pub use credential::AwsCredential;
 
 /// Default metadata endpoint
 static METADATA_ENDPOINT: &str = "http://169.254.169.254";
@@ -206,6 +206,13 @@ pub struct AmazonS3 {
 impl std::fmt::Display for AmazonS3 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "AmazonS3({})", self.client.config().bucket)
+    }
+}
+
+impl AmazonS3 {
+    /// Returns the [`AwsCredentialProvider`] used by [`AmazonS3`]
+    pub fn credentials(&self) -> &AwsCredentialProvider {
+        &self.client.config().credentials
     }
 }
 
@@ -424,6 +431,8 @@ pub struct AmazonS3Builder {
     profile: Option<String>,
     /// Client options
     client_options: ClientOptions,
+    /// Credentials
+    credentials: Option<AwsCredentialProvider>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -879,6 +888,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Set the credential provider overriding any other options
+    pub fn with_credentials(mut self, credentials: AwsCredentialProvider) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
     /// Sets what protocol is allowed. If `allow_http` is :
     /// * false (default):  Only HTTPS are allowed
     /// * true:  HTTP and HTTPS are allowed
@@ -992,7 +1007,7 @@ impl AmazonS3Builder {
             self.parse_url(&url)?;
         }
 
-        let region = match (self.region.clone(), self.profile.clone()) {
+        let region = match (self.region, self.profile.clone()) {
             (Some(region), _) => Some(region),
             (None, Some(profile)) => profile_region(profile),
             (None, None) => None,
@@ -1002,76 +1017,74 @@ impl AmazonS3Builder {
         let region = region.context(MissingRegionSnafu)?;
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
 
-        let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
-            (Some(key_id), Some(secret_key), token) => {
-                info!("Using Static credential provider");
-                let credential = AwsCredential {
-                    key_id,
-                    secret_key,
-                    token,
-                };
-                Arc::new(StaticCredentialProvider::new(credential)) as _
-            }
-            (None, Some(_), _) => return Err(Error::MissingAccessKeyId.into()),
-            (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
-            // TODO: Replace with `AmazonS3Builder::credentials_from_env`
-            _ => match (
-                std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE"),
-                std::env::var("AWS_ROLE_ARN"),
-            ) {
-                (Ok(token_path), Ok(role_arn)) => {
-                    info!("Using WebIdentity credential provider");
-
-                    let session_name = std::env::var("AWS_ROLE_SESSION_NAME")
-                        .unwrap_or_else(|_| "WebIdentitySession".to_string());
-
-                    let endpoint = format!("https://sts.{region}.amazonaws.com");
-
-                    // Disallow non-HTTPs requests
-                    let client = self
-                        .client_options
-                        .clone()
-                        .with_allow_http(false)
-                        .client()?;
-
-                    let token = WebIdentityProvider {
-                        token_path,
-                        session_name,
-                        role_arn,
-                        endpoint,
-                    };
-
-                    Arc::new(TokenCredentialProvider::new(
+        let credentials = if let Some(credentials) = self.credentials {
+            credentials
+        } else if self.access_key_id.is_some() || self.secret_access_key.is_some() {
+            match (self.access_key_id, self.secret_access_key, self.token) {
+                (Some(key_id), Some(secret_key), token) => {
+                    info!("Using Static credential provider");
+                    let credential = AwsCredential {
+                        key_id,
+                        secret_key,
                         token,
-                        client,
-                        self.retry_config.clone(),
-                    )) as _
+                    };
+                    Arc::new(StaticCredentialProvider::new(credential)) as _
                 }
-                _ => match self.profile {
-                    Some(profile) => {
-                        info!("Using profile \"{}\" credential provider", profile);
-                        profile_credentials(profile, region.clone())?
-                    }
-                    None => {
-                        info!("Using Instance credential provider");
+                (None, Some(_), _) => return Err(Error::MissingAccessKeyId.into()),
+                (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
+                (None, None, _) => unreachable!(),
+            }
+        } else if let (Ok(token_path), Ok(role_arn)) = (
+            std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE"),
+            std::env::var("AWS_ROLE_ARN"),
+        ) {
+            // TODO: Replace with `AmazonS3Builder::credentials_from_env`
+            info!("Using WebIdentity credential provider");
 
-                        let token = InstanceCredentialProvider {
-                            cache: Default::default(),
-                            imdsv1_fallback: self.imdsv1_fallback.get()?,
-                            metadata_endpoint: self
-                                .metadata_endpoint
-                                .unwrap_or_else(|| METADATA_ENDPOINT.into()),
-                        };
+            let session_name = std::env::var("AWS_ROLE_SESSION_NAME")
+                .unwrap_or_else(|_| "WebIdentitySession".to_string());
 
-                        Arc::new(TokenCredentialProvider::new(
-                            token,
-                            // The instance metadata endpoint is access over HTTP
-                            self.client_options.clone().with_allow_http(true).client()?,
-                            self.retry_config.clone(),
-                        )) as _
-                    }
-                },
-            },
+            let endpoint = format!("https://sts.{region}.amazonaws.com");
+
+            // Disallow non-HTTPs requests
+            let client = self
+                .client_options
+                .clone()
+                .with_allow_http(false)
+                .client()?;
+
+            let token = WebIdentityProvider {
+                token_path,
+                session_name,
+                role_arn,
+                endpoint,
+            };
+
+            Arc::new(TokenCredentialProvider::new(
+                token,
+                client,
+                self.retry_config.clone(),
+            )) as _
+        } else if let Some(profile) = self.profile {
+            info!("Using profile \"{}\" credential provider", profile);
+            profile_credentials(profile, region.clone())?
+        } else {
+            info!("Using Instance credential provider");
+
+            let token = InstanceCredentialProvider {
+                cache: Default::default(),
+                imdsv1_fallback: self.imdsv1_fallback.get()?,
+                metadata_endpoint: self
+                    .metadata_endpoint
+                    .unwrap_or_else(|| METADATA_ENDPOINT.into()),
+            };
+
+            Arc::new(TokenCredentialProvider::new(
+                token,
+                // The instance metadata endpoint is access over HTTP
+                self.client_options.clone().with_allow_http(true).client()?,
+                self.retry_config.clone(),
+            )) as _
         };
 
         let endpoint: String;

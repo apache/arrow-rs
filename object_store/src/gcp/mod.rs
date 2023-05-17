@@ -52,7 +52,6 @@ use crate::client::{
     ClientConfigKey, CredentialProvider, GetOptionsExt, StaticCredentialProvider,
     TokenCredentialProvider,
 };
-use crate::gcp::credential::{application_default_credentials, GcpCredential};
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
@@ -61,15 +60,18 @@ use crate::{
     ObjectStore, Result, RetryConfig,
 };
 
-use self::credential::{
-    default_gcs_base_url, InstanceCredentialProvider, ServiceAccountCredentials,
+use credential::{
+    application_default_credentials, default_gcs_base_url, InstanceCredentialProvider,
+    ServiceAccountCredentials,
 };
 
 mod credential;
 
 const STORE: &str = "GCS";
 
-type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
+/// [`CredentialProvider`] for [`GoogleCloudStorage`]
+pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
+pub use credential::GcpCredential;
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -202,6 +204,13 @@ pub struct GoogleCloudStorage {
 impl std::fmt::Display for GoogleCloudStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "GoogleCloudStorage({})", self.client.bucket_name)
+    }
+}
+
+impl GoogleCloudStorage {
+    /// Returns the [`GcpCredentialProvider`] used by [`GoogleCloudStorage`]
+    pub fn credentials(&self) -> &GcpCredentialProvider {
+        &self.client.credentials
     }
 }
 
@@ -696,6 +705,8 @@ pub struct GoogleCloudStorageBuilder {
     retry_config: RetryConfig,
     /// Client options
     client_options: ClientOptions,
+    /// Credentials
+    credentials: Option<GcpCredentialProvider>,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
@@ -794,6 +805,7 @@ impl Default for GoogleCloudStorageBuilder {
             retry_config: Default::default(),
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
+            credentials: None,
         }
     }
 }
@@ -1006,6 +1018,12 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Set the credential provider overriding any other options
+    pub fn with_credentials(mut self, credentials: GcpCredentialProvider) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
@@ -1072,7 +1090,9 @@ impl GoogleCloudStorageBuilder {
         let scope = "https://www.googleapis.com/auth/devstorage.full_control";
         let audience = "https://www.googleapis.com/oauth2/v4/token";
 
-        let credentials = if disable_oauth {
+        let credentials = if let Some(credentials) = self.credentials {
+            credentials
+        } else if disable_oauth {
             Arc::new(StaticCredentialProvider::new(GcpCredential {
                 bearer: "".to_string(),
             })) as _
