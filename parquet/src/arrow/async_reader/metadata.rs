@@ -42,6 +42,8 @@ impl<'a, T: AsyncFileReader> MetadataFetch for &'a mut T {
 }
 
 /// An asynchronous interface to load [`ParquetMetaData`] from an async source
+///
+/// Crate-private until stabilised
 pub(crate) struct MetadataLoader<F> {
     /// Function that fetches byte ranges asynchronously
     fetch: F,
@@ -54,20 +56,7 @@ pub(crate) struct MetadataLoader<F> {
 impl<F: MetadataFetch> MetadataLoader<F> {
     /// Create a new [`MetadataLoader`] by reading the footer information
     ///
-    /// Parameters:
-    /// * fetch: an async function that can fetch byte ranges
-    /// * file_size: the total size of the parquet file
-    /// * footer_size_hint: footer prefetch size (see comments below)
-    ///
-    /// The length of the parquet footer, which contains file metadata, is not
-    /// known up front. Therefore this function will first issue a request to read
-    /// the last 8 bytes to determine the footer's precise length, before
-    /// issuing a second request to fetch the metadata bytes
-    ///
-    /// If a `prefetch` is `Some`, this will read the specified number of bytes
-    /// in the first request, instead of 8, and only issue further requests
-    /// if additional bytes are needed. Providing a hint can therefore significantly
-    /// reduce the number of `fetch` requests, and consequently latency
+    /// See [`fetch_parquet_metadata`] for the meaning of the individual parameters
     pub async fn load(
         mut fetch: F,
         file_size: usize,
@@ -237,6 +226,21 @@ where
 }
 
 /// Fetches parquet metadata
+///
+/// Parameters:
+/// * fetch: an async function that can fetch byte ranges
+/// * file_size: the total size of the parquet file
+/// * footer_size_hint: footer prefetch size (see comments below)
+///
+/// The length of the parquet footer, which contains file metadata, is not
+/// known up front. Therefore this function will first issue a request to read
+/// the last 8 bytes to determine the footer's precise length, before
+/// issuing a second request to fetch the metadata bytes
+///
+/// If a `prefetch` is `Some`, this will read the specified number of bytes
+/// in the first request, instead of 8, and only issue further requests
+/// if additional bytes are needed. Providing a hint can therefore significantly
+/// reduce the number of `fetch` requests, and consequently latency|
 pub async fn fetch_parquet_metadata<F, Fut>(
     fetch: F,
     file_size: usize,
