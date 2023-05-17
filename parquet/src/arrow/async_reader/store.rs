@@ -24,7 +24,7 @@ use futures::{FutureExt, TryFutureExt};
 
 use object_store::{ObjectMeta, ObjectStore};
 
-use crate::arrow::async_reader::{fetch_parquet_metadata, AsyncFileReader};
+use crate::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ParquetMetaData;
 
@@ -34,6 +34,8 @@ pub struct ParquetObjectReader {
     store: Arc<dyn ObjectStore>,
     meta: ObjectMeta,
     metadata_size_hint: Option<usize>,
+    preload_column_index: bool,
+    preload_offset_index: bool,
 }
 
 impl ParquetObjectReader {
@@ -45,13 +47,32 @@ impl ParquetObjectReader {
             store,
             meta,
             metadata_size_hint: None,
+            preload_column_index: false,
+            preload_offset_index: false,
         }
     }
 
-    /// Provide a hint as to the size of the parquet file's footer, see [fetch_parquet_metadata]
+    /// Provide a hint as to the size of the parquet file's footer,
+    /// see [fetch_parquet_metadata](crate::arrow::async_reader::fetch_parquet_metadata)
     pub fn with_footer_size_hint(self, hint: usize) -> Self {
         Self {
             metadata_size_hint: Some(hint),
+            ..self
+        }
+    }
+
+    /// Load the Column Index as part of [`Self::get_metadata`]
+    pub fn with_preload_column_index(self, preload_column_index: bool) -> Self {
+        Self {
+            preload_column_index,
+            ..self
+        }
+    }
+
+    /// Load the Offset Index as part of [`Self::get_metadata`]
+    pub fn with_preload_offset_index(self, preload_offset_index: bool) -> Self {
+        Self {
+            preload_offset_index,
             ..self
         }
     }
@@ -89,21 +110,15 @@ impl AsyncFileReader for ParquetObjectReader {
 
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
-            let metadata = fetch_parquet_metadata(
-                |range| {
-                    self.store
-                        .get_range(&self.meta.location, range)
-                        .map_err(|e| {
-                            ParquetError::General(format!(
-                                "ParquetObjectReader::get_metadata error: {e}"
-                            ))
-                        })
-                },
-                self.meta.size,
-                self.metadata_size_hint,
-            )
-            .await?;
-            Ok(Arc::new(metadata))
+            let preload_column_index = self.preload_column_index;
+            let preload_offset_index = self.preload_offset_index;
+            let file_size = self.meta.size;
+            let prefetch = self.metadata_size_hint;
+            let mut loader = MetadataLoader::load(self, file_size, prefetch).await?;
+            loader
+                .load_page_index(preload_column_index, preload_offset_index)
+                .await?;
+            Ok(Arc::new(loader.finish()))
         })
     }
 }
@@ -150,7 +165,11 @@ mod tests {
             Ok(_) => panic!("expected failure"),
             Err(e) => {
                 let err = e.to_string();
-                assert!(err.contains("Parquet error: ParquetObjectReader::get_metadata error: Object at location") && err.contains("not found: No such file or directory (os error 2)"), "{}", err);
+                assert!(
+                    err.contains("not found: No such file or directory (os error 2)"),
+                    "{}",
+                    err
+                );
             }
         }
     }
