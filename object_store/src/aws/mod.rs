@@ -45,7 +45,6 @@ use tokio::io::AsyncWrite;
 use tracing::info;
 use url::Url;
 
-pub use crate::aws::checksum::Checksum;
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
     AwsCredential, InstanceCredentialProvider, WebIdentityProvider,
@@ -64,7 +63,11 @@ use crate::{
 
 mod checksum;
 mod client;
+mod copy;
 mod credential;
+
+pub use checksum::Checksum;
+pub use copy::S3CopyIfNotExists;
 
 #[cfg(feature = "aws_profile")]
 mod profile;
@@ -314,12 +317,11 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client.copy_request(from, to).await
+        self.client.copy_request(from, to, true).await
     }
 
-    async fn copy_if_not_exists(&self, _source: &Path, _dest: &Path) -> Result<()> {
-        // Will need dynamodb_lock
-        Err(crate::Error::NotImplemented)
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        self.client.copy_request(from, to, false).await
     }
 }
 
@@ -424,6 +426,8 @@ pub struct AmazonS3Builder {
     profile: Option<String>,
     /// Client options
     client_options: ClientOptions,
+    /// Copy if not exists
+    copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -557,6 +561,11 @@ pub enum AmazonS3ConfigKey {
     /// - `profile`
     Profile,
 
+    /// Configure how to provide [`ObjectStore::copy_if_not_exists`]
+    ///
+    /// See [`S3CopyIfNotExists`]
+    CopyIfNotExists,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -577,6 +586,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::Profile => "aws_profile",
             Self::UnsignedPayload => "aws_unsigned_payload",
             Self::Checksum => "aws_checksum_algorithm",
+            Self::CopyIfNotExists => "copy_if_not_exists",
             Self::Client(opt) => opt.as_ref(),
         }
     }
@@ -608,6 +618,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
             "aws_checksum_algorithm" | "checksum_algorithm" => Ok(Self::Checksum),
+            "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.parse() {
@@ -726,6 +737,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
+            AmazonS3ConfigKey::CopyIfNotExists => {
+                self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
+            }
         };
         self
     }
@@ -791,6 +805,9 @@ impl AmazonS3Builder {
                 self.checksum_algorithm.as_ref().map(ToString::to_string)
             }
             AmazonS3ConfigKey::Client(key) => self.client_options.get_config_value(key),
+            AmazonS3ConfigKey::CopyIfNotExists => {
+                self.copy_if_not_exists.as_ref().map(ToString::to_string)
+            }
         }
     }
 
@@ -967,6 +984,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Configure how to provide [`ObjectStore::copy_if_not_exists`]
+    pub fn with_copy_if_not_exists(mut self, config: S3CopyIfNotExists) -> Self {
+        self.copy_if_not_exists = Some(config.into());
+        self
+    }
+
     /// Set the AWS profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
     ///
     /// This makes use of [aws-config] to provide credentials and therefore requires
@@ -1001,6 +1024,7 @@ impl AmazonS3Builder {
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
         let region = region.context(MissingRegionSnafu)?;
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
+        let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
 
         let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
             (Some(key_id), Some(secret_key), token) => {
@@ -1102,6 +1126,7 @@ impl AmazonS3Builder {
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
             checksum,
+            copy_if_not_exists,
         };
 
         let client = Arc::new(S3Client::new(config)?);
