@@ -509,8 +509,10 @@ impl GetOptionsExt for RequestBuilder {
 /// Provides credentials for use when signing requests
 #[async_trait]
 pub trait CredentialProvider: std::fmt::Debug + Send + Sync {
+    /// The type of credential returned by this provider
     type Credential;
 
+    /// Return a credential
     async fn get_credential(&self) -> Result<Arc<Self::Credential>>;
 }
 
