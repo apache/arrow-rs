@@ -245,7 +245,7 @@ pub mod throttle;
 mod client;
 
 #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
-pub use client::{backoff::BackoffConfig, retry::RetryConfig};
+pub use client::{backoff::BackoffConfig, retry::RetryConfig, CredentialProvider};
 
 #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
 mod config;
