@@ -17,6 +17,9 @@
 
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
+use crate::client::{TokenCredentialProvider, TokenProvider};
+use crate::gcp::credential::Error::UnsupportedCredentialsType;
+use crate::gcp::{GcpCredentialProvider, STORE};
 use crate::ClientOptions;
 use crate::RetryConfig;
 use async_trait::async_trait;
@@ -30,6 +33,7 @@ use std::env;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::info;
 
@@ -67,9 +71,21 @@ pub enum Error {
 
     #[snafu(display("Unsupported ApplicationCredentials type: {}", type_))]
     UnsupportedCredentialsType { type_: String },
+}
 
-    #[snafu(display("Error creating client: {}", source))]
-    Client { source: crate::Error },
+impl From<Error> for crate::Error {
+    fn from(value: Error) -> Self {
+        Self::Generic {
+            store: STORE,
+            source: Box::new(value),
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct GcpCredential {
+    /// An HTTP bearer token
+    pub bearer: String,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -127,15 +143,6 @@ struct TokenResponse {
     expires_in: u64,
 }
 
-#[async_trait]
-pub trait TokenProvider: std::fmt::Debug + Send + Sync {
-    async fn fetch_token(
-        &self,
-        client: &Client,
-        retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>>;
-}
-
 /// Encapsulates the logic to perform an OAuth token challenge
 #[derive(Debug)]
 pub struct OAuthProvider {
@@ -174,12 +181,14 @@ impl OAuthProvider {
 
 #[async_trait]
 impl TokenProvider for OAuthProvider {
+    type Credential = GcpCredential;
+
     /// Fetch a fresh token
     async fn fetch_token(
         &self,
         client: &Client,
         retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
+    ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
         let now = seconds_since_epoch();
         let exp = now + 3600;
 
@@ -221,12 +230,12 @@ impl TokenProvider for OAuthProvider {
             .await
             .context(TokenResponseBodySnafu)?;
 
-        let token = TemporaryToken {
-            token: response.access_token,
+        Ok(TemporaryToken {
+            token: Arc::new(GcpCredential {
+                bearer: response.access_token,
+            }),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
-        };
-
-        Ok(token)
+        })
     }
 }
 
@@ -281,17 +290,17 @@ impl ServiceAccountCredentials {
     }
 
     /// Create an [`OAuthProvider`] from this credentials struct.
-    pub fn token_provider(
+    pub fn oauth_provider(
         self,
         scope: &str,
         audience: &str,
-    ) -> Result<Box<dyn TokenProvider>> {
-        Ok(Box::new(OAuthProvider::new(
+    ) -> crate::Result<OAuthProvider> {
+        Ok(OAuthProvider::new(
             self.client_email,
             self.private_key,
             scope.to_string(),
             audience.to_string(),
-        )?) as Box<dyn TokenProvider>)
+        )?)
     }
 }
 
@@ -329,23 +338,14 @@ fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
 #[derive(Debug, Default)]
 pub struct InstanceCredentialProvider {
     audience: String,
-    client: Client,
 }
 
 impl InstanceCredentialProvider {
     /// Create a new [`InstanceCredentialProvider`], we need to control the client in order to enable http access so save the options.
-    pub fn new<T: Into<String>>(
-        audience: T,
-        client_options: ClientOptions,
-    ) -> Result<Self> {
-        client_options
-            .with_allow_http(true)
-            .client()
-            .map(|client| Self {
-                audience: audience.into(),
-                client,
-            })
-            .context(ClientSnafu)
+    pub fn new<T: Into<String>>(audience: T) -> Self {
+        Self {
+            audience: audience.into(),
+        }
     }
 }
 
@@ -355,7 +355,7 @@ async fn make_metadata_request(
     hostname: &str,
     retry: &RetryConfig,
     audience: &str,
-) -> Result<TokenResponse> {
+) -> crate::Result<TokenResponse> {
     let url = format!(
         "http://{hostname}/computeMetadata/v1/instance/service-accounts/default/token"
     );
@@ -374,30 +374,29 @@ async fn make_metadata_request(
 
 #[async_trait]
 impl TokenProvider for InstanceCredentialProvider {
+    type Credential = GcpCredential;
+
     /// Fetch a token from the metadata server.
     /// Since the connection is local we need to enable http access and don't actually use the client object passed in.
     async fn fetch_token(
         &self,
-        _client: &Client,
+        client: &Client,
         retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
+    ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
         const METADATA_IP: &str = "169.254.169.254";
         const METADATA_HOST: &str = "metadata";
 
         info!("fetching token from metadata server");
         let response =
-            make_metadata_request(&self.client, METADATA_HOST, retry, &self.audience)
+            make_metadata_request(client, METADATA_HOST, retry, &self.audience)
                 .or_else(|_| {
-                    make_metadata_request(
-                        &self.client,
-                        METADATA_IP,
-                        retry,
-                        &self.audience,
-                    )
+                    make_metadata_request(client, METADATA_IP, retry, &self.audience)
                 })
                 .await?;
         let token = TemporaryToken {
-            token: response.access_token,
+            token: Arc::new(GcpCredential {
+                bearer: response.access_token,
+            }),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
         };
         Ok(token)
@@ -406,31 +405,35 @@ impl TokenProvider for InstanceCredentialProvider {
 
 /// ApplicationDefaultCredentials
 /// <https://google.aip.dev/auth/4110>
-#[derive(Debug)]
-pub enum ApplicationDefaultCredentials {
-    /// <https://google.aip.dev/auth/4113>
-    AuthorizedUser {
-        client_id: String,
-        client_secret: String,
-        refresh_token: String,
-    },
-}
+pub fn application_default_credentials(
+    path: Option<&str>,
+    client: &ClientOptions,
+    retry: &RetryConfig,
+) -> crate::Result<Option<GcpCredentialProvider>> {
+    let file = match ApplicationDefaultCredentialsFile::read(path)? {
+        Some(x) => x,
+        None => return Ok(None),
+    };
 
-impl ApplicationDefaultCredentials {
-    pub fn new(path: Option<&str>) -> Result<Option<Self>, Error> {
-        let file = match ApplicationDefaultCredentialsFile::read(path)? {
-            Some(f) => f,
-            None => return Ok(None),
-        };
-
-        Ok(Some(match file.type_.as_str() {
-            "authorized_user" => Self::AuthorizedUser {
+    match file.type_.as_str() {
+        // <https://google.aip.dev/auth/4113>
+        "authorized_user" => {
+            let token = AuthorizedUserCredentials {
                 client_id: file.client_id,
                 client_secret: file.client_secret,
                 refresh_token: file.refresh_token,
-            },
-            type_ => return UnsupportedCredentialsTypeSnafu { type_ }.fail(),
-        }))
+            };
+
+            Ok(Some(Arc::new(TokenCredentialProvider::new(
+                token,
+                client.client()?,
+                retry.clone(),
+            ))))
+        }
+        type_ => Err(UnsupportedCredentialsType {
+            type_: type_.to_string(),
+        }
+        .into()),
     }
 }
 
@@ -473,41 +476,43 @@ impl ApplicationDefaultCredentialsFile {
 
 const DEFAULT_TOKEN_GCP_URI: &str = "https://accounts.google.com/o/oauth2/token";
 
+/// <https://google.aip.dev/auth/4113>
+#[derive(Debug)]
+struct AuthorizedUserCredentials {
+    client_id: String,
+    client_secret: String,
+    refresh_token: String,
+}
+
 #[async_trait]
-impl TokenProvider for ApplicationDefaultCredentials {
+impl TokenProvider for AuthorizedUserCredentials {
+    type Credential = GcpCredential;
+
     async fn fetch_token(
         &self,
         client: &Client,
         retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>, Error> {
-        let builder = client.request(Method::POST, DEFAULT_TOKEN_GCP_URI);
-        let builder = match self {
-            Self::AuthorizedUser {
-                client_id,
-                client_secret,
-                refresh_token,
-            } => {
-                let body = [
-                    ("grant_type", "refresh_token"),
-                    ("client_id", client_id),
-                    ("client_secret", client_secret),
-                    ("refresh_token", refresh_token),
-                ];
-                builder.form(&body)
-            }
-        };
-
-        let response = builder
+    ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
+        let response = client
+            .request(Method::POST, DEFAULT_TOKEN_GCP_URI)
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("client_id", &self.client_id),
+                ("client_secret", &self.client_secret),
+                ("refresh_token", &self.refresh_token),
+            ])
             .send_retry(retry)
             .await
             .context(TokenRequestSnafu)?
             .json::<TokenResponse>()
             .await
             .context(TokenResponseBodySnafu)?;
-        let token = TemporaryToken {
-            token: response.access_token,
+
+        Ok(TemporaryToken {
+            token: Arc::new(GcpCredential {
+                bearer: response.access_token,
+            }),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
-        };
-        Ok(token)
+        })
     }
 }

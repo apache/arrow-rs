@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::credential::{AzureCredential, CredentialProvider};
+use super::credential::AzureCredential;
 use crate::azure::credential::*;
-use crate::azure::STORE;
+use crate::azure::{AzureCredentialProvider, STORE};
 use crate::client::get::GetClient;
 use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
@@ -41,6 +41,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
+use std::sync::Arc;
 use url::Url;
 
 /// A specialized `Error` for object store-related errors
@@ -102,10 +103,10 @@ impl From<Error> for crate::Error {
 
 /// Configuration for [AzureClient]
 #[derive(Debug)]
-pub struct AzureConfig {
+pub(crate) struct AzureConfig {
     pub account: String,
     pub container: String,
-    pub credentials: CredentialProvider,
+    pub credentials: AzureCredentialProvider,
     pub retry_config: RetryConfig,
     pub service: Url,
     pub is_emulator: bool,
@@ -144,45 +145,8 @@ impl AzureClient {
         &self.config
     }
 
-    async fn get_credential(&self) -> Result<AzureCredential> {
-        match &self.config.credentials {
-            CredentialProvider::AccessKey(key) => {
-                Ok(AzureCredential::AccessKey(key.to_owned()))
-            }
-            CredentialProvider::BearerToken(token) => {
-                Ok(AzureCredential::AuthorizationToken(
-                    // we do the conversion to a HeaderValue here, since it is fallible
-                    // and we want to use it in an infallible function
-                    HeaderValue::from_str(&format!("Bearer {token}")).map_err(|err| {
-                        crate::Error::Generic {
-                            store: STORE,
-                            source: Box::new(err),
-                        }
-                    })?,
-                ))
-            }
-            CredentialProvider::TokenCredential(cache, cred) => {
-                let token = cache
-                    .get_or_insert_with(|| {
-                        cred.fetch_token(&self.client, &self.config.retry_config)
-                    })
-                    .await
-                    .context(AuthorizationSnafu)?;
-                Ok(AzureCredential::AuthorizationToken(
-                    // we do the conversion to a HeaderValue here, since it is fallible
-                    // and we want to use it in an infallible function
-                    HeaderValue::from_str(&format!("Bearer {token}")).map_err(|err| {
-                        crate::Error::Generic {
-                            store: STORE,
-                            source: Box::new(err),
-                        }
-                    })?,
-                ))
-            }
-            CredentialProvider::SASToken(sas) => {
-                Ok(AzureCredential::SASToken(sas.clone()))
-            }
-        }
+    async fn get_credential(&self) -> Result<Arc<AzureCredential>> {
+        self.config.credentials.get_credential().await
     }
 
     /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
@@ -224,7 +188,19 @@ impl AzureClient {
                 path: path.as_ref(),
             })?;
 
-        Ok(response)
+        match response.headers().get("x-ms-resource-type") {
+            Some(resource) if resource.as_ref() != b"file" => {
+                Err(crate::Error::NotFound {
+                    path: path.to_string(),
+                    source: format!(
+                        "Not a file, got x-ms-resource-type: {}",
+                        String::from_utf8_lossy(resource.as_ref())
+                    )
+                    .into(),
+                })
+            }
+            _ => Ok(response),
+        }
     }
 
     /// Make an Azure Delete request <https://docs.microsoft.com/en-us/rest/api/storageservices/delete-blob>
@@ -263,7 +239,7 @@ impl AzureClient {
 
         // If using SAS authorization must include the headers in the URL
         // <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob#request-headers>
-        if let AzureCredential::SASToken(pairs) = &credential {
+        if let AzureCredential::SASToken(pairs) = credential.as_ref() {
             source.query_pairs_mut().extend_pairs(pairs);
         }
 

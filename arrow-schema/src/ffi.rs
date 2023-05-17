@@ -37,20 +37,25 @@
 use crate::{
     ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionFields, UnionMode,
 };
-use bitflags::bitflags;
 use std::sync::Arc;
 use std::{
     collections::HashMap,
     ffi::{c_char, c_void, CStr, CString},
 };
 
-bitflags! {
-    pub struct Flags: i64 {
-        const DICTIONARY_ORDERED = 0b00000001;
-        const NULLABLE = 0b00000010;
-        const MAP_KEYS_SORTED = 0b00000100;
+#[allow(clippy::assign_op_pattern)]
+/// Workaround <https://github.com/bitflags/bitflags/issues/356>
+mod flags {
+    use bitflags::bitflags;
+    bitflags! {
+        pub struct Flags: i64 {
+            const DICTIONARY_ORDERED = 0b00000001;
+            const NULLABLE = 0b00000010;
+            const MAP_KEYS_SORTED = 0b00000100;
+        }
     }
 }
+pub use flags::*;
 
 /// ABI-compatible struct for `ArrowSchema` from C Data Interface
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>

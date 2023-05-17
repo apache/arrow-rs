@@ -1695,6 +1695,12 @@ mod tests {
         test_layout::<Float16Type>();
         test_layout::<Float32Type>();
         test_layout::<Float64Type>();
+        test_layout::<Decimal128Type>();
+        test_layout::<Decimal256Type>();
+        test_layout::<TimestampNanosecondType>();
+        test_layout::<TimestampMillisecondType>();
+        test_layout::<TimestampMicrosecondType>();
+        test_layout::<TimestampNanosecondType>();
         test_layout::<TimestampSecondType>();
         test_layout::<Date32Type>();
         test_layout::<Date64Type>();
@@ -1708,5 +1714,6 @@ mod tests {
         test_layout::<DurationNanosecondType>();
         test_layout::<DurationMicrosecondType>();
         test_layout::<DurationMillisecondType>();
+        test_layout::<DurationSecondType>();
     }
 }

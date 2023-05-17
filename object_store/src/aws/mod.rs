@@ -46,12 +46,14 @@ use url::Url;
 pub use crate::aws::checksum::Checksum;
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
-    AwsCredential, CredentialProvider, InstanceCredentialProvider,
-    StaticCredentialProvider, WebIdentityProvider,
+    AwsCredential, InstanceCredentialProvider, WebIdentityProvider,
 };
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
-use crate::client::ClientConfigKey;
+use crate::client::{
+    ClientConfigKey, CredentialProvider, StaticCredentialProvider,
+    TokenCredentialProvider,
+};
 use crate::config::ConfigValue;
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
 use crate::{
@@ -62,6 +64,9 @@ use crate::{
 mod checksum;
 mod client;
 mod credential;
+
+#[cfg(feature = "aws_profile")]
+mod profile;
 
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 //
@@ -78,6 +83,8 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
 const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 
 const STORE: &str = "S3";
+
+type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
 
 /// Default metadata endpoint
 static METADATA_ENDPOINT: &str = "http://169.254.169.254";
@@ -938,20 +945,25 @@ impl AmazonS3Builder {
             self.parse_url(&url)?;
         }
 
+        let region = match (self.region.clone(), self.profile.clone()) {
+            (Some(region), _) => Some(region),
+            (None, Some(profile)) => profile_region(profile),
+            (None, None) => None,
+        };
+
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
-        let region = self.region.context(MissingRegionSnafu)?;
+        let region = region.context(MissingRegionSnafu)?;
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
 
         let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
             (Some(key_id), Some(secret_key), token) => {
                 info!("Using Static credential provider");
-                Box::new(StaticCredentialProvider {
-                    credential: Arc::new(AwsCredential {
-                        key_id,
-                        secret_key,
-                        token,
-                    }),
-                }) as _
+                let credential = AwsCredential {
+                    key_id,
+                    secret_key,
+                    token,
+                };
+                Arc::new(StaticCredentialProvider::new(credential)) as _
             }
             (None, Some(_), _) => return Err(Error::MissingAccessKeyId.into()),
             (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
@@ -975,15 +987,18 @@ impl AmazonS3Builder {
                         .with_allow_http(false)
                         .client()?;
 
-                    Box::new(WebIdentityProvider {
-                        cache: Default::default(),
+                    let token = WebIdentityProvider {
                         token_path,
                         session_name,
                         role_arn,
                         endpoint,
+                    };
+
+                    Arc::new(TokenCredentialProvider::new(
+                        token,
                         client,
-                        retry_config: self.retry_config.clone(),
-                    }) as _
+                        self.retry_config.clone(),
+                    )) as _
                 }
                 _ => match self.profile {
                     Some(profile) => {
@@ -993,19 +1008,20 @@ impl AmazonS3Builder {
                     None => {
                         info!("Using Instance credential provider");
 
-                        // The instance metadata endpoint is access over HTTP
-                        let client_options =
-                            self.client_options.clone().with_allow_http(true);
-
-                        Box::new(InstanceCredentialProvider {
+                        let token = InstanceCredentialProvider {
                             cache: Default::default(),
-                            client: client_options.client()?,
-                            retry_config: self.retry_config.clone(),
                             imdsv1_fallback: self.imdsv1_fallback.get()?,
                             metadata_endpoint: self
                                 .metadata_endpoint
                                 .unwrap_or_else(|| METADATA_ENDPOINT.into()),
-                        }) as _
+                        };
+
+                        Arc::new(TokenCredentialProvider::new(
+                            token,
+                            // The instance metadata endpoint is access over HTTP
+                            self.client_options.clone().with_allow_http(true).client()?,
+                            self.retry_config.clone(),
+                        )) as _
                     }
                 },
             },
@@ -1048,18 +1064,33 @@ impl AmazonS3Builder {
 }
 
 #[cfg(feature = "aws_profile")]
-fn profile_credentials(
-    profile: String,
-    region: String,
-) -> Result<Box<dyn CredentialProvider>> {
-    Ok(Box::new(credential::ProfileProvider::new(profile, region)))
+fn profile_region(profile: String) -> Option<String> {
+    use tokio::runtime::Handle;
+
+    let handle = Handle::current();
+    let provider = profile::ProfileProvider::new(profile, None);
+
+    handle.block_on(provider.get_region())
+}
+
+#[cfg(feature = "aws_profile")]
+fn profile_credentials(profile: String, region: String) -> Result<AwsCredentialProvider> {
+    Ok(Arc::new(profile::ProfileProvider::new(
+        profile,
+        Some(region),
+    )))
+}
+
+#[cfg(not(feature = "aws_profile"))]
+fn profile_region(_profile: String) -> Option<String> {
+    None
 }
 
 #[cfg(not(feature = "aws_profile"))]
 fn profile_credentials(
     _profile: String,
     _region: String,
-) -> Result<Box<dyn CredentialProvider>> {
+) -> Result<AwsCredentialProvider> {
     Err(Error::MissingProfileFeature.into())
 }
 
@@ -1545,5 +1576,52 @@ mod s3_resolve_bucket_region_tests {
         let result = resolve_bucket_region(bucket, &ClientOptions::new()).await;
 
         assert!(result.is_err());
+    }
+}
+
+#[cfg(all(test, feature = "aws_profile"))]
+mod profile_tests {
+    use super::*;
+    use std::env;
+
+    use super::profile::{TEST_PROFILE_NAME, TEST_PROFILE_REGION};
+
+    #[tokio::test]
+    async fn s3_test_region_from_profile() {
+        let s3_url = "s3://bucket/prefix".to_owned();
+
+        let s3 = AmazonS3Builder::new()
+            .with_url(s3_url)
+            .with_profile(TEST_PROFILE_NAME)
+            .build()
+            .unwrap();
+
+        let region = &s3.client.config().region;
+
+        assert_eq!(region, TEST_PROFILE_REGION);
+    }
+
+    #[test]
+    fn s3_test_region_override() {
+        let s3_url = "s3://bucket/prefix".to_owned();
+
+        let aws_profile =
+            env::var("AWS_PROFILE").unwrap_or_else(|_| TEST_PROFILE_NAME.into());
+
+        let aws_region =
+            env::var("AWS_REGION").unwrap_or_else(|_| "object_store:fake_region".into());
+
+        env::set_var("AWS_PROFILE", aws_profile);
+
+        let s3 = AmazonS3Builder::from_env()
+            .with_url(s3_url)
+            .with_region(aws_region.clone())
+            .build()
+            .unwrap();
+
+        let actual = &s3.client.config().region;
+        let expected = &aws_region;
+
+        assert_eq!(actual, expected);
     }
 }

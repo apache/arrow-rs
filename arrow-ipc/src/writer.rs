@@ -861,6 +861,10 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         self.write(batch)
     }
+
+    fn close(mut self) -> Result<(), ArrowError> {
+        self.finish()
+    }
 }
 
 pub struct StreamWriter<W: Write> {
@@ -1000,6 +1004,10 @@ impl<W: Write> StreamWriter<W> {
 impl<W: Write> RecordBatchWriter for StreamWriter<W> {
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         self.write(batch)
+    }
+
+    fn close(mut self) -> Result<(), ArrowError> {
+        self.finish()
     }
 }
 

@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::aws::checksum::Checksum;
-use crate::aws::credential::{AwsCredential, CredentialExt, CredentialProvider};
-use crate::aws::{STORE, STRICT_PATH_ENCODE_SET};
+use crate::aws::credential::{AwsCredential, CredentialExt};
+use crate::aws::{AwsCredentialProvider, STORE, STRICT_PATH_ENCODE_SET};
 use crate::client::get::GetClient;
 use crate::client::list::ListClient;
 use crate::client::list_response::ListResponse;
@@ -135,7 +135,7 @@ pub struct S3Config {
     pub endpoint: String,
     pub bucket: String,
     pub bucket_endpoint: String,
-    pub credentials: Box<dyn CredentialProvider>,
+    pub credentials: AwsCredentialProvider,
     pub retry_config: RetryConfig,
     pub client_options: ClientOptions,
     pub sign_payload: bool,

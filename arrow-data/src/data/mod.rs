@@ -1976,6 +1976,7 @@ mod tests {
         assert!(!int_data.ptr_eq(&float_data));
         assert!(int_data.ptr_eq(&int_data));
 
+        #[allow(clippy::redundant_clone)]
         let int_data_clone = int_data.clone();
         assert_eq!(int_data, int_data_clone);
         assert!(int_data.ptr_eq(&int_data_clone));
@@ -2003,6 +2004,7 @@ mod tests {
 
         assert!(string_data.ptr_eq(&string_data));
 
+        #[allow(clippy::redundant_clone)]
         let string_data_cloned = string_data.clone();
         assert!(string_data_cloned.ptr_eq(&string_data));
         assert!(string_data.ptr_eq(&string_data_cloned));

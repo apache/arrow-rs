@@ -419,18 +419,23 @@ impl ObjectStore for LocalFileSystem {
 
         maybe_spawn_blocking(move || {
             let metadata = match metadata(&path) {
-                Err(e) => Err(if e.kind() == ErrorKind::NotFound {
-                    Error::NotFound {
+                Err(e) => Err(match e.kind() {
+                    ErrorKind::NotFound => Error::NotFound {
                         path: path.clone(),
                         source: e,
-                    }
-                } else {
-                    Error::Metadata {
+                    },
+                    _ => Error::Metadata {
                         source: e.into(),
                         path: location.to_string(),
-                    }
+                    },
                 }),
-                Ok(m) => Ok(m),
+                Ok(m) => match m.is_file() {
+                    true => Ok(m),
+                    false => Err(Error::NotFound {
+                        path,
+                        source: io::Error::new(ErrorKind::NotFound, "is not file"),
+                    }),
+                },
             }?;
             convert_metadata(metadata, location)
         })
@@ -878,19 +883,25 @@ fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<By
 }
 
 fn open_file(path: &PathBuf) -> Result<File> {
-    let file = File::open(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Error::NotFound {
+    let file = match File::open(path).and_then(|f| Ok((f.metadata()?, f))) {
+        Err(e) => Err(match e.kind() {
+            ErrorKind::NotFound => Error::NotFound {
                 path: path.clone(),
                 source: e,
-            }
-        } else {
-            Error::UnableToOpenFile {
+            },
+            _ => Error::UnableToOpenFile {
                 path: path.clone(),
                 source: e,
-            }
-        }
-    })?;
+            },
+        }),
+        Ok((metadata, file)) => match metadata.is_file() {
+            true => Ok(file),
+            false => Err(Error::NotFound {
+                path: path.clone(),
+                source: io::Error::new(ErrorKind::NotFound, "not a file"),
+            }),
+        },
+    }?;
     Ok(file)
 }
 

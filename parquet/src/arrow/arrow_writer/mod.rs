@@ -250,6 +250,11 @@ impl<W: Write> RecordBatchWriter for ArrowWriter<W> {
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         self.write(batch).map_err(|e| e.into())
     }
+
+    fn close(self) -> std::result::Result<(), ArrowError> {
+        self.close()?;
+        Ok(())
+    }
 }
 
 fn write_leaves<W: Write>(
