@@ -880,6 +880,14 @@ mod tests {
         assert_eq!(result.common_prefixes.len(), 1);
         assert_eq!(result.common_prefixes[0], Path::from("test_dir"));
 
+        // Should return not found
+        let err = storage.get(&Path::from("test_dir")).await.unwrap_err();
+        assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
+        // Should return not found
+        let err = storage.head(&Path::from("test_dir")).await.unwrap_err();
+        assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
         // List everything starting with a prefix that should return results
         let prefix = Path::from("test_dir");
         let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();

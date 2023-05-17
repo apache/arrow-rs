@@ -238,10 +238,13 @@ impl Client {
             .send_retry(&self.retry_config)
             .await
             .map_err(|source| match source.status() {
-                Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
-                    source: Box::new(source),
-                    path: location.to_string(),
-                },
+                // Some stores return METHOD_NOT_ALLOWED for get on directories
+                Some(StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED) => {
+                    crate::Error::NotFound {
+                        source: Box::new(source),
+                        path: location.to_string(),
+                    }
+                }
                 _ => Error::Request { source }.into(),
             })
     }
