@@ -32,17 +32,20 @@ pub mod header;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 pub mod list;
 
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, ClientBuilder, Proxy, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
+use crate::client::token::{TemporaryToken, TokenCache};
 use crate::config::{fmt_duration, ConfigValue};
 use crate::path::Path;
-use crate::GetOptions;
+use crate::{GetOptions, Result, RetryConfig};
 
 fn map_client_error(e: reqwest::Error) -> super::Error {
     super::Error::Generic {
@@ -502,6 +505,90 @@ impl GetOptionsExt for RequestBuilder {
         self
     }
 }
+
+/// Provides credentials for use when signing requests
+#[async_trait]
+pub trait CredentialProvider: std::fmt::Debug + Send + Sync {
+    type Credential;
+
+    async fn get_credential(&self) -> Result<Arc<Self::Credential>>;
+}
+
+/// A static set of credentials
+#[derive(Debug)]
+pub struct StaticCredentialProvider<T> {
+    credential: Arc<T>,
+}
+
+impl<T> StaticCredentialProvider<T> {
+    pub fn new(credential: T) -> Self {
+        Self {
+            credential: Arc::new(credential),
+        }
+    }
+}
+
+#[async_trait]
+impl<T> CredentialProvider for StaticCredentialProvider<T>
+where
+    T: std::fmt::Debug + Send + Sync,
+{
+    type Credential = T;
+
+    async fn get_credential(&self) -> Result<Arc<T>> {
+        Ok(Arc::clone(&self.credential))
+    }
+}
+
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
+mod cloud {
+    use super::*;
+
+    /// A [`CredentialProvider`] that uses [`Client`] to fetch temporary tokens
+    #[derive(Debug)]
+    pub struct TokenCredentialProvider<T: TokenProvider> {
+        inner: T,
+        client: Client,
+        retry: RetryConfig,
+        cache: TokenCache<Arc<T::Credential>>,
+    }
+
+    impl<T: TokenProvider> TokenCredentialProvider<T> {
+        pub fn new(inner: T, client: Client, retry: RetryConfig) -> Self {
+            Self {
+                inner,
+                client,
+                retry,
+                cache: Default::default(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl<T: TokenProvider> CredentialProvider for TokenCredentialProvider<T> {
+        type Credential = T::Credential;
+
+        async fn get_credential(&self) -> Result<Arc<Self::Credential>> {
+            self.cache
+                .get_or_insert_with(|| self.inner.fetch_token(&self.client, &self.retry))
+                .await
+        }
+    }
+
+    #[async_trait]
+    pub trait TokenProvider: std::fmt::Debug + Send + Sync {
+        type Credential: std::fmt::Debug + Send + Sync;
+
+        async fn fetch_token(
+            &self,
+            client: &Client,
+            retry: &RetryConfig,
+        ) -> Result<TemporaryToken<Arc<Self::Credential>>>;
+    }
+}
+
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
+pub use cloud::*;
 
 #[cfg(test)]
 mod tests {

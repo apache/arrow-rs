@@ -18,12 +18,12 @@
 use crate::aws::{STORE, STRICT_ENCODE_SET};
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
+use crate::client::TokenProvider;
 use crate::util::hmac_sha256;
 use crate::{Result, RetryConfig};
+use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
-use futures::future::BoxFuture;
-use futures::TryFutureExt;
 use percent_encoding::utf8_percent_encode;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, Method, Request, RequestBuilder, StatusCode};
@@ -41,10 +41,14 @@ static EMPTY_SHA256_HASH: &str =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 static UNSIGNED_PAYLOAD_LITERAL: &str = "UNSIGNED-PAYLOAD";
 
-#[derive(Debug)]
+/// A set of AWS security credentials
+#[derive(Debug, Eq, PartialEq)]
 pub struct AwsCredential {
+    /// AWS_ACCESS_KEY_ID
     pub key_id: String,
+    /// AWS_SECRET_ACCESS_KEY
     pub secret_key: String,
+    /// AWS_SESSION_TOKEN
     pub token: Option<String>,
 }
 
@@ -291,49 +295,31 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
     (signed_headers, canonical_headers)
 }
 
-/// Provides credentials for use when signing requests
-pub trait CredentialProvider: std::fmt::Debug + Send + Sync {
-    fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>>;
-}
-
-/// A static set of credentials
-#[derive(Debug)]
-pub struct StaticCredentialProvider {
-    pub credential: Arc<AwsCredential>,
-}
-
-impl CredentialProvider for StaticCredentialProvider {
-    fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>> {
-        Box::pin(futures::future::ready(Ok(Arc::clone(&self.credential))))
-    }
-}
-
 /// Credentials sourced from the instance metadata service
 ///
 /// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html>
 #[derive(Debug)]
 pub struct InstanceCredentialProvider {
     pub cache: TokenCache<Arc<AwsCredential>>,
-    pub client: Client,
-    pub retry_config: RetryConfig,
     pub imdsv1_fallback: bool,
     pub metadata_endpoint: String,
 }
 
-impl CredentialProvider for InstanceCredentialProvider {
-    fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>> {
-        Box::pin(self.cache.get_or_insert_with(|| {
-            instance_creds(
-                &self.client,
-                &self.retry_config,
-                &self.metadata_endpoint,
-                self.imdsv1_fallback,
-            )
+#[async_trait]
+impl TokenProvider for InstanceCredentialProvider {
+    type Credential = AwsCredential;
+
+    async fn fetch_token(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> Result<TemporaryToken<Arc<AwsCredential>>> {
+        instance_creds(client, retry, &self.metadata_endpoint, self.imdsv1_fallback)
+            .await
             .map_err(|source| crate::Error::Generic {
                 store: STORE,
                 source,
             })
-        }))
     }
 }
 
@@ -342,31 +328,34 @@ impl CredentialProvider for InstanceCredentialProvider {
 /// <https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts-technical-overview.html>
 #[derive(Debug)]
 pub struct WebIdentityProvider {
-    pub cache: TokenCache<Arc<AwsCredential>>,
     pub token_path: String,
     pub role_arn: String,
     pub session_name: String,
     pub endpoint: String,
-    pub client: Client,
-    pub retry_config: RetryConfig,
 }
 
-impl CredentialProvider for WebIdentityProvider {
-    fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>> {
-        Box::pin(self.cache.get_or_insert_with(|| {
-            web_identity(
-                &self.client,
-                &self.retry_config,
-                &self.token_path,
-                &self.role_arn,
-                &self.session_name,
-                &self.endpoint,
-            )
-            .map_err(|source| crate::Error::Generic {
-                store: STORE,
-                source,
-            })
-        }))
+#[async_trait]
+impl TokenProvider for WebIdentityProvider {
+    type Credential = AwsCredential;
+
+    async fn fetch_token(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> Result<TemporaryToken<Arc<AwsCredential>>> {
+        web_identity(
+            client,
+            retry,
+            &self.token_path,
+            &self.role_arn,
+            &self.session_name,
+            &self.endpoint,
+        )
+        .await
+        .map_err(|source| crate::Error::Generic {
+            store: STORE,
+            source,
+        })
     }
 }
 

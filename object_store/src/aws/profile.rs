@@ -17,6 +17,7 @@
 
 #![cfg(feature = "aws_profile")]
 
+use async_trait::async_trait;
 use aws_config::meta::region::ProvideRegion;
 use aws_config::profile::profile_file::ProfileFiles;
 use aws_config::profile::ProfileFileCredentialsProvider;
@@ -24,14 +25,13 @@ use aws_config::profile::ProfileFileRegionProvider;
 use aws_config::provider_config::ProviderConfig;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_types::region::Region;
-use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::Instant;
 use std::time::SystemTime;
 
-use crate::aws::credential::CredentialProvider;
 use crate::aws::AwsCredential;
 use crate::client::token::{TemporaryToken, TokenCache};
+use crate::client::CredentialProvider;
 use crate::Result;
 
 #[cfg(test)]
@@ -91,38 +91,43 @@ impl ProfileProvider {
     }
 }
 
+#[async_trait]
 impl CredentialProvider for ProfileProvider {
-    fn get_credential(&self) -> BoxFuture<'_, Result<Arc<AwsCredential>>> {
-        Box::pin(self.cache.get_or_insert_with(move || async move {
-            let region = self.region.clone().map(Region::new);
+    type Credential = AwsCredential;
 
-            let config = ProviderConfig::default().with_region(region);
+    async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
+        self.cache
+            .get_or_insert_with(move || async move {
+                let region = self.region.clone().map(Region::new);
 
-            let credentials = ProfileFileCredentialsProvider::builder()
-                .configure(&config)
-                .profile_name(&self.name)
-                .build();
+                let config = ProviderConfig::default().with_region(region);
 
-            let c = credentials.provide_credentials().await.map_err(|source| {
-                crate::Error::Generic {
-                    store: "S3",
-                    source: Box::new(source),
-                }
-            })?;
-            let t_now = SystemTime::now();
-            let expiry = c
-                .expiry()
-                .and_then(|e| e.duration_since(t_now).ok())
-                .map(|ttl| Instant::now() + ttl);
+                let credentials = ProfileFileCredentialsProvider::builder()
+                    .configure(&config)
+                    .profile_name(&self.name)
+                    .build();
 
-            Ok(TemporaryToken {
-                token: Arc::new(AwsCredential {
-                    key_id: c.access_key_id().to_string(),
-                    secret_key: c.secret_access_key().to_string(),
-                    token: c.session_token().map(ToString::to_string),
-                }),
-                expiry,
+                let c = credentials.provide_credentials().await.map_err(|source| {
+                    crate::Error::Generic {
+                        store: "S3",
+                        source: Box::new(source),
+                    }
+                })?;
+                let t_now = SystemTime::now();
+                let expiry = c
+                    .expiry()
+                    .and_then(|e| e.duration_since(t_now).ok())
+                    .map(|ttl| Instant::now() + ttl);
+
+                Ok(TemporaryToken {
+                    token: Arc::new(AwsCredential {
+                        key_id: c.access_key_id().to_string(),
+                        secret_key: c.secret_access_key().to_string(),
+                        token: c.session_token().map(ToString::to_string),
+                    }),
+                    expiry,
+                })
             })
-        }))
+            .await
     }
 }

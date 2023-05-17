@@ -27,7 +27,6 @@
 //! a way to drop old blocks. Instead unused blocks are automatically cleaned up
 //! after 7 days.
 use self::client::{BlockId, BlockList};
-use crate::client::token::TokenCache;
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::Path,
@@ -49,13 +48,19 @@ use std::{collections::BTreeSet, str::FromStr};
 use tokio::io::AsyncWrite;
 use url::Url;
 
+use crate::azure::credential::AzureCredential;
 use crate::client::header::header_meta;
-use crate::client::ClientConfigKey;
+use crate::client::{
+    ClientConfigKey, CredentialProvider, StaticCredentialProvider,
+    TokenCredentialProvider,
+};
 use crate::config::ConfigValue;
 pub use credential::authority_hosts;
 
 mod client;
 mod credential;
+
+type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
 
 const STORE: &str = "MicrosoftAzure";
 
@@ -100,12 +105,6 @@ enum Error {
 
     #[snafu(display("Container name must be specified"))]
     MissingContainerName {},
-
-    #[snafu(display("At least one authorization option must be specified"))]
-    MissingCredentials {},
-
-    #[snafu(display("Azure credential error: {}", source), context(false))]
-    Credential { source: credential::Error },
 
     #[snafu(display(
         "Unknown url scheme cannot be parsed into storage location: {}",
@@ -913,6 +912,9 @@ impl MicrosoftAzureBuilder {
         }
 
         let container = self.container_name.ok_or(Error::MissingContainerName {})?;
+        let static_creds = |credential: AzureCredential| -> AzureCredentialProvider {
+            Arc::new(StaticCredentialProvider::new(credential))
+        };
 
         let (is_emulator, storage_url, auth, account) = if self.use_emulator.get()? {
             let account_name = self
@@ -924,7 +926,8 @@ impl MicrosoftAzureBuilder {
             let account_key = self
                 .access_key
                 .unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
-            let credential = credential::CredentialProvider::AccessKey(account_key);
+
+            let credential = static_creds(AzureCredential::AccessKey(account_key));
 
             self.client_options = self.client_options.with_allow_http(true);
             (true, url, credential, account_name)
@@ -933,10 +936,11 @@ impl MicrosoftAzureBuilder {
             let account_url = format!("https://{}.blob.core.windows.net", &account_name);
             let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
+
             let credential = if let Some(bearer_token) = self.bearer_token {
-                credential::CredentialProvider::BearerToken(bearer_token)
+                static_creds(AzureCredential::BearerToken(bearer_token))
             } else if let Some(access_key) = self.access_key {
-                credential::CredentialProvider::AccessKey(access_key)
+                static_creds(AzureCredential::AccessKey(access_key))
             } else if let (Some(client_id), Some(tenant_id), Some(federated_token_file)) =
                 (&self.client_id, &self.tenant_id, self.federated_token_file)
             {
@@ -946,10 +950,11 @@ impl MicrosoftAzureBuilder {
                     tenant_id,
                     self.authority_host,
                 );
-                credential::CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(client_credential),
-                )
+                Arc::new(TokenCredentialProvider::new(
+                    client_credential,
+                    self.client_options.client()?,
+                    self.retry_config.clone(),
+                )) as _
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
                 (&self.client_id, self.client_secret, &self.tenant_id)
             {
@@ -959,33 +964,29 @@ impl MicrosoftAzureBuilder {
                     tenant_id,
                     self.authority_host,
                 );
-                credential::CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(client_credential),
-                )
+                Arc::new(TokenCredentialProvider::new(
+                    client_credential,
+                    self.client_options.client()?,
+                    self.retry_config.clone(),
+                )) as _
             } else if let Some(query_pairs) = self.sas_query_pairs {
-                credential::CredentialProvider::SASToken(query_pairs)
+                static_creds(AzureCredential::SASToken(query_pairs))
             } else if let Some(sas) = self.sas_key {
-                credential::CredentialProvider::SASToken(split_sas(&sas)?)
+                static_creds(AzureCredential::SASToken(split_sas(&sas)?))
             } else if self.use_azure_cli.get()? {
-                credential::CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(credential::AzureCliCredential::new()),
-                )
+                Arc::new(credential::AzureCliCredential::new()) as _
             } else {
-                let client =
-                    self.client_options.clone().with_allow_http(true).client()?;
                 let msi_credential = credential::ImdsManagedIdentityProvider::new(
                     self.client_id,
                     self.object_id,
                     self.msi_resource_id,
                     self.msi_endpoint,
-                    client,
                 );
-                credential::CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(msi_credential),
-                )
+                Arc::new(TokenCredentialProvider::new(
+                    msi_credential,
+                    self.client_options.clone().with_allow_http(true).client()?,
+                    self.retry_config.clone(),
+                )) as _
             };
             (false, url, credential, account_name)
         };

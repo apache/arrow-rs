@@ -48,9 +48,12 @@ use crate::client::header::header_meta;
 use crate::client::list::ListResponse;
 use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
-use crate::client::{ClientConfigKey, GetOptionsExt};
+use crate::client::{
+    ClientConfigKey, CredentialProvider, GetOptionsExt, StaticCredentialProvider,
+    TokenCredentialProvider,
+};
+use crate::gcp::credential::{application_default_credentials, GcpCredential};
 use crate::{
-    client::token::TokenCache,
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
     util::format_prefix,
@@ -59,13 +62,14 @@ use crate::{
 };
 
 use self::credential::{
-    default_gcs_base_url, ApplicationDefaultCredentials, InstanceCredentialProvider,
-    ServiceAccountCredentials, TokenProvider,
+    default_gcs_base_url, InstanceCredentialProvider, ServiceAccountCredentials,
 };
 
 mod credential;
 
 const STORE: &str = "GCS";
+
+type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -118,9 +122,6 @@ enum Error {
 
     #[snafu(display("Missing bucket name"))]
     MissingBucketName {},
-
-    #[snafu(display("Could not find either metadata credentials or configuration properties to initialize GCS credentials."))]
-    MissingCredentials,
 
     #[snafu(display(
         "One of service account path or service account key may be provided."
@@ -209,8 +210,7 @@ struct GoogleCloudStorageClient {
     client: Client,
     base_url: String,
 
-    token_provider: Option<Arc<Box<dyn TokenProvider>>>,
-    token_cache: TokenCache<String>,
+    credentials: GcpCredentialProvider,
 
     bucket_name: String,
     bucket_name_encoded: String,
@@ -223,18 +223,8 @@ struct GoogleCloudStorageClient {
 }
 
 impl GoogleCloudStorageClient {
-    async fn get_token(&self) -> Result<String> {
-        if let Some(token_provider) = &self.token_provider {
-            Ok(self
-                .token_cache
-                .get_or_insert_with(|| {
-                    token_provider.fetch_token(&self.client, &self.retry_config)
-                })
-                .await
-                .context(CredentialSnafu)?)
-        } else {
-            Ok("".to_owned())
-        }
+    async fn get_credential(&self) -> Result<Arc<GcpCredential>> {
+        self.credentials.get_credential().await
     }
 
     fn object_url(&self, path: &Path) -> String {
@@ -249,7 +239,7 @@ impl GoogleCloudStorageClient {
         options: GetOptions,
         head: bool,
     ) -> Result<Response> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
         let url = self.object_url(path);
 
         let method = match head {
@@ -260,7 +250,7 @@ impl GoogleCloudStorageClient {
         let response = self
             .client
             .request(method, url)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .with_get_options(options)
             .send_retry(&self.retry_config)
             .await
@@ -273,7 +263,7 @@ impl GoogleCloudStorageClient {
 
     /// Perform a put request <https://cloud.google.com/storage/docs/xml-api/put-object-upload>
     async fn put_request(&self, path: &Path, payload: Bytes) -> Result<()> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
         let url = self.object_url(path);
 
         let content_type = self
@@ -283,7 +273,7 @@ impl GoogleCloudStorageClient {
 
         self.client
             .request(Method::PUT, url)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, payload.len())
             .body(payload)
@@ -298,7 +288,7 @@ impl GoogleCloudStorageClient {
 
     /// Initiate a multi-part upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
     async fn multipart_initiate(&self, path: &Path) -> Result<MultipartId> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
         let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
 
         let content_type = self
@@ -309,7 +299,7 @@ impl GoogleCloudStorageClient {
         let response = self
             .client
             .request(Method::POST, &url)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, "0")
             .query(&[("uploads", "")])
@@ -338,12 +328,12 @@ impl GoogleCloudStorageClient {
         path: &str,
         multipart_id: &MultipartId,
     ) -> Result<()> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
         let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
 
         self.client
             .request(Method::DELETE, &url)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .header(header::CONTENT_TYPE, "application/octet-stream")
             .header(header::CONTENT_LENGTH, "0")
             .query(&[("uploadId", multipart_id)])
@@ -356,12 +346,12 @@ impl GoogleCloudStorageClient {
 
     /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
     async fn delete_request(&self, path: &Path) -> Result<()> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
         let url = self.object_url(path);
 
         let builder = self.client.request(Method::DELETE, url);
         builder
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .send_retry(&self.retry_config)
             .await
             .context(DeleteRequestSnafu {
@@ -378,7 +368,7 @@ impl GoogleCloudStorageClient {
         to: &Path,
         if_not_exists: bool,
     ) -> Result<()> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
         let url = self.object_url(to);
 
         let from = utf8_percent_encode(from.as_ref(), NON_ALPHANUMERIC);
@@ -394,7 +384,7 @@ impl GoogleCloudStorageClient {
         }
 
         builder
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             // Needed if reqwest is compiled with native-tls instead of rustls-tls
             // See https://github.com/apache/arrow-rs/pull/3921
             .header(header::CONTENT_LENGTH, 0)
@@ -418,7 +408,7 @@ impl GoogleCloudStorageClient {
         delimiter: bool,
         page_token: Option<&str>,
     ) -> Result<ListResponse> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
         let url = format!("{}/{}", self.base_url, self.bucket_name_encoded);
 
         let mut query = Vec::with_capacity(5);
@@ -443,7 +433,7 @@ impl GoogleCloudStorageClient {
             .client
             .request(Method::GET, url)
             .query(&query)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .send_retry(&self.retry_config)
             .await
             .context(ListRequestSnafu)?
@@ -495,9 +485,9 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             self.client.base_url, self.client.bucket_name_encoded, self.encoded_path
         );
 
-        let token = self
+        let credential = self
             .client
-            .get_token()
+            .get_credential()
             .await
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
@@ -505,7 +495,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             .client
             .client
             .request(Method::PUT, &url)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .query(&[
                 ("partNumber", format!("{}", part_idx + 1)),
                 ("uploadId", upload_id),
@@ -549,9 +539,9 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             })
             .collect();
 
-        let token = self
+        let credential = self
             .client
-            .get_token()
+            .get_credential()
             .await
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
@@ -567,7 +557,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
         self.client
             .client
             .request(Method::POST, &url)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .query(&[("uploadId", upload_id)])
             .body(data)
             .send_retry(&self.client.retry_config)
@@ -1062,10 +1052,11 @@ impl GoogleCloudStorageBuilder {
             };
 
         // Then try to initialize from the application credentials file, or the environment.
-        let application_default_credentials = ApplicationDefaultCredentials::new(
+        let application_default_credentials = application_default_credentials(
             self.application_credentials_path.as_deref(),
-        )
-        .context(CredentialSnafu)?;
+            &self.client_options,
+            &self.retry_config,
+        )?;
 
         let disable_oauth = service_account_credentials
             .as_ref()
@@ -1081,29 +1072,24 @@ impl GoogleCloudStorageBuilder {
         let scope = "https://www.googleapis.com/auth/devstorage.full_control";
         let audience = "https://www.googleapis.com/oauth2/v4/token";
 
-        let token_provider = if disable_oauth {
-            None
+        let credentials = if disable_oauth {
+            Arc::new(StaticCredentialProvider::new(GcpCredential {
+                bearer: "".to_string(),
+            })) as _
+        } else if let Some(credentials) = service_account_credentials {
+            Arc::new(TokenCredentialProvider::new(
+                credentials.oauth_provider(scope, audience)?,
+                self.client_options.client()?,
+                self.retry_config.clone(),
+            )) as _
+        } else if let Some(credentials) = application_default_credentials {
+            credentials
         } else {
-            let best_provider = if let Some(credentials) = service_account_credentials {
-                Some(
-                    credentials
-                        .token_provider(scope, audience)
-                        .context(CredentialSnafu)?,
-                )
-            } else if let Some(credentials) = application_default_credentials {
-                Some(Box::new(credentials) as Box<dyn TokenProvider>)
-            } else {
-                Some(Box::new(
-                    InstanceCredentialProvider::new(
-                        audience,
-                        self.client_options.clone(),
-                    )
-                    .context(CredentialSnafu)?,
-                ) as Box<dyn TokenProvider>)
-            };
-
-            // A provider is required at this point, bail out if we don't have one.
-            Some(best_provider.ok_or(Error::MissingCredentials)?)
+            Arc::new(TokenCredentialProvider::new(
+                InstanceCredentialProvider::new(audience),
+                self.client_options.clone().with_allow_http(true).client()?,
+                self.retry_config.clone(),
+            )) as _
         };
 
         let encoded_bucket_name =
@@ -1113,8 +1099,7 @@ impl GoogleCloudStorageBuilder {
             client: Arc::new(GoogleCloudStorageClient {
                 client,
                 base_url: gcs_base_url,
-                token_provider: token_provider.map(Arc::new),
-                token_cache: Default::default(),
+                credentials,
                 bucket_name,
                 bucket_name_encoded: encoded_bucket_name,
                 retry_config: self.retry_config,
