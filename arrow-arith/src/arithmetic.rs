@@ -1098,7 +1098,8 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 }
                 DataType::Timestamp(TimeUnit::Second, _) => {
                     let r = right.as_primitive::<TimestampSecondType>();
-                    let res: PrimitiveArray<DurationSecondType> = try_binary(l, r, <TimestampSecondType as ArrowPrimitiveType>::Native::sub_checked)?;
+                    let op = <TimestampSecondType as ArrowPrimitiveType>::Native::wrapping_sub;
+                    let res: PrimitiveArray<DurationSecondType> = binary(l, r, op)?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1107,7 +1108,6 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 ))),
             }
         }
-
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             let l = left.as_primitive::<TimestampMicrosecondType>();
             match right.data_type() {
@@ -1128,7 +1128,8 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 }
                 DataType::Timestamp(TimeUnit::Microsecond, _) => {
                     let r = right.as_primitive::<TimestampMicrosecondType>();
-                    let res: PrimitiveArray<DurationMicrosecondType> = try_binary(l, r, <TimestampMicrosecondType as ArrowPrimitiveType>::Native::sub_checked)?;
+                    let op = <TimestampMicrosecondType as ArrowPrimitiveType>::Native::wrapping_sub;
+                    let res: PrimitiveArray<DurationMicrosecondType> = binary(l, r, op)?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1157,7 +1158,8 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 }
                 DataType::Timestamp(TimeUnit::Millisecond, _) => {
                     let r = right.as_primitive::<TimestampMillisecondType>();
-                    let res: PrimitiveArray<DurationMillisecondType> = try_binary(l, r, <TimestampMillisecondType as ArrowPrimitiveType>::Native::sub_checked)?;
+                    let op = <TimestampMillisecondType as ArrowPrimitiveType>::Native::wrapping_sub;
+                    let res: PrimitiveArray<DurationMillisecondType> = binary(l, r, op)?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1166,7 +1168,6 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 ))),
             }
         }
-
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
             let l = left.as_primitive::<TimestampNanosecondType>();
             match right.data_type() {
@@ -1187,7 +1188,8 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 }
                 DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                     let r = right.as_primitive::<TimestampNanosecondType>();
-                    let res: PrimitiveArray<DurationNanosecondType> = try_binary(l, r, <TimestampNanosecondType as ArrowPrimitiveType>::Native::sub_checked)?;
+                    let op = <TimestampNanosecondType as ArrowPrimitiveType>::Native::wrapping_sub;
+                    let res: PrimitiveArray<DurationNanosecondType> = binary(l, r, op)?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1268,6 +1270,66 @@ pub fn subtract_dyn_checked(
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
                     let r = right.as_primitive::<IntervalMonthDayNanoType>();
                     let res = math_op(l, r, Date64Type::subtract_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            let l = left.as_primitive::<TimestampSecondType>();
+            match right.data_type() {
+                DataType::Timestamp(TimeUnit::Second, _) => {
+                    let r = right.as_primitive::<TimestampSecondType>();
+                    let op = <TimestampSecondType as ArrowPrimitiveType>::Native::sub_checked;
+                    let res: PrimitiveArray<DurationSecondType> = try_binary(l, r, op)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            let l = left.as_primitive::<TimestampMicrosecondType>();
+            match right.data_type() {
+                DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    let r = right.as_primitive::<TimestampMicrosecondType>();
+                    let op = <TimestampMicrosecondType as ArrowPrimitiveType>::Native::sub_checked;
+                    let res: PrimitiveArray<DurationMicrosecondType> = try_binary(l, r, op)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            let l = left.as_primitive::<TimestampMillisecondType>();
+            match right.data_type() {
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    let r = right.as_primitive::<TimestampMillisecondType>();
+                    let op = <TimestampMillisecondType as ArrowPrimitiveType>::Native::sub_checked;
+                    let res: PrimitiveArray<DurationMillisecondType> = try_binary(l, r, op)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            let l = left.as_primitive::<TimestampNanosecondType>();
+            match right.data_type() {
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    let r = right.as_primitive::<TimestampNanosecondType>();
+                    let op = <TimestampNanosecondType as ArrowPrimitiveType>::Native::sub_checked;
+                    let res: PrimitiveArray<DurationNanosecondType> = try_binary(l, r, op)?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -4674,15 +4736,21 @@ mod tests {
     fn test_timestamp_second_subtract_timestamp() {
         let a = TimestampSecondArray::from(vec![0, 2, 4, 6, 8]);
         let b = TimestampSecondArray::from(vec![1, 2, 3, 4, 5]);
-
-        let result = subtract_dyn(&a, &b).unwrap();
-        let result = result.as_primitive::<DurationSecondType>();
-
         let expected = DurationSecondArray::from(vec![-1, 0, 1, 2, 3]);
 
+        // unchecked
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<DurationSecondType>();
         assert_eq!(&expected, result);
 
-        // overflow
+        // checked
+        let result = subtract_dyn_checked(&a, &b).unwrap();
+        let result = result.as_primitive::<DurationSecondType>();
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_timestamp_second_subtract_timestamp_overflow() {
         let a = TimestampSecondArray::from(vec![
             <TimestampSecondType as ArrowPrimitiveType>::Native::MAX,
         ]);
@@ -4690,8 +4758,12 @@ mod tests {
             <TimestampSecondType as ArrowPrimitiveType>::Native::MIN,
         ]);
 
+        // unchecked
         let result = subtract_dyn(&a, &b);
+        assert!(!&result.is_err());
 
+        // checked
+        let result = subtract_dyn_checked(&a, &b);
         assert!(&result.is_err());
     }
 
@@ -4699,15 +4771,21 @@ mod tests {
     fn test_timestamp_microsecond_subtract_timestamp() {
         let a = TimestampMicrosecondArray::from(vec![0, 2, 4, 6, 8]);
         let b = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5]);
-
-        let result = subtract_dyn(&a, &b).unwrap();
-        let result = result.as_primitive::<DurationMicrosecondType>();
-
         let expected = DurationMicrosecondArray::from(vec![-1, 0, 1, 2, 3]);
 
+        // unchecked
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<DurationMicrosecondType>();
         assert_eq!(&expected, result);
 
-        // overflow
+        // checked
+        let result = subtract_dyn_checked(&a, &b).unwrap();
+        let result = result.as_primitive::<DurationMicrosecondType>();
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_timestamp_microsecond_subtract_timestamp_overflow() {
         let a = TimestampMicrosecondArray::from(vec![
             <TimestampMicrosecondType as ArrowPrimitiveType>::Native::MAX,
         ]);
@@ -4715,8 +4793,12 @@ mod tests {
             <TimestampMicrosecondType as ArrowPrimitiveType>::Native::MIN,
         ]);
 
+        // unchecked
         let result = subtract_dyn(&a, &b);
+        assert!(!&result.is_err());
 
+        // checked
+        let result = subtract_dyn_checked(&a, &b);
         assert!(&result.is_err());
     }
 
@@ -4724,15 +4806,21 @@ mod tests {
     fn test_timestamp_millisecond_subtract_timestamp() {
         let a = TimestampMillisecondArray::from(vec![0, 2, 4, 6, 8]);
         let b = TimestampMillisecondArray::from(vec![1, 2, 3, 4, 5]);
-
-        let result = subtract_dyn(&a, &b).unwrap();
-        let result = result.as_primitive::<DurationMillisecondType>();
-
         let expected = DurationMillisecondArray::from(vec![-1, 0, 1, 2, 3]);
 
+        // unchecked
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<DurationMillisecondType>();
         assert_eq!(&expected, result);
 
-        // overflow
+        // checked
+        let result = subtract_dyn_checked(&a, &b).unwrap();
+        let result = result.as_primitive::<DurationMillisecondType>();
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_timestamp_millisecond_subtract_timestamp_overflow() {
         let a = TimestampMillisecondArray::from(vec![
             <TimestampMillisecondType as ArrowPrimitiveType>::Native::MAX,
         ]);
@@ -4740,8 +4828,12 @@ mod tests {
             <TimestampMillisecondType as ArrowPrimitiveType>::Native::MIN,
         ]);
 
+        // unchecked
         let result = subtract_dyn(&a, &b);
+        assert!(!&result.is_err());
 
+        // checked
+        let result = subtract_dyn_checked(&a, &b);
         assert!(&result.is_err());
     }
 
@@ -4749,15 +4841,21 @@ mod tests {
     fn test_timestamp_nanosecond_subtract_timestamp() {
         let a = TimestampNanosecondArray::from(vec![0, 2, 4, 6, 8]);
         let b = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
-
-        let result = subtract_dyn(&a, &b).unwrap();
-        let result = result.as_primitive::<DurationNanosecondType>();
-
         let expected = DurationNanosecondArray::from(vec![-1, 0, 1, 2, 3]);
 
+        // unchecked
+        let result = subtract_dyn(&a, &b).unwrap();
+        let result = result.as_primitive::<DurationNanosecondType>();
         assert_eq!(&expected, result);
 
-        // overflow
+        // checked
+        let result = subtract_dyn_checked(&a, &b).unwrap();
+        let result = result.as_primitive::<DurationNanosecondType>();
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_timestamp_nanosecond_subtract_timestamp_overflow() {
         let a = TimestampNanosecondArray::from(vec![
             <TimestampNanosecondType as ArrowPrimitiveType>::Native::MAX,
         ]);
@@ -4765,8 +4863,12 @@ mod tests {
             <TimestampNanosecondType as ArrowPrimitiveType>::Native::MIN,
         ]);
 
+        // unchecked
         let result = subtract_dyn(&a, &b);
+        assert!(!&result.is_err());
 
+        // checked
+        let result = subtract_dyn_checked(&a, &b);
         assert!(&result.is_err());
     }
 }
