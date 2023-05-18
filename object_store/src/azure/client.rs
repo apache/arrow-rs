@@ -188,19 +188,7 @@ impl AzureClient {
                 path: path.as_ref(),
             })?;
 
-        match response.headers().get("x-ms-resource-type") {
-            Some(resource) if resource.as_ref() != b"file" => {
-                Err(crate::Error::NotFound {
-                    path: path.to_string(),
-                    source: format!(
-                        "Not a file, got x-ms-resource-type: {}",
-                        String::from_utf8_lossy(resource.as_ref())
-                    )
-                    .into(),
-                })
-            }
-            _ => Ok(response),
-        }
+        Ok(response)
     }
 
     /// Make an Azure Delete request <https://docs.microsoft.com/en-us/rest/api/storageservices/delete-blob>
@@ -304,7 +292,19 @@ impl GetClient for AzureClient {
                 path: path.as_ref(),
             })?;
 
-        Ok(response)
+        match response.headers().get("x-ms-resource-type") {
+            Some(resource) if resource.as_ref() != b"file" => {
+                Err(crate::Error::NotFound {
+                    path: path.to_string(),
+                    source: format!(
+                        "Not a file, got x-ms-resource-type: {}",
+                        String::from_utf8_lossy(resource.as_ref())
+                    )
+                    .into(),
+                })
+            }
+            _ => Ok(response),
+        }
     }
 }
 
