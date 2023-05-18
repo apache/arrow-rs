@@ -1098,8 +1098,7 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 }
                 DataType::Timestamp(TimeUnit::Second, _) => {
                     let r = right.as_primitive::<TimestampSecondType>();
-                    let op = <TimestampSecondType as ArrowPrimitiveType>::Native::wrapping_sub;
-                    let res: PrimitiveArray<DurationSecondType> = binary(l, r, op)?;
+                    let res: PrimitiveArray<DurationSecondType> = binary(l, r, |a, b| a.wrapping_sub(b))?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1128,8 +1127,7 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 }
                 DataType::Timestamp(TimeUnit::Microsecond, _) => {
                     let r = right.as_primitive::<TimestampMicrosecondType>();
-                    let op = <TimestampMicrosecondType as ArrowPrimitiveType>::Native::wrapping_sub;
-                    let res: PrimitiveArray<DurationMicrosecondType> = binary(l, r, op)?;
+                    let res: PrimitiveArray<DurationMicrosecondType> = binary(l, r, |a, b| a.wrapping_sub(b))?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1158,8 +1156,7 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 }
                 DataType::Timestamp(TimeUnit::Millisecond, _) => {
                     let r = right.as_primitive::<TimestampMillisecondType>();
-                    let op = <TimestampMillisecondType as ArrowPrimitiveType>::Native::wrapping_sub;
-                    let res: PrimitiveArray<DurationMillisecondType> = binary(l, r, op)?;
+                    let res: PrimitiveArray<DurationMillisecondType> = binary(l, r, |a, b| a.wrapping_sub(b))?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1188,8 +1185,7 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
                 }
                 DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                     let r = right.as_primitive::<TimestampNanosecondType>();
-                    let op = <TimestampNanosecondType as ArrowPrimitiveType>::Native::wrapping_sub;
-                    let res: PrimitiveArray<DurationNanosecondType> = binary(l, r, op)?;
+                    let res: PrimitiveArray<DurationNanosecondType> = binary(l, r, |a, b| a.wrapping_sub(b))?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1283,8 +1279,7 @@ pub fn subtract_dyn_checked(
             match right.data_type() {
                 DataType::Timestamp(TimeUnit::Second, _) => {
                     let r = right.as_primitive::<TimestampSecondType>();
-                    let op = <TimestampSecondType as ArrowPrimitiveType>::Native::sub_checked;
-                    let res: PrimitiveArray<DurationSecondType> = try_binary(l, r, op)?;
+                    let res: PrimitiveArray<DurationSecondType> = try_binary(l, r, |a, b| a.sub_checked(b))?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1298,8 +1293,7 @@ pub fn subtract_dyn_checked(
             match right.data_type() {
                 DataType::Timestamp(TimeUnit::Microsecond, _) => {
                     let r = right.as_primitive::<TimestampMicrosecondType>();
-                    let op = <TimestampMicrosecondType as ArrowPrimitiveType>::Native::sub_checked;
-                    let res: PrimitiveArray<DurationMicrosecondType> = try_binary(l, r, op)?;
+                    let res: PrimitiveArray<DurationMicrosecondType> = try_binary(l, r, |a, b| a.sub_checked(b))?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1313,8 +1307,7 @@ pub fn subtract_dyn_checked(
             match right.data_type() {
                 DataType::Timestamp(TimeUnit::Millisecond, _) => {
                     let r = right.as_primitive::<TimestampMillisecondType>();
-                    let op = <TimestampMillisecondType as ArrowPrimitiveType>::Native::sub_checked;
-                    let res: PrimitiveArray<DurationMillisecondType> = try_binary(l, r, op)?;
+                    let res: PrimitiveArray<DurationMillisecondType> = try_binary(l, r, |a, b| a.sub_checked(b))?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
@@ -1328,8 +1321,7 @@ pub fn subtract_dyn_checked(
             match right.data_type() {
                 DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                     let r = right.as_primitive::<TimestampNanosecondType>();
-                    let op = <TimestampNanosecondType as ArrowPrimitiveType>::Native::sub_checked;
-                    let res: PrimitiveArray<DurationNanosecondType> = try_binary(l, r, op)?;
+                    let res: PrimitiveArray<DurationNanosecondType> = try_binary(l, r, |a, b| a.sub_checked(b))?;
                     Ok(Arc::new(res))
                 }
                 _ => Err(ArrowError::CastError(format!(
