@@ -20,9 +20,18 @@
 pub mod backoff;
 #[cfg(test)]
 pub mod mock_server;
+
+pub mod retry;
+
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod pagination;
-pub mod retry;
+
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub mod get;
+
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub mod list;
+
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod token;
 
@@ -30,7 +39,7 @@ pub mod token;
 pub mod header;
 
 #[cfg(any(feature = "aws", feature = "gcp"))]
-pub mod list;
+pub mod list_response;
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -42,10 +51,9 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, ClientBuilder, Proxy, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
-use crate::client::token::{TemporaryToken, TokenCache};
 use crate::config::{fmt_duration, ConfigValue};
 use crate::path::Path;
-use crate::{GetOptions, Result, RetryConfig};
+use crate::{GetOptions, Result};
 
 fn map_client_error(e: reqwest::Error) -> super::Error {
     super::Error::Generic {
@@ -545,6 +553,8 @@ where
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 mod cloud {
     use super::*;
+    use crate::client::token::{TemporaryToken, TokenCache};
+    use crate::RetryConfig;
 
     /// A [`CredentialProvider`] that uses [`Client`] to fetch temporary tokens
     #[derive(Debug)]

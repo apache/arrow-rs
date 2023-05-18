@@ -18,15 +18,16 @@
 use super::credential::AzureCredential;
 use crate::azure::credential::*;
 use crate::azure::{AzureCredentialProvider, STORE};
-use crate::client::pagination::stream_paginated;
+use crate::client::get::GetClient;
+use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
 use crate::path::DELIMITER;
-use crate::util::{deserialize_rfc1123, format_prefix};
+use crate::util::deserialize_rfc1123;
 use crate::{
-    BoxStream, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, Result,
-    RetryConfig, StreamExt,
+    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, Result, RetryConfig,
 };
+use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
@@ -187,40 +188,6 @@ impl AzureClient {
                 path: path.as_ref(),
             })?;
 
-        Ok(response)
-    }
-
-    /// Make an Azure GET request
-    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob>
-    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties>
-    pub async fn get_request(
-        &self,
-        path: &Path,
-        options: GetOptions,
-        head: bool,
-    ) -> Result<Response> {
-        let credential = self.get_credential().await?;
-        let url = self.config.path_url(path);
-        let method = match head {
-            true => Method::HEAD,
-            false => Method::GET,
-        };
-
-        let builder = self
-            .client
-            .request(method, url)
-            .header(CONTENT_LENGTH, HeaderValue::from_static("0"))
-            .body(Bytes::new());
-
-        let response = builder
-            .with_get_options(options)
-            .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
-            .await
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
-            })?;
-
         match response.headers().get("x-ms-resource-type") {
             Some(resource) if resource.as_ref() != b"file" => {
                 Err(crate::Error::NotFound {
@@ -300,14 +267,59 @@ impl AzureClient {
 
         Ok(())
     }
+}
 
+#[async_trait]
+impl GetClient for AzureClient {
+    const STORE: &'static str = STORE;
+
+    /// Make an Azure GET request
+    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob>
+    /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties>
+    async fn get_request(
+        &self,
+        path: &Path,
+        options: GetOptions,
+        head: bool,
+    ) -> Result<Response> {
+        let credential = self.get_credential().await?;
+        let url = self.config.path_url(path);
+        let method = match head {
+            true => Method::HEAD,
+            false => Method::GET,
+        };
+
+        let builder = self
+            .client
+            .request(method, url)
+            .header(CONTENT_LENGTH, HeaderValue::from_static("0"))
+            .body(Bytes::new());
+
+        let response = builder
+            .with_get_options(options)
+            .with_azure_authorization(&credential, &self.config.account)
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(GetRequestSnafu {
+                path: path.as_ref(),
+            })?;
+
+        Ok(response)
+    }
+}
+
+#[async_trait]
+impl ListClient for AzureClient {
     /// Make an Azure List request <https://docs.microsoft.com/en-us/rest/api/storageservices/list-blobs>
     async fn list_request(
         &self,
         prefix: Option<&str>,
         delimiter: bool,
         token: Option<&str>,
+        offset: Option<&str>,
     ) -> Result<(ListResult, Option<String>)> {
+        assert!(offset.is_none()); // Not yet supported
+
         let credential = self.get_credential().await?;
         let url = self.config.path_url(&Path::default());
 
@@ -345,22 +357,6 @@ impl AzureClient {
         let token = response.next_marker.take();
 
         Ok((to_list_result(response, prefix)?, token))
-    }
-
-    /// Perform a list operation automatically handling pagination
-    pub fn list_paginated(
-        &self,
-        prefix: Option<&Path>,
-        delimiter: bool,
-    ) -> BoxStream<'_, Result<ListResult>> {
-        let prefix = format_prefix(prefix);
-        stream_paginated(prefix, move |prefix, token| async move {
-            let (r, next_token) = self
-                .list_request(prefix.as_deref(), delimiter, token.as_deref())
-                .await?;
-            Ok((r, prefix, next_token))
-        })
-        .boxed()
     }
 }
 

@@ -29,14 +29,13 @@
 //! to abort the upload and drop those unneeded parts. In addition, you may wish to
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
-use std::collections::BTreeSet;
 use std::io;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::stream::BoxStream;
 use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{header, Client, Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -44,9 +43,9 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::client::header::header_meta;
-use crate::client::list::ListResponse;
-use crate::client::pagination::stream_paginated;
+use crate::client::get::{GetClient, GetClientExt};
+use crate::client::list::{ListClient, ListClientExt};
+use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
 use crate::client::{
     ClientConfigKey, CredentialProvider, GetOptionsExt, StaticCredentialProvider,
@@ -55,7 +54,6 @@ use crate::client::{
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
-    util::format_prefix,
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Result, RetryConfig,
 };
@@ -150,11 +148,6 @@ enum Error {
 
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
-
-    #[snafu(display("Failed to parse headers: {}", source))]
-    Header {
-        source: crate::client::header::Error,
-    },
 }
 
 impl From<Error> for super::Error {
@@ -239,35 +232,6 @@ impl GoogleCloudStorageClient {
     fn object_url(&self, path: &Path) -> String {
         let encoded = utf8_percent_encode(path.as_ref(), NON_ALPHANUMERIC);
         format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, encoded)
-    }
-
-    /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
-    async fn get_request(
-        &self,
-        path: &Path,
-        options: GetOptions,
-        head: bool,
-    ) -> Result<Response> {
-        let credential = self.get_credential().await?;
-        let url = self.object_url(path);
-
-        let method = match head {
-            true => Method::HEAD,
-            false => Method::GET,
-        };
-
-        let response = self
-            .client
-            .request(method, url)
-            .bearer_auth(&credential.bearer)
-            .with_get_options(options)
-            .send_retry(&self.retry_config)
-            .await
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
-            })?;
-
-        Ok(response)
     }
 
     /// Perform a put request <https://cloud.google.com/storage/docs/xml-api/put-object-upload>
@@ -409,14 +373,54 @@ impl GoogleCloudStorageClient {
 
         Ok(())
     }
+}
 
+#[async_trait]
+impl GetClient for GoogleCloudStorageClient {
+    const STORE: &'static str = STORE;
+
+    /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
+    async fn get_request(
+        &self,
+        path: &Path,
+        options: GetOptions,
+        head: bool,
+    ) -> Result<Response> {
+        let credential = self.get_credential().await?;
+        let url = self.object_url(path);
+
+        let method = match head {
+            true => Method::HEAD,
+            false => Method::GET,
+        };
+
+        let response = self
+            .client
+            .request(method, url)
+            .bearer_auth(&credential.bearer)
+            .with_get_options(options)
+            .send_retry(&self.retry_config)
+            .await
+            .context(GetRequestSnafu {
+                path: path.as_ref(),
+            })?;
+
+        Ok(response)
+    }
+}
+
+#[async_trait]
+impl ListClient for GoogleCloudStorageClient {
     /// Perform a list request <https://cloud.google.com/storage/docs/xml-api/get-bucket-list>
     async fn list_request(
         &self,
         prefix: Option<&str>,
         delimiter: bool,
         page_token: Option<&str>,
-    ) -> Result<ListResponse> {
+        offset: Option<&str>,
+    ) -> Result<(ListResult, Option<String>)> {
+        assert!(offset.is_none()); // Not yet supported
+
         let credential = self.get_credential().await?;
         let url = format!("{}/{}", self.base_url, self.bucket_name_encoded);
 
@@ -450,27 +454,11 @@ impl GoogleCloudStorageClient {
             .await
             .context(ListResponseBodySnafu)?;
 
-        let response: ListResponse = quick_xml::de::from_reader(response.reader())
+        let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
             .context(InvalidListResponseSnafu)?;
 
-        Ok(response)
-    }
-
-    /// Perform a list operation automatically handling pagination
-    fn list_paginated(
-        &self,
-        prefix: Option<&Path>,
-        delimiter: bool,
-    ) -> BoxStream<'_, Result<ListResult>> {
-        let prefix = format_prefix(prefix);
-        stream_paginated(prefix, move |prefix, token| async move {
-            let mut r = self
-                .list_request(prefix.as_deref(), delimiter, token.as_deref())
-                .await?;
-            let next_token = r.next_continuation_token.take();
-            Ok((r.try_into()?, prefix, next_token))
-        })
-        .boxed()
+        let token = response.next_continuation_token.take();
+        Ok((response.try_into()?, token))
     }
 }
 
@@ -613,22 +601,11 @@ impl ObjectStore for GoogleCloudStorage {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        let response = self.client.get_request(location, options, false).await?;
-        let stream = response
-            .bytes_stream()
-            .map_err(|source| crate::Error::Generic {
-                store: STORE,
-                source: Box::new(source),
-            })
-            .boxed();
-
-        Ok(GetResult::Stream(stream))
+        self.client.get_opts(location, options).await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let options = GetOptions::default();
-        let response = self.client.get_request(location, options, true).await?;
-        Ok(header_meta(location, response.headers()).context(HeaderSnafu)?)
+        self.client.head(location).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
@@ -639,32 +616,11 @@ impl ObjectStore for GoogleCloudStorage {
         &self,
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        let stream = self
-            .client
-            .list_paginated(prefix, false)
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed();
-
-        Ok(stream)
+        self.client.list(prefix).await
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.client.list_paginated(prefix, true);
-
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let response = result?;
-            common_prefixes.extend(response.common_prefixes.into_iter());
-            objects.extend(response.objects.into_iter());
-        }
-
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
-        })
+        self.client.list_with_delimiter(prefix).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {

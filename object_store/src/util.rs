@@ -36,14 +36,6 @@ where
         .map_err(serde::de::Error::custom)
 }
 
-/// Returns the prefix to be passed to an object store
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub fn format_prefix(prefix: Option<&crate::path::Path>) -> Option<String> {
-    prefix
-        .filter(|x| !x.as_ref().is_empty())
-        .map(|p| format!("{}{}", p.as_ref(), crate::path::DELIMITER))
-}
-
 #[cfg(any(feature = "aws", feature = "azure"))]
 pub(crate) fn hmac_sha256(
     secret: impl AsRef<[u8]>,

@@ -18,17 +18,17 @@
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
 use crate::aws::{AwsCredentialProvider, STORE, STRICT_PATH_ENCODE_SET};
-use crate::client::list::ListResponse;
-use crate::client::pagination::stream_paginated;
+use crate::client::get::GetClient;
+use crate::client::list::ListClient;
+use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
 use crate::multipart::UploadPart;
 use crate::path::DELIMITER;
-use crate::util::format_prefix;
 use crate::{
-    BoxStream, ClientOptions, GetOptions, ListResult, MultipartId, Path, Result,
-    RetryConfig, StreamExt,
+    ClientOptions, GetOptions, ListResult, MultipartId, Path, Result, RetryConfig,
 };
+use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
@@ -169,40 +169,6 @@ impl S3Client {
         self.config.credentials.get_credential().await
     }
 
-    /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>
-    pub async fn get_request(
-        &self,
-        path: &Path,
-        options: GetOptions,
-        head: bool,
-    ) -> Result<Response> {
-        let credential = self.get_credential().await?;
-        let url = self.config.path_url(path);
-        let method = match head {
-            true => Method::HEAD,
-            false => Method::GET,
-        };
-
-        let builder = self.client.request(method, url);
-
-        let response = builder
-            .with_get_options(options)
-            .with_aws_sigv4(
-                credential.as_ref(),
-                &self.config.region,
-                "s3",
-                self.config.sign_payload,
-                None,
-            )
-            .send_retry(&self.config.retry_config)
-            .await
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
-            })?;
-
-        Ok(response)
-    }
-
     /// Make an S3 PUT request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
     pub async fn put_request<T: Serialize + ?Sized + Sync>(
         &self,
@@ -302,88 +268,6 @@ impl S3Client {
         Ok(())
     }
 
-    /// Make an S3 List request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html>
-    async fn list_request(
-        &self,
-        prefix: Option<&str>,
-        delimiter: bool,
-        token: Option<&str>,
-        offset: Option<&str>,
-    ) -> Result<(ListResult, Option<String>)> {
-        let credential = self.get_credential().await?;
-        let url = self.config.bucket_endpoint.clone();
-
-        let mut query = Vec::with_capacity(4);
-
-        if let Some(token) = token {
-            query.push(("continuation-token", token))
-        }
-
-        if delimiter {
-            query.push(("delimiter", DELIMITER))
-        }
-
-        query.push(("list-type", "2"));
-
-        if let Some(prefix) = prefix {
-            query.push(("prefix", prefix))
-        }
-
-        if let Some(offset) = offset {
-            query.push(("start-after", offset))
-        }
-
-        let response = self
-            .client
-            .request(Method::GET, &url)
-            .query(&query)
-            .with_aws_sigv4(
-                credential.as_ref(),
-                &self.config.region,
-                "s3",
-                self.config.sign_payload,
-                None,
-            )
-            .send_retry(&self.config.retry_config)
-            .await
-            .context(ListRequestSnafu)?
-            .bytes()
-            .await
-            .context(ListResponseBodySnafu)?;
-
-        let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
-            .context(InvalidListResponseSnafu)?;
-        let token = response.next_continuation_token.take();
-
-        Ok((response.try_into()?, token))
-    }
-
-    /// Perform a list operation automatically handling pagination
-    pub fn list_paginated(
-        &self,
-        prefix: Option<&Path>,
-        delimiter: bool,
-        offset: Option<&Path>,
-    ) -> BoxStream<'_, Result<ListResult>> {
-        let offset = offset.map(|x| x.to_string());
-        let prefix = format_prefix(prefix);
-        stream_paginated(
-            (prefix, offset),
-            move |(prefix, offset), token| async move {
-                let (r, next_token) = self
-                    .list_request(
-                        prefix.as_deref(),
-                        delimiter,
-                        token.as_deref(),
-                        offset.as_deref(),
-                    )
-                    .await?;
-                Ok((r, (prefix, offset), next_token))
-            },
-        )
-        .boxed()
-    }
-
     pub async fn create_multipart(&self, location: &Path) -> Result<MultipartId> {
         let credential = self.get_credential().await?;
         let url = format!("{}?uploads=", self.config.path_url(location),);
@@ -448,6 +332,104 @@ impl S3Client {
             .context(CompleteMultipartRequestSnafu)?;
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl GetClient for S3Client {
+    const STORE: &'static str = STORE;
+
+    /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>
+    async fn get_request(
+        &self,
+        path: &Path,
+        options: GetOptions,
+        head: bool,
+    ) -> Result<Response> {
+        let credential = self.get_credential().await?;
+        let url = self.config.path_url(path);
+        let method = match head {
+            true => Method::HEAD,
+            false => Method::GET,
+        };
+
+        let builder = self.client.request(method, url);
+
+        let response = builder
+            .with_get_options(options)
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+                None,
+            )
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(GetRequestSnafu {
+                path: path.as_ref(),
+            })?;
+
+        Ok(response)
+    }
+}
+
+#[async_trait]
+impl ListClient for S3Client {
+    /// Make an S3 List request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html>
+    async fn list_request(
+        &self,
+        prefix: Option<&str>,
+        delimiter: bool,
+        token: Option<&str>,
+        offset: Option<&str>,
+    ) -> Result<(ListResult, Option<String>)> {
+        let credential = self.get_credential().await?;
+        let url = self.config.bucket_endpoint.clone();
+
+        let mut query = Vec::with_capacity(4);
+
+        if let Some(token) = token {
+            query.push(("continuation-token", token))
+        }
+
+        if delimiter {
+            query.push(("delimiter", DELIMITER))
+        }
+
+        query.push(("list-type", "2"));
+
+        if let Some(prefix) = prefix {
+            query.push(("prefix", prefix))
+        }
+
+        if let Some(offset) = offset {
+            query.push(("start-after", offset))
+        }
+
+        let response = self
+            .client
+            .request(Method::GET, &url)
+            .query(&query)
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+                None,
+            )
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(ListRequestSnafu)?
+            .bytes()
+            .await
+            .context(ListResponseBodySnafu)?;
+
+        let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
+            .context(InvalidListResponseSnafu)?;
+        let token = response.next_continuation_token.take();
+
+        Ok((response.try_into()?, token))
     }
 }
 

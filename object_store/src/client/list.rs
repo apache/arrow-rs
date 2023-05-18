@@ -1,3 +1,4 @@
+// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -14,72 +15,123 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The list response format used by GCP and AWS
-
+use crate::client::pagination::stream_paginated;
 use crate::path::Path;
-use crate::{ListResult, ObjectMeta, Result};
-use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use crate::Result;
+use crate::{ListResult, ObjectMeta};
+use async_trait::async_trait;
+use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
+use std::collections::BTreeSet;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct ListResponse {
-    #[serde(default)]
-    pub contents: Vec<ListContents>,
-    #[serde(default)]
-    pub common_prefixes: Vec<ListPrefix>,
-    #[serde(default)]
-    pub next_continuation_token: Option<String>,
+/// A client that can perform paginated list requests
+#[async_trait]
+pub trait ListClient: Send + Sync + 'static {
+    async fn list_request(
+        &self,
+        prefix: Option<&str>,
+        delimiter: bool,
+        token: Option<&str>,
+        offset: Option<&str>,
+    ) -> Result<(ListResult, Option<String>)>;
 }
 
-impl TryFrom<ListResponse> for ListResult {
-    type Error = crate::Error;
+/// Extension trait for [`ListClient`] that adds common listing functionality
+#[async_trait]
+pub trait ListClientExt {
+    fn list_paginated(
+        &self,
+        prefix: Option<&Path>,
+        delimiter: bool,
+        offset: Option<&Path>,
+    ) -> BoxStream<'_, Result<ListResult>>;
 
-    fn try_from(value: ListResponse) -> Result<Self> {
-        let common_prefixes = value
-            .common_prefixes
-            .into_iter()
-            .map(|x| Ok(Path::parse(x.prefix)?))
-            .collect::<Result<_>>()?;
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>>;
 
-        let objects = value
-            .contents
-            .into_iter()
-            .map(TryFrom::try_from)
-            .collect::<Result<_>>()?;
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>>;
 
-        Ok(Self {
-            common_prefixes,
-            objects,
-        })
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult>;
+}
+
+#[async_trait]
+impl<T: ListClient> ListClientExt for T {
+    fn list_paginated(
+        &self,
+        prefix: Option<&Path>,
+        delimiter: bool,
+        offset: Option<&Path>,
+    ) -> BoxStream<'_, Result<ListResult>> {
+        let offset = offset.map(|x| x.to_string());
+        let prefix = prefix
+            .filter(|x| !x.as_ref().is_empty())
+            .map(|p| format!("{}{}", p.as_ref(), crate::path::DELIMITER));
+
+        stream_paginated(
+            (prefix, offset),
+            move |(prefix, offset), token| async move {
+                let (r, next_token) = self
+                    .list_request(
+                        prefix.as_deref(),
+                        delimiter,
+                        token.as_deref(),
+                        offset.as_deref(),
+                    )
+                    .await?;
+                Ok((r, (prefix, offset), next_token))
+            },
+        )
+        .boxed()
     }
-}
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct ListPrefix {
-    pub prefix: String,
-}
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        let stream = self
+            .list_paginated(prefix, false, None)
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .try_flatten()
+            .boxed();
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct ListContents {
-    pub key: String,
-    pub size: usize,
-    pub last_modified: DateTime<Utc>,
-    #[serde(rename = "ETag")]
-    pub e_tag: Option<String>,
-}
+        Ok(stream)
+    }
 
-impl TryFrom<ListContents> for ObjectMeta {
-    type Error = crate::Error;
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        let stream = self
+            .list_paginated(prefix, false, Some(offset))
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .try_flatten()
+            .boxed();
 
-    fn try_from(value: ListContents) -> Result<Self> {
-        Ok(Self {
-            location: Path::parse(value.key)?,
-            last_modified: value.last_modified,
-            size: value.size,
-            e_tag: value.e_tag,
+        Ok(stream)
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        let mut stream = self.list_paginated(prefix, true, None);
+
+        let mut common_prefixes = BTreeSet::new();
+        let mut objects = Vec::new();
+
+        while let Some(result) = stream.next().await {
+            let response = result?;
+            common_prefixes.extend(response.common_prefixes.into_iter());
+            objects.extend(response.objects.into_iter());
+        }
+
+        Ok(ListResult {
+            common_prefixes: common_prefixes.into_iter().collect(),
+            objects,
         })
     }
 }
