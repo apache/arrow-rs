@@ -82,7 +82,7 @@ const STORE: &str = "S3";
 
 /// [`CredentialProvider`] for [`AmazonS3`]
 pub type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
-pub use credential::AwsCredential;
+pub use credential::{AwsAuthorizer, AwsCredential};
 
 /// Default metadata endpoint
 static METADATA_ENDPOINT: &str = "http://169.254.169.254";
@@ -160,6 +160,7 @@ impl From<Error> for super::Error {
 }
 
 /// Get the bucket region using the [HeadBucket API]. This will fail if the bucket does not exist.
+///
 /// [HeadBucket API]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
 pub async fn resolve_bucket_region(
     bucket: &str,

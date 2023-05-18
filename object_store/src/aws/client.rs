@@ -238,7 +238,7 @@ impl S3Client {
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
-                payload_sha256,
+                payload_sha256.as_deref(),
             )
             .send_retry(&self.config.retry_config)
             .await
@@ -315,7 +315,6 @@ impl S3Client {
 
         let mut query = Vec::with_capacity(4);
 
-        // Note: the order of these matters to ensure the generated URL is canonical
         if let Some(token) = token {
             query.push(("continuation-token", token))
         }
