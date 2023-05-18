@@ -64,9 +64,6 @@ mod checksum;
 mod client;
 mod credential;
 
-#[cfg(feature = "aws_profile")]
-mod profile;
-
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 //
 // Do not URI-encode any of the unreserved characters that RFC 3986 defines:
@@ -105,9 +102,6 @@ enum Error {
 
     #[snafu(display("Missing SecretAccessKey"))]
     MissingSecretAccessKey,
-
-    #[snafu(display("Profile support requires aws_profile feature"))]
-    MissingProfileFeature,
 
     #[snafu(display("ETag Header missing from response"))]
     MissingEtag,
@@ -427,8 +421,6 @@ pub struct AmazonS3Builder {
     checksum_algorithm: Option<ConfigValue<Checksum>>,
     /// Metadata endpoint, see <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html>
     metadata_endpoint: Option<String>,
-    /// Profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
-    profile: Option<String>,
     /// Client options
     client_options: ClientOptions,
     /// Credentials
@@ -559,13 +551,6 @@ pub enum AmazonS3ConfigKey {
     /// - `metadata_endpoint`
     MetadataEndpoint,
 
-    /// AWS profile name
-    ///
-    /// Supported keys:
-    /// - `aws_profile`
-    /// - `profile`
-    Profile,
-
     /// Client options
     Client(ClientConfigKey),
 }
@@ -583,7 +568,6 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::VirtualHostedStyleRequest => "aws_virtual_hosted_style_request",
             Self::DefaultRegion => "aws_default_region",
             Self::MetadataEndpoint => "aws_metadata_endpoint",
-            Self::Profile => "aws_profile",
             Self::UnsignedPayload => "aws_unsigned_payload",
             Self::Checksum => "aws_checksum_algorithm",
             Self::Client(opt) => opt.as_ref(),
@@ -612,7 +596,6 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_virtual_hosted_style_request" | "virtual_hosted_style_request" => {
                 Ok(Self::VirtualHostedStyleRequest)
             }
-            "aws_profile" | "profile" => Ok(Self::Profile),
             "aws_imdsv1_fallback" | "imdsv1_fallback" => Ok(Self::ImdsV1Fallback),
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
@@ -643,7 +626,6 @@ impl AmazonS3Builder {
     /// * `AWS_SESSION_TOKEN` -> token
     /// * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
-    /// * `AWS_PROFILE` -> set profile name, requires `aws_profile` feature enabled
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -727,7 +709,6 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::MetadataEndpoint => {
                 self.metadata_endpoint = Some(value.into())
             }
-            AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
             AmazonS3ConfigKey::UnsignedPayload => self.unsigned_payload.parse(value),
             AmazonS3ConfigKey::Checksum => {
                 self.checksum_algorithm = Some(ConfigValue::Deferred(value.into()))
@@ -794,7 +775,6 @@ impl AmazonS3Builder {
                 Some(self.virtual_hosted_style_request.to_string())
             }
             AmazonS3ConfigKey::MetadataEndpoint => self.metadata_endpoint.clone(),
-            AmazonS3ConfigKey::Profile => self.profile.clone(),
             AmazonS3ConfigKey::UnsignedPayload => Some(self.unsigned_payload.to_string()),
             AmazonS3ConfigKey::Checksum => {
                 self.checksum_algorithm.as_ref().map(ToString::to_string)
@@ -982,24 +962,6 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Set the AWS profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
-    ///
-    /// This makes use of [aws-config] to provide credentials and therefore requires
-    /// the `aws-profile` feature to be enabled
-    ///
-    /// It is strongly encouraged that users instead make use of a credential manager
-    /// such as [aws-vault] not only to avoid the significant additional dependencies,
-    /// but also to avoid storing credentials in [plain text on disk]
-    ///
-    /// [aws-config]: https://docs.rs/aws-config
-    /// [aws-vault]: https://github.com/99designs/aws-vault
-    /// [plain text on disk]: https://99designs.com.au/blog/engineering/aws-vault/
-    #[cfg(feature = "aws_profile")]
-    pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
-        self.profile = Some(profile.into());
-        self
-    }
-
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -1007,14 +969,8 @@ impl AmazonS3Builder {
             self.parse_url(&url)?;
         }
 
-        let region = match (self.region, self.profile.clone()) {
-            (Some(region), _) => Some(region),
-            (None, Some(profile)) => profile_region(profile),
-            (None, None) => None,
-        };
-
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
-        let region = region.context(MissingRegionSnafu)?;
+        let region = self.region.context(MissingRegionSnafu)?;
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
 
         let credentials = if let Some(credentials) = self.credentials {
@@ -1065,9 +1021,6 @@ impl AmazonS3Builder {
                 client,
                 self.retry_config.clone(),
             )) as _
-        } else if let Some(profile) = self.profile {
-            info!("Using profile \"{}\" credential provider", profile);
-            profile_credentials(profile, region.clone())?
         } else {
             info!("Using Instance credential provider");
 
@@ -1121,37 +1074,6 @@ impl AmazonS3Builder {
 
         Ok(AmazonS3 { client })
     }
-}
-
-#[cfg(feature = "aws_profile")]
-fn profile_region(profile: String) -> Option<String> {
-    use tokio::runtime::Handle;
-
-    let handle = Handle::current();
-    let provider = profile::ProfileProvider::new(profile, None);
-
-    handle.block_on(provider.get_region())
-}
-
-#[cfg(feature = "aws_profile")]
-fn profile_credentials(profile: String, region: String) -> Result<AwsCredentialProvider> {
-    Ok(Arc::new(profile::ProfileProvider::new(
-        profile,
-        Some(region),
-    )))
-}
-
-#[cfg(not(feature = "aws_profile"))]
-fn profile_region(_profile: String) -> Option<String> {
-    None
-}
-
-#[cfg(not(feature = "aws_profile"))]
-fn profile_credentials(
-    _profile: String,
-    _region: String,
-) -> Result<AwsCredentialProvider> {
-    Err(Error::MissingProfileFeature.into())
 }
 
 #[cfg(test)]
@@ -1636,52 +1558,5 @@ mod s3_resolve_bucket_region_tests {
         let result = resolve_bucket_region(bucket, &ClientOptions::new()).await;
 
         assert!(result.is_err());
-    }
-}
-
-#[cfg(all(test, feature = "aws_profile"))]
-mod profile_tests {
-    use super::*;
-    use std::env;
-
-    use super::profile::{TEST_PROFILE_NAME, TEST_PROFILE_REGION};
-
-    #[tokio::test]
-    async fn s3_test_region_from_profile() {
-        let s3_url = "s3://bucket/prefix".to_owned();
-
-        let s3 = AmazonS3Builder::new()
-            .with_url(s3_url)
-            .with_profile(TEST_PROFILE_NAME)
-            .build()
-            .unwrap();
-
-        let region = &s3.client.config().region;
-
-        assert_eq!(region, TEST_PROFILE_REGION);
-    }
-
-    #[test]
-    fn s3_test_region_override() {
-        let s3_url = "s3://bucket/prefix".to_owned();
-
-        let aws_profile =
-            env::var("AWS_PROFILE").unwrap_or_else(|_| TEST_PROFILE_NAME.into());
-
-        let aws_region =
-            env::var("AWS_REGION").unwrap_or_else(|_| "object_store:fake_region".into());
-
-        env::set_var("AWS_PROFILE", aws_profile);
-
-        let s3 = AmazonS3Builder::from_env()
-            .with_url(s3_url)
-            .with_region(aws_region.clone())
-            .build()
-            .unwrap();
-
-        let actual = &s3.client.config().region;
-        let expected = &aws_region;
-
-        assert_eq!(actual, expected);
     }
 }

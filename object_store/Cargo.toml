@@ -53,11 +53,6 @@ reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"
 ring = { version = "0.16", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 
-# AWS Profile support
-aws-types = { version = "0.55", optional = true }
-aws-credential-types = { version = "0.55", optional = true }
-aws-config = { version = "0.55", optional = true }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util", "fs"] }
 
@@ -73,9 +68,6 @@ azure = ["cloud"]
 gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud"]
 http = ["cloud"]
-
-# Experimental support for AWS_PROFILE
-aws_profile = ["aws", "aws-config", "aws-types", "aws-credential-types"]
 
 [dev-dependencies] # In alphabetical order
 dotenv = "0.15.0"
