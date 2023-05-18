@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Response;
 
+/// A client that can perform a get request
 #[async_trait]
 pub trait GetClient: Send + Sync + 'static {
     const STORE: &'static str;
@@ -35,6 +36,7 @@ pub trait GetClient: Send + Sync + 'static {
     ) -> Result<Response>;
 }
 
+/// Extension trait for [`GetClient`] that adds common retrieval functionality
 #[async_trait]
 pub trait GetClientExt {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
