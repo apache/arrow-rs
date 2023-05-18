@@ -109,7 +109,8 @@ impl<'a> AwsAuthorizer<'a> {
         self
     }
 
-    /// Authorize `request` with an optional pre-calculated SHA256 digest
+    /// Authorize `request` with an optional pre-calculated SHA256 digest by attaching
+    /// the relevant [AWS SigV4] headers
     ///
     /// # Payload Signature
     ///
@@ -119,6 +120,8 @@ impl<'a> AwsAuthorizer<'a> {
     /// * If a `pre_calculated_digest` is provided, it is set to the hex encoding of it
     /// * If it is a streaming request, it is set to `STREAMING-AWS4-HMAC-SHA256-PAYLOAD`
     /// * Otherwise it is set to the hex encoded SHA256 of the request body
+    ///
+    /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
     pub fn authorize(&self, request: &mut Request, pre_calculated_digest: Option<&[u8]>) {
         if let Some(ref token) = self.credential.token {
             let token_val = HeaderValue::from_str(token).unwrap();
