@@ -48,7 +48,6 @@ use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::azure::credential::AzureCredential;
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::{
@@ -61,7 +60,10 @@ pub use credential::authority_hosts;
 mod client;
 mod credential;
 
-type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
+/// [`CredentialProvider`] for [`MicrosoftAzure`]
+pub type AzureCredentialProvider =
+    Arc<dyn CredentialProvider<Credential = AzureCredential>>;
+pub use credential::AzureCredential;
 
 const STORE: &str = "MicrosoftAzure";
 
@@ -147,6 +149,13 @@ impl From<Error> for super::Error {
 #[derive(Debug)]
 pub struct MicrosoftAzure {
     client: Arc<client::AzureClient>,
+}
+
+impl MicrosoftAzure {
+    /// Returns the [`AzureCredentialProvider`] used by [`MicrosoftAzure`]
+    pub fn credentials(&self) -> &AzureCredentialProvider {
+        &self.client.config().credentials
+    }
 }
 
 impl std::fmt::Display for MicrosoftAzure {
@@ -335,6 +344,8 @@ pub struct MicrosoftAzureBuilder {
     retry_config: RetryConfig,
     /// Client options
     client_options: ClientOptions,
+    /// Credentials
+    credentials: Option<AzureCredentialProvider>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -801,6 +812,12 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Set the credential provider overriding any other options
+    pub fn with_credentials(mut self, credentials: AzureCredentialProvider) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
     /// Set if the Azure emulator should be used (defaults to false)
     pub fn with_use_emulator(mut self, use_emulator: bool) -> Self {
         self.use_emulator = use_emulator.into();
@@ -898,7 +915,9 @@ impl MicrosoftAzureBuilder {
             let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
 
-            let credential = if let Some(bearer_token) = self.bearer_token {
+            let credential = if let Some(credential) = self.credentials {
+                credential
+            } else if let Some(bearer_token) = self.bearer_token {
                 static_creds(AzureCredential::BearerToken(bearer_token))
             } else if let Some(access_key) = self.access_key {
                 static_creds(AzureCredential::AccessKey(access_key))

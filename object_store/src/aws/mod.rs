@@ -45,9 +45,7 @@ use url::Url;
 
 pub use crate::aws::checksum::Checksum;
 use crate::aws::client::{S3Client, S3Config};
-use crate::aws::credential::{
-    AwsCredential, InstanceCredentialProvider, WebIdentityProvider,
-};
+use crate::aws::credential::{InstanceCredentialProvider, WebIdentityProvider};
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::{
@@ -65,9 +63,6 @@ mod checksum;
 mod client;
 mod credential;
 
-#[cfg(feature = "aws_profile")]
-mod profile;
-
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 //
 // Do not URI-encode any of the unreserved characters that RFC 3986 defines:
@@ -84,7 +79,9 @@ const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.rem
 
 const STORE: &str = "S3";
 
-type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
+/// [`CredentialProvider`] for [`AmazonS3`]
+pub type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
+pub use credential::AwsCredential;
 
 /// Default metadata endpoint
 static METADATA_ENDPOINT: &str = "http://169.254.169.254";
@@ -104,9 +101,6 @@ enum Error {
 
     #[snafu(display("Missing SecretAccessKey"))]
     MissingSecretAccessKey,
-
-    #[snafu(display("Profile support requires aws_profile feature"))]
-    MissingProfileFeature,
 
     #[snafu(display("ETag Header missing from response"))]
     MissingEtag,
@@ -200,6 +194,13 @@ pub struct AmazonS3 {
 impl std::fmt::Display for AmazonS3 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "AmazonS3({})", self.client.config().bucket)
+    }
+}
+
+impl AmazonS3 {
+    /// Returns the [`AwsCredentialProvider`] used by [`AmazonS3`]
+    pub fn credentials(&self) -> &AwsCredentialProvider {
+        &self.client.config().credentials
     }
 }
 
@@ -373,10 +374,10 @@ pub struct AmazonS3Builder {
     checksum_algorithm: Option<ConfigValue<Checksum>>,
     /// Metadata endpoint, see <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html>
     metadata_endpoint: Option<String>,
-    /// Profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
-    profile: Option<String>,
     /// Client options
     client_options: ClientOptions,
+    /// Credentials
+    credentials: Option<AwsCredentialProvider>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -503,13 +504,6 @@ pub enum AmazonS3ConfigKey {
     /// - `metadata_endpoint`
     MetadataEndpoint,
 
-    /// AWS profile name
-    ///
-    /// Supported keys:
-    /// - `aws_profile`
-    /// - `profile`
-    Profile,
-
     /// Client options
     Client(ClientConfigKey),
 }
@@ -527,7 +521,6 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::VirtualHostedStyleRequest => "aws_virtual_hosted_style_request",
             Self::DefaultRegion => "aws_default_region",
             Self::MetadataEndpoint => "aws_metadata_endpoint",
-            Self::Profile => "aws_profile",
             Self::UnsignedPayload => "aws_unsigned_payload",
             Self::Checksum => "aws_checksum_algorithm",
             Self::Client(opt) => opt.as_ref(),
@@ -556,7 +549,6 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_virtual_hosted_style_request" | "virtual_hosted_style_request" => {
                 Ok(Self::VirtualHostedStyleRequest)
             }
-            "aws_profile" | "profile" => Ok(Self::Profile),
             "aws_imdsv1_fallback" | "imdsv1_fallback" => Ok(Self::ImdsV1Fallback),
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
@@ -587,7 +579,6 @@ impl AmazonS3Builder {
     /// * `AWS_SESSION_TOKEN` -> token
     /// * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
-    /// * `AWS_PROFILE` -> set profile name, requires `aws_profile` feature enabled
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -671,7 +662,6 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::MetadataEndpoint => {
                 self.metadata_endpoint = Some(value.into())
             }
-            AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
             AmazonS3ConfigKey::UnsignedPayload => self.unsigned_payload.parse(value),
             AmazonS3ConfigKey::Checksum => {
                 self.checksum_algorithm = Some(ConfigValue::Deferred(value.into()))
@@ -738,7 +728,6 @@ impl AmazonS3Builder {
                 Some(self.virtual_hosted_style_request.to_string())
             }
             AmazonS3ConfigKey::MetadataEndpoint => self.metadata_endpoint.clone(),
-            AmazonS3ConfigKey::Profile => self.profile.clone(),
             AmazonS3ConfigKey::UnsignedPayload => Some(self.unsigned_payload.to_string()),
             AmazonS3ConfigKey::Checksum => {
                 self.checksum_algorithm.as_ref().map(ToString::to_string)
@@ -832,6 +821,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Set the credential provider overriding any other options
+    pub fn with_credentials(mut self, credentials: AwsCredentialProvider) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
     /// Sets what protocol is allowed. If `allow_http` is :
     /// * false (default):  Only HTTPS are allowed
     /// * true:  HTTP and HTTPS are allowed
@@ -920,24 +915,6 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Set the AWS profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
-    ///
-    /// This makes use of [aws-config] to provide credentials and therefore requires
-    /// the `aws-profile` feature to be enabled
-    ///
-    /// It is strongly encouraged that users instead make use of a credential manager
-    /// such as [aws-vault] not only to avoid the significant additional dependencies,
-    /// but also to avoid storing credentials in [plain text on disk]
-    ///
-    /// [aws-config]: https://docs.rs/aws-config
-    /// [aws-vault]: https://github.com/99designs/aws-vault
-    /// [plain text on disk]: https://99designs.com.au/blog/engineering/aws-vault/
-    #[cfg(feature = "aws_profile")]
-    pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
-        self.profile = Some(profile.into());
-        self
-    }
-
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -945,86 +922,75 @@ impl AmazonS3Builder {
             self.parse_url(&url)?;
         }
 
-        let region = match (self.region.clone(), self.profile.clone()) {
-            (Some(region), _) => Some(region),
-            (None, Some(profile)) => profile_region(profile),
-            (None, None) => None,
-        };
-
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
-        let region = region.context(MissingRegionSnafu)?;
+        let region = self.region.context(MissingRegionSnafu)?;
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
 
-        let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
-            (Some(key_id), Some(secret_key), token) => {
-                info!("Using Static credential provider");
-                let credential = AwsCredential {
-                    key_id,
-                    secret_key,
-                    token,
-                };
-                Arc::new(StaticCredentialProvider::new(credential)) as _
-            }
-            (None, Some(_), _) => return Err(Error::MissingAccessKeyId.into()),
-            (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
-            // TODO: Replace with `AmazonS3Builder::credentials_from_env`
-            _ => match (
-                std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE"),
-                std::env::var("AWS_ROLE_ARN"),
-            ) {
-                (Ok(token_path), Ok(role_arn)) => {
-                    info!("Using WebIdentity credential provider");
-
-                    let session_name = std::env::var("AWS_ROLE_SESSION_NAME")
-                        .unwrap_or_else(|_| "WebIdentitySession".to_string());
-
-                    let endpoint = format!("https://sts.{region}.amazonaws.com");
-
-                    // Disallow non-HTTPs requests
-                    let client = self
-                        .client_options
-                        .clone()
-                        .with_allow_http(false)
-                        .client()?;
-
-                    let token = WebIdentityProvider {
-                        token_path,
-                        session_name,
-                        role_arn,
-                        endpoint,
-                    };
-
-                    Arc::new(TokenCredentialProvider::new(
+        let credentials = if let Some(credentials) = self.credentials {
+            credentials
+        } else if self.access_key_id.is_some() || self.secret_access_key.is_some() {
+            match (self.access_key_id, self.secret_access_key, self.token) {
+                (Some(key_id), Some(secret_key), token) => {
+                    info!("Using Static credential provider");
+                    let credential = AwsCredential {
+                        key_id,
+                        secret_key,
                         token,
-                        client,
-                        self.retry_config.clone(),
-                    )) as _
+                    };
+                    Arc::new(StaticCredentialProvider::new(credential)) as _
                 }
-                _ => match self.profile {
-                    Some(profile) => {
-                        info!("Using profile \"{}\" credential provider", profile);
-                        profile_credentials(profile, region.clone())?
-                    }
-                    None => {
-                        info!("Using Instance credential provider");
+                (None, Some(_), _) => return Err(Error::MissingAccessKeyId.into()),
+                (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
+                (None, None, _) => unreachable!(),
+            }
+        } else if let (Ok(token_path), Ok(role_arn)) = (
+            std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE"),
+            std::env::var("AWS_ROLE_ARN"),
+        ) {
+            // TODO: Replace with `AmazonS3Builder::credentials_from_env`
+            info!("Using WebIdentity credential provider");
 
-                        let token = InstanceCredentialProvider {
-                            cache: Default::default(),
-                            imdsv1_fallback: self.imdsv1_fallback.get()?,
-                            metadata_endpoint: self
-                                .metadata_endpoint
-                                .unwrap_or_else(|| METADATA_ENDPOINT.into()),
-                        };
+            let session_name = std::env::var("AWS_ROLE_SESSION_NAME")
+                .unwrap_or_else(|_| "WebIdentitySession".to_string());
 
-                        Arc::new(TokenCredentialProvider::new(
-                            token,
-                            // The instance metadata endpoint is access over HTTP
-                            self.client_options.clone().with_allow_http(true).client()?,
-                            self.retry_config.clone(),
-                        )) as _
-                    }
-                },
-            },
+            let endpoint = format!("https://sts.{region}.amazonaws.com");
+
+            // Disallow non-HTTPs requests
+            let client = self
+                .client_options
+                .clone()
+                .with_allow_http(false)
+                .client()?;
+
+            let token = WebIdentityProvider {
+                token_path,
+                session_name,
+                role_arn,
+                endpoint,
+            };
+
+            Arc::new(TokenCredentialProvider::new(
+                token,
+                client,
+                self.retry_config.clone(),
+            )) as _
+        } else {
+            info!("Using Instance credential provider");
+
+            let token = InstanceCredentialProvider {
+                cache: Default::default(),
+                imdsv1_fallback: self.imdsv1_fallback.get()?,
+                metadata_endpoint: self
+                    .metadata_endpoint
+                    .unwrap_or_else(|| METADATA_ENDPOINT.into()),
+            };
+
+            Arc::new(TokenCredentialProvider::new(
+                token,
+                // The instance metadata endpoint is access over HTTP
+                self.client_options.clone().with_allow_http(true).client()?,
+                self.retry_config.clone(),
+            )) as _
         };
 
         let endpoint: String;
@@ -1061,37 +1027,6 @@ impl AmazonS3Builder {
 
         Ok(AmazonS3 { client })
     }
-}
-
-#[cfg(feature = "aws_profile")]
-fn profile_region(profile: String) -> Option<String> {
-    use tokio::runtime::Handle;
-
-    let handle = Handle::current();
-    let provider = profile::ProfileProvider::new(profile, None);
-
-    handle.block_on(provider.get_region())
-}
-
-#[cfg(feature = "aws_profile")]
-fn profile_credentials(profile: String, region: String) -> Result<AwsCredentialProvider> {
-    Ok(Arc::new(profile::ProfileProvider::new(
-        profile,
-        Some(region),
-    )))
-}
-
-#[cfg(not(feature = "aws_profile"))]
-fn profile_region(_profile: String) -> Option<String> {
-    None
-}
-
-#[cfg(not(feature = "aws_profile"))]
-fn profile_credentials(
-    _profile: String,
-    _region: String,
-) -> Result<AwsCredentialProvider> {
-    Err(Error::MissingProfileFeature.into())
 }
 
 #[cfg(test)]
@@ -1576,52 +1511,5 @@ mod s3_resolve_bucket_region_tests {
         let result = resolve_bucket_region(bucket, &ClientOptions::new()).await;
 
         assert!(result.is_err());
-    }
-}
-
-#[cfg(all(test, feature = "aws_profile"))]
-mod profile_tests {
-    use super::*;
-    use std::env;
-
-    use super::profile::{TEST_PROFILE_NAME, TEST_PROFILE_REGION};
-
-    #[tokio::test]
-    async fn s3_test_region_from_profile() {
-        let s3_url = "s3://bucket/prefix".to_owned();
-
-        let s3 = AmazonS3Builder::new()
-            .with_url(s3_url)
-            .with_profile(TEST_PROFILE_NAME)
-            .build()
-            .unwrap();
-
-        let region = &s3.client.config().region;
-
-        assert_eq!(region, TEST_PROFILE_REGION);
-    }
-
-    #[test]
-    fn s3_test_region_override() {
-        let s3_url = "s3://bucket/prefix".to_owned();
-
-        let aws_profile =
-            env::var("AWS_PROFILE").unwrap_or_else(|_| TEST_PROFILE_NAME.into());
-
-        let aws_region =
-            env::var("AWS_REGION").unwrap_or_else(|_| "object_store:fake_region".into());
-
-        env::set_var("AWS_PROFILE", aws_profile);
-
-        let s3 = AmazonS3Builder::from_env()
-            .with_url(s3_url)
-            .with_region(aws_region.clone())
-            .build()
-            .unwrap();
-
-        let actual = &s3.client.config().region;
-        let expected = &aws_region;
-
-        assert_eq!(actual, expected);
     }
 }
