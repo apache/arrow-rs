@@ -304,8 +304,11 @@ impl S3Client {
 
     /// Make an S3 Delete Objects request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html>
     ///
-    /// Produces a vector of results, one for each path in the input vector. The
-    /// result is `Ok(())` if the delete was successful, or `Err` if the delete failed.
+    /// Produces a vector of results, one for each path in the input vector. If
+    /// the delete was successful, the path is returned in the `Ok` variant. If
+    /// there was an error for a certain path, the error will be returned in the
+    /// vector. If there was an issue with making the overall request, an error
+    /// will be returned at the top level.
     pub async fn bulk_delete_request(
         &self,
         paths: Vec<Path>,
