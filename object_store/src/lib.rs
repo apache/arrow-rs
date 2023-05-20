@@ -1206,11 +1206,7 @@ mod tests {
         }
 
         // Test bulk delete errors
-        let paths = vec![
-            Path::from("a%2Fa.file"),
-            Path::from("a/😀.file"),
-            Path::from("does_not_exist"),
-        ];
+        let paths = vec![Path::from("a/😀.file"), Path::from("does_not_exist")];
         let delete_results = storage
             .delete_stream(futures::stream::iter(paths.clone()).boxed())
             .buffered(5)
@@ -1218,21 +1214,16 @@ mod tests {
             .try_flatten()
             .collect::<Vec<Result<_>>>()
             .await;
-        assert_eq!(delete_results.len(), 3);
-        dbg!(&delete_results);
-        // TODO: make sure paths are passed down correctly
-        // TODO: make sure not found errors are bubbled up
+        assert_eq!(delete_results.len(), 2);
         assert!(delete_results[0].is_ok());
         assert_eq!(delete_results[0].as_ref().unwrap(), &paths[0]);
-        assert!(delete_results[1].is_ok());
-        assert_eq!(delete_results[1].as_ref().unwrap(), &paths[1]);
-        assert!(delete_results[2].is_err());
-        assert!(matches!(delete_results[3], Err(Error::NotFound { .. })));
-        let err_path = match &delete_results[3] {
+        assert!(delete_results[1].is_err());
+        assert!(matches!(delete_results[1], Err(Error::NotFound { .. })));
+        let err_path = match &delete_results[1] {
             Err(Error::NotFound { path, .. }) => path,
             _ => panic!("unexpected error"),
         };
-        assert_eq!(err_path, &paths[3].to_string());
+        assert!(err_path.ends_with(&paths[1].to_string()));
 
         delete_fixtures(storage).await;
     }

@@ -167,17 +167,13 @@ enum DeleteObjectResult {
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase", rename = "Deleted")]
 struct DeletedObject {
-    delete_marker: Option<bool>,
-    delete_marker_version_id: Option<String>,
     key: String,
-    version_id: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase", rename = "Error")]
 struct DeleteError {
     key: String,
-    version_id: Option<String>,
     code: String,
     message: String,
 }

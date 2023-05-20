@@ -330,6 +330,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Error;
     use crate::{memory::InMemory, tests::*};
     use bytes::Bytes;
     use futures::TryStreamExt;
@@ -490,7 +491,11 @@ mod tests {
             store.put(&path, bytes).await.unwrap();
         } else {
             // ensure object is absent
-            store.delete(&path).await.unwrap();
+            match store.delete(&path).await {
+                Ok(_) => {}
+                Err(Error::NotFound { .. }) => {}
+                Err(e) => panic!("unexpected error: {}", e),
+            };
         }
 
         path
@@ -534,7 +539,11 @@ mod tests {
         let path = place_test_object(store, n_bytes).await;
 
         let t0 = Instant::now();
-        store.delete(&path).await.unwrap();
+        match store.delete(&path).await {
+            Ok(_) => {}
+            Err(Error::NotFound { .. }) => {}
+            Err(e) => panic!("unexpected error: {}", e),
+        };
 
         t0.elapsed()
     }
