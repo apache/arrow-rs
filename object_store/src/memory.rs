@@ -177,13 +177,8 @@ impl ObjectStore for InMemory {
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
-        match self.storage.write().remove(location) {
-            Some(_) => Ok(()),
-            None => Err(Error::NoDataInMemory {
-                path: location.to_string(),
-            }
-            .into()),
-        }
+        self.storage.write().remove(location);
+        Ok(())
     }
 
     async fn list(

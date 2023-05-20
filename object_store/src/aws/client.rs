@@ -86,7 +86,9 @@ pub(crate) enum Error {
     DeleteObjectsResponse { source: reqwest::Error },
 
     #[snafu(display("Got invalid DeleteObjects response: {}", source))]
-    InvalidDeleteObjectsResponse { source: quick_xml::de::DeError },
+    InvalidDeleteObjectsResponse {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
 
     #[snafu(display("Error performing copy request {}: {}", path, source))]
     CopyRequest {
@@ -320,8 +322,10 @@ impl S3Client {
             .iter()
             .map(|path| format!("<Object><Key>{}</Key></Object>", path))
             .join("");
-        let body = format!("<Delete xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">{}<Quiet>true</Quiet></Delete>", inner_body);
-
+        let body = format!(
+            "<Delete xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">{}</Delete>",
+            inner_body
+        );
         let response = self
             .client
             .request(Method::POST, url)
@@ -342,13 +346,20 @@ impl S3Client {
             .context(DeleteObjectsResponseSnafu {})?;
 
         let response: BatchDeleteResponse = quick_xml::de::from_reader(response.reader())
-            .context(InvalidDeleteObjectsResponseSnafu {})?;
+            .map_err(|err| Error::InvalidDeleteObjectsResponse {
+                source: Box::new(err),
+            })?;
 
         Ok(response
             .content
             .into_iter()
             .map(|content| match content {
-                DeleteObjectResult::Deleted(obj) => Ok(Path::from(obj.key)),
+                DeleteObjectResult::Deleted(obj) => Path::parse(obj.key).map_err(|err| {
+                    Error::InvalidDeleteObjectsResponse {
+                        source: Box::new(err),
+                    }
+                    .into()
+                }),
                 DeleteObjectResult::Error(error) => Err(Error::from(error).into()),
             })
             .collect())

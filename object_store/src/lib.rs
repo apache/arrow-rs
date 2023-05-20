@@ -1217,13 +1217,18 @@ mod tests {
         assert_eq!(delete_results.len(), 2);
         assert!(delete_results[0].is_ok());
         assert_eq!(delete_results[0].as_ref().unwrap(), &paths[0]);
-        assert!(delete_results[1].is_err());
-        assert!(matches!(delete_results[1], Err(Error::NotFound { .. })));
-        let err_path = match &delete_results[1] {
-            Err(Error::NotFound { path, .. }) => path,
+
+        // Some object stores will report NotFound, but others (such as S3) will
+        // report success regardless.
+        match &delete_results[1] {
+            Err(Error::NotFound { path, .. }) => {
+                assert!(path.ends_with(&paths[1].to_string()));
+            }
+            Ok(path) => {
+                assert_eq!(path, &paths[1]);
+            }
             _ => panic!("unexpected error"),
-        };
-        assert!(err_path.ends_with(&paths[1].to_string()));
+        }
 
         delete_fixtures(storage).await;
     }
