@@ -37,24 +37,18 @@
 //! let reader = Box::new(FileReader::try_new(file).unwrap());
 //!
 //! // export it
-//! let stream = Box::new(FFI_ArrowArrayStream::empty());
-//! let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
-//! unsafe { export_reader_into_raw(reader, stream_ptr) };
+//! let mut stream = FFI_ArrowArrayStream::empty();
+//! unsafe { export_reader_into_raw(reader, &mut stream) };
 //!
 //! // consumed and used by something else...
 //!
 //! // import it
-//! let stream_reader = unsafe { ArrowArrayStreamReader::from_raw(stream_ptr).unwrap() };
+//! let stream_reader = unsafe { ArrowArrayStreamReader::from_raw(&mut stream).unwrap() };
 //! let imported_schema = stream_reader.schema();
 //!
 //! let mut produced_batches = vec![];
 //! for batch in stream_reader {
 //!      produced_batches.push(batch.unwrap());
-//! }
-//!
-//! // (drop/release)
-//! unsafe {
-//!   Box::from_raw(stream_ptr);
 //! }
 //! Ok(())
 //! }
@@ -233,8 +227,7 @@ impl ExportedArrayStream {
                     let struct_array = StructArray::from(batch);
                     let array = FFI_ArrowArray::new(&struct_array.to_data());
 
-                    unsafe { std::ptr::copy(addr_of!(array), out, 1) };
-                    std::mem::forget(array);
+                    unsafe { std::ptr::write_unaligned(out, array) };
                     0
                 } else {
                     let err = &next_batch.unwrap_err();
@@ -272,15 +265,12 @@ pub struct ArrowArrayStreamReader {
 /// Gets schema from a raw pointer of `FFI_ArrowArrayStream`. This is used when constructing
 /// `ArrowArrayStreamReader` to cache schema.
 fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef> {
-    let empty_schema = Arc::new(FFI_ArrowSchema::empty());
-    let schema_ptr = Arc::into_raw(empty_schema) as *mut FFI_ArrowSchema;
+    let mut schema = FFI_ArrowSchema::empty();
 
-    let ret_code = unsafe { (*stream_ptr).get_schema.unwrap()(stream_ptr, schema_ptr) };
-
-    let ffi_schema = unsafe { Arc::from_raw(schema_ptr) };
+    let ret_code = unsafe { (*stream_ptr).get_schema.unwrap()(stream_ptr, &mut schema) };
 
     if ret_code == 0 {
-        let schema = Schema::try_from(ffi_schema.as_ref()).unwrap();
+        let schema = Schema::try_from(&schema).unwrap();
         Ok(Arc::new(schema))
     } else {
         Err(ArrowError::CDataInterface(format!(
@@ -293,19 +283,17 @@ impl ArrowArrayStreamReader {
     /// Creates a new `ArrowArrayStreamReader` from a `FFI_ArrowArrayStream`.
     /// This is used to import from the C Stream Interface.
     #[allow(dead_code)]
-    pub fn try_new(stream: FFI_ArrowArrayStream) -> Result<Self> {
+    pub fn try_new(mut stream: FFI_ArrowArrayStream) -> Result<Self> {
         if stream.release.is_none() {
             return Err(ArrowError::CDataInterface(
                 "input stream is already released".to_string(),
             ));
         }
 
-        let stream_ptr = Arc::into_raw(Arc::new(stream)) as *mut FFI_ArrowArrayStream;
-
-        let schema = get_stream_schema(stream_ptr)?;
+        let schema = get_stream_schema(&mut stream)?;
 
         Ok(Self {
-            stream: unsafe { Box::from_raw(stream_ptr) },
+            stream: Box::new(stream),
             schema,
         })
     }
@@ -329,10 +317,9 @@ impl ArrowArrayStreamReader {
     fn get_stream_last_error(&mut self) -> Option<String> {
         self.stream.get_last_error?;
 
-        let stream_ptr = Box::as_mut(&mut self.stream) as *mut FFI_ArrowArrayStream;
-
         let error_str = unsafe {
-            let c_str = self.stream.get_last_error.unwrap()(stream_ptr) as *mut c_char;
+            let c_str =
+                self.stream.get_last_error.unwrap()(self.stream.as_mut()) as *mut c_char;
             CString::from_raw(c_str).into_string()
         };
 
@@ -348,18 +335,14 @@ impl Iterator for ArrowArrayStreamReader {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let stream_ptr = Box::as_mut(&mut self.stream) as *mut FFI_ArrowArrayStream;
+        let mut array = FFI_ArrowArray::empty();
 
-        let empty_array = Arc::new(FFI_ArrowArray::empty());
-        let array_ptr = Arc::into_raw(empty_array) as *mut FFI_ArrowArray;
-
-        let ret_code = unsafe { self.stream.get_next.unwrap()(stream_ptr, array_ptr) };
+        let ret_code =
+            unsafe { self.stream.get_next.unwrap()(self.stream.as_mut(), &mut array) };
 
         if ret_code == 0 {
-            let ffi_array = unsafe { Arc::from_raw(array_ptr) };
-
             // The end of stream has been reached
-            if ffi_array.is_released() {
+            if array.is_released() {
                 return None;
             }
 
@@ -367,7 +350,7 @@ impl Iterator for ArrowArrayStreamReader {
             let schema = FFI_ArrowSchema::try_from(schema_ref.as_ref()).ok()?;
 
             let data = ArrowArray {
-                array: ffi_array,
+                array: Arc::new(array),
                 schema: Arc::new(schema),
             }
             .to_data()
@@ -377,8 +360,6 @@ impl Iterator for ArrowArrayStreamReader {
 
             Some(Ok(record_batch))
         } else {
-            unsafe { Arc::from_raw(array_ptr) };
-
             let last_error = self.get_stream_last_error();
             let err = ArrowError::CDataInterface(last_error.unwrap());
             Some(Err(err))
@@ -453,40 +434,33 @@ mod tests {
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
 
         // Export a `RecordBatchReader` through `FFI_ArrowArrayStream`
-        let stream = Arc::new(FFI_ArrowArrayStream::empty());
-        let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
-
-        unsafe { export_reader_into_raw(reader, stream_ptr) };
-
-        let empty_schema = Arc::new(FFI_ArrowSchema::empty());
-        let schema_ptr = Arc::into_raw(empty_schema) as *mut FFI_ArrowSchema;
+        let mut ffi_stream = FFI_ArrowArrayStream::empty();
+        unsafe { export_reader_into_raw(reader, &mut ffi_stream) };
 
         // Get schema from `FFI_ArrowArrayStream`
-        let ret_code = unsafe { get_schema(stream_ptr, schema_ptr) };
+        let mut ffi_schema = FFI_ArrowSchema::empty();
+        let ret_code = unsafe { get_schema(&mut ffi_stream, &mut ffi_schema) };
         assert_eq!(ret_code, 0);
 
-        let ffi_schema = unsafe { Arc::from_raw(schema_ptr) };
-
-        let exported_schema = Schema::try_from(ffi_schema.as_ref()).unwrap();
+        let exported_schema = Schema::try_from(&ffi_schema).unwrap();
         assert_eq!(&exported_schema, schema.as_ref());
+
+        let ffi_schema = Arc::new(ffi_schema);
 
         // Get array from `FFI_ArrowArrayStream`
         let mut produced_batches = vec![];
         loop {
-            let empty_array = Arc::new(FFI_ArrowArray::empty());
-            let array_ptr = Arc::into_raw(empty_array.clone()) as *mut FFI_ArrowArray;
-
-            let ret_code = unsafe { get_next(stream_ptr, array_ptr) };
+            let mut ffi_array = FFI_ArrowArray::empty();
+            let ret_code = unsafe { get_next(&mut ffi_stream, &mut ffi_array) };
             assert_eq!(ret_code, 0);
 
             // The end of stream has been reached
-            let ffi_array = unsafe { Arc::from_raw(array_ptr) };
             if ffi_array.is_released() {
                 break;
             }
 
             let array = ArrowArray {
-                array: ffi_array,
+                array: Arc::new(ffi_array),
                 schema: ffi_schema.clone(),
             }
             .to_data()
@@ -498,7 +472,6 @@ mod tests {
 
         assert_eq!(produced_batches, vec![batch.clone(), batch]);
 
-        unsafe { Arc::from_raw(stream_ptr) };
         Ok(())
     }
 
@@ -514,10 +487,9 @@ mod tests {
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
-        let stream = Arc::new(FFI_ArrowArrayStream::new(reader));
-        let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
+        let mut stream = FFI_ArrowArrayStream::new(reader);
         let stream_reader =
-            unsafe { ArrowArrayStreamReader::from_raw(stream_ptr).unwrap() };
+            unsafe { ArrowArrayStreamReader::from_raw(&mut stream).unwrap() };
 
         let imported_schema = stream_reader.schema();
         assert_eq!(imported_schema, schema);
@@ -529,7 +501,6 @@ mod tests {
 
         assert_eq!(produced_batches, vec![batch.clone(), batch]);
 
-        unsafe { Arc::from_raw(stream_ptr) };
         Ok(())
     }
 
