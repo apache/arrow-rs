@@ -16,9 +16,17 @@
 // under the License.
 
 //! Common logic for interacting with remote object stores
+use std::pin::Pin;
+
+use crate::path::Path;
+
 use super::Result;
 use bytes::Bytes;
-use futures::{stream::StreamExt, Stream, TryStreamExt};
+use futures::{
+    future::BoxFuture,
+    stream::{BoxStream, StreamExt},
+    Future, Stream, TryStreamExt,
+};
 
 #[cfg(any(feature = "azure", feature = "http"))]
 pub static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
@@ -168,6 +176,31 @@ fn merge_ranges(
     }
 
     ret
+}
+
+#[allow(dead_code)]
+pub(crate) fn str_is_truthy(val: &str) -> bool {
+    val.eq_ignore_ascii_case("1")
+        | val.eq_ignore_ascii_case("true")
+        | val.eq_ignore_ascii_case("on")
+        | val.eq_ignore_ascii_case("yes")
+        | val.eq_ignore_ascii_case("y")
+}
+
+/// Common implementation for delete_all
+#[allow(dead_code)]
+pub(crate) fn delete_all_helper<'a>(
+    locations: BoxStream<'a, Path>,
+    chunk_size: usize,
+    request_handler: impl Fn(
+            Vec<Path>,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Vec<Result<Path>>>> + Send + 'a>>
+        + Send
+        + Sync
+        + 'a,
+) -> BoxStream<'a, BoxFuture<'a, Result<Vec<Result<Path>>>>> {
+    locations.chunks(chunk_size).map(request_handler).boxed()
 }
 
 #[cfg(test)]

@@ -32,6 +32,7 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
+use itertools::Itertools;
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use reqwest::{header::CONTENT_TYPE, Client as ReqwestClient, Method, Response};
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,27 @@ pub(crate) enum Error {
         source: crate::client::retry::Error,
         path: String,
     },
+
+    #[snafu(display("Error performing DeleteObjects request: {}", source))]
+    DeleteObjectsRequest { source: crate::client::retry::Error },
+
+    #[snafu(display(
+        "DeleteObjects request failed for key {}: {} (code: {})",
+        path,
+        message,
+        code
+    ))]
+    DeleteFailed {
+        path: String,
+        code: String,
+        message: String,
+    },
+
+    #[snafu(display("Error getting DeleteObjects response body: {}", source))]
+    DeleteObjectsResponse { source: reqwest::Error },
+
+    #[snafu(display("Got invalid DeleteObjects response: {}", source))]
+    InvalidDeleteObjectsResponse { source: quick_xml::de::DeError },
 
     #[snafu(display("Error performing copy request {}: {}", path, source))]
     CopyRequest {
@@ -127,6 +149,47 @@ struct MultipartPart {
     e_tag: String,
     #[serde(rename = "PartNumber")]
     part_number: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase", rename = "DeleteResult")]
+struct BatchDeleteResponse {
+    #[serde(rename = "$value")]
+    content: Vec<DeleteObjectResult>,
+}
+
+#[derive(Deserialize)]
+enum DeleteObjectResult {
+    Deleted(DeletedObject),
+    Error(DeleteError),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase", rename = "Deleted")]
+struct DeletedObject {
+    delete_marker: Option<bool>,
+    delete_marker_version_id: Option<String>,
+    key: String,
+    version_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase", rename = "Error")]
+struct DeleteError {
+    key: String,
+    version_id: Option<String>,
+    code: String,
+    message: String,
+}
+
+impl From<DeleteError> for Error {
+    fn from(err: DeleteError) -> Self {
+        Self::DeleteFailed {
+            path: err.key,
+            code: err.code,
+            message: err.message,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -241,6 +304,55 @@ impl S3Client {
             })?;
 
         Ok(())
+    }
+
+    /// Make an S3 Delete Objects request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html>
+    ///
+    /// Produces a vector of results, one for each path in the input vector. The
+    /// result is `Ok(())` if the delete was successful, or `Err` if the delete failed.
+    pub async fn bulk_delete_request(
+        &self,
+        paths: Vec<Path>,
+    ) -> Result<Vec<Result<Path>>> {
+        let credential = self.get_credential().await?;
+        let url = format!("{}?delete", self.config.bucket_endpoint);
+
+        let inner_body = paths
+            .iter()
+            .map(|path| format!("<Object><Key>{}</Key></Object>", path))
+            .join("");
+        let body = format!("<Delete xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">{}<Quiet>true</Quiet></Delete>", inner_body);
+
+        let response = self
+            .client
+            .request(Method::POST, url)
+            .header(CONTENT_TYPE, "application/xml")
+            .body(body)
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+                None,
+            )
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(DeleteObjectsRequestSnafu {})?
+            .bytes()
+            .await
+            .context(DeleteObjectsResponseSnafu {})?;
+
+        let response: BatchDeleteResponse = quick_xml::de::from_reader(response.reader())
+            .context(InvalidDeleteObjectsResponseSnafu {})?;
+
+        Ok(response
+            .content
+            .into_iter()
+            .map(|content| match content {
+                DeleteObjectResult::Deleted(obj) => Ok(Path::from(obj.key)),
+                DeleteObjectResult::Error(error) => Err(Error::from(error).into()),
+            })
+            .collect())
     }
 
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>

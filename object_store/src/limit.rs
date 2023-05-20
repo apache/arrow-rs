@@ -23,7 +23,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::Stream;
+use futures::future::BoxFuture;
+use futures::{FutureExt, Stream};
 use std::io::{Error, IoSlice};
 use std::ops::Range;
 use std::pin::Pin;
@@ -146,6 +147,20 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
     async fn delete(&self, location: &Path) -> Result<()> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.delete(location).await
+    }
+
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Path>,
+    ) -> BoxStream<'a, BoxFuture<'a, Result<Vec<Result<Path>>>>> {
+        self.inner
+            .delete_stream(locations)
+            .map(move |f| async move {
+                let _permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
+                f.await
+            })
+            .map(|f| f.boxed())
+            .boxed()
     }
 
     async fn list(

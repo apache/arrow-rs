@@ -264,7 +264,7 @@ use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT}
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::{future::BoxFuture, stream::BoxStream, FutureExt, StreamExt, TryStreamExt};
 use snafu::Snafu;
 use std::fmt::{Debug, Formatter};
 #[cfg(not(target_arch = "wasm32"))]
@@ -385,6 +385,63 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> Result<()>;
+
+    /// Delete all the objects at the specified locations
+    ///
+    /// When supported, this method will use bulk operations that delete more
+    /// than one object per a request. Each future in the stream represents one
+    /// API call and will resolve to the number of deleted objects. If the
+    /// overall request fails, the item in the stream will be an error. If a
+    /// subrequest fails, a corresponding error will be in the result vector.
+    /// If an object is successfully deleted, it's path will be in the result.
+    ///
+    /// This method may be used with [`tokio::stream::StreamExt::buffer_unordered`]
+    /// to make multiple requests concurrently.
+    ///
+    /// ```
+    /// # use object_store::local::LocalFileSystem;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let root = tempfile::TempDir::new().unwrap();
+    /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+    /// use object_store::{ObjectStore, ObjectMeta};
+    /// use object_store::path::Path;
+    /// use futures::{StreamExt, TryStreamExt};
+    /// use bytes::Bytes;
+    ///
+    /// // Create two objects
+    /// store.put(&Path::from("foo"), Bytes::from("foo")).await?;
+    /// store.put(&Path::from("bar"), Bytes::from("bar")).await?;
+    ///
+    /// // List object
+    /// let locations: Vec<Path> = store.list(None).await?
+    ///   .map(|meta: Result<ObjectMeta, _>| meta.map(|m| m.location))
+    ///   .try_collect::<Vec<Path>>().await?;
+    ///
+    /// // Delete them
+    /// store.delete_stream(futures::stream::iter(locations).boxed())
+    ///   .buffer_unordered(10) // Up to ten concurrent calls
+    ///   .map_ok(futures::stream::iter)
+    ///   .try_flatten()
+    ///   .try_collect::<Vec<Path>>().await?;
+    /// # Ok(())
+    /// # }
+    /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    /// # rt.block_on(example()).unwrap();
+    /// ```
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Path>,
+    ) -> BoxStream<'a, BoxFuture<'a, Result<Vec<Result<Path>>>>> {
+        locations
+            .map(move |location| async move {
+                match self.delete(&location).await {
+                    Ok(()) => Ok(vec![Ok(location)]),
+                    Err(e) => Ok(vec![Err(e)]),
+                }
+            })
+            .map(|f| f.boxed())
+            .boxed()
+    }
 
     /// List all the objects with the given prefix.
     ///
@@ -513,6 +570,13 @@ impl ObjectStore for Box<dyn ObjectStore> {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.as_ref().delete(location).await
+    }
+
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Path>,
+    ) -> BoxStream<'a, BoxFuture<'a, Result<Vec<Result<Path>>>>> {
+        self.as_ref().delete_stream(locations)
     }
 
     async fn list(
@@ -1119,6 +1183,57 @@ mod tests {
             assert_eq!(actual, expected, "{prefix:?} - {offset:?}");
         }
 
+        // Test bulk delete
+        let paths = vec![
+            Path::from("a/a.file"),
+            Path::from("a/a/b.file"),
+            Path::from("aa/a.file"),
+            Path::from("ab/a.file"),
+        ];
+
+        storage
+            .delete_stream(futures::stream::iter(paths.clone()).boxed())
+            .buffered(5)
+            .map_ok(futures::stream::iter)
+            .try_flatten()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        for path in paths {
+            let err = storage.head(&path).await.unwrap_err();
+            assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+        }
+
+        // Test bulk delete errors
+        let paths = vec![
+            Path::from("a%2Fa.file"),
+            Path::from("a/😀.file"),
+            Path::from("does_not_exist"),
+        ];
+        let delete_results = storage
+            .delete_stream(futures::stream::iter(paths.clone()).boxed())
+            .buffered(5)
+            .map_ok(futures::stream::iter)
+            .try_flatten()
+            .collect::<Vec<Result<_>>>()
+            .await;
+        assert_eq!(delete_results.len(), 3);
+        dbg!(&delete_results);
+        // TODO: make sure paths are passed down correctly
+        // TODO: make sure not found errors are bubbled up
+        assert!(delete_results[0].is_ok());
+        assert_eq!(delete_results[0].as_ref().unwrap(), &paths[0]);
+        assert!(delete_results[1].is_ok());
+        assert_eq!(delete_results[1].as_ref().unwrap(), &paths[1]);
+        assert!(delete_results[2].is_err());
+        assert!(matches!(delete_results[3], Err(Error::NotFound { .. })));
+        let err_path = match &delete_results[3] {
+            Err(Error::NotFound { path, .. }) => path,
+            _ => panic!("unexpected error"),
+        };
+        assert_eq!(err_path, &paths[3].to_string());
+
         delete_fixtures(storage).await;
     }
 
@@ -1472,10 +1587,14 @@ mod tests {
 
     async fn delete_fixtures(storage: &DynObjectStore) {
         let paths = flatten_list_stream(storage, None).await.unwrap();
-
-        for f in &paths {
-            storage.delete(f).await.unwrap();
-        }
+        storage
+            .delete_stream(futures::stream::iter(paths).boxed())
+            .buffered(5)
+            .map_ok(futures::stream::iter)
+            .try_flatten()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
     }
 
     /// Test that the returned stream does not borrow the lifetime of Path
