@@ -315,6 +315,10 @@ impl S3Client {
         &self,
         paths: Vec<Path>,
     ) -> Result<Vec<Result<Path>>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let credential = self.get_credential().await?;
         let url = format!("{}?delete", self.config.bucket_endpoint);
 
@@ -326,9 +330,21 @@ impl S3Client {
             "<Delete xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">{}</Delete>",
             inner_body
         );
-        let response = self
-            .client
-            .request(Method::POST, url)
+
+        let mut builder = self.client.request(Method::POST, url);
+
+        // Compute checksum - S3 *requires* this for DeleteObjects requests, so we default to
+        // their algorithm if the user hasn't specified one.
+        let checksum = self.config().checksum.unwrap_or(Checksum::SHA256);
+        let digest = checksum.digest(body.as_bytes());
+        builder = builder.header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
+        let payload_sha256 = if checksum == Checksum::SHA256 {
+            Some(digest)
+        } else {
+            None
+        };
+
+        let response = builder
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
             .with_aws_sigv4(
@@ -336,7 +352,7 @@ impl S3Client {
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
-                None,
+                payload_sha256.as_deref(),
             )
             .send_retry(&self.config.retry_config)
             .await
