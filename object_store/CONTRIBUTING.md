@@ -39,7 +39,7 @@ To test the S3 integration against [localstack](https://localstack.cloud/)
 First start up a container running localstack
 
 ```
-$ podman run -d -p 4566:4566 localstack/localstack:2.0 PROVIDER_OVERRIDE_S3=asf
+$ podman run -d -p 4566:4566 localstack/localstack:2.0
 $ podman run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
 ```
 
