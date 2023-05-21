@@ -50,17 +50,19 @@ pub trait FromPyArrow: Sized {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self>;
 }
 
-pub trait AsPyArrow {
-    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject>;
+/// Create a new PyArrow object from a arrow-rs type.
+pub trait ToPyArrow {
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject>;
 }
 
+/// Convert an arrow-rs type into a PyArrow object.
 pub trait IntoPyArrow {
-    fn to_pyarrow(self, py: Python) -> PyResult<PyObject>;
+    fn into_pyarrow(self, py: Python) -> PyResult<PyObject>;
 }
 
-impl<T: AsPyArrow> IntoPyArrow for T {
-    fn to_pyarrow(self, py: Python) -> PyResult<PyObject> {
-        self.as_pyarrow(py)
+impl<T: ToPyArrow> IntoPyArrow for T {
+    fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
+        self.to_pyarrow(py)
     }
 }
 
@@ -74,8 +76,8 @@ impl FromPyArrow for DataType {
     }
 }
 
-impl AsPyArrow for DataType {
-    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl ToPyArrow for DataType {
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
@@ -96,8 +98,8 @@ impl FromPyArrow for Field {
     }
 }
 
-impl AsPyArrow for Field {
-    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl ToPyArrow for Field {
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
@@ -118,8 +120,8 @@ impl FromPyArrow for Schema {
     }
 }
 
-impl AsPyArrow for Schema {
-    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl ToPyArrow for Schema {
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
@@ -154,8 +156,8 @@ impl FromPyArrow for ArrayData {
     }
 }
 
-impl AsPyArrow for ArrayData {
-    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl ToPyArrow for ArrayData {
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let array = FFI_ArrowArray::new(self);
         let schema = FFI_ArrowSchema::try_from(self.data_type()).map_err(to_py_err)?;
 
@@ -175,15 +177,15 @@ impl AsPyArrow for ArrayData {
 impl<T: FromPyArrow> FromPyArrow for Vec<T> {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         let list = value.downcast::<PyList>()?;
-        list.iter().map(|x| T::from_pyarrow(&x)).collect()
+        list.iter().map(|x| T::from_pyarrow(x)).collect()
     }
 }
 
-impl<T: AsPyArrow> AsPyArrow for Vec<T> {
-    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl<T: ToPyArrow> ToPyArrow for Vec<T> {
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let values = self
             .iter()
-            .map(|v| v.as_pyarrow(py))
+            .map(|v| v.to_pyarrow(py))
             .collect::<PyResult<Vec<_>>>()?;
         Ok(values.to_object(py))
     }
@@ -206,18 +208,18 @@ impl FromPyArrow for RecordBatch {
     }
 }
 
-impl AsPyArrow for RecordBatch {
-    fn as_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+impl ToPyArrow for RecordBatch {
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let mut py_arrays = vec![];
 
         let schema = self.schema();
         let columns = self.columns().iter();
 
         for array in columns {
-            py_arrays.push(array.to_data().as_pyarrow(py)?);
+            py_arrays.push(array.to_data().to_pyarrow(py)?);
         }
 
-        let py_schema = schema.as_pyarrow(py)?;
+        let py_schema = schema.to_pyarrow(py)?;
 
         let module = py.import("pyarrow")?;
         let class = module.getattr("RecordBatch")?;
@@ -239,7 +241,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
         // make the conversion through PyArrow's private API
         // this changes the pointer's memory and is thus unsafe.
         // In particular, `_export_to_c` can go out of bounds
-        let args = PyTuple::new(value.py(), &[stream_ptr as Py_uintptr_t]);
+        let args = PyTuple::new(value.py(), [stream_ptr as Py_uintptr_t]);
         value.call_method1("_export_to_c", args)?;
 
         let stream_reader =
@@ -254,7 +256,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
 }
 
 impl IntoPyArrow for ArrowArrayStreamReader {
-    fn to_pyarrow(self, py: Python) -> PyResult<PyObject> {
+    fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
         let stream = Box::new(FFI_ArrowArrayStream::empty());
         let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
 
@@ -262,7 +264,7 @@ impl IntoPyArrow for ArrowArrayStreamReader {
 
         let module = py.import("pyarrow")?;
         let class = module.getattr("RecordBatchReader")?;
-        let args = PyTuple::new(py, &[stream_ptr as Py_uintptr_t]);
+        let args = PyTuple::new(py, [stream_ptr as Py_uintptr_t]);
         let reader = class.call_method1("_import_from_c", args)?;
 
         Ok(PyObject::from(reader))
@@ -280,9 +282,9 @@ impl<'source, T: FromPyArrow + IntoPyArrow> FromPyObject<'source> for PyArrowTyp
     }
 }
 
-impl<'a, T: FromPyArrow + IntoPyArrow> IntoPy<PyObject> for PyArrowType<T> {
+impl<T: FromPyArrow + IntoPyArrow> IntoPy<PyObject> for PyArrowType<T> {
     fn into_py(self, py: Python) -> PyObject {
-        self.0.to_pyarrow(py).unwrap()
+        self.0.into_pyarrow(py).unwrap()
     }
 }
 
