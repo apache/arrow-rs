@@ -104,6 +104,7 @@ fn test_flight_info(request: &FlightDescriptor) -> FlightInfo {
         flight_descriptor: Some(request.clone()),
         total_bytes: 123,
         total_records: 456,
+        ordered: false,
     }
 }
 

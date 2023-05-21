@@ -18,7 +18,11 @@
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::sql::{
-    ActionCreatePreparedStatementResult, Any, ProstMessageExt, SqlInfo,
+    ActionBeginSavepointRequest, ActionBeginSavepointResult,
+    ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
+    ActionCreatePreparedStatementResult, ActionEndSavepointRequest,
+    ActionEndTransactionRequest, Any, CommandStatementSubstraitPlan, ProstMessageExt,
+    SqlInfo,
 };
 use arrow_flight::{
     Action, FlightData, FlightEndpoint, HandshakeRequest, HandshakeResponse, IpcMessage,
@@ -40,8 +44,9 @@ use arrow_flight::{
     flight_service_server::FlightService,
     flight_service_server::FlightServiceServer,
     sql::{
-        server::FlightSqlService, ActionClosePreparedStatementRequest,
-        ActionCreatePreparedStatementRequest, CommandGetCatalogs,
+        server::FlightSqlService, ActionBeginTransactionRequest,
+        ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
+        ActionCreatePreparedSubstraitPlanRequest, CommandGetCatalogs,
         CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
         CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
         CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
@@ -177,6 +182,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
+    async fn get_flight_info_substrait_plan(
+        &self,
+        _query: CommandStatementSubstraitPlan,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_substrait_plan not implemented",
+        ))
+    }
+
     async fn get_flight_info_prepared_statement(
         &self,
         cmd: CommandPreparedStatementQuery,
@@ -220,6 +235,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             endpoint: endpoints,
             total_records: num_rows as i64,
             total_bytes: num_bytes as i64,
+            ordered: false,
         };
         let resp = Response::new(info);
         Ok(resp)
@@ -441,6 +457,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(FAKE_UPDATE_RESULT)
     }
 
+    async fn do_put_substrait_plan(
+        &self,
+        _ticket: CommandStatementSubstraitPlan,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<i64, Status> {
+        Err(Status::unimplemented(
+            "do_put_substrait_plan not implemented",
+        ))
+    }
+
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
@@ -486,8 +512,56 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: ActionClosePreparedStatementRequest,
         _request: Request<Action>,
-    ) {
+    ) -> Result<(), Status> {
         unimplemented!("Implement do_action_close_prepared_statement")
+    }
+
+    async fn do_action_create_prepared_substrait_plan(
+        &self,
+        _query: ActionCreatePreparedSubstraitPlanRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionCreatePreparedStatementResult, Status> {
+        unimplemented!("Implement do_action_create_prepared_substrait_plan")
+    }
+
+    async fn do_action_begin_transaction(
+        &self,
+        _query: ActionBeginTransactionRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionBeginTransactionResult, Status> {
+        unimplemented!("Implement do_action_begin_transaction")
+    }
+
+    async fn do_action_end_transaction(
+        &self,
+        _query: ActionEndTransactionRequest,
+        _request: Request<Action>,
+    ) -> Result<(), Status> {
+        unimplemented!("Implement do_action_end_transaction")
+    }
+
+    async fn do_action_begin_savepoint(
+        &self,
+        _query: ActionBeginSavepointRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionBeginSavepointResult, Status> {
+        unimplemented!("Implement do_action_begin_savepoint")
+    }
+
+    async fn do_action_end_savepoint(
+        &self,
+        _query: ActionEndSavepointRequest,
+        _request: Request<Action>,
+    ) -> Result<(), Status> {
+        unimplemented!("Implement do_action_end_savepoint")
+    }
+
+    async fn do_action_cancel_query(
+        &self,
+        _query: ActionCancelQueryRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionCancelQueryResult, Status> {
+        unimplemented!("Implement do_action_cancel_query")
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
@@ -718,7 +792,7 @@ mod tests {
         test_all_clients(|mut client| async move {
             auth_client(&mut client).await;
 
-            let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
+            let mut stmt = client.prepare("select 1;".to_string(), None).await.unwrap();
 
             let flight_info = stmt.execute().await.unwrap();
 
@@ -746,7 +820,7 @@ mod tests {
         test_all_clients(|mut client| async move {
             auth_client(&mut client).await;
             let res = client
-                .execute_update("creat table test(a int);".to_string())
+                .execute_update("creat table test(a int);".to_string(), None)
                 .await
                 .unwrap();
             assert_eq!(res, FAKE_UPDATE_RESULT);
@@ -759,7 +833,7 @@ mod tests {
         test_all_clients(|mut client| async move {
             // no handshake
             assert!(client
-                .prepare("select 1;".to_string())
+                .prepare("select 1;".to_string(), None)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -776,7 +850,7 @@ mod tests {
             // forget to set_token
             client.handshake("admin", "password").await.unwrap();
             assert!(client
-                .prepare("select 1;".to_string())
+                .prepare("select 1;".to_string(), None)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -786,7 +860,7 @@ mod tests {
             client.handshake("admin", "password").await.unwrap();
             client.set_token("wrong token".to_string());
             assert!(client
-                .prepare("select 1;".to_string())
+                .prepare("select 1;".to_string(), None)
                 .await
                 .unwrap_err()
                 .to_string()

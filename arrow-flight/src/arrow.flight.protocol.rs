@@ -183,8 +183,21 @@ pub struct FlightInfo {
     /// In other words, an application can use multiple endpoints to
     /// represent partitioned data.
     ///
-    /// There is no ordering defined on endpoints. Hence, if the returned
-    /// data has an ordering, it should be returned in a single endpoint.
+    /// If the returned data has an ordering, an application can use
+    /// "FlightInfo.ordered = true" or should return the all data in a
+    /// single endpoint. Otherwise, there is no ordering defined on
+    /// endpoints or the data within.
+    ///
+    /// A client can read ordered data by reading data from returned
+    /// endpoints, in order, from front to back.
+    ///
+    /// Note that a client may ignore "FlightInfo.ordered = true". If an
+    /// ordering is important for an application, an application must
+    /// choose one of them:
+    ///
+    /// * An application requires that all clients must read data in
+    ///    returned endpoints order.
+    /// * An application must return the all data in a single endpoint.
     #[prost(message, repeated, tag = "3")]
     pub endpoint: ::prost::alloc::vec::Vec<FlightEndpoint>,
     /// Set these to -1 if unknown.
@@ -192,6 +205,10 @@ pub struct FlightInfo {
     pub total_records: i64,
     #[prost(int64, tag = "5")]
     pub total_bytes: i64,
+    ///
+    /// FlightEndpoints are in the same order as the data.
+    #[prost(bool, tag = "6")]
+    pub ordered: bool,
 }
 ///
 /// A particular stream or split associated with a flight.
