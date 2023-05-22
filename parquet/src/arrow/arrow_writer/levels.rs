@@ -42,7 +42,7 @@
 
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait, StructArray};
+use arrow_array::{Array, ArrayRef, FixedSizeListArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
@@ -158,6 +158,18 @@ impl LevelInfoBuilder {
                 let child = Self::try_new(child.as_ref(), ctx)?;
                 Ok(Self::List(Box::new(child), ctx))
             }
+            DataType::FixedSizeList(child, _) => {
+                let def_level = match field.is_nullable() {
+                    true => parent_ctx.def_level + 2,
+                    false => parent_ctx.def_level + 1,
+                };
+                let ctx = LevelContext {
+                    rep_level: parent_ctx.rep_level + 1,
+                    def_level,
+                };
+                let child = Self::try_new(child.as_ref(), ctx)?;
+                Ok(Self::List(Box::new(child), ctx))
+            }
             d => Err(nyi_err!("Datatype {} is not yet supported", d)),
         }
     }
@@ -211,6 +223,19 @@ impl LevelInfoBuilder {
                     array.value_offsets(),
                     array.nulls(),
                     array.entries(),
+                    range,
+                )
+            }
+            &DataType::FixedSizeList(_, size) => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .expect("unable to get fixed-size list array");
+
+                self.write_fixed_size_list(
+                    size as usize,
+                    array.nulls(),
+                    array.values(),
                     range,
                 )
             }
@@ -368,6 +393,51 @@ impl LevelInfoBuilder {
                 }
             }
             None => write_non_null(children, range),
+        }
+    }
+
+    /// Write `range` elements from FixedSizeListArray with child data `values` and null bitmap `nulls`.
+    fn write_fixed_size_list(
+        &mut self,
+        fixed_size: usize,
+        nulls: Option<&NullBuffer>,
+        values: &dyn Array,
+        range: Range<usize>,
+    ) {
+        let (child, ctx) = match self {
+            Self::List(child, ctx) => (child, ctx),
+            _ => unreachable!(),
+        };
+
+        let write_non_null =
+            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+                let child_start = start_idx * fixed_size;
+                let child_end = end_idx * fixed_size;
+                child.write(values, child_start..child_end);
+                child.visit_leaves(|leaf| {
+                    let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                    for i in start_idx..end_idx {
+                        rep_levels[i * fixed_size] -= 1;
+                    }
+                })
+            };
+
+        match nulls {
+            Some(nulls) => {
+                for idx in range {
+                    if nulls.is_valid(idx) {
+                        write_non_null(child, idx, idx + 1)
+                    } else {
+                        child.visit_leaves(|leaf| {
+                            let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                            rep_levels.push(ctx.rep_level - 1);
+                            let def_levels = leaf.def_levels.as_mut().unwrap();
+                            def_levels.push(ctx.def_level - 2);
+                        })
+                    }
+                }
+            }
+            None => write_non_null(child, range.start, range.end),
         }
     }
 
