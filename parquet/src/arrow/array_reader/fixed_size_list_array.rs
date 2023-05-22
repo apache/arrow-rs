@@ -83,14 +83,14 @@ impl ArrayReader for FixedSizeListArrayReader {
 
         let data = next_batch_array.to_data();
         let mut child_data_builder =
-            MutableArrayData::new(vec![&data], false, next_batch_array.len());
+            MutableArrayData::new(vec![&data], true, next_batch_array.len());
 
-        // The number of seen child array items
-        let mut child_items = 0;
-        // The number of seen child array items that haven't been added to the data builder
-        let mut pending_items = 0;
+        // The current index into the child array entries
+        let mut child_idx = 0;
         // The total number of rows (valid and invalid) in the list array
         let mut list_len = 0;
+        // Start of the current run of valid values
+        let mut start_idx = None;
 
         def_levels.iter().zip(rep_levels).try_for_each(|(d, r)| {
             match r.cmp(&self.rep_level) {
@@ -104,57 +104,50 @@ impl ArrayReader for FixedSizeListArrayReader {
                 }
                 Ordering::Equal => {
                     // Item inside of the current list
-                    child_items += 1;
-                    pending_items += 1;
+                    child_idx += 1;
                 }
                 Ordering::Less => {
                     // Start of new list row
                     list_len += 1;
-
-                    // Verify new row is aligned to the fixed list size
-                    if child_items % self.fixed_size != 0 {
-                        return Err(general_err!("Misaligned fixed-size list entries"));
-                    }
 
                     if *d >= self.def_level {
                         // Valid list entry
                         if let Some(validity) = validity.as_mut() {
                             validity.append(true);
                         }
-                        child_items += 1;
-                        pending_items += 1;
+                        // Start a run of valid rows if not already inside of one
+                        start_idx.get_or_insert(child_idx);
                     } else {
                         // Null list entry
 
-                        if pending_items > 0 {
+                        if let Some(start) = start_idx.take() {
                             // Flush pending child items
-                            child_data_builder.extend(
-                                0,
-                                child_items - pending_items,
-                                child_items,
-                            );
-                            pending_items = 0;
+                            child_data_builder.extend(0, start, child_idx);
                         }
+                        // Pad list with nulls
                         child_data_builder.extend_nulls(self.fixed_size);
-                        child_items += self.fixed_size;
 
                         if let Some(validity) = validity.as_mut() {
                             validity.append(false);
                         }
                     }
+                    child_idx += 1;
                 }
             }
             Ok(())
         })?;
 
-        let child_data = if pending_items == child_items {
-            // No null entries - can reuse original array
-            next_batch_array.to_data()
-        } else {
-            if pending_items > 0 {
-                child_data_builder.extend(0, child_items - pending_items, child_items);
+        let child_data = match start_idx {
+            Some(0) => {
+                // No null entries - can reuse original array
+                next_batch_array.to_data()
             }
-            child_data_builder.freeze()
+            Some(start) => {
+                // Flush pending child items
+                child_data_builder.extend(0, start, child_idx);
+                child_data_builder.freeze()
+            }
+            None => child_data_builder.freeze(),
         };
 
         let mut list_builder = ArrayData::builder(self.get_data_type().clone())
@@ -181,5 +174,206 @@ impl ArrayReader for FixedSizeListArrayReader {
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.item_reader.get_rep_levels()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arrow::array_reader::test_util::InMemoryArrayReader;
+    use arrow::datatypes::{Field, Int32Type};
+    use arrow_array::{FixedSizeListArray, PrimitiveArray};
+    use arrow_buffer::Buffer;
+    use arrow_data::ArrayDataBuilder;
+
+    #[test]
+    fn test_nullable_list() {
+        // [null, [1, null, 2], null, [3, 4, 5], [null, null, null]]
+        let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                None,
+                Some([Some(1), None, Some(2)]),
+                None,
+                Some([Some(3), Some(4), Some(5)]),
+                Some([None, None, None]),
+            ],
+            3,
+        );
+
+        let array = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
+            None,
+            Some(1),
+            None,
+            Some(2),
+            None,
+            Some(3),
+            Some(4),
+            Some(5),
+            None,
+            None,
+            None,
+        ]));
+        let item_array_reader = InMemoryArrayReader::new(
+            ArrowType::Int32,
+            array,
+            Some(vec![0, 3, 2, 3, 0, 3, 3, 3, 2, 2, 2]),
+            Some(vec![0, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1]),
+        );
+
+        let mut list_array_reader = FixedSizeListArrayReader::new(
+            Box::new(item_array_reader),
+            3,
+            ArrowType::FixedSizeList(
+                Arc::new(Field::new("item", ArrowType::Int32, true)),
+                3,
+            ),
+            2,
+            1,
+            true,
+        );
+        let actual = list_array_reader.next_batch(1024).unwrap();
+        let actual = actual
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(&expected, actual)
+    }
+
+    #[test]
+    fn test_required_list() {
+        // [[1, null], [2, 3], [null, null], [4, 5]]
+        let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some([Some(1), None]),
+                Some([Some(2), Some(3)]),
+                Some([None, None]),
+                Some([Some(4), Some(5)]),
+            ],
+            2,
+        );
+
+        let array = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            Some(3),
+            None,
+            None,
+            Some(4),
+            Some(5),
+        ]));
+        let item_array_reader = InMemoryArrayReader::new(
+            ArrowType::Int32,
+            array,
+            Some(vec![2, 1, 2, 2, 1, 1, 2, 2]),
+            Some(vec![0, 1, 0, 1, 0, 1, 0, 1]),
+        );
+
+        let mut list_array_reader = FixedSizeListArrayReader::new(
+            Box::new(item_array_reader),
+            2,
+            ArrowType::FixedSizeList(
+                Arc::new(Field::new("item", ArrowType::Int32, true)),
+                2,
+            ),
+            1,
+            1,
+            false,
+        );
+        let actual = list_array_reader.next_batch(1024).unwrap();
+        let actual = actual
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(&expected, actual)
+    }
+
+    #[test]
+    fn test_nested_list() {
+        // [
+        //   null,
+        //   [[1, 2]],
+        //   [[null, 3]],
+        //   null,
+        //   [[4, 5]],
+        //   [[null, null]],
+        // ]
+        let l2_type = ArrowType::FixedSizeList(
+            Arc::new(Field::new("item", ArrowType::Int32, true)),
+            2,
+        );
+        let l1_type = ArrowType::FixedSizeList(
+            Arc::new(Field::new("item", l2_type.clone(), false)),
+            1,
+        );
+
+        let array = PrimitiveArray::<Int32Type>::from(vec![
+            None,
+            None,
+            Some(1),
+            Some(2),
+            None,
+            Some(3),
+            None,
+            None,
+            Some(4),
+            Some(5),
+            None,
+            None,
+        ]);
+
+        let l2 = ArrayDataBuilder::new(l2_type.clone())
+            .len(6)
+            .add_child_data(array.into_data())
+            .build()
+            .unwrap();
+
+        let l1 = ArrayDataBuilder::new(l1_type.clone())
+            .len(6)
+            .add_child_data(l2)
+            .null_bit_buffer(Some(Buffer::from([0b110110])))
+            .build()
+            .unwrap();
+
+        let expected = FixedSizeListArray::from(l1);
+
+        let values = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
+            None,
+            Some(1),
+            Some(2),
+            None,
+            Some(3),
+            None,
+            Some(4),
+            Some(5),
+            None,
+            None,
+        ]));
+
+        let item_array_reader = InMemoryArrayReader::new(
+            ArrowType::Int32,
+            values,
+            Some(vec![0, 5, 5, 4, 5, 0, 5, 5, 4, 4]),
+            Some(vec![0, 0, 2, 0, 2, 0, 0, 2, 0, 2]),
+        );
+
+        let l2 = FixedSizeListArrayReader::new(
+            Box::new(item_array_reader),
+            2,
+            l2_type,
+            4,
+            2,
+            false,
+        );
+        let mut l1 = FixedSizeListArrayReader::new(Box::new(l2), 1, l1_type, 3, 1, true);
+
+        let expected_1 = expected.slice(0, 2);
+        let expected_2 = expected.slice(2, 4);
+
+        let actual = l1.next_batch(2).unwrap();
+        assert_eq!(actual.as_ref(), &expected_1);
+
+        let actual = l1.next_batch(1024).unwrap();
+        assert_eq!(actual.as_ref(), &expected_2);
     }
 }
