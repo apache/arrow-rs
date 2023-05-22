@@ -513,7 +513,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _query: ActionClosePreparedStatementRequest,
         _request: Request<Action>,
     ) -> Result<(), Status> {
-        unimplemented!("Implement do_action_close_prepared_statement")
+        Err(Status::unimplemented(
+            "Implement do_action_close_prepared_statement",
+        ))
     }
 
     async fn do_action_create_prepared_substrait_plan(
@@ -521,7 +523,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _query: ActionCreatePreparedSubstraitPlanRequest,
         _request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        unimplemented!("Implement do_action_create_prepared_substrait_plan")
+        Err(Status::unimplemented(
+            "Implement do_action_create_prepared_substrait_plan",
+        ))
     }
 
     async fn do_action_begin_transaction(
@@ -529,7 +533,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _query: ActionBeginTransactionRequest,
         _request: Request<Action>,
     ) -> Result<ActionBeginTransactionResult, Status> {
-        unimplemented!("Implement do_action_begin_transaction")
+        Err(Status::unimplemented(
+            "Implement do_action_begin_transaction",
+        ))
     }
 
     async fn do_action_end_transaction(
@@ -537,7 +543,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _query: ActionEndTransactionRequest,
         _request: Request<Action>,
     ) -> Result<(), Status> {
-        unimplemented!("Implement do_action_end_transaction")
+        Err(Status::unimplemented("Implement do_action_end_transaction"))
     }
 
     async fn do_action_begin_savepoint(
@@ -545,7 +551,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _query: ActionBeginSavepointRequest,
         _request: Request<Action>,
     ) -> Result<ActionBeginSavepointResult, Status> {
-        unimplemented!("Implement do_action_begin_savepoint")
+        Err(Status::unimplemented("Implement do_action_begin_savepoint"))
     }
 
     async fn do_action_end_savepoint(
@@ -553,7 +559,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _query: ActionEndSavepointRequest,
         _request: Request<Action>,
     ) -> Result<(), Status> {
-        unimplemented!("Implement do_action_end_savepoint")
+        Err(Status::unimplemented("Implement do_action_end_savepoint"))
     }
 
     async fn do_action_cancel_query(
@@ -561,7 +567,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _query: ActionCancelQueryRequest,
         _request: Request<Action>,
     ) -> Result<ActionCancelQueryResult, Status> {
-        unimplemented!("Implement do_action_cancel_query")
+        Err(Status::unimplemented("Implement do_action_cancel_query"))
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}

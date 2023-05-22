@@ -643,8 +643,7 @@ where
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
-        }
-        if request.get_ref().r#type == CLOSE_PREPARED_STATEMENT {
+        } else if request.get_ref().r#type == CLOSE_PREPARED_STATEMENT {
             let any =
                 Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
@@ -659,8 +658,7 @@ where
             self.do_action_close_prepared_statement(cmd, request)
                 .await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
-        }
-        if request.get_ref().r#type == CREATE_PREPARED_SUBSTRAIT_PLAN {
+        } else if request.get_ref().r#type == CREATE_PREPARED_SUBSTRAIT_PLAN {
             let any =
                 Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
@@ -675,8 +673,7 @@ where
             self.do_action_create_prepared_substrait_plan(cmd, request)
                 .await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
-        }
-        if request.get_ref().r#type == BEGIN_TRANSACTION {
+        } else if request.get_ref().r#type == BEGIN_TRANSACTION {
             let any =
                 Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
@@ -693,8 +690,7 @@ where
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
-        }
-        if request.get_ref().r#type == END_TRANSACTION {
+        } else if request.get_ref().r#type == END_TRANSACTION {
             let any =
                 Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
@@ -708,8 +704,7 @@ where
                 })?;
             self.do_action_end_transaction(cmd, request).await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
-        }
-        if request.get_ref().r#type == BEGIN_SAVEPOINT {
+        } else if request.get_ref().r#type == BEGIN_SAVEPOINT {
             let any =
                 Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
@@ -726,8 +721,7 @@ where
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
-        }
-        if request.get_ref().r#type == END_SAVEPOINT {
+        } else if request.get_ref().r#type == END_SAVEPOINT {
             let any =
                 Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
@@ -741,8 +735,7 @@ where
                 })?;
             self.do_action_end_savepoint(cmd, request).await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
-        }
-        if request.get_ref().r#type == CANCEL_QUERY {
+        } else if request.get_ref().r#type == CANCEL_QUERY {
             let any =
                 Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
