@@ -411,23 +411,37 @@ impl LevelInfoBuilder {
 
         let write_non_null =
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
-                let child_start = start_idx * fixed_size;
-                let child_end = end_idx * fixed_size;
-                child.write(values, child_start..child_end);
+                let values_start = start_idx * fixed_size;
+                let values_end = end_idx * fixed_size;
+                child.write(values, values_start..values_end);
+
                 child.visit_leaves(|leaf| {
                     let rep_levels = leaf.rep_levels.as_mut().unwrap();
-                    for i in start_idx..end_idx {
-                        rep_levels[i * fixed_size] -= 1;
+
+                    // The index of the start of the current write range
+                    let start = rep_levels.len() - (values_end - values_start);
+                    let num_items = end_idx - start_idx;
+                    // Mark the start of each list in the child array
+                    for i in 0..num_items {
+                        let idx = start + i * fixed_size;
+                        rep_levels[idx] = ctx.rep_level - 1;
                     }
                 })
             };
 
         match nulls {
             Some(nulls) => {
-                for idx in range {
+                let mut start_idx = None;
+                for idx in range.clone() {
                     if nulls.is_valid(idx) {
-                        write_non_null(child, idx, idx + 1)
+                        // Start a run of valid rows if not already inside of one
+                        start_idx.get_or_insert(idx);
                     } else {
+                        // Write out any pending valid rows
+                        if let Some(start) = start_idx.take() {
+                            write_non_null(child, start, idx);
+                        }
+                        // Add null row
                         child.visit_leaves(|leaf| {
                             let rep_levels = leaf.rep_levels.as_mut().unwrap();
                             rep_levels.push(ctx.rep_level - 1);
@@ -436,7 +450,12 @@ impl LevelInfoBuilder {
                         })
                     }
                 }
+                // Write out any remaining valid rows
+                if let Some(start) = start_idx.take() {
+                    write_non_null(child, start, range.end);
+                }
             }
+            // If all rows are valid then write the whole array
             None => write_non_null(child, range.start, range.end),
         }
     }
@@ -1466,5 +1485,133 @@ mod tests {
         };
 
         assert_eq!(&levels[1], &expected_level);
+    }
+
+    #[test]
+    fn test_fixed_size_list() {
+        // [[1, 2], null, null, [7, 8], null]
+        let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 2);
+        builder.values().append_slice(&[1, 2]);
+        builder.append(true);
+        builder.values().append_slice(&[3, 4]);
+        builder.append(false);
+        builder.values().append_slice(&[5, 6]);
+        builder.append(false);
+        builder.values().append_slice(&[7, 8]);
+        builder.append(true);
+        builder.values().append_slice(&[9, 10]);
+        builder.append(false);
+        let a = builder.finish();
+
+        let item_field = Field::new("item", a.data_type().clone(), true);
+        let mut builder =
+            LevelInfoBuilder::try_new(&item_field, Default::default()).unwrap();
+        builder.write(&a, 1..4);
+        let levels = builder.finish();
+
+        assert_eq!(levels.len(), 1);
+
+        let list_level = levels.get(0).unwrap();
+
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![0, 0, 3, 3]),
+            rep_levels: Some(vec![0, 0, 0, 1]),
+            non_null_indices: vec![6, 7],
+            max_def_level: 3,
+            max_rep_level: 1,
+        };
+        assert_eq!(list_level, &expected_level);
+    }
+
+    #[test]
+    fn test_fixed_size_list_of_struct() {
+        // define schema
+        let int_field = Field::new("a", DataType::Int32, true);
+        let fields = Fields::from([Arc::new(int_field)]);
+        let item_field = Field::new("item", DataType::Struct(fields.clone()), true);
+        let list_field = Field::new(
+            "list",
+            DataType::FixedSizeList(Arc::new(item_field), 2),
+            true,
+        );
+
+        let int_builder = Int32Builder::with_capacity(10);
+        let struct_builder = StructBuilder::new(fields, vec![Box::new(int_builder)]);
+        let mut list_builder = FixedSizeListBuilder::new(struct_builder, 2);
+
+        // [[{a: 1}, null], null, [null, null], [{a: null}, {a: 2}]]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(1);
+        values.append(true);
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values.append(false);
+        list_builder.append(true);
+
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values.append(false);
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values.append(false);
+        list_builder.append(false);
+
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values.append(false);
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values.append(false);
+        list_builder.append(true);
+
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values.append(true);
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(2);
+        values.append(true);
+        list_builder.append(true);
+
+        let array = Arc::new(list_builder.finish());
+
+        assert_eq!(array.values().len(), 8);
+        assert_eq!(array.len(), 4);
+
+        let schema = Arc::new(Schema::new(vec![list_field]));
+
+        let rb = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let levels = calculate_array_levels(rb.column(0), rb.schema().field(0)).unwrap();
+        let list_level = &levels[0];
+
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![4, 2, 0, 2, 2, 3, 4]),
+            rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1]),
+            non_null_indices: vec![0, 7],
+            max_def_level: 4,
+            max_rep_level: 1,
+        };
+
+        assert_eq!(list_level, &expected_level);
     }
 }
