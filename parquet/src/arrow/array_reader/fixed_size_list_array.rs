@@ -570,12 +570,11 @@ mod tests {
         )]));
 
         // Create record batch with a single fixed-length array column
-        let batch =
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(list.clone())]).unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(list)]).unwrap();
 
         // Write record batch to Parquet
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), None)
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, None)
             .expect("unable to create parquet writer");
         writer.write(&batch).expect("unable to write record batch");
         writer.close().expect("unable to close parquet writer");
