@@ -249,6 +249,12 @@ pub struct SqlInfoList {
     infos: BTreeMap<u32, SqlInfoValue>,
 }
 
+impl Default for SqlInfoList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SqlInfoList {
     pub fn new() -> Self {
         Self {

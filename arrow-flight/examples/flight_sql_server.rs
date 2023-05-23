@@ -17,7 +17,7 @@
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use futures::{stream, Stream};
+use futures::{stream, Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use prost::Message;
 use std::pin::Pin;
@@ -408,7 +408,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let batch = INSTANCE_SQL_INFO.filter(&query.info).encode();
         let stream = FlightDataEncoderBuilder::new()
             .with_schema(Arc::new(SqlInfoList::schema().clone()))
-            .build(futures::stream::once(batch))
+            .build(futures::stream::once(async { batch }))
             .map_err(Status::from);
         Ok(Response::new(Box::pin(stream)))
     }
