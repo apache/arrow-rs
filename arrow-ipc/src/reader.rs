@@ -429,7 +429,7 @@ impl<'a> ArrayReader<'a> {
         })
     }
 
-    fn skip_node(&mut self, field: &Field) -> Result<(), ArrowError> {
+    fn skip_field(&mut self, field: &Field) -> Result<(), ArrowError> {
         self.next_node(field)?;
 
         match field.data_type() {
@@ -445,23 +445,23 @@ impl<'a> ArrayReader<'a> {
             List(list_field) | LargeList(list_field) | Map(list_field, _) => {
                 self.skip_buffer();
                 self.skip_buffer();
-                self.skip_node(list_field)?;
+                self.skip_field(list_field)?;
             }
             FixedSizeList(list_field, _) => {
                 self.skip_buffer();
-                self.skip_node(list_field)?;
+                self.skip_field(list_field)?;
             }
             Struct(struct_fields) => {
                 self.skip_buffer();
 
                 // skip for each field
                 for struct_field in struct_fields {
-                    self.skip_node(struct_field)?
+                    self.skip_field(struct_field)?
                 }
             }
             RunEndEncoded(run_ends_field, values_field) => {
-                self.skip_node(run_ends_field)?;
-                self.skip_node(values_field)?;
+                self.skip_field(run_ends_field)?;
+                self.skip_field(values_field)?;
             }
             Dictionary(_, _) => {
                 self.skip_buffer(); // Nulls
@@ -476,7 +476,7 @@ impl<'a> ArrayReader<'a> {
                 };
 
                 for (_, field) in fields.iter() {
-                    self.skip_node(field)?
+                    self.skip_field(field)?
                 }
             }
             Null => {} // No buffer increases
@@ -529,7 +529,7 @@ pub fn read_record_batch(
                 let child = create_array(&mut reader, field)?;
                 arrays.push((proj_idx, child));
             } else {
-                reader.skip_node(field)?;
+                reader.skip_field(field)?;
             }
         }
         arrays.sort_by_key(|t| t.0);
