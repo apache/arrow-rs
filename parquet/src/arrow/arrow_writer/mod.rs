@@ -103,7 +103,7 @@ impl<W: Write> ArrowWriter<W> {
     ) -> Result<Self> {
         let schema = arrow_to_parquet_schema(&arrow_schema)?;
         // add serialized arrow schema
-        let mut props = props.unwrap_or_else(|| WriterProperties::builder().build());
+        let mut props = props.unwrap_or_default();
         add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
 
         let max_row_group_size = props.max_row_group_size();

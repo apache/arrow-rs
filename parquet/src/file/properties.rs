@@ -27,7 +27,7 @@
 //! };
 //!
 //! // Create properties with default configuration.
-//! let props = WriterProperties::builder().build();
+//! let props = WriterProperties::default();
 //!
 //! // Use properties builder to set certain options and assemble the configuration.
 //! let props = WriterProperties::builder()
@@ -128,6 +128,12 @@ pub struct WriterProperties {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
+}
+
+impl Default for WriterProperties {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 impl WriterProperties {
@@ -836,7 +842,7 @@ mod tests {
 
     #[test]
     fn test_writer_properties_default_settings() {
-        let props = WriterProperties::builder().build();
+        let props = WriterProperties::default();
         assert_eq!(props.data_pagesize_limit(), DEFAULT_PAGE_SIZE);
         assert_eq!(
             props.dictionary_pagesize_limit(),
