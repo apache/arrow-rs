@@ -200,6 +200,7 @@ impl FlightService for FlightServiceImpl {
                     endpoint: vec![endpoint],
                     total_records: total_records as i64,
                     total_bytes: -1,
+                    ordered: false,
                 };
 
                 Ok(Response::new(info))
