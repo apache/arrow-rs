@@ -49,7 +49,7 @@ where
         match parts.as_slice() {
             [key, value] => {
                 let key = K::from_str(key).map_err(|e| e.to_string())?;
-                let value = V::from_str(value).map_err(|e| e.to_string())?;
+                let value = V::from_str(value.trim_start()).map_err(|e| e.to_string())?;
                 Ok(Self { key, value })
             }
             _ => Err(format!(
