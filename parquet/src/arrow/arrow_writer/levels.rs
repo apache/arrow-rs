@@ -144,7 +144,8 @@ impl LevelInfoBuilder {
             }
             DataType::List(child)
             | DataType::LargeList(child)
-            | DataType::Map(child, _) => {
+            | DataType::Map(child, _)
+            | DataType::FixedSizeList(child, _) => {
                 let def_level = match field.is_nullable() {
                     true => parent_ctx.def_level + 2,
                     false => parent_ctx.def_level + 1,
@@ -155,18 +156,6 @@ impl LevelInfoBuilder {
                     def_level,
                 };
 
-                let child = Self::try_new(child.as_ref(), ctx)?;
-                Ok(Self::List(Box::new(child), ctx))
-            }
-            DataType::FixedSizeList(child, _) => {
-                let def_level = match field.is_nullable() {
-                    true => parent_ctx.def_level + 2,
-                    false => parent_ctx.def_level + 1,
-                };
-                let ctx = LevelContext {
-                    rep_level: parent_ctx.rep_level + 1,
-                    def_level,
-                };
                 let child = Self::try_new(child.as_ref(), ctx)?;
                 Ok(Self::List(Box::new(child), ctx))
             }
@@ -1533,7 +1522,7 @@ mod tests {
 
         let expected_level = LevelInfo {
             def_levels: Some(vec![0, 0, 3, 3]),
-            rep_levels: Some(vec![0, 0, 0, 1]),
+            rep_levels: Some(vec![0, 1, 0, 1]),
             non_null_indices: vec![6, 7],
             max_def_level: 3,
             max_rep_level: 1,
