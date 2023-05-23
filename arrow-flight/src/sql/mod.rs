@@ -92,6 +92,8 @@ pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
 
+pub use sql_info::SqlInfoList;
+
 pub mod client;
 pub mod server;
 pub mod sql_info;

@@ -15,6 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Auxiliary module to handle [`CommandGetSqlInfo`] queries.
+//!
+//! [`CommandGetSqlInfo`] represents metadata requests againsts the Flight SQL server.
+//! Via this mechanism, the server can communicate supported capabilities to generic
+//! Flight SQL clients.
+//!
+//! Servers construct a [`SqlInfoList`] by adding infos via `with_sql_info`.
+//! The availabe configuration options are defined in the [Flight SQL protos][protos].
+//!
+//! [protos]: https://github.com/apache/arrow/blob/6d3d2fca2c9693231fa1e52c142ceef563fc23f9/format/FlightSql.proto#L71-L820
+
 use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 
 use arrow_array::array::{Array, UnionArray};
@@ -321,13 +332,13 @@ impl SqlInfoList {
         Ok(batch)
     }
 
-    /// Return the schema for the record batches produced
+    /// Return the [`Schema`] for a GetSchema RPC call with [`CommandGetSqlInfo`]
     pub fn schema() -> &'static Schema {
         // It is always the same
         &SQL_INFO_SCHEMA
     }
 
-    /// Return the [`FlightInfo`] for CommandSqlInfo
+    /// Return the [`FlightInfo`] for a GetFlightInfo RPC call with [`CommandGetSqlInfo`]
     pub fn flight_info(
         ticket: Option<Ticket>,
         flight_descriptor: Option<FlightDescriptor>,
