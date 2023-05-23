@@ -34,6 +34,7 @@ use base64::Engine;
 use bytes::{Buf, Bytes};
 use itertools::Itertools;
 use percent_encoding::{utf8_percent_encode, PercentEncode};
+use quick_xml::events::{self as xml_events};
 use reqwest::{header::CONTENT_TYPE, Client as ReqwestClient, Method, Response};
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
@@ -169,6 +170,7 @@ enum DeleteObjectResult {
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase", rename = "Deleted")]
 struct DeletedObject {
+    #[allow(dead_code)]
     key: String,
 }
 
@@ -322,21 +324,53 @@ impl S3Client {
         let credential = self.get_credential().await?;
         let url = format!("{}?delete", self.config.bucket_endpoint);
 
-        let inner_body = paths
-            .iter()
-            .map(|path| format!("<Object><Key>{}</Key></Object>", path))
-            .join("");
-        let body = format!(
-            "<Delete xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">{}</Delete>",
-            inner_body
-        );
+        let mut buffer = Vec::new();
+        let mut writer = quick_xml::Writer::new(&mut buffer);
+        writer
+            .write_event(xml_events::Event::Start(
+                xml_events::BytesStart::new("Delete").with_attributes([(
+                    "xmlns",
+                    "http://s3.amazonaws.com/doc/2006-03-01/",
+                )]),
+            ))
+            .unwrap();
+        for path in &paths {
+            // <Object><Key>{path}</Key></Object>
+            writer
+                .write_event(xml_events::Event::Start(xml_events::BytesStart::new(
+                    "Object",
+                )))
+                .unwrap();
+            writer
+                .write_event(xml_events::Event::Start(xml_events::BytesStart::new("Key")))
+                .unwrap();
+            writer
+                .write_event(xml_events::Event::Text(xml_events::BytesText::new(
+                    path.as_ref(),
+                )))
+                .map_err(|err| crate::Error::Generic {
+                    store: STORE,
+                    source: Box::new(err),
+                })?;
+            writer
+                .write_event(xml_events::Event::End(xml_events::BytesEnd::new("Key")))
+                .unwrap();
+            writer
+                .write_event(xml_events::Event::End(xml_events::BytesEnd::new("Object")))
+                .unwrap();
+        }
+        writer
+            .write_event(xml_events::Event::End(xml_events::BytesEnd::new("Delete")))
+            .unwrap();
+
+        let body = Bytes::from(buffer);
 
         let mut builder = self.client.request(Method::POST, url);
 
         // Compute checksum - S3 *requires* this for DeleteObjects requests, so we default to
         // their algorithm if the user hasn't specified one.
         let checksum = self.config().checksum.unwrap_or(Checksum::SHA256);
-        let digest = checksum.digest(body.as_bytes());
+        let digest = checksum.digest(&body);
         builder = builder.header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
         let payload_sha256 = if checksum == Checksum::SHA256 {
             Some(digest)
@@ -366,19 +400,22 @@ impl S3Client {
                 source: Box::new(err),
             })?;
 
-        Ok(response
-            .content
-            .into_iter()
-            .map(|content| match content {
-                DeleteObjectResult::Deleted(obj) => Path::parse(obj.key).map_err(|err| {
+        // Assume all were ok, then fill in errors. This guarantees output order
+        // matches input order.
+        let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
+        for content in response.content.into_iter() {
+            if let DeleteObjectResult::Error(error) = content {
+                let path = Path::parse(&error.key).map_err(|err| {
                     Error::InvalidDeleteObjectsResponse {
                         source: Box::new(err),
                     }
-                    .into()
-                }),
-                DeleteObjectResult::Error(error) => Err(Error::from(error).into()),
-            })
-            .collect())
+                })?;
+                let i = paths.iter().find_position(|&p| p == &path).unwrap().0;
+                results[i] = Err(Error::from(error).into());
+            }
+        }
+
+        Ok(results)
     }
 
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>

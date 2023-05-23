@@ -392,10 +392,12 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// than one object per a request. The default implementation will call
     /// the single object delete method for each location, but with up to 10
     /// concurrent requests.
-    /// 
+    ///
     /// The returned stream yields the results of the delete operations in the
-    /// same order as the input locations.
-    /// 
+    /// same order as the input locations. However, some errors will be from
+    /// an overall call to a bulk delete operation, and not from a specific
+    /// location.
+    ///
     /// If the object did not exist, the result may be an error or a success,
     /// depending on the behavior of the underlying store. For example, local
     /// filesystems, GCP, and Azure return an error, while S3 and in-memory will
@@ -894,8 +896,6 @@ mod test_util {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
     use crate::test_util::flatten_list_stream;
     use tokio::io::AsyncWriteExt;
@@ -1188,46 +1188,42 @@ mod tests {
             Path::from("a/a.file"),
             Path::from("a/a/b.file"),
             Path::from("aa/a.file"),
+            Path::from("does_not_exist"),
+            Path::from("I'm a < & weird path"),
             Path::from("ab/a.file"),
             Path::from("a/😀.file"),
         ];
 
+        storage.put(&paths[4], "foo".into()).await.unwrap();
+
         let out_paths = storage
             .delete_stream(futures::stream::iter(paths.clone()).boxed())
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-
-        for path in &paths {
-            let err = storage.head(path).await.unwrap_err();
-            assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
-        }
-
-        // Some object stores return results out of order (for example, S3)
-        assert_eq!(
-            out_paths.into_iter().collect::<HashSet<Path>>(),
-            paths.into_iter().collect::<HashSet<Path>>()
-        );
-
-        // Test bulk delete
-
-        // Test bulk delete errors
-        let paths = vec![Path::from("does_not_exist")];
-        let delete_results = storage
-            .delete_stream(futures::stream::iter(paths.clone()).boxed())
-            .collect::<Vec<Result<_>>>()
+            .collect::<Vec<_>>()
             .await;
-        assert_eq!(delete_results.len(), 1);
-        // Some object stores will report NotFound, but others (such as S3) will
-        // report success regardless.
-        match &delete_results[0] {
-            Err(Error::NotFound { path, .. }) => {
-                assert!(path.ends_with(&paths[0].to_string()));
+
+        assert_eq!(out_paths.len(), paths.len());
+
+        let expect_errors = [3];
+
+        for (i, input_path) in paths.iter().enumerate() {
+            let err = storage.head(input_path).await.unwrap_err();
+            assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
+            if expect_errors.contains(&i) {
+                // Some object stores will report NotFound, but others (such as S3) will
+                // report success regardless.
+                match &out_paths[i] {
+                    Err(Error::NotFound { path: out_path, .. }) => {
+                        assert!(out_path.ends_with(&input_path.to_string()));
+                    }
+                    Ok(out_path) => {
+                        assert_eq!(out_path, input_path);
+                    }
+                    _ => panic!("unexpected error"),
+                }
+            } else {
+                assert_eq!(out_paths[i].as_ref().unwrap(), input_path);
             }
-            Ok(path) => {
-                assert_eq!(path, &paths[0]);
-            }
-            _ => panic!("unexpected error"),
         }
 
         delete_fixtures(storage).await;

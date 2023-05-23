@@ -33,8 +33,8 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{StreamExt, TryStreamExt};
 use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
@@ -254,11 +254,12 @@ impl ObjectStore for AmazonS3 {
         &'a self,
         locations: BoxStream<'a, Path>,
     ) -> BoxStream<'a, Result<Path>> {
-        
         locations
             .chunks(1_000)
             .map(move |locations| async {
-                self.client.bulk_delete_request(locations).await
+                self.client
+                    .bulk_delete_request(locations)
+                    .await
                     .map(futures::stream::iter)
             })
             .buffered(20)

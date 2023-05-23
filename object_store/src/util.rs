@@ -16,17 +16,9 @@
 // under the License.
 
 //! Common logic for interacting with remote object stores
-use std::pin::Pin;
-
-use crate::path::Path;
-
 use super::Result;
 use bytes::Bytes;
-use futures::{
-    future::BoxFuture,
-    stream::{BoxStream, StreamExt},
-    Future, Stream, TryStreamExt,
-};
+use futures::{stream::StreamExt, Stream, TryStreamExt};
 
 #[cfg(any(feature = "azure", feature = "http"))]
 pub static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
