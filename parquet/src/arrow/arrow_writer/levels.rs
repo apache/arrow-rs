@@ -1536,8 +1536,9 @@ mod tests {
     #[test]
     fn test_fixed_size_list_of_struct() {
         // define schema
-        let int_field = Field::new("a", DataType::Int32, true);
-        let fields = Fields::from([Arc::new(int_field)]);
+        let field_a = Field::new("a", DataType::Int32, true);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let fields = Fields::from([Arc::new(field_a), Arc::new(field_b)]);
         let item_field = Field::new("item", DataType::Struct(fields.clone()), true);
         let list_field = Field::new(
             "list",
@@ -1545,60 +1546,112 @@ mod tests {
             true,
         );
 
-        let int_builder = Int32Builder::with_capacity(10);
-        let struct_builder = StructBuilder::new(fields, vec![Box::new(int_builder)]);
+        let builder_a = Int32Builder::with_capacity(10);
+        let builder_b = Int64Builder::with_capacity(10);
+        let struct_builder =
+            StructBuilder::new(fields, vec![Box::new(builder_a), Box::new(builder_b)]);
         let mut list_builder = FixedSizeListBuilder::new(struct_builder, 2);
 
-        // [[{a: 1}, null], null, [null, null], [{a: null}, {a: 2}]]
+        // [
+        //   [{a: 1, b: 2}, null],
+        //   null,
+        //   [null, null],
+        //   [{a: null, b: 3}, {a: 2, b: 4}]
+        // ]
+
+        // [{a: 1, b: 2}, null]
         let values = list_builder.values();
+        // {a: 1, b: 2}
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
             .append_value(1);
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(2);
         values.append(true);
+        // null
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
             .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(0);
         values.append(false);
         list_builder.append(true);
 
+        // null
         let values = list_builder.values();
+        // null
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
             .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(0);
         values.append(false);
+        // null
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
             .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(0);
         values.append(false);
         list_builder.append(false);
 
+        // [null, null]
         let values = list_builder.values();
+        // null
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
             .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(0);
         values.append(false);
+        // null
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
             .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(0);
         values.append(false);
         list_builder.append(true);
 
+        // [{a: null, b: 3}, {a: 2, b: 4}]
         let values = list_builder.values();
+        // {a: null, b: 3}
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
             .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(3);
         values.append(true);
+        // {a: 2, b: 4}
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
             .append_value(2);
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(4);
         values.append(true);
         list_builder.append(true);
 
@@ -1608,21 +1661,31 @@ mod tests {
         assert_eq!(array.len(), 4);
 
         let schema = Arc::new(Schema::new(vec![list_field]));
-
         let rb = RecordBatch::try_new(schema, vec![array]).unwrap();
 
         let levels = calculate_array_levels(rb.column(0), rb.schema().field(0)).unwrap();
-        let list_level = &levels[0];
+        let a_levels = &levels[0];
+        let b_levels = &levels[1];
 
-        let expected_level = LevelInfo {
+        // [[{a: 1}, null], null, [null, null], [{a: null}, {a: 2}]]
+        let expected_a = LevelInfo {
             def_levels: Some(vec![4, 2, 0, 2, 2, 3, 4]),
             rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1]),
             non_null_indices: vec![0, 7],
             max_def_level: 4,
             max_rep_level: 1,
         };
+        // [[{b: 2}, null], null, [null, null], [{b: 3}, {b: 4}]]
+        let expected_b = LevelInfo {
+            def_levels: Some(vec![3, 2, 0, 2, 2, 3, 3]),
+            rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1]),
+            non_null_indices: vec![0, 6, 7],
+            max_def_level: 3,
+            max_rep_level: 1,
+        };
 
-        assert_eq!(list_level, &expected_level);
+        assert_eq!(a_levels, &expected_a);
+        assert_eq!(b_levels, &expected_b);
     }
 
     #[test]
