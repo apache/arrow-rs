@@ -116,8 +116,15 @@ impl FlightSqlServiceClient<Channel> {
     }
 
     /// Execute a query on the server.
-    pub async fn execute(&mut self, query: String) -> Result<FlightInfo, ArrowError> {
-        let cmd = CommandStatementQuery { query };
+    pub async fn execute(
+        &mut self,
+        query: String,
+        transaction_id: Option<Bytes>,
+    ) -> Result<FlightInfo, ArrowError> {
+        let cmd = CommandStatementQuery {
+            query,
+            transaction_id,
+        };
         self.get_flight_info_for_command(cmd).await
     }
 
@@ -170,8 +177,15 @@ impl FlightSqlServiceClient<Channel> {
     }
 
     /// Execute a update query on the server, and return the number of records affected
-    pub async fn execute_update(&mut self, query: String) -> Result<i64, ArrowError> {
-        let cmd = CommandStatementUpdate { query };
+    pub async fn execute_update(
+        &mut self,
+        query: String,
+        transaction_id: Option<Bytes>,
+    ) -> Result<i64, ArrowError> {
+        let cmd = CommandStatementUpdate {
+            query,
+            transaction_id,
+        };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
         let req = self.set_request_headers(
             stream::iter(vec![FlightData {
@@ -325,8 +339,12 @@ impl FlightSqlServiceClient<Channel> {
     pub async fn prepare(
         &mut self,
         query: String,
+        transaction_id: Option<Bytes>,
     ) -> Result<PreparedStatement<Channel>, ArrowError> {
-        let cmd = ActionCreatePreparedStatementRequest { query };
+        let cmd = ActionCreatePreparedStatementRequest {
+            query,
+            transaction_id,
+        };
         let action = Action {
             r#type: CREATE_PREPARED_STATEMENT.to_string(),
             body: cmd.as_any().encode_to_vec().into(),

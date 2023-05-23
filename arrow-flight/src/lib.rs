@@ -424,6 +424,7 @@ impl FlightInfo {
         endpoint: Vec<FlightEndpoint>,
         total_records: i64,
         total_bytes: i64,
+        ordered: bool,
     ) -> Self {
         let IpcMessage(vals) = message;
         FlightInfo {
@@ -432,6 +433,7 @@ impl FlightInfo {
             endpoint,
             total_records,
             total_bytes,
+            ordered,
         }
     }
 
