@@ -24,6 +24,7 @@ use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 
+use pyo3::exceptions::PyValueError;
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
 use pyo3::prelude::*;
@@ -235,8 +236,8 @@ impl ToPyArrow for RecordBatch {
 impl FromPyArrow for ArrowArrayStreamReader {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // prepare a pointer to receive the stream struct
-        let stream = Box::new(FFI_ArrowArrayStream::empty());
-        let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
+        let mut stream = FFI_ArrowArrayStream::empty();
+        let stream_ptr = &mut stream as *mut FFI_ArrowArrayStream;
 
         // make the conversion through PyArrow's private API
         // this changes the pointer's memory and is thus unsafe.
@@ -244,8 +245,8 @@ impl FromPyArrow for ArrowArrayStreamReader {
         let args = PyTuple::new(value.py(), [stream_ptr as Py_uintptr_t]);
         value.call_method1("_export_to_c", args)?;
 
-        let stream_reader =
-            unsafe { ArrowArrayStreamReader::from_raw(stream_ptr).unwrap() };
+        let stream_reader = ArrowArrayStreamReader::try_new(stream)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
         unsafe {
             drop(Box::from_raw(stream_ptr));
@@ -257,11 +258,10 @@ impl FromPyArrow for ArrowArrayStreamReader {
 
 impl IntoPyArrow for ArrowArrayStreamReader {
     fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
-        let stream = Box::new(FFI_ArrowArrayStream::empty());
-        let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
+        let mut stream = FFI_ArrowArrayStream::empty();
+        unsafe { export_reader_into_raw(Box::new(self), &mut stream) };
 
-        unsafe { export_reader_into_raw(Box::new(self), stream_ptr) };
-
+        let stream_ptr = (&mut stream) as *mut FFI_ArrowArrayStream;
         let module = py.import("pyarrow")?;
         let class = module.getattr("RecordBatchReader")?;
         let args = PyTuple::new(py, [stream_ptr as Py_uintptr_t]);
@@ -284,7 +284,10 @@ impl<'source, T: FromPyArrow + IntoPyArrow> FromPyObject<'source> for PyArrowTyp
 
 impl<T: FromPyArrow + IntoPyArrow> IntoPy<PyObject> for PyArrowType<T> {
     fn into_py(self, py: Python) -> PyObject {
-        self.0.into_pyarrow(py).unwrap()
+        match self.0.into_pyarrow(py) {
+            Ok(obj) => obj,
+            Err(err) => err.to_object(py),
+        }
     }
 }
 

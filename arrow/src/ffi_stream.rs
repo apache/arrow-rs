@@ -258,7 +258,7 @@ fn get_error_code(err: &ArrowError) -> i32 {
 /// that requires [FFI_ArrowArrayStream].
 #[derive(Debug)]
 pub struct ArrowArrayStreamReader {
-    stream: Box<FFI_ArrowArrayStream>,
+    stream: FFI_ArrowArrayStream,
     schema: SchemaRef,
 }
 
@@ -292,10 +292,7 @@ impl ArrowArrayStreamReader {
 
         let schema = get_stream_schema(&mut stream)?;
 
-        Ok(Self {
-            stream: Box::new(stream),
-            schema,
-        })
+        Ok(Self { stream, schema })
     }
 
     /// Creates a new `ArrowArrayStreamReader` from a raw pointer of `FFI_ArrowArrayStream`.
@@ -319,7 +316,7 @@ impl ArrowArrayStreamReader {
 
         let error_str = unsafe {
             let c_str =
-                self.stream.get_last_error.unwrap()(self.stream.as_mut()) as *mut c_char;
+                self.stream.get_last_error.unwrap()(&mut self.stream) as *mut c_char;
             CString::from_raw(c_str).into_string()
         };
 
@@ -338,7 +335,7 @@ impl Iterator for ArrowArrayStreamReader {
         let mut array = FFI_ArrowArray::empty();
 
         let ret_code =
-            unsafe { self.stream.get_next.unwrap()(self.stream.as_mut(), &mut array) };
+            unsafe { self.stream.get_next.unwrap()(&mut self.stream, &mut array) };
 
         if ret_code == 0 {
             // The end of stream has been reached
@@ -487,9 +484,8 @@ mod tests {
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
-        let mut stream = FFI_ArrowArrayStream::new(reader);
-        let stream_reader =
-            unsafe { ArrowArrayStreamReader::from_raw(&mut stream).unwrap() };
+        let stream = FFI_ArrowArrayStream::new(reader);
+        let stream_reader = ArrowArrayStreamReader::try_new(stream).unwrap();
 
         let imported_schema = stream_reader.schema();
         assert_eq!(imported_schema, schema);
