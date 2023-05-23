@@ -23,7 +23,9 @@ use std::io::Write;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Decimal128Type, Int32Type, Int64Type, UInt32Type, UInt64Type};
+use arrow_array::types::{
+    Decimal128Type, Decimal256Type, Int32Type, Int64Type, UInt32Type, UInt64Type,
+};
 use arrow_array::{
     types, Array, ArrayRef, FixedSizeListArray, RecordBatch, RecordBatchWriter,
 };
@@ -458,6 +460,13 @@ fn write_leaf(
                         .unary::<_, types::Int32Type>(|v| v as i32);
                     write_primitive(typed, array.values(), levels)?
                 }
+                ArrowDataType::Decimal256(_, _) => {
+                    // use the int32 to represent the decimal with low precision
+                    let array = column
+                        .as_primitive::<Decimal256Type>()
+                        .unary::<_, types::Int32Type>(|v| v.as_i128() as i32);
+                    write_primitive(typed, array.values(), levels)?
+                }
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
                     let array = array.as_primitive::<Int32Type>();
@@ -491,6 +500,13 @@ fn write_leaf(
                     let array = column
                         .as_primitive::<Decimal128Type>()
                         .unary::<_, types::Int64Type>(|v| v as i64);
+                    write_primitive(typed, array.values(), levels)?
+                }
+                ArrowDataType::Decimal256(_, _) => {
+                    // use the int64 to represent the decimal with low precision
+                    let array = column
+                        .as_primitive::<Decimal256Type>()
+                        .unary::<_, types::Int64Type>(|v| v.as_i128() as i64);
                     write_primitive(typed, array.values(), levels)?
                 }
                 _ => {
@@ -557,7 +573,14 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Decimal128Array>()
                         .unwrap();
-                    get_decimal_array_slice(array, indices)
+                    get_decimal_128_array_slice(array, indices)
+                }
+                ArrowDataType::Decimal256(_, _) => {
+                    let array = column
+                        .as_any()
+                        .downcast_ref::<arrow_array::Decimal256Array>()
+                        .unwrap();
+                    get_decimal_256_array_slice(array, indices)
                 }
                 _ => {
                     return Err(ParquetError::NYI(
@@ -636,7 +659,7 @@ fn get_interval_dt_array_slice(
     values
 }
 
-fn get_decimal_array_slice(
+fn get_decimal_128_array_slice(
     array: &arrow_array::Decimal128Array,
     indices: &[usize],
 ) -> Vec<FixedLenByteArray> {
@@ -645,6 +668,20 @@ fn get_decimal_array_slice(
     for i in indices {
         let as_be_bytes = array.value(*i).to_be_bytes();
         let resized_value = as_be_bytes[(16 - size)..].to_vec();
+        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+    }
+    values
+}
+
+fn get_decimal_256_array_slice(
+    array: &arrow_array::Decimal256Array,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    let size = decimal_length_from_precision(array.precision());
+    for i in indices {
+        let as_be_bytes = array.value(*i).to_be_bytes();
+        let resized_value = as_be_bytes[(32 - size)..].to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
     }
     values
