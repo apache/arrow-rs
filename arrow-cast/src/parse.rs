@@ -891,7 +891,7 @@ fn parse_interval_components(
     }
 
     // collect parsed results
-    let amounts = amounts.into_iter().map(Result::unwrap);
+    let mut amounts = amounts.into_iter().map(Result::unwrap);
     let units = units.into_iter().map(Result::unwrap).collect::<Vec<_>>();
 
     // out-of-bounds amounts?
@@ -904,8 +904,8 @@ fn parse_interval_components(
     }
 
     // if only an amount is specified, use the default unit
-    if amounts.len() == 1 && units.len() == 0 {
-        return Ok(vec![(amounts.clone().next().unwrap(), config.default_unit)]);
+    if amounts.len() == 1 && units.is_empty() {
+        return Ok(vec![(amounts.next().unwrap(), config.default_unit)]);
     };
 
     // duplicate units?
@@ -920,7 +920,7 @@ fn parse_interval_components(
         observed_interval_types |= *unit as u16;
     }
 
-    let result = amounts.zip(units.iter().map(|x| *x));
+    let result = amounts.zip(units.iter().copied());
 
     Ok(result.collect::<Vec<_>>())
 }
@@ -931,7 +931,7 @@ fn parse_interval(
     value: &str,
     config: &IntervalParseConfig,
 ) -> Result<MonthDayNano, ArrowError> {
-    let intervals = parse_interval_components(value, &config)?
+    let intervals = parse_interval_components(value, config)?
         .into_iter()
         .map(month_day_nano_from_interval_component)
         .collect::<Result<Vec<_>, _>>()?;
