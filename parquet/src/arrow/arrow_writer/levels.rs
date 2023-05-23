@@ -408,6 +408,7 @@ impl LevelInfoBuilder {
             Self::List(child, ctx) => (child, ctx),
             _ => unreachable!(),
         };
+
         let write_non_null =
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
                 let values_start = start_idx * fixed_size;
@@ -440,12 +441,11 @@ impl LevelInfoBuilder {
                 })
             };
 
-        let write_rows: Box<dyn Fn(&mut LevelInfoBuilder, usize, usize)> =
-            if fixed_size > 0 {
-                Box::new(write_non_null)
-            } else {
-                Box::new(write_empty)
-            };
+        let write_rows = if fixed_size > 0 {
+            &write_non_null as &dyn Fn(&mut LevelInfoBuilder, usize, usize)
+        } else {
+            &write_empty as _
+        };
 
         match nulls {
             Some(nulls) => {
