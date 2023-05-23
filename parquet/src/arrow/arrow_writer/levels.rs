@@ -430,11 +430,14 @@ impl LevelInfoBuilder {
                 })
             };
 
-        let write_rows = if fixed_size > 0 {
-            &write_non_null as &dyn Fn(&mut LevelInfoBuilder, usize, usize)
-        } else {
-            &write_empty as _
-        };
+        let write_rows =
+            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+                if fixed_size > 0 {
+                    write_non_null(child, start_idx, end_idx)
+                } else {
+                    write_empty(child, start_idx, end_idx)
+                }
+            };
 
         match nulls {
             Some(nulls) => {
