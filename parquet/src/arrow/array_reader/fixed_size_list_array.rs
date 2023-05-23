@@ -198,11 +198,21 @@ impl ArrayReader for FixedSizeListArrayReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array_reader::test_util::InMemoryArrayReader;
+    use crate::arrow::{
+        array_reader::test_util::InMemoryArrayReader,
+        arrow_reader::{
+            ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
+        },
+        ArrowWriter,
+    };
     use arrow::datatypes::{Field, Int32Type};
-    use arrow_array::{FixedSizeListArray, PrimitiveArray};
+    use arrow_array::{
+        cast::AsArray, FixedSizeListArray, ListArray, PrimitiveArray, RecordBatch,
+    };
     use arrow_buffer::Buffer;
     use arrow_data::ArrayDataBuilder;
+    use arrow_schema::Schema;
+    use bytes::Bytes;
 
     #[test]
     fn test_nullable_list() {
@@ -430,5 +440,151 @@ mod tests {
             .downcast_ref::<FixedSizeListArray>()
             .unwrap();
         assert_eq!(&expected, actual)
+    }
+
+    #[test]
+    fn test_read_list_column() {
+        // This test writes a Parquet file containing a fixed-length array column and a primitive column,
+        // then reads the columns back from the file.
+
+        // [
+        //   [1, 2, 3, null],
+        //   [5, 6, 7, 8],
+        //   null,
+        //   [9, null, 11, 12],
+        // ]
+        let list = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2), Some(3), None]),
+                Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+                None,
+                Some(vec![Some(9), None, Some(11), Some(12)]),
+                Some(vec![None, None, None, None]),
+            ],
+            4,
+        );
+
+        // [null, 2, 3, null, 5]
+        let primitive = PrimitiveArray::<Int32Type>::from_iter(vec![
+            None,
+            Some(2),
+            Some(3),
+            None,
+            Some(5),
+        ]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "list",
+                ArrowType::FixedSizeList(
+                    Arc::new(Field::new("item", ArrowType::Int32, true)),
+                    4,
+                ),
+                true,
+            ),
+            Field::new("primitive", ArrowType::Int32, true),
+        ]));
+
+        // Create record batch with a fixed-length array column and a primitive column
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(list.clone()), Arc::new(primitive.clone())],
+        )
+        .expect("unable to create record batch");
+
+        // Write record batch to Parquet
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), None)
+            .expect("unable to create parquet writer");
+        writer.write(&batch).expect("unable to write record batch");
+        writer.close().expect("unable to close parquet writer");
+
+        // Read record batch from Parquet
+        let reader = Bytes::from(buffer);
+        let mut batch_reader = ParquetRecordBatchReader::try_new(reader, 1024)
+            .expect("unable to create parquet reader");
+        let actual = batch_reader
+            .next()
+            .expect("missing record batch")
+            .expect("unable to read record batch");
+
+        // Verify values of both read columns match
+        assert_eq!(schema, actual.schema());
+        let actual_list = actual
+            .column(0)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("unable to cast array to FixedSizeListArray");
+        let actual_primitive = actual.column(1).as_primitive::<Int32Type>();
+        assert_eq!(actual_list, &list);
+        assert_eq!(actual_primitive, &primitive);
+    }
+
+    #[test]
+    fn test_read_as_dyn_list() {
+        // This test verifies that fixed-size list arrays can be read from Parquet
+        // as variable-length list arrays.
+
+        // [
+        //   [1, 2, 3, null],
+        //   [5, 6, 7, 8],
+        //   null,
+        //   [9, null, 11, 12],
+        // ]
+        let list = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2), Some(3), None]),
+                Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+                None,
+                Some(vec![Some(9), None, Some(11), Some(12)]),
+                Some(vec![None, None, None, None]),
+            ],
+            4,
+        );
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "list",
+            ArrowType::FixedSizeList(
+                Arc::new(Field::new("item", ArrowType::Int32, true)),
+                4,
+            ),
+            true,
+        )]));
+
+        // Create record batch with a single fixed-length array column
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(list.clone())]).unwrap();
+
+        // Write record batch to Parquet
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), None)
+            .expect("unable to create parquet writer");
+        writer.write(&batch).expect("unable to write record batch");
+        writer.close().expect("unable to close parquet writer");
+
+        // Read record batch from Parquet - ignoring arrow metadata
+        let reader = Bytes::from(buffer);
+        let mut batch_reader = ArrowReaderBuilder::try_new_with_options(
+            reader,
+            ArrowReaderOptions::new().with_skip_arrow_metadata(true),
+        )
+        .expect("unable to create reader builder")
+        .build()
+        .expect("unable to create parquet reader");
+        let actual = batch_reader
+            .next()
+            .expect("missing record batch")
+            .expect("unable to read record batch");
+
+        // Verify the read column is a variable length list with values that match the input
+        let col = actual.column(0).as_list::<i32>();
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3), None]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            None,
+            Some(vec![Some(9), None, Some(11), Some(12)]),
+            Some(vec![None, None, None, None]),
+        ]);
+        assert_eq!(col, &expected);
     }
 }
