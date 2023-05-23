@@ -418,13 +418,12 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// store.put(&Path::from("bar"), Bytes::from("bar")).await?;
     ///
     /// // List object
-    /// let locations: Vec<Path> = store.list(None).await?
+    /// let locations = store.list(None).await?
     ///   .map(|meta: Result<ObjectMeta, _>| meta.map(|m| m.location))
-    ///   .try_collect::<Vec<Path>>().await?;
+    ///   .boxed();
     ///
     /// // Delete them
-    /// store.delete_stream(futures::stream::iter(locations).boxed())
-    ///   .try_collect::<Vec<Path>>().await?;
+    /// store.delete_stream(locations).try_collect::<Vec<Path>>().await?;
     /// # Ok(())
     /// # }
     /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
@@ -432,10 +431,11 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// ```
     fn delete_stream<'a>(
         &'a self,
-        locations: BoxStream<'a, Path>,
+        locations: BoxStream<'a, Result<Path>>,
     ) -> BoxStream<'a, Result<Path>> {
         locations
             .map(|location| async {
+                let location = location?;
                 self.delete(&location).await?;
                 Ok(location)
             })
@@ -574,7 +574,7 @@ impl ObjectStore for Box<dyn ObjectStore> {
 
     fn delete_stream<'a>(
         &'a self,
-        locations: BoxStream<'a, Path>,
+        locations: BoxStream<'a, Result<Path>>,
     ) -> BoxStream<'a, Result<Path>> {
         self.as_ref().delete_stream(locations)
     }
@@ -1197,7 +1197,7 @@ mod tests {
         storage.put(&paths[4], "foo".into()).await.unwrap();
 
         let out_paths = storage
-            .delete_stream(futures::stream::iter(paths.clone()).boxed())
+            .delete_stream(futures::stream::iter(paths.clone()).map(Ok).boxed())
             .collect::<Vec<_>>()
             .await;
 
@@ -1578,9 +1578,15 @@ mod tests {
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {
-        let paths = flatten_list_stream(storage, None).await.unwrap();
+        // let paths = flatten_list_stream(storage, None).await.unwrap();
+        let paths = storage
+            .list(None)
+            .await
+            .unwrap()
+            .map_ok(|meta| meta.location)
+            .boxed();
         storage
-            .delete_stream(futures::stream::iter(paths).boxed())
+            .delete_stream(paths)
             .try_collect::<Vec<_>>()
             .await
             .unwrap();

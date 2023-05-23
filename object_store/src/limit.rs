@@ -150,9 +150,8 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
 
     fn delete_stream<'a>(
         &'a self,
-        locations: BoxStream<'a, Path>,
+        locations: BoxStream<'a, Result<Path>>,
     ) -> BoxStream<'a, Result<Path>> {
-        let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.delete_stream(locations)
     }
 

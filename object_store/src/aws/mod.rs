@@ -252,11 +252,13 @@ impl ObjectStore for AmazonS3 {
 
     fn delete_stream<'a>(
         &'a self,
-        locations: BoxStream<'a, Path>,
+        locations: BoxStream<'a, Result<Path>>,
     ) -> BoxStream<'a, Result<Path>> {
         locations
             .chunks(1_000)
             .map(move |locations| async {
+                let locations: Vec<Path> =
+                    locations.into_iter().collect::<Result<_>>()?;
                 self.client
                     .bulk_delete_request(locations)
                     .await
