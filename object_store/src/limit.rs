@@ -152,7 +152,7 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         &'a self,
         locations: BoxStream<'a, Path>,
     ) -> BoxStream<'a, Result<Path>> {
-        // TODO: how do I implement limit stream with this API?
+        let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.delete_stream(locations)
     }
 
