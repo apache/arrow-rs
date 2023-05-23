@@ -408,7 +408,6 @@ impl LevelInfoBuilder {
             Self::List(child, ctx) => (child, ctx),
             _ => unreachable!(),
         };
-
         let write_non_null =
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
                 let values_start = start_idx * fixed_size;
@@ -429,6 +428,25 @@ impl LevelInfoBuilder {
                 })
             };
 
+        // If list size is 0, ignore values and just write rep/def levels.
+        let write_empty =
+            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+                let len = end_idx - start_idx;
+                child.visit_leaves(|leaf| {
+                    let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                    rep_levels.extend(std::iter::repeat(ctx.rep_level - 1).take(len));
+                    let def_levels = leaf.def_levels.as_mut().unwrap();
+                    def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
+                })
+            };
+
+        let write_rows: Box<dyn Fn(&mut LevelInfoBuilder, usize, usize)> =
+            if fixed_size > 0 {
+                Box::new(write_non_null)
+            } else {
+                Box::new(write_empty)
+            };
+
         match nulls {
             Some(nulls) => {
                 let mut start_idx = None;
@@ -439,7 +457,7 @@ impl LevelInfoBuilder {
                     } else {
                         // Write out any pending valid rows
                         if let Some(start) = start_idx.take() {
-                            write_non_null(child, start, idx);
+                            write_rows(child, start, idx);
                         }
                         // Add null row
                         child.visit_leaves(|leaf| {
@@ -452,11 +470,11 @@ impl LevelInfoBuilder {
                 }
                 // Write out any remaining valid rows
                 if let Some(start) = start_idx.take() {
-                    write_non_null(child, start, range.end);
+                    write_rows(child, start, range.end);
                 }
             }
             // If all rows are valid then write the whole array
-            None => write_non_null(child, range.start, range.end),
+            None => write_rows(child, range.start, range.end),
         }
     }
 
@@ -1612,6 +1630,34 @@ mod tests {
             max_rep_level: 1,
         };
 
+        assert_eq!(list_level, &expected_level);
+    }
+
+    #[test]
+    fn test_fixed_size_list_empty() {
+        let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 0);
+        builder.append(true);
+        builder.append(false);
+        builder.append(true);
+        let a = builder.finish();
+
+        let item_field = Field::new("item", a.data_type().clone(), true);
+        let mut builder =
+            LevelInfoBuilder::try_new(&item_field, Default::default()).unwrap();
+        builder.write(&a, 0..3);
+        let levels = builder.finish();
+
+        assert_eq!(levels.len(), 1);
+
+        let list_level = levels.get(0).unwrap();
+
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![1, 0, 1]),
+            rep_levels: Some(vec![0, 0, 0]),
+            non_null_indices: vec![],
+            max_def_level: 3,
+            max_rep_level: 1,
+        };
         assert_eq!(list_level, &expected_level);
     }
 }
