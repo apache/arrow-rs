@@ -128,7 +128,8 @@ impl ArrayReader for FixedSizeListArrayReader {
                         child_data_builder.extend_nulls(self.fixed_size);
 
                         if let Some(validity) = validity.as_mut() {
-                            validity.append(false);
+                            // Valid if empty list
+                            validity.append(*d + 1 == self.def_level);
                         }
                     }
                     child_idx += 1;
@@ -375,5 +376,42 @@ mod tests {
 
         let actual = l1.next_batch(1024).unwrap();
         assert_eq!(actual.as_ref(), &expected_2);
+    }
+
+    #[test]
+    fn test_empty_list() {
+        // [null, [], null, []]
+        let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![None, Some([]), None, Some([])],
+            0,
+        );
+
+        let array = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
+            None, None, None, None,
+        ]));
+        let item_array_reader = InMemoryArrayReader::new(
+            ArrowType::Int32,
+            array,
+            Some(vec![0, 1, 0, 1]),
+            Some(vec![0, 0, 0, 0]),
+        );
+
+        let mut list_array_reader = FixedSizeListArrayReader::new(
+            Box::new(item_array_reader),
+            0,
+            ArrowType::FixedSizeList(
+                Arc::new(Field::new("item", ArrowType::Int32, true)),
+                0,
+            ),
+            2,
+            1,
+            true,
+        );
+        let actual = list_array_reader.next_batch(1024).unwrap();
+        let actual = actual
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(&expected, actual)
     }
 }
