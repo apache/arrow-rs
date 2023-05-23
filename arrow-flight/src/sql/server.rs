@@ -19,29 +19,28 @@
 
 use std::pin::Pin;
 
-use crate::sql::{Any, Command};
 use futures::Stream;
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
 use super::{
-    super::{
-        flight_service_server::FlightService, Action, ActionType, Criteria, Empty,
-        FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
-        PutResult, SchemaResult, Ticket,
-    },
     ActionBeginSavepointRequest, ActionBeginSavepointResult,
     ActionBeginTransactionRequest, ActionBeginTransactionResult,
     ActionCancelQueryRequest, ActionCancelQueryResult,
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
     ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
-    ActionEndSavepointRequest, ActionEndTransactionRequest, CommandGetCatalogs,
-    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
-    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
-    CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
+    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, Command,
+    CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas,
+    CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
+    CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
     CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
     CommandStatementSubstraitPlan, CommandStatementUpdate, DoPutUpdateResult,
     ProstMessageExt, SqlInfo, TicketStatementQuery,
+};
+use crate::{
+    flight_service_server::FlightService, Action, ActionType, Criteria, Empty,
+    FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
+    PutResult, SchemaResult, Ticket,
 };
 
 pub(crate) static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";

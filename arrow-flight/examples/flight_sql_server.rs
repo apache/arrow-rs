@@ -15,22 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::StringBuilder;
-use arrow_array::{ArrayRef, RecordBatch};
-use arrow_flight::sql::{
-    ActionBeginSavepointRequest, ActionBeginSavepointResult,
-    ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
-    ActionCreatePreparedStatementResult, ActionEndSavepointRequest,
-    ActionEndTransactionRequest, Any, CommandStatementSubstraitPlan, ProstMessageExt,
-    SqlInfo,
-};
-use arrow_flight::{
-    Action, FlightData, FlightEndpoint, HandshakeRequest, HandshakeResponse, IpcMessage,
-    Location, SchemaAsIpc, Ticket,
-};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use futures::{stream, Stream};
+use once_cell::sync::Lazy;
 use prost::Message;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -38,22 +26,30 @@ use tonic::transport::Server;
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 
+use arrow_array::builder::StringBuilder;
+use arrow_array::{ArrayRef, RecordBatch};
+use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::flight_descriptor::DescriptorType;
+use arrow_flight::sql::sql_info::SqlInfoList;
+use arrow_flight::sql::{
+    server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
+    ActionBeginTransactionRequest, ActionBeginTransactionResult,
+    ActionCancelQueryRequest, ActionCancelQueryResult,
+    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
+    ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
+    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
+    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
+    CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
+    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
+    CommandStatementSubstraitPlan, CommandStatementUpdate, ProstMessageExt, SqlInfo,
+    TicketStatementQuery,
+};
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
-    flight_service_server::FlightService,
-    flight_service_server::FlightServiceServer,
-    sql::{
-        server::FlightSqlService, ActionBeginTransactionRequest,
-        ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-        ActionCreatePreparedSubstraitPlanRequest, CommandGetCatalogs,
-        CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
-        CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
-        CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-        CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-        CommandStatementQuery, CommandStatementUpdate, TicketStatementQuery,
-    },
-    FlightDescriptor, FlightInfo,
+    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
+    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
+    HandshakeResponse, IpcMessage, Location, SchemaAsIpc, Ticket,
 };
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
@@ -67,6 +63,15 @@ macro_rules! status {
 const FAKE_TOKEN: &str = "uuid_token";
 const FAKE_HANDLE: &str = "uuid_handle";
 const FAKE_UPDATE_RESULT: i64 = 1;
+
+static INSTANCE_SQL_INFO: Lazy<SqlInfoList> = Lazy::new(|| {
+    SqlInfoList::new()
+        // Server information
+        .with_sql_info(SqlInfo::FlightSqlServerName, "Example Flight SQL Server")
+        .with_sql_info(SqlInfo::FlightSqlServerVersion, "1")
+        // 1.3 comes from https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/Schema.fbs#L24
+        .with_sql_info(SqlInfo::FlightSqlServerArrowVersion, "1.3")
+});
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {}
@@ -283,12 +288,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn get_flight_info_sql_info(
         &self,
-        _query: CommandGetSqlInfo,
-        _request: Request<FlightDescriptor>,
+        query: CommandGetSqlInfo,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_sql_info not implemented",
-        ))
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.encode_to_vec().into(),
+        };
+        let flight_info = SqlInfoList::flight_info(Some(ticket), Some(flight_descriptor));
+        Ok(tonic::Response::new(flight_info))
     }
 
     async fn get_flight_info_primary_keys(
@@ -394,10 +402,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_get_sql_info(
         &self,
-        _query: CommandGetSqlInfo,
+        query: CommandGetSqlInfo,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_sql_info not implemented"))
+        let batch = INSTANCE_SQL_INFO.filter(&query.info).encode();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(Arc::new(SqlInfoList::schema().clone()))
+            .build(futures::stream::once(batch))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn do_get_primary_keys(

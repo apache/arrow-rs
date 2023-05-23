@@ -94,6 +94,7 @@ pub use gen::UpdateDeleteRules;
 
 pub mod client;
 pub mod server;
+pub mod sql_info;
 
 /// ProstMessageExt are useful utility methods for prost::Message types
 pub trait ProstMessageExt: prost::Message + Default {
