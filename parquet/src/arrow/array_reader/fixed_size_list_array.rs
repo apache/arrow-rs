@@ -108,6 +108,7 @@ impl ArrayReader for FixedSizeListArrayReader {
         let mut list_len = 0;
         // Start of the current run of valid values
         let mut start_idx = None;
+        let mut row_len = 0;
 
         def_levels.iter().zip(rep_levels).try_for_each(|(d, r)| {
             match r.cmp(&self.rep_level) {
@@ -122,12 +123,28 @@ impl ArrayReader for FixedSizeListArrayReader {
                 Ordering::Equal => {
                     // Item inside of the current list
                     child_idx += 1;
+                    row_len += 1;
                 }
                 Ordering::Less => {
                     // Start of new list row
                     list_len += 1;
 
+                    // Length of the previous row should be equal to:
+                    // - the list's fixed size (valid entries)
+                    // - zero (null entries, start of array)
+                    // Any other length indicates invalid data
+                    if row_len != 0 && row_len != self.fixed_size {
+                        return Err(general_err!(
+                            "Encountered misaligned row with length {} (expected length {})",
+                            row_len,
+                            self.fixed_size
+                        ))
+                    }
+                    row_len = 0;
+
                     if *d >= self.def_level {
+                        row_len += 1;
+
                         // Valid list entry
                         if let Some(validity) = validity.as_mut() {
                             validity.append(true);
@@ -167,6 +184,7 @@ impl ArrayReader for FixedSizeListArrayReader {
             }
             None => child_data_builder.freeze(),
         };
+        assert_eq!(list_len * self.fixed_size, child_data.len());
 
         let mut list_builder = ArrayData::builder(self.get_data_type().clone())
             .len(list_len)
