@@ -601,9 +601,8 @@ mod tests {
         );
 
         let nulls = NullBuffer::new_null(2);
-        let err =
-            FixedSizeListArray::try_new(field.clone(), 2, values.clone(), Some(nulls))
-                .unwrap_err();
+        let err = FixedSizeListArray::try_new(field, 2, values.clone(), Some(nulls))
+            .unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for FixedSizeListArray, expected 3 got 2");
 
         let field = Arc::new(Field::new("item", DataType::Int32, false));
@@ -613,11 +612,10 @@ mod tests {
 
         // Valid as nulls in child masked by parent
         let nulls = NullBuffer::new(BooleanBuffer::new(vec![0b0000101].into(), 0, 3));
-        FixedSizeListArray::new(field.clone(), 2, values.clone(), Some(nulls));
+        FixedSizeListArray::new(field, 2, values.clone(), Some(nulls));
 
         let field = Arc::new(Field::new("item", DataType::Int64, true));
-        let err =
-            FixedSizeListArray::try_new(field, 2, values.clone(), None).unwrap_err();
+        let err = FixedSizeListArray::try_new(field, 2, values, None).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: FixedSizeListArray expected data type Int64 got Int32 for \"item\"");
     }
 }
