@@ -178,22 +178,6 @@ fn merge_ranges(
     ret
 }
 
-/// Common implementation for delete_all
-#[allow(dead_code)]
-pub(crate) fn delete_all_helper<'a>(
-    locations: BoxStream<'a, Path>,
-    chunk_size: usize,
-    request_handler: impl Fn(
-            Vec<Path>,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Vec<Result<Path>>>> + Send + 'a>>
-        + Send
-        + Sync
-        + 'a,
-) -> BoxStream<'a, BoxFuture<'a, Result<Vec<Result<Path>>>>> {
-    locations.chunks(chunk_size).map(request_handler).boxed()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

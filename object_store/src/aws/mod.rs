@@ -33,7 +33,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::future::BoxFuture;
+use futures::{StreamExt, TryStreamExt};
 use futures::stream::BoxStream;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -55,7 +55,6 @@ use crate::client::{
 };
 use crate::config::ConfigValue;
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
-use crate::util::delete_all_helper;
 use crate::{
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Path, Result, RetryConfig,
@@ -254,10 +253,17 @@ impl ObjectStore for AmazonS3 {
     fn delete_stream<'a>(
         &'a self,
         locations: BoxStream<'a, Path>,
-    ) -> BoxStream<'a, BoxFuture<'a, Result<Vec<Result<Path>>>>> {
-        delete_all_helper(locations, 1_000, move |locations| {
-            Box::pin(self.client.bulk_delete_request(locations))
-        })
+    ) -> BoxStream<'a, Result<Path>> {
+        
+        locations
+            .chunks(1_000)
+            .map(move |locations| async {
+                self.client.bulk_delete_request(locations).await
+                    .map(futures::stream::iter)
+            })
+            .buffered(20)
+            .try_flatten()
+            .boxed()
     }
 
     async fn list(

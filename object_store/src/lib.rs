@@ -264,7 +264,7 @@ use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT}
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{future::BoxFuture, stream::BoxStream, FutureExt, StreamExt, TryStreamExt};
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use snafu::Snafu;
 use std::fmt::{Debug, Formatter};
 #[cfg(not(target_arch = "wasm32"))]
@@ -389,18 +389,17 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Delete all the objects at the specified locations
     ///
     /// When supported, this method will use bulk operations that delete more
-    /// than one object per a request. Each future in the stream represents one
-    /// API call and will resolve to the number of deleted objects. If the
-    /// overall request fails, the item in the stream will be an error. If a
-    /// subrequest fails, a corresponding error will be in the result vector.
-    /// If an object is successfully deleted, it's path will be in the result.
-    ///
-    /// **Note**: the order of the results is not guaranteed to be the same as
-    /// the order of the input paths, since some object stores return batch
-    /// delete results out of order.
-    ///
-    /// This method may be used with [`tokio::stream::StreamExt::buffer_unordered`]
-    /// to make multiple requests concurrently.
+    /// than one object per a request. The default implementation will call
+    /// the single object delete method for each location, but with up to 10
+    /// concurrent requests.
+    /// 
+    /// The returned stream yields the results of the delete operations in the
+    /// same order as the input locations.
+    /// 
+    /// If the object did not exist, the result may be an error or a success,
+    /// depending on the behavior of the underlying store. For example, local
+    /// filesystems, GCP, and Azure return an error, while S3 and in-memory will
+    /// return Ok. If it is an error, it will be [`Error::NotFound`].
     ///
     /// ```
     /// # use object_store::local::LocalFileSystem;
@@ -423,9 +422,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// // Delete them
     /// store.delete_stream(futures::stream::iter(locations).boxed())
-    ///   .buffer_unordered(10) // Up to ten concurrent calls
-    ///   .map_ok(futures::stream::iter)
-    ///   .try_flatten()
     ///   .try_collect::<Vec<Path>>().await?;
     /// # Ok(())
     /// # }
@@ -435,15 +431,13 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     fn delete_stream<'a>(
         &'a self,
         locations: BoxStream<'a, Path>,
-    ) -> BoxStream<'a, BoxFuture<'a, Result<Vec<Result<Path>>>>> {
+    ) -> BoxStream<'a, Result<Path>> {
         locations
-            .map(move |location| async move {
-                match self.delete(&location).await {
-                    Ok(()) => Ok(vec![Ok(location)]),
-                    Err(e) => Ok(vec![Err(e)]),
-                }
+            .map(|location| async {
+                self.delete(&location).await?;
+                Ok(location)
             })
-            .map(|f| f.boxed())
+            .buffered(10)
             .boxed()
     }
 
@@ -579,7 +573,7 @@ impl ObjectStore for Box<dyn ObjectStore> {
     fn delete_stream<'a>(
         &'a self,
         locations: BoxStream<'a, Path>,
-    ) -> BoxStream<'a, BoxFuture<'a, Result<Vec<Result<Path>>>>> {
+    ) -> BoxStream<'a, Result<Path>> {
         self.as_ref().delete_stream(locations)
     }
 
@@ -1200,9 +1194,6 @@ mod tests {
 
         let out_paths = storage
             .delete_stream(futures::stream::iter(paths.clone()).boxed())
-            .buffered(5)
-            .map_ok(futures::stream::iter)
-            .try_flatten()
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
@@ -1224,9 +1215,6 @@ mod tests {
         let paths = vec![Path::from("does_not_exist")];
         let delete_results = storage
             .delete_stream(futures::stream::iter(paths.clone()).boxed())
-            .buffered(5)
-            .map_ok(futures::stream::iter)
-            .try_flatten()
             .collect::<Vec<Result<_>>>()
             .await;
         assert_eq!(delete_results.len(), 1);
@@ -1597,9 +1585,6 @@ mod tests {
         let paths = flatten_list_stream(storage, None).await.unwrap();
         storage
             .delete_stream(futures::stream::iter(paths).boxed())
-            .buffered(5)
-            .map_ok(futures::stream::iter)
-            .try_flatten()
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
