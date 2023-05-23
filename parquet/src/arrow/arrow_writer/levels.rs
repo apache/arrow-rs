@@ -1525,7 +1525,7 @@ mod tests {
 
         let expected_level = LevelInfo {
             def_levels: Some(vec![0, 0, 3, 3]),
-            rep_levels: Some(vec![0, 1, 0, 1]),
+            rep_levels: Some(vec![0, 0, 0, 1]),
             non_null_indices: vec![6, 7],
             max_def_level: 3,
             max_rep_level: 1,
