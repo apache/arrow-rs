@@ -133,7 +133,7 @@ impl ArrayReader for FixedSizeListArrayReader {
                     // - the list's fixed size (valid entries)
                     // - zero (null entries, start of array)
                     // Any other length indicates invalid data
-                    if row_len != 0 && row_len != self.fixed_size {
+                    if start_idx.is_some() && row_len != self.fixed_size {
                         return Err(general_err!(
                             "Encountered misaligned row with length {} (expected length {})",
                             row_len,
