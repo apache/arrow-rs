@@ -35,6 +35,7 @@ fn get_repetition(t: &Type) -> Repetition {
 }
 
 /// Representation of a parquet file, in terms of arrow schema elements
+#[derive(Debug)]
 pub struct ParquetField {
     /// The level which represents an insertion into the current list
     /// i.e. guaranteed to be > 0 for a list type
@@ -82,6 +83,7 @@ impl ParquetField {
     }
 }
 
+#[derive(Debug)]
 pub enum ParquetFieldType {
     Primitive {
         /// The index of the column in parquet

@@ -43,6 +43,7 @@ macro_rules! triplet_enum_func {
 /// High level API wrapper on column reader.
 /// Provides per-element access for each primitive column.
 #[allow(clippy::enum_variant_names)]
+#[derive(Debug)]
 pub enum TripletIter {
     BoolTripletIter(TypedTripletIter<BoolType>),
     Int32TripletIter(TypedTripletIter<Int32Type>),
@@ -175,6 +176,7 @@ impl TripletIter {
 
 /// Internal typed triplet iterator as a wrapper for column reader
 /// (primitive leaf column), provides per-element access.
+#[derive(Debug)]
 pub struct TypedTripletIter<T: DataType> {
     reader: ColumnReaderImpl<T>,
     column_descr: ColumnDescPtr,

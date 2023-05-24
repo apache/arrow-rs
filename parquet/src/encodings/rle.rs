@@ -48,6 +48,7 @@ const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;
 
 /// A RLE/Bit-Packing hybrid encoder.
 // TODO: tracking memory usage
+#[derive(Debug)]
 pub struct RleEncoder {
     // Number of bits needed to encode the value. Must be in the range of [0, 64].
     bit_width: u8,
@@ -293,6 +294,7 @@ impl RleEncoder {
 const RLE_DECODER_INDEX_BUFFER_SIZE: usize = 1024;
 
 /// A RLE/Bit-Packing hybrid decoder.
+#[derive(Debug)]
 pub struct RleDecoder {
     // Number of bits used to encode the value. Must be between [0, 64].
     bit_width: u8,

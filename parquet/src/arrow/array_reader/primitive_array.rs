@@ -33,6 +33,7 @@ use arrow_buffer::Buffer;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, TimeUnit};
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 /// Primitive array readers are leaves of array reader tree. They accept page iterator
@@ -48,6 +49,18 @@ where
     rep_levels_buffer: Option<Buffer>,
     record_reader: RecordReader<T>,
 }
+
+impl<T> Debug for  PrimitiveArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrimitiveArrayReader<T>")
+            .finish_non_exhaustive()
+    }
+}
+
 
 impl<T> PrimitiveArrayReader<T>
 where

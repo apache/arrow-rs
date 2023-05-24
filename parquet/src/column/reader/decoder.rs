@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::ops::Range;
 
 use crate::basic::Encoding;
@@ -162,6 +163,16 @@ pub struct ColumnValueDecoderImpl<T: DataType> {
     decoders: HashMap<Encoding, Box<dyn Decoder<T>>>,
 }
 
+impl<T: DataType> Debug for ColumnValueDecoderImpl<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ColumnValueDecoderImpl<T>")
+            .field("descr", &self.descr)
+            .field("current_encoding", &self.current_encoding)
+            .field("decoders", &"...")
+            .finish()
+    }
+}
+
 impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     type Slice = [T::T];
 
@@ -267,6 +278,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 const SKIP_BUFFER_SIZE: usize = 1024;
 
 /// An implementation of [`ColumnLevelDecoder`] for `[i16]`
+#[derive(Debug)]
 pub struct ColumnLevelDecoderImpl {
     decoder: Option<LevelDecoderInner>,
     /// Temporary buffer populated when skipping values
@@ -311,6 +323,7 @@ impl ColumnLevelDecoderImpl {
     }
 }
 
+#[derive(Debug)]
 enum LevelDecoderInner {
     Packed(BitReader, u8),
     Rle(RleDecoder),

@@ -41,6 +41,7 @@ pub trait DataPageBuilder {
 ///   - add_values() for normal data page / add_indices() for dictionary data page
 ///   - consume()
 /// in order to populate and obtain a data page.
+#[derive(Debug)]
 pub struct DataPageBuilderImpl {
     encoding: Option<Encoding>,
     num_values: u32,
@@ -149,6 +150,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
 }
 
 /// A utility page reader which stores pages in memory.
+#[derive(Debug)]
 pub struct InMemoryPageReader<P: Iterator<Item = Page>> {
     page_iter: Peekable<P>,
 }
@@ -202,7 +204,7 @@ impl<P: Iterator<Item = Page> + Send> Iterator for InMemoryPageReader<P> {
 }
 
 /// A utility page iterator which stores page readers in memory, used for tests.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct InMemoryPageIterator<I: Iterator<Item = Vec<Page>>> {
     schema: SchemaDescPtr,
     column_desc: ColumnDescPtr,

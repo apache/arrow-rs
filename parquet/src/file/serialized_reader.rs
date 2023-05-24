@@ -19,6 +19,7 @@
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::io::Cursor;
 use std::iter;
 use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
@@ -91,6 +92,7 @@ impl IntoIterator for SerializedFileReader<File> {
 // Implementations of file & row group readers
 
 /// A serialized implementation for Parquet [`FileReader`].
+#[derive(Debug)]
 pub struct SerializedFileReader<R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: Arc<ParquetMetaData>,
@@ -110,6 +112,19 @@ pub struct ReadOptionsBuilder {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: Option<ReaderProperties>,
+}
+
+impl Debug for ReadOptionsBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadOptionsBuilder")
+            .field(
+                "predicates",
+                &format!("{} predicates", self.predicates.len()),
+            )
+            .field("enable_page_index", &self.enable_page_index)
+            .field("props", &self.props)
+            .finish()
+    }
 }
 
 impl ReadOptionsBuilder {
@@ -173,6 +188,19 @@ pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: ReaderProperties,
+}
+
+impl Debug for ReadOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadOptions")
+            .field(
+                "predicates",
+                &format!("{} predicates", self.predicates.len()),
+            )
+            .field("enable_page_index", &self.enable_page_index)
+            .field("props", &self.props)
+            .finish()
+    }
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -289,6 +317,7 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
 }
 
 /// A serialized implementation for Parquet [`RowGroupReader`].
+#[derive(Debug)]
 pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: &'a RowGroupMetaData,
@@ -489,6 +518,7 @@ pub(crate) fn decode_page(
     Ok(result)
 }
 
+#[derive(Debug)]
 enum SerializedPageReaderState {
     Values {
         /// The current byte offset in the reader
@@ -511,6 +541,7 @@ enum SerializedPageReaderState {
 }
 
 /// A serialized implementation for Parquet [`PageReader`].
+#[derive(Debug)]
 pub struct SerializedPageReader<R: ChunkReader> {
     /// The chunk reader
     reader: Arc<R>,

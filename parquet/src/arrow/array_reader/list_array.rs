@@ -28,6 +28,7 @@ use arrow_data::{transform::MutableArrayData, ArrayData};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::cmp::Ordering;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -42,6 +43,17 @@ pub struct ListArrayReader<OffsetSize: OffsetSizeTrait> {
     /// If this list is nullable
     nullable: bool,
     _marker: PhantomData<OffsetSize>,
+}
+
+impl <OffsetSize: OffsetSizeTrait> Debug for ListArrayReader<OffsetSize> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ListArrayReader<OffsetSize>")
+            .field("item_reader", &"...")
+            .field("data_type", &self.data_type)
+            .field("def_level", &self.def_level)
+            .field("rep_level", &self.rep_level)
+            .finish()
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> ListArrayReader<OffsetSize> {

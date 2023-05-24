@@ -21,6 +21,7 @@ use crate::errors::{ParquetError, Result};
 use crate::util::memory::ByteBufferPtr;
 
 /// Decoder for `Encoding::DELTA_BYTE_ARRAY`
+#[derive(Debug)]
 pub struct DeltaByteArrayDecoder {
     prefix_lengths: Vec<i32>,
     suffix_lengths: Vec<i32>,

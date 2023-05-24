@@ -18,6 +18,7 @@
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
@@ -52,6 +53,7 @@ pub use selection::{RowSelection, RowSelector};
 /// * For an asynchronous API - [`ParquetRecordBatchStreamBuilder`]
 ///
 /// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
+#[derive(Debug)]
 pub struct ArrowReaderBuilder<T> {
     pub(crate) input: T,
 
@@ -238,6 +240,7 @@ impl ArrowReaderOptions {
 
 #[doc(hidden)]
 /// A newtype used within [`ReaderOptionsBuilder`] to distinguish sync readers from async
+#[derive(Debug)]
 pub struct SyncReader<T: ChunkReader>(SerializedFileReader<T>);
 
 /// A synchronous builder used to construct [`ParquetRecordBatchReader`] for a file
@@ -323,6 +326,17 @@ pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
     selection: Option<VecDeque<RowSelector>>,
+}
+
+impl Debug for ParquetRecordBatchReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParquetRecordBatchReader")
+            .field("batch_size", &self.batch_size)
+            .field("array_reader", &"...")
+            .field("schema", &self.schema)
+            .field("selection", &self.selection)
+            .finish()
+    }
 }
 
 impl Iterator for ParquetRecordBatchReader {

@@ -21,6 +21,7 @@ use arrow_array::{builder::BooleanBufferBuilder, Array, ArrayRef, StructArray};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 /// Implementation of struct array reader.
@@ -30,6 +31,14 @@ pub struct StructArrayReader {
     struct_def_level: i16,
     struct_rep_level: i16,
     nullable: bool,
+}
+
+impl Debug for StructArrayReader
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StructArrayReader")
+            .finish_non_exhaustive()
+    }
 }
 
 impl StructArrayReader {

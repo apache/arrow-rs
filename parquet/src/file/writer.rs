@@ -21,6 +21,7 @@
 use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
+use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
 use thrift::protocol::{TCompactOutputProtocol, TSerializable};
@@ -47,6 +48,7 @@ use crate::schema::types::{
 /// A wrapper around a [`Write`] that keeps track of the number
 /// of bytes that have been written. The given [`Write`] is wrapped
 /// with a [`BufWriter`] to optimize writing performance.
+#[derive(Debug)]
 pub struct TrackedWrite<W: Write> {
     inner: BufWriter<W>,
     bytes_written: usize,
@@ -145,6 +147,15 @@ pub struct SerializedFileWriter<W: Write> {
     row_group_index: usize,
     // kv_metadatas will be appended to `props` when `write_metadata`
     kv_metadatas: Vec<KeyValue>,
+}
+
+impl<W: Write> Debug for SerializedFileWriter<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // implement Debug so this can be used with #[derive(Debug)]
+        // in client code rather than actually listing all the fields
+        f.debug_struct("SerializedFileWriter<W>")
+            .finish_non_exhaustive()
+    }
 }
 
 impl<W: Write> SerializedFileWriter<W> {
@@ -393,6 +404,26 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     on_close: Option<OnCloseRowGroup<'a>>,
 }
 
+impl<'a, W: Write> Debug for SerializedRowGroupWriter<'a, W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SerializedRowGroupWriter<'a, W>")
+            .field("descr", &self.descr)
+            .field("props", &self.props)
+            .field("buf", &"...")
+            .field("total_rows_written", &self.total_rows_written)
+            .field("total_bytes_written", &self.total_bytes_written)
+            .field("total_uncompressed_bytes", &self.total_uncompressed_bytes)
+            .field("column_index", &self.column_index)
+            .field("row_group_metadata", &self.row_group_metadata)
+            .field("column_chunks", &self.column_chunks)
+            .field("bloom_filters", &self.bloom_filters)
+            .field("column_indexes", &self.column_indexes)
+            .field("offset_indexes", &self.offset_indexes)
+            .field("on_close", &"...")
+            .finish()
+    }
+}
+
 impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
     /// Creates a new `SerializedRowGroupWriter` with:
     ///
@@ -619,6 +650,15 @@ pub struct SerializedColumnWriter<'a> {
     on_close: Option<OnCloseColumnChunk<'a>>,
 }
 
+impl<'a> Debug for SerializedColumnWriter<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SerializedColumnWriter<'a>")
+            .field("inner", &self.inner)
+            .field("on_close", &"...")
+            .finish()
+    }
+}
+
 impl<'a> SerializedColumnWriter<'a> {
     /// Create a new [`SerializedColumnWriter`] from a [`ColumnWriter`] and an
     /// optional callback to be invoked on [`Self::close`]
@@ -664,6 +704,7 @@ impl<'a> SerializedColumnWriter<'a> {
 /// Writes and serializes pages and metadata into output stream.
 ///
 /// `SerializedPageWriter` should not be used after calling `close()`.
+#[derive(Debug)]
 pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
 }

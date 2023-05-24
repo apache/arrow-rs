@@ -20,6 +20,7 @@ use crate::errors::Result;
 use crate::util::memory::ByteBufferPtr;
 
 /// Decoder for `Encoding::RLE_DICTIONARY` indices
+#[derive(Debug)]
 pub struct DictIndexDecoder {
     /// Decoder for the dictionary offsets array
     decoder: RleDecoder,

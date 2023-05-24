@@ -20,6 +20,7 @@
 //! iterator.
 
 use bytes::{Buf, Bytes};
+use std::fmt::Debug;
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::{boxed::Box, io::Read, sync::Arc};
@@ -214,6 +215,16 @@ pub struct FilePageIterator {
     column_index: usize,
     row_group_indices: Box<dyn Iterator<Item = usize> + Send>,
     file_reader: Arc<dyn FileReader>,
+}
+
+impl Debug for FilePageIterator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilePageIterator")
+            .field("column_index", &self.column_index)
+            .field("row_group_indices", &"...")
+            .field("file_reader", &"...")
+            .finish()
+    }
 }
 
 impl FilePageIterator {

@@ -191,6 +191,7 @@ impl Type {
 /// A builder for primitive types. All attributes are optional
 /// except the name and physical type.
 /// Note that if not specified explicitly, `Repetition::OPTIONAL` is used.
+#[derive(Debug)]
 pub struct PrimitiveTypeBuilder<'a> {
     name: &'a str,
     repetition: Repetition,
@@ -531,6 +532,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
 /// A builder for group types. All attributes are optional except the name.
 /// Note that if not specified explicitly, `None` is used as the repetition of the group,
 /// which means it is a root (message) type.
+#[derive(Debug)]
 pub struct GroupTypeBuilder<'a> {
     name: &'a str,
     repetition: Option<Repetition>,

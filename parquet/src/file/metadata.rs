@@ -373,6 +373,7 @@ impl RowGroupMetaData {
 }
 
 /// Builder for row group metadata.
+#[derive(Debug)]
 pub struct RowGroupMetaDataBuilder(RowGroupMetaData);
 
 impl RowGroupMetaDataBuilder {
@@ -700,6 +701,7 @@ impl ColumnChunkMetaData {
 }
 
 /// Builder for column chunk metadata.
+#[derive(Debug)]
 pub struct ColumnChunkMetaDataBuilder(ColumnChunkMetaData);
 
 impl ColumnChunkMetaDataBuilder {
@@ -836,6 +838,7 @@ impl ColumnChunkMetaDataBuilder {
 }
 
 /// Builder for column index
+#[derive(Debug)]
 pub struct ColumnIndexBuilder {
     null_pages: Vec<bool>,
     min_values: Vec<Vec<u8>>,
@@ -899,6 +902,7 @@ impl ColumnIndexBuilder {
 }
 
 /// Builder for offset index
+#[derive(Debug)]
 pub struct OffsetIndexBuilder {
     offset_array: Vec<i64>,
     compressed_page_size_array: Vec<i32>,

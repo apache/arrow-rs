@@ -91,6 +91,7 @@ impl Row {
 }
 
 /// `RowColumnIter` represents an iterator over column names and values in a Row.
+#[derive(Debug)]
 pub struct RowColumnIter<'a> {
     fields: &'a Vec<(String, Field)>,
     curr: usize,
@@ -152,7 +153,7 @@ pub trait RowAccessor {
 /// ```
 ///
 pub trait RowFormatter {
-    fn fmt(&self, i: usize) -> &dyn fmt::Display;
+    fn fmt_for_display(&self, i: usize) -> &dyn fmt::Display;
 }
 
 /// Macro to generate type-safe get_xxx methods for primitive types,
@@ -191,7 +192,7 @@ macro_rules! row_complex_accessor {
 
 impl RowFormatter for Row {
     /// Get Display reference for a given field.
-    fn fmt(&self, i: usize) -> &dyn fmt::Display {
+    fn fmt_for_display(&self, i: usize) -> &dyn fmt::Display {
         &self.fields[i].1
     }
 }
@@ -1342,30 +1343,33 @@ mod tests {
             ("17".to_string(), Field::Decimal(Decimal::from_i32(4, 7, 2))),
         ]);
 
-        assert_eq!("null", format!("{}", row.fmt(0)));
-        assert_eq!("false", format!("{}", row.fmt(1)));
-        assert_eq!("3", format!("{}", row.fmt(2)));
-        assert_eq!("4", format!("{}", row.fmt(3)));
-        assert_eq!("5", format!("{}", row.fmt(4)));
-        assert_eq!("6", format!("{}", row.fmt(5)));
-        assert_eq!("7", format!("{}", row.fmt(6)));
-        assert_eq!("8", format!("{}", row.fmt(7)));
-        assert_eq!("9", format!("{}", row.fmt(8)));
-        assert_eq!("10", format!("{}", row.fmt(9)));
-        assert_eq!("11.1", format!("{}", row.fmt(10)));
-        assert_eq!("12.1", format!("{}", row.fmt(11)));
-        assert_eq!("\"abc\"", format!("{}", row.fmt(12)));
-        assert_eq!("[1, 2, 3, 4, 5]", format!("{}", row.fmt(13)));
-        assert_eq!(convert_date_to_string(14611), format!("{}", row.fmt(14)));
+        assert_eq!("null", format!("{}", row.fmt_for_display(0)));
+        assert_eq!("false", format!("{}", row.fmt_for_display(1)));
+        assert_eq!("3", format!("{}", row.fmt_for_display(2)));
+        assert_eq!("4", format!("{}", row.fmt_for_display(3)));
+        assert_eq!("5", format!("{}", row.fmt_for_display(4)));
+        assert_eq!("6", format!("{}", row.fmt_for_display(5)));
+        assert_eq!("7", format!("{}", row.fmt_for_display(6)));
+        assert_eq!("8", format!("{}", row.fmt_for_display(7)));
+        assert_eq!("9", format!("{}", row.fmt_for_display(8)));
+        assert_eq!("10", format!("{}", row.fmt_for_display(9)));
+        assert_eq!("11.1", format!("{}", row.fmt_for_display(10)));
+        assert_eq!("12.1", format!("{}", row.fmt_for_display(11)));
+        assert_eq!("\"abc\"", format!("{}", row.fmt_for_display(12)));
+        assert_eq!("[1, 2, 3, 4, 5]", format!("{}", row.fmt_for_display(13)));
+        assert_eq!(
+            convert_date_to_string(14611),
+            format!("{}", row.fmt_for_display(14))
+        );
         assert_eq!(
             convert_timestamp_millis_to_string(1262391174000),
-            format!("{}", row.fmt(15))
+            format!("{}", row.fmt_for_display(15))
         );
         assert_eq!(
             convert_timestamp_micros_to_string(1262391174000000),
-            format!("{}", row.fmt(16))
+            format!("{}", row.fmt_for_display(16))
         );
-        assert_eq!("0.04", format!("{}", row.fmt(17)));
+        assert_eq!("0.04", format!("{}", row.fmt_for_display(17)));
     }
 
     #[test]
@@ -1398,9 +1402,12 @@ mod tests {
             ),
         ]);
 
-        assert_eq!("{x: null, Y: 2}", format!("{}", row.fmt(0)));
-        assert_eq!("[2, 1, null, 12]", format!("{}", row.fmt(1)));
-        assert_eq!("{1 -> 1.2, 2 -> 4.5, 3 -> 2.3}", format!("{}", row.fmt(2)));
+        assert_eq!("{x: null, Y: 2}", format!("{}", row.fmt_for_display(0)));
+        assert_eq!("[2, 1, null, 12]", format!("{}", row.fmt_for_display(1)));
+        assert_eq!(
+            "{1 -> 1.2, 2 -> 4.5, 3 -> 2.3}",
+            format!("{}", row.fmt_for_display(2))
+        );
     }
 
     #[test]

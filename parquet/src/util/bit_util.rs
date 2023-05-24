@@ -164,6 +164,7 @@ pub fn get_bit(data: &[u8], i: usize) -> bool {
 
 /// Utility class for writing bit/byte streams. This class can write data in either
 /// bit packed or byte aligned fashion.
+#[derive(Debug)]
 pub struct BitWriter {
     buffer: Vec<u8>,
     buffered_values: u64,
@@ -339,6 +340,7 @@ impl BitWriter {
 /// MAX_VLQ_BYTE_LEN = 5 for i32, and MAX_VLQ_BYTE_LEN = 10 for i64
 pub const MAX_VLQ_BYTE_LEN: usize = 10;
 
+#[derive(Debug)]
 pub struct BitReader {
     /// The byte buffer to read from, passed in by client
     buffer: ByteBufferPtr,

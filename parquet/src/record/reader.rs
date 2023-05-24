@@ -18,6 +18,7 @@
 //! Contains implementation of record assembly and converting Parquet types into
 //! [`Row`](crate::record::Row)s.
 
+use std::fmt::Debug;
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use crate::basic::{ConvertedType, Repetition};
@@ -35,6 +36,7 @@ const DEFAULT_BATCH_SIZE: usize = 1024;
 /// Tree builder for `Reader` enum.
 /// Serves as a container of options for building a reader tree and a builder, and
 /// accessing a records iterator [`RowIter`].
+#[derive(Debug)]
 pub struct TreeBuilder {
     // Batch size (>= 1) for triplet iterators
     batch_size: usize,
@@ -316,6 +318,7 @@ impl TreeBuilder {
 }
 
 /// Reader tree for record assembly
+#[derive(Debug)]
 pub enum Reader {
     // Primitive reader with type information and triplet iterator
     PrimitiveReader(TypePtr, Box<TripletIter>),
@@ -639,6 +642,19 @@ pub struct RowIter<'a> {
     row_iter: Option<ReaderIter>,
 }
 
+impl<'a> Debug for RowIter<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RowIter")
+            .field("descr", &self.descr)
+            .field("tree_builder", &self.tree_builder)
+            .field("file_reader", &"...")
+            .field("current_row_group", &self.current_row_group)
+            .field("num_row_groups", &self.num_row_groups)
+            .field("row_iter", &self.row_iter)
+            .finish()
+    }
+}
+
 impl<'a> RowIter<'a> {
     /// Creates a new iterator of [`Row`](crate::record::Row)s.
     fn new(
@@ -784,6 +800,7 @@ impl<'a> Iterator for RowIter<'a> {
 }
 
 /// Internal iterator of [`Row`](crate::record::Row)s for a reader.
+#[derive(Debug)]
 pub struct ReaderIter {
     root_reader: Reader,
     records_left: usize,
@@ -1513,7 +1530,7 @@ mod tests {
 
                 RowIter::from_file_into(Box::new(r)).project(proj).unwrap()
             })
-            .map(|r| format!("id:{}", r.fmt(0)))
+            .map(|r| format!("id:{}", r.fmt_for_display(0)))
             .collect::<Vec<_>>()
             .join(", ");
 

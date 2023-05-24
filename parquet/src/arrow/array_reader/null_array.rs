@@ -26,6 +26,7 @@ use arrow_array::ArrayRef;
 use arrow_buffer::Buffer;
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 /// A NullArrayReader reads Parquet columns stored as null int32s with an Arrow
@@ -40,6 +41,17 @@ where
     def_levels_buffer: Option<Buffer>,
     rep_levels_buffer: Option<Buffer>,
     record_reader: RecordReader<T>,
+}
+
+impl<T> Debug for NullArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NullArrayReader<T>")
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> NullArrayReader<T>

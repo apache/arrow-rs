@@ -106,6 +106,7 @@ pub fn get_encoder<T: DataType>(encoding: Encoding) -> Result<Box<dyn Encoder<T>
 /// - DOUBLE - 8 bytes per value, stored as IEEE little-endian.
 /// - BYTE_ARRAY - 4 byte length stored as little endian, followed by bytes.
 /// - FIXED_LEN_BYTE_ARRAY - just the bytes are stored.
+#[derive(Debug)]
 pub struct PlainEncoder<T: DataType> {
     buffer: Vec<u8>,
     bit_writer: BitWriter,
@@ -164,6 +165,7 @@ const DEFAULT_RLE_BUFFER_LEN: usize = 1024;
 
 /// RLE/Bit-Packing hybrid encoding for values.
 /// Currently is used only for data pages v2 and supports boolean types.
+#[derive(Debug)]
 pub struct RleValueEncoder<T: DataType> {
     // Buffer with raw values that we collect,
     // when flushing buffer they are encoded using RLE encoder
@@ -272,6 +274,7 @@ const DEFAULT_NUM_MINI_BLOCKS: usize = 4;
 /// writes out all data and resets internal state, including page header.
 ///
 /// Supports only INT32 and INT64.
+#[derive(Debug)]
 pub struct DeltaBitPackEncoder<T: DataType> {
     page_header_writer: BitWriter,
     bit_writer: BitWriter,
@@ -533,6 +536,7 @@ impl<T: DataType> DeltaBitPackEncoderConversion<T> for DeltaBitPackEncoder<T> {
 /// Encoding for byte arrays to separate the length values and the data.
 /// The lengths are encoded using DELTA_BINARY_PACKED encoding, data is
 /// stored as raw bytes.
+#[derive(Debug)]
 pub struct DeltaLengthByteArrayEncoder<T: DataType> {
     // length encoder
     len_encoder: DeltaBitPackEncoder<Int32Type>,
@@ -621,6 +625,7 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
 
 /// Encoding for byte arrays, prefix lengths are encoded using DELTA_BINARY_PACKED
 /// encoding, followed by suffixes with DELTA_LENGTH_BYTE_ARRAY encoding.
+#[derive(Debug)]
 pub struct DeltaByteArrayEncoder<T: DataType> {
     prefix_len_encoder: DeltaBitPackEncoder<Int32Type>,
     suffix_writer: DeltaLengthByteArrayEncoder<ByteArrayType>,

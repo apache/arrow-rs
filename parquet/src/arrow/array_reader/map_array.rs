@@ -23,6 +23,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Implementation of a map array reader.
+#[derive(Debug)]
 pub struct MapArrayReader {
     data_type: ArrowType,
     reader: ListArrayReader<i32>,

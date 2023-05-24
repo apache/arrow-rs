@@ -18,6 +18,7 @@
 //! Contains column reader API.
 
 use std::cmp::min;
+use std::fmt::Debug;
 
 use super::page::{Page, PageReader};
 use crate::basic::*;
@@ -133,6 +134,20 @@ pub struct GenericColumnReader<R, D, V> {
 
     /// The decoder for the values
     values_decoder: V,
+}
+
+impl<R, D, V> Debug for GenericColumnReader<R, D, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GenericColumnReader<R, D, V>")
+            .field("descr", &self.descr)
+            .field("page_reader", &"...")
+            .field("num_buffered_values", &self.num_buffered_values)
+            .field("num_decoded_values", &self.num_decoded_values)
+            .field("def_level_decoder", &"...")
+            .field("rep_level_decoder", &"...")
+            .field("values_decoder", &"...")
+            .finish()
+    }
 }
 
 impl<V> GenericColumnReader<ColumnLevelDecoderImpl, ColumnLevelDecoderImpl, V>

@@ -33,6 +33,7 @@ use crate::util::memory::ByteBufferPtr;
 
 use super::{buffer::ScalarBuffer, MIN_BATCH_SIZE};
 
+#[derive(Debug)]
 enum BufferInner {
     /// Compute levels and null mask
     Full {
@@ -48,6 +49,7 @@ enum BufferInner {
     Mask { nulls: BooleanBufferBuilder },
 }
 
+#[derive(Debug)]
 pub struct DefinitionLevelBuffer {
     inner: BufferInner,
 
@@ -146,11 +148,13 @@ impl LevelsBufferSlice for DefinitionLevelBuffer {
     }
 }
 
+#[derive(Debug)]
 enum MaybePacked {
     Packed(PackedDecoder),
     Fallback(ColumnLevelDecoderImpl),
 }
 
+#[derive(Debug)]
 pub struct DefinitionLevelBufferDecoder {
     max_level: i16,
     decoder: MaybePacked,
@@ -242,6 +246,7 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
 ///
 /// [RLE]: https://github.com/apache/parquet-format/blob/master/Encodings.md#run-length-encoding--bit-packing-hybrid-rle--3
 /// [BIT_PACKED]: https://github.com/apache/parquet-format/blob/master/Encodings.md#bit-packed-deprecated-bit_packed--4
+#[derive(Debug)]
 struct PackedDecoder {
     data: ByteBufferPtr,
     data_offset: usize,

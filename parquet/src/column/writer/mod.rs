@@ -20,6 +20,7 @@
 use crate::bloom_filter::Sbbf;
 use crate::format::{ColumnIndex, OffsetIndex};
 use std::collections::{BTreeSet, VecDeque};
+use std::fmt::Debug;
 
 use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
@@ -44,6 +45,7 @@ use crate::util::memory::ByteBufferPtr;
 pub(crate) mod encoder;
 
 /// Column writer for a Parquet type.
+#[derive(Debug)]
 pub enum ColumnWriter<'a> {
     BoolColumnWriter(ColumnWriterImpl<'a, BoolType>),
     Int32ColumnWriter(ColumnWriterImpl<'a, Int32Type>),
@@ -165,7 +167,7 @@ pub struct ColumnCloseResult {
 }
 
 // Metrics per page
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct PageMetrics {
     num_buffered_values: u32,
     num_buffered_rows: u32,
@@ -173,6 +175,7 @@ struct PageMetrics {
 }
 
 // Metrics per column writer
+#[derive(Debug)]
 struct ColumnMetrics<T> {
     total_bytes_written: u64,
     total_rows_written: u64,
@@ -215,6 +218,13 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // column index and offset index
     column_index_builder: ColumnIndexBuilder,
     offset_index_builder: OffsetIndexBuilder,
+}
+
+impl<'a, E: ColumnValueEncoder> Debug for GenericColumnWriter<'a, E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GenericColumnWriter<'a, E>")
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {

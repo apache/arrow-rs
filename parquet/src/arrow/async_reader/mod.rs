@@ -212,6 +212,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 ///
 /// Allows sharing the same builder for both the sync and async versions, whilst also not
 /// breaking the pre-existing ParquetRecordBatchStreamBuilder API
+#[derive(Debug)]
 pub struct AsyncReader<T>(T);
 
 /// A builder used to construct a [`ParquetRecordBatchStream`] for a parquet file
@@ -437,6 +438,7 @@ impl<T> std::fmt::Debug for StreamState<T> {
 
 /// An asynchronous [`Stream`](https://docs.rs/futures/latest/futures/stream/trait.Stream.html) of [`RecordBatch`]
 /// for a parquet file that can be constructed using [`ParquetRecordBatchStreamBuilder`].
+#[derive(Debug)]
 pub struct ParquetRecordBatchStream<T> {
     metadata: Arc<ParquetMetaData>,
 

@@ -72,6 +72,7 @@ impl<T: DataType> Storage for KeyStorage<T> {
 /// Data page format: the bit width used to encode the entry ids stored as 1 byte
 /// (max bit width = 32), followed by the values encoded using RLE/Bit packed described
 /// above (with the given bit width).
+#[derive(Debug)]
 pub struct DictEncoder<T: DataType> {
     interner: Interner<KeyStorage<T>>,
 

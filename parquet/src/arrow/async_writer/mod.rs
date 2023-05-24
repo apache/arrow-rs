@@ -68,6 +68,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 /// It is implemented based on the sync writer [`ArrowWriter`] with an inner buffer.
 /// The buffered data will be flushed to the writer provided by caller when the
 /// buffer's threshold is exceeded.
+#[derive(Debug)]
 pub struct AsyncArrowWriter<W> {
     /// Underlying sync writer
     sync_writer: ArrowWriter<SharedBuffer>,
@@ -166,7 +167,7 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
 
 /// A buffer with interior mutability shared by the [`ArrowWriter`] and
 /// [`AsyncArrowWriter`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct SharedBuffer {
     /// The inner buffer for reading and writing
     ///

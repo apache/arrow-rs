@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Debug;
+
 use crate::arrow::ProjectionMask;
 use arrow_array::{BooleanArray, RecordBatch};
 use arrow_schema::ArrowError;
@@ -38,6 +40,12 @@ pub trait ArrowPredicate: Send + 'static {
 pub struct ArrowPredicateFn<F> {
     f: F,
     projection: ProjectionMask,
+}
+
+impl<F> Debug for ArrowPredicateFn<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArrowPredicateFn").finish_non_exhaustive()
+    }
 }
 
 impl<F> ArrowPredicateFn<F>
@@ -98,6 +106,17 @@ where
 pub struct RowFilter {
     /// A list of [`ArrowPredicate`]
     pub(crate) predicates: Vec<Box<dyn ArrowPredicate>>,
+}
+
+impl Debug for RowFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RowFilter")
+            .field(
+                "predicates",
+                &format!("{} predicates", self.predicates.len()),
+            )
+            .finish()
+    }
 }
 
 impl RowFilter {

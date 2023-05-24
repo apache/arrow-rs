@@ -322,6 +322,7 @@ impl ByteArrayDecoder {
 }
 
 /// Decoder from [`Encoding::PLAIN`] data to [`OffsetBuffer`]
+#[derive(Debug)]
 pub struct ByteArrayDecoderPlain {
     buf: ByteBufferPtr,
     offset: usize,
@@ -420,6 +421,7 @@ impl ByteArrayDecoderPlain {
 }
 
 /// Decoder from [`Encoding::DELTA_LENGTH_BYTE_ARRAY`] data to [`OffsetBuffer`]
+#[derive(Debug)]
 pub struct ByteArrayDecoderDeltaLength {
     lengths: Vec<i32>,
     data: ByteBufferPtr,
@@ -500,6 +502,7 @@ impl ByteArrayDecoderDeltaLength {
 }
 
 /// Decoder from [`Encoding::DELTA_BYTE_ARRAY`] to [`OffsetBuffer`]
+#[derive(Debug)]
 pub struct ByteArrayDecoderDelta {
     decoder: DeltaByteArrayDecoder,
     validate_utf8: bool,
@@ -537,6 +540,7 @@ impl ByteArrayDecoderDelta {
 }
 
 /// Decoder from [`Encoding::RLE_DICTIONARY`] to [`OffsetBuffer`]
+#[derive(Debug)]
 pub struct ByteArrayDecoderDictionary {
     decoder: DictIndexDecoder,
 }

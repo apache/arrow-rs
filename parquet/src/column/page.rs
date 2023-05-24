@@ -29,7 +29,7 @@ use crate::util::memory::ByteBufferPtr;
 /// List of supported pages.
 /// These are 1-to-1 mapped from the equivalent Thrift definitions, except `buf` which
 /// used to store uncompressed bytes of the page.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Page {
     DataPage {
         buf: ByteBufferPtr,
@@ -110,6 +110,7 @@ impl Page {
 /// data page v2).
 ///
 /// The difference with `Page` is that `Page` buffer is always uncompressed.
+#[derive(Debug)]
 pub struct CompressedPage {
     compressed_page: Page,
     uncompressed_size: usize,
@@ -165,6 +166,7 @@ impl CompressedPage {
 }
 
 /// Contains page write metrics.
+#[derive(Debug)]
 pub struct PageWriteSpec {
     pub page_type: PageType,
     pub uncompressed_size: usize,
@@ -195,7 +197,7 @@ impl PageWriteSpec {
 }
 
 /// Contains metadata for a page
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PageMetadata {
     /// The number of rows in this page
     pub num_rows: usize,

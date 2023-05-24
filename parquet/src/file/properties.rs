@@ -276,6 +276,7 @@ impl WriterProperties {
 }
 
 /// Writer properties builder.
+#[derive(Debug)]
 pub struct WriterPropertiesBuilder {
     data_pagesize_limit: usize,
     dictionary_pagesize_limit: usize,
@@ -749,6 +750,7 @@ const DEFAULT_READ_BLOOM_FILTER: bool = false;
 ///
 /// All properties are immutable and `Send` + `Sync`.
 /// Use [`ReaderPropertiesBuilder`] to assemble these properties.
+#[derive(Debug)]
 pub struct ReaderProperties {
     codec_options: CodecOptions,
     read_bloom_filter: bool,
@@ -772,6 +774,7 @@ impl ReaderProperties {
 }
 
 /// Reader properties builder.
+#[derive(Debug)]
 pub struct ReaderPropertiesBuilder {
     codec_options_builder: CodecOptionsBuilder,
     read_bloom_filter: Option<bool>,

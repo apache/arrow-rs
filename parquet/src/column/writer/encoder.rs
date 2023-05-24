@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Debug;
+
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
@@ -49,6 +51,7 @@ impl<T: ParquetValueType> ColumnValues for [T] {
 }
 
 /// The encoded data for a dictionary page
+#[derive(Debug)]
 pub struct DictionaryPage {
     pub buf: ByteBufferPtr,
     pub num_values: usize,
@@ -56,6 +59,7 @@ pub struct DictionaryPage {
 }
 
 /// The encoded values for a data page, with optional statistics
+#[derive(Debug)]
 pub struct DataPageValues<T> {
     pub buf: ByteBufferPtr,
     pub num_values: usize,
@@ -132,6 +136,21 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     min_value: Option<T::T>,
     max_value: Option<T::T>,
     bloom_filter: Option<Sbbf>,
+}
+
+impl<T: DataType> Debug for ColumnValueEncoderImpl<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ColumnValueEncoderImpl<T>")
+            .field("encoder", &"...")
+            .field("dict_encoder", &"...")
+            .field("descr", &self.descr)
+            .field("num_values", &self.num_values)
+            .field("statistics_enabled", &self.statistics_enabled)
+            .field("min_value", &self.min_value)
+            .field("max_value", &self.max_value)
+            .field("bloom_filter", &self.bloom_filter)
+            .finish()
+    }
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
