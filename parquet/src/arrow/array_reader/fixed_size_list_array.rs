@@ -225,7 +225,7 @@ impl ArrayReader for FixedSizeListArrayReader {
 mod tests {
     use super::*;
     use crate::arrow::{
-        array_reader::test_util::InMemoryArrayReader,
+        array_reader::{test_util::InMemoryArrayReader, ListArrayReader},
         arrow_reader::{
             ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
         },
@@ -233,7 +233,9 @@ mod tests {
     };
     use arrow::datatypes::{Field, Int32Type};
     use arrow_array::{
-        cast::AsArray, FixedSizeListArray, ListArray, PrimitiveArray, RecordBatch,
+        builder::{FixedSizeListBuilder, Int32Builder, ListBuilder},
+        cast::AsArray,
+        FixedSizeListArray, ListArray, PrimitiveArray, RecordBatch,
     };
     use arrow_buffer::Buffer;
     use arrow_data::ArrayDataBuilder;
@@ -456,6 +458,77 @@ mod tests {
                 Arc::new(Field::new("item", ArrowType::Int32, true)),
                 0,
             ),
+            2,
+            1,
+            true,
+        );
+        let actual = list_array_reader.next_batch(1024).unwrap();
+        let actual = actual
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(&expected, actual)
+    }
+
+    #[test]
+    fn test_nested_var_list() {
+        // [[[1, null, 3], null], [[4], []], [[5, 6], [null, null]], null]
+        let mut builder =
+            FixedSizeListBuilder::new(ListBuilder::new(Int32Builder::new()), 2);
+        builder.values().append_value([Some(1), None, Some(3)]);
+        builder.values().append_null();
+        builder.append(true);
+        builder.values().append_value([Some(4)]);
+        builder.values().append_value([]);
+        builder.append(true);
+        builder.values().append_value([Some(5), Some(6)]);
+        builder.values().append_value([None, None]);
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.append(false);
+        let expected = builder.finish();
+
+        let array = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            None,
+            Some(4),
+            None,
+            Some(5),
+            Some(6),
+            None,
+            None,
+            None,
+        ]));
+
+        let inner_type =
+            ArrowType::List(Arc::new(Field::new("item", ArrowType::Int32, true)));
+        let list_type = ArrowType::FixedSizeList(
+            Arc::new(Field::new("item", inner_type.clone(), true)),
+            2,
+        );
+
+        let item_array_reader = InMemoryArrayReader::new(
+            ArrowType::Int32,
+            array,
+            Some(vec![5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0]),
+            Some(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
+        );
+
+        let inner_array_reader = ListArrayReader::<i32>::new(
+            Box::new(item_array_reader),
+            inner_type,
+            4,
+            2,
+            true,
+        );
+
+        let mut list_array_reader = FixedSizeListArrayReader::new(
+            Box::new(inner_array_reader),
+            2,
+            list_type,
             2,
             1,
             true,
