@@ -562,6 +562,12 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         }
         close.metadata = builder.build()?;
 
+        if let Some(offsets) = close.offset_index.as_mut() {
+            for location in &mut offsets.page_locations {
+                location.offset = map_offset(location.offset)
+            }
+        }
+
         SerializedPageWriter::new(self.buf).write_metadata(&metadata)?;
         let (_, on_close) = self.get_on_close();
         on_close(close)
@@ -794,6 +800,7 @@ mod tests {
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
     use crate::data_type::{BoolType, Int32Type};
     use crate::file::reader::ChunkReader;
+    use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
@@ -1676,18 +1683,26 @@ mod tests {
 
         // Check data was written correctly
         let file = Bytes::from(file);
-        let reader = SerializedFileReader::new(file).unwrap();
-        let row_group = reader.get_row_group(0).unwrap();
+        let test_read = |reader: SerializedFileReader<Bytes>| {
+            let row_group = reader.get_row_group(0).unwrap();
 
-        let mut out = [0; 4];
-        let mut c1 =
-            get_typed_column_reader::<Int32Type>(row_group.get_column_reader(0).unwrap());
-        c1.read_batch(4, None, None, &mut out).unwrap();
-        assert_eq!(out, column_data[0]);
+            let mut out = [0; 4];
+            let c1 = row_group.get_column_reader(0).unwrap();
+            let mut c1 = get_typed_column_reader::<Int32Type>(c1);
+            c1.read_batch(4, None, None, &mut out).unwrap();
+            assert_eq!(out, column_data[0]);
 
-        let mut c2 =
-            get_typed_column_reader::<Int32Type>(row_group.get_column_reader(1).unwrap());
-        c2.read_batch(4, None, None, &mut out).unwrap();
-        assert_eq!(out, column_data[1]);
+            let c2 = row_group.get_column_reader(1).unwrap();
+            let mut c2 = get_typed_column_reader::<Int32Type>(c2);
+            c2.read_batch(4, None, None, &mut out).unwrap();
+            assert_eq!(out, column_data[1]);
+        };
+
+        let reader = SerializedFileReader::new(file.clone()).unwrap();
+        test_read(reader);
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+        test_read(reader);
     }
 }
