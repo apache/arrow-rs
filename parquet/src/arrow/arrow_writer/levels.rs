@@ -42,7 +42,7 @@
 
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait, StructArray};
+use arrow_array::{Array, ArrayRef, FixedSizeListArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
@@ -144,7 +144,8 @@ impl LevelInfoBuilder {
             }
             DataType::List(child)
             | DataType::LargeList(child)
-            | DataType::Map(child, _) => {
+            | DataType::Map(child, _)
+            | DataType::FixedSizeList(child, _) => {
                 let def_level = match field.is_nullable() {
                     true => parent_ctx.def_level + 2,
                     false => parent_ctx.def_level + 1,
@@ -211,6 +212,19 @@ impl LevelInfoBuilder {
                     array.value_offsets(),
                     array.nulls(),
                     array.entries(),
+                    range,
+                )
+            }
+            &DataType::FixedSizeList(_, size) => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .expect("unable to get fixed-size list array");
+
+                self.write_fixed_size_list(
+                    size as usize,
+                    array.nulls(),
+                    array.values(),
                     range,
                 )
             }
@@ -368,6 +382,100 @@ impl LevelInfoBuilder {
                 }
             }
             None => write_non_null(children, range),
+        }
+    }
+
+    /// Write `range` elements from FixedSizeListArray with child data `values` and null bitmap `nulls`.
+    fn write_fixed_size_list(
+        &mut self,
+        fixed_size: usize,
+        nulls: Option<&NullBuffer>,
+        values: &dyn Array,
+        range: Range<usize>,
+    ) {
+        let (child, ctx) = match self {
+            Self::List(child, ctx) => (child, ctx),
+            _ => unreachable!(),
+        };
+
+        let write_non_null =
+            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+                let values_start = start_idx * fixed_size;
+                let values_end = end_idx * fixed_size;
+                child.write(values, values_start..values_end);
+
+                child.visit_leaves(|leaf| {
+                    let rep_levels = leaf.rep_levels.as_mut().unwrap();
+
+                    let row_indices = (0..fixed_size)
+                        .rev()
+                        .cycle()
+                        .take(values_end - values_start);
+
+                    // Step backward over the child rep levels and mark the start of each list
+                    rep_levels
+                        .iter_mut()
+                        .rev()
+                        // Filter out reps from nested children
+                        .filter(|&&mut r| r == ctx.rep_level)
+                        .zip(row_indices)
+                        .for_each(|(r, idx)| {
+                            if idx == 0 {
+                                *r = ctx.rep_level - 1;
+                            }
+                        });
+                })
+            };
+
+        // If list size is 0, ignore values and just write rep/def levels.
+        let write_empty =
+            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+                let len = end_idx - start_idx;
+                child.visit_leaves(|leaf| {
+                    let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                    rep_levels.extend(std::iter::repeat(ctx.rep_level - 1).take(len));
+                    let def_levels = leaf.def_levels.as_mut().unwrap();
+                    def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
+                })
+            };
+
+        let write_rows =
+            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+                if fixed_size > 0 {
+                    write_non_null(child, start_idx, end_idx)
+                } else {
+                    write_empty(child, start_idx, end_idx)
+                }
+            };
+
+        match nulls {
+            Some(nulls) => {
+                let mut start_idx = None;
+                for idx in range.clone() {
+                    if nulls.is_valid(idx) {
+                        // Start a run of valid rows if not already inside of one
+                        start_idx.get_or_insert(idx);
+                    } else {
+                        // Write out any pending valid rows
+                        if let Some(start) = start_idx.take() {
+                            write_rows(child, start, idx);
+                        }
+                        // Add null row
+                        child.visit_leaves(|leaf| {
+                            let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                            rep_levels.push(ctx.rep_level - 1);
+                            let def_levels = leaf.def_levels.as_mut().unwrap();
+                            def_levels.push(ctx.def_level - 2);
+                        })
+                    }
+                }
+                // Write out any remaining valid rows
+                if let Some(start) = start_idx.take() {
+                    write_rows(child, start, range.end);
+                }
+            }
+            // If all rows are valid then write the whole array
+            None => write_rows(child, range.start, range.end),
         }
     }
 
@@ -1396,5 +1504,261 @@ mod tests {
         };
 
         assert_eq!(&levels[1], &expected_level);
+    }
+
+    #[test]
+    fn test_fixed_size_list() {
+        // [[1, 2], null, null, [7, 8], null]
+        let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 2);
+        builder.values().append_slice(&[1, 2]);
+        builder.append(true);
+        builder.values().append_slice(&[3, 4]);
+        builder.append(false);
+        builder.values().append_slice(&[5, 6]);
+        builder.append(false);
+        builder.values().append_slice(&[7, 8]);
+        builder.append(true);
+        builder.values().append_slice(&[9, 10]);
+        builder.append(false);
+        let a = builder.finish();
+
+        let item_field = Field::new("item", a.data_type().clone(), true);
+        let mut builder =
+            LevelInfoBuilder::try_new(&item_field, Default::default()).unwrap();
+        builder.write(&a, 1..4);
+        let levels = builder.finish();
+
+        assert_eq!(levels.len(), 1);
+
+        let list_level = levels.get(0).unwrap();
+
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![0, 0, 3, 3]),
+            rep_levels: Some(vec![0, 0, 0, 1]),
+            non_null_indices: vec![6, 7],
+            max_def_level: 3,
+            max_rep_level: 1,
+        };
+        assert_eq!(list_level, &expected_level);
+    }
+
+    #[test]
+    fn test_fixed_size_list_of_struct() {
+        // define schema
+        let field_a = Field::new("a", DataType::Int32, true);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let fields = Fields::from([Arc::new(field_a), Arc::new(field_b)]);
+        let item_field = Field::new("item", DataType::Struct(fields.clone()), true);
+        let list_field = Field::new(
+            "list",
+            DataType::FixedSizeList(Arc::new(item_field), 2),
+            true,
+        );
+
+        let builder_a = Int32Builder::with_capacity(10);
+        let builder_b = Int64Builder::with_capacity(10);
+        let struct_builder =
+            StructBuilder::new(fields, vec![Box::new(builder_a), Box::new(builder_b)]);
+        let mut list_builder = FixedSizeListBuilder::new(struct_builder, 2);
+
+        // [
+        //   [{a: 1, b: 2}, null],
+        //   null,
+        //   [null, null],
+        //   [{a: null, b: 3}, {a: 2, b: 4}]
+        // ]
+
+        // [{a: 1, b: 2}, null]
+        let values = list_builder.values();
+        // {a: 1, b: 2}
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(1);
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(2);
+        values.append(true);
+        // null
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(0);
+        values.append(false);
+        list_builder.append(true);
+
+        // null
+        let values = list_builder.values();
+        // null
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(0);
+        values.append(false);
+        // null
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(0);
+        values.append(false);
+        list_builder.append(false);
+
+        // [null, null]
+        let values = list_builder.values();
+        // null
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(0);
+        values.append(false);
+        // null
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(0);
+        values.append(false);
+        list_builder.append(true);
+
+        // [{a: null, b: 3}, {a: 2, b: 4}]
+        let values = list_builder.values();
+        // {a: null, b: 3}
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null();
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(3);
+        values.append(true);
+        // {a: 2, b: 4}
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(2);
+        values
+            .field_builder::<Int64Builder>(1)
+            .unwrap()
+            .append_value(4);
+        values.append(true);
+        list_builder.append(true);
+
+        let array = Arc::new(list_builder.finish());
+
+        assert_eq!(array.values().len(), 8);
+        assert_eq!(array.len(), 4);
+
+        let schema = Arc::new(Schema::new(vec![list_field]));
+        let rb = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let levels = calculate_array_levels(rb.column(0), rb.schema().field(0)).unwrap();
+        let a_levels = &levels[0];
+        let b_levels = &levels[1];
+
+        // [[{a: 1}, null], null, [null, null], [{a: null}, {a: 2}]]
+        let expected_a = LevelInfo {
+            def_levels: Some(vec![4, 2, 0, 2, 2, 3, 4]),
+            rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1]),
+            non_null_indices: vec![0, 7],
+            max_def_level: 4,
+            max_rep_level: 1,
+        };
+        // [[{b: 2}, null], null, [null, null], [{b: 3}, {b: 4}]]
+        let expected_b = LevelInfo {
+            def_levels: Some(vec![3, 2, 0, 2, 2, 3, 3]),
+            rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1]),
+            non_null_indices: vec![0, 6, 7],
+            max_def_level: 3,
+            max_rep_level: 1,
+        };
+
+        assert_eq!(a_levels, &expected_a);
+        assert_eq!(b_levels, &expected_b);
+    }
+
+    #[test]
+    fn test_fixed_size_list_empty() {
+        let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 0);
+        builder.append(true);
+        builder.append(false);
+        builder.append(true);
+        let a = builder.finish();
+
+        let item_field = Field::new("item", a.data_type().clone(), true);
+        let mut builder =
+            LevelInfoBuilder::try_new(&item_field, Default::default()).unwrap();
+        builder.write(&a, 0..3);
+        let levels = builder.finish();
+
+        assert_eq!(levels.len(), 1);
+
+        let list_level = levels.get(0).unwrap();
+
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![1, 0, 1]),
+            rep_levels: Some(vec![0, 0, 0]),
+            non_null_indices: vec![],
+            max_def_level: 3,
+            max_rep_level: 1,
+        };
+        assert_eq!(list_level, &expected_level);
+    }
+
+    #[test]
+    fn test_fixed_size_list_of_var_lists() {
+        // [[[1, null, 3], null], [[4], []], [[5, 6], [null, null]], null]
+        let mut builder =
+            FixedSizeListBuilder::new(ListBuilder::new(Int32Builder::new()), 2);
+        builder.values().append_value([Some(1), None, Some(3)]);
+        builder.values().append_null();
+        builder.append(true);
+        builder.values().append_value([Some(4)]);
+        builder.values().append_value([]);
+        builder.append(true);
+        builder.values().append_value([Some(5), Some(6)]);
+        builder.values().append_value([None, None]);
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.append(false);
+        let a = builder.finish();
+
+        let item_field = Field::new("item", a.data_type().clone(), true);
+        let mut builder =
+            LevelInfoBuilder::try_new(&item_field, Default::default()).unwrap();
+        builder.write(&a, 0..4);
+        let levels = builder.finish();
+
+        let list_level = levels.get(0).unwrap();
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0]),
+            rep_levels: Some(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
+            non_null_indices: vec![0, 2, 3, 4, 5],
+            max_def_level: 5,
+            max_rep_level: 2,
+        };
+
+        assert_eq!(list_level, &expected_level);
     }
 }
