@@ -95,7 +95,7 @@ chrono-tz = ["arrow-array/chrono-tz"]
 
 [dev-dependencies]
 chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
-criterion = { version = "0.4", default-features = false }
+criterion = { version = "0.5", default-features = false }
 half = { version = "2.1", default-features = false }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 tempfile = { version = "3", default-features = false }
