@@ -21,7 +21,7 @@ use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
-use num::CheckedMul;
+use num::{CheckedAdd, CheckedMul};
 use std::ops::{Add, Mul, Sub};
 use std::str::FromStr;
 
@@ -806,44 +806,85 @@ impl FromStr for IntervalType {
 
 pub type MonthDayNano = (i32, i32, i64);
 
-#[derive(Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 struct FixedPointNumber {
     fixed: i64,
-    scale: usize,
+    log_scale: i32,
+}
+
+impl FixedPointNumber {
+    fn new(fixed: i64, log_scale: i32) -> Self {
+        // while the fixed part is divisible by ten, divide by 10 and subtract from the log scale
+        let mut fixed = fixed;
+        let mut log_scale = log_scale;
+
+        while fixed != 0 && fixed % 10 == 0 {
+            fixed /= 10;
+            log_scale += 1;
+        }
+
+        Self { fixed, log_scale }
+    }
+
+    /// Aligns the higher-scale fixed point number to match the scale of the lower-scale fixed number.
+    /// This prepares both numbers for addition and subtraction.
+    fn align(
+        lhs: &FixedPointNumber,
+        rhs: &FixedPointNumber,
+    ) -> (FixedPointNumber, FixedPointNumber) {
+        match (lhs, rhs) {
+            (lhs, rhs) if lhs.log_scale < rhs.log_scale => {
+                let fixed =
+                    rhs.fixed * 10_i64.pow((rhs.log_scale - lhs.log_scale) as u32);
+                let log_scale = lhs.log_scale;
+
+                let rhs = FixedPointNumber { fixed, log_scale };
+
+                (*lhs, rhs)
+            }
+            (lhs, rhs) if lhs.log_scale > rhs.log_scale => {
+                let fixed =
+                    lhs.fixed * 10_i64.pow((lhs.log_scale - rhs.log_scale) as u32);
+                let log_scale = rhs.log_scale;
+
+                let lhs = FixedPointNumber { fixed, log_scale };
+
+                (lhs, *rhs)
+            }
+            (lhs, rhs) => (*lhs, *rhs),
+        }
+    }
 }
 
 impl FromStr for FixedPointNumber {
     type Err = ArrowError;
 
     fn from_str(s: &str) -> Result<Self, ArrowError> {
-        if s.is_empty() {
-            return Err(ArrowError::ParseError(
-                "Fixed point number cannot be empty".to_string(),
-            ));
-        }
+        let mut parts = s.trim().split('.');
 
-        let mut parts = s.split('.');
-
-        let integer = parts.next().unwrap();
+        let integer = parts.next();
         let fractional = parts.next();
 
-        let combined = match fractional {
-            Some(fractional) => format!("{}{}", integer, fractional),
-            None => integer.to_string(),
-        };
-
-        let fractional_digits = match fractional {
-            Some(fractional) => fractional.len(),
-            None => 0,
-        };
+        let combined = match (integer, fractional) {
+            (Some(integer), None) => Ok(integer.trim().to_string()),
+            (Some(integer), Some(fractional)) => {
+                Ok(format!("{}{}", integer.trim(), fractional.trim()))
+            }
+            (None, _) => Err(ArrowError::ParseError(format!(
+                "Failed to parse number: \"{s}\""
+            ))),
+        }?;
 
         let fixed = i64::from_str(&combined).map_err(|_| {
-            ArrowError::ParseError(format!("Failed to parse fixed point number: {s}"))
+            ArrowError::ParseError(format!("Failed to parse number: \"{s}\""))
         })?;
 
-        let scale = 10_usize.pow(fractional_digits as u32);
+        let log_scale = match fractional {
+            Some(fractional) => -(fractional.len() as i32),
+            None => 0i32,
+        };
 
-        Ok(Self { fixed, scale })
+        Ok(Self::new(fixed, log_scale))
     }
 }
 
@@ -851,9 +892,23 @@ impl Add<FixedPointNumber> for FixedPointNumber {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        let fixed = self.fixed * (rhs.scale as i64) + rhs.fixed * (self.scale as i64);
-        let scale = self.scale * rhs.scale;
-        Self { fixed, scale }
+        let (lhs, rhs) = FixedPointNumber::align(&self, &rhs);
+
+        let fixed = lhs.fixed + rhs.fixed;
+        let log_scale = lhs.log_scale;
+
+        Self::new(fixed, log_scale)
+    }
+}
+
+impl CheckedAdd for FixedPointNumber {
+    fn checked_add(&self, rhs: &Self) -> Option<Self> {
+        let (lhs, rhs) = FixedPointNumber::align(self, rhs);
+
+        let fixed = lhs.fixed.checked_add(rhs.fixed)?;
+        let log_scale = lhs.log_scale;
+
+        Some(Self::new(fixed, log_scale))
     }
 }
 
@@ -861,9 +916,12 @@ impl Sub<FixedPointNumber> for FixedPointNumber {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        let fixed = self.fixed * (rhs.scale as i64) - rhs.fixed * (self.scale as i64);
-        let scale = self.scale * rhs.scale;
-        Self { fixed, scale }
+        let (lhs, rhs) = FixedPointNumber::align(&self, &rhs);
+
+        let fixed = lhs.fixed - rhs.fixed;
+        let log_scale = lhs.log_scale;
+
+        Self::new(fixed, log_scale)
     }
 }
 
@@ -872,18 +930,19 @@ impl Mul<FixedPointNumber> for FixedPointNumber {
 
     fn mul(self, rhs: Self) -> Self::Output {
         let fixed = self.fixed * rhs.fixed;
-        let scale = self.scale * rhs.scale;
-        Self { fixed, scale }
+        let log_scale = self.log_scale + rhs.log_scale;
+
+        Self::new(fixed, log_scale)
     }
 }
 
 impl CheckedMul for FixedPointNumber {
     fn checked_mul(&self, rhs: &Self) -> Option<Self> {
         let fixed = self.fixed.checked_mul(rhs.fixed);
-        let scale = self.scale.checked_mul(rhs.scale);
+        let log_scale = self.log_scale.checked_add(rhs.log_scale);
 
-        match (fixed, scale) {
-            (Some(fixed), Some(scale)) => Some(Self { fixed, scale }),
+        match (fixed, log_scale) {
+            (Some(fixed), Some(log_scale)) => Some(Self::new(fixed, log_scale)),
             _ => None,
         }
     }
@@ -891,36 +950,51 @@ impl CheckedMul for FixedPointNumber {
 
 impl From<i64> for FixedPointNumber {
     fn from(value: i64) -> Self {
-        Self {
-            fixed: value,
-            scale: 1,
+        Self::new(value, 0)
+    }
+}
+
+impl From<f64> for FixedPointNumber {
+    fn from(value: f64) -> Self {
+        let mut log_scale = 0;
+        let mut fixed = value;
+
+        while fixed != fixed.round() {
+            fixed *= 10_f64;
+            log_scale -= 1;
         }
+
+        Self::new(fixed as i64, log_scale)
     }
 }
 
 impl From<FixedPointNumber> for f64 {
     fn from(val: FixedPointNumber) -> Self {
-        val.fixed as f64 / val.scale as f64
+        let scale = 10_f64.powi(val.log_scale);
+        val.fixed as f64 * scale
     }
 }
 
 impl From<FixedPointNumber> for i64 {
     fn from(val: FixedPointNumber) -> Self {
-        val.fixed / val.scale as i64
+        let scale = 10_f64.powi(val.log_scale);
+        (val.fixed as f64 * scale).round() as i64
     }
 }
 
 impl From<FixedPointNumber> for i32 {
     fn from(val: FixedPointNumber) -> Self {
-        (val.fixed / val.scale as i64) as i32
+        let scale = 10_f64.powi(val.log_scale);
+        (val.fixed as f64 * scale).round() as i32
     }
 }
 
 type IntervalComponent = (FixedPointNumber, IntervalType);
+type FixedMonthDayNano = (FixedPointNumber, FixedPointNumber, FixedPointNumber);
 
 fn month_day_nano_from_interval_component(
     interval: IntervalComponent,
-) -> Result<MonthDayNano, ArrowError> {
+) -> Result<FixedMonthDayNano, ArrowError> {
     let (amount, unit) = interval;
 
     match unit {
@@ -961,7 +1035,7 @@ fn month_day_nano_from_interval_component(
             let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
                 "Overflow converting hours to nanoseconds".to_string(),
             ))?;
-            Ok((0, 0, nanos.into()))
+            Ok((0.into(), 0.into(), nanos))
         }
         IntervalType::Minute => {
             let scale = FixedPointNumber::from(60 * NANOS_PER_SECOND as i64);
@@ -969,30 +1043,30 @@ fn month_day_nano_from_interval_component(
                 "Overflow converting minutes to nanoseconds".to_string(),
             ))?;
 
-            Ok((0, 0, nanos.into()))
+            Ok((0.into(), 0.into(), nanos))
         }
         IntervalType::Second => {
             let scale = FixedPointNumber::from(NANOS_PER_SECOND as i64);
             let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
                 "Overflow converting seconds to nanoseconds".to_string(),
             ))?;
-            Ok((0, 0, nanos.into()))
+            Ok((0.into(), 0.into(), nanos))
         }
         IntervalType::Millisecond => {
             let scale = FixedPointNumber::from(1_000_000);
             let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
                 "Overflow converting milliseconds to nanoseconds".to_string(),
             ))?;
-            Ok((0, 0, nanos.into()))
+            Ok((0.into(), 0.into(), nanos))
         }
         IntervalType::Microsecond => {
             let scale = FixedPointNumber::from(1_000);
             let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
                 "Overflow converting microseconds to nanoseconds".to_string(),
             ))?;
-            Ok((0, 0, nanos.into()))
+            Ok((0.into(), 0.into(), nanos))
         }
-        IntervalType::Nanosecond => Ok((0, 0, amount.into())),
+        IntervalType::Nanosecond => Ok((0.into(), 0.into(), amount)),
     }
 }
 
@@ -1090,33 +1164,30 @@ fn parse_interval(
         .map(month_day_nano_from_interval_component)
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut result_months: i32 = 0;
-    let mut result_days: i32 = 0;
-    let mut result_nanos: i64 = 0;
+    let mut months: FixedPointNumber = 0.into();
+    let mut days: FixedPointNumber = 0.into();
+    let mut nanos: FixedPointNumber = 0.into();
     for (diff_month, diff_days, diff_nanos) in intervals {
-        result_months =
-            result_months
-                .checked_add(diff_month)
-                .ok_or(ArrowError::ParseError(format!(
-                    "Interval field value out of range: {value:?}"
-                )))?;
+        months = months
+            .checked_add(&diff_month)
+            .ok_or(ArrowError::ParseError(format!(
+                "Interval field value out of range: {value:?}"
+            )))?;
 
-        result_days =
-            result_days
-                .checked_add(diff_days)
-                .ok_or(ArrowError::ParseError(format!(
-                    "Interval field value out of range: {value:?}"
-                )))?;
+        days = days
+            .checked_add(&diff_days)
+            .ok_or(ArrowError::ParseError(format!(
+                "Interval field value out of range: {value:?}"
+            )))?;
 
-        result_nanos =
-            result_nanos
-                .checked_add(diff_nanos)
-                .ok_or(ArrowError::ParseError(format!(
-                    "Interval field value out of range: {value:?}"
-                )))?;
+        nanos = nanos
+            .checked_add(&diff_nanos)
+            .ok_or(ArrowError::ParseError(format!(
+                "Interval field value out of range: {value:?}"
+            )))?;
     }
 
-    Ok((result_months, result_days, result_nanos))
+    Ok((months.into(), days.into(), nanos.into()))
 }
 
 /// The fractional units must be spilled to smaller units.
@@ -1127,20 +1198,18 @@ fn align_interval_parts(
     month_part: FixedPointNumber,
     day_part: FixedPointNumber,
     nanos_part: FixedPointNumber,
-) -> Result<MonthDayNano, ArrowError> {
-    // Convert fractional month to days, It's not supported by Arrow types, but anyway
+) -> Result<FixedMonthDayNano, ArrowError> {
+    // Convert fractional part of months to days (not supported by Arrow types, but anyway)
     let whole_months: i64 = month_part.into();
-    let days = day_part
-        + (month_part - FixedPointNumber::from(whole_months))
-            * FixedPointNumber::from(30);
+    let days = day_part + (month_part - whole_months.into()) * 30.into();
 
-    // Convert fractional days to nanos
+    // Convert fractional part of days to nanos
     let whole_days: i64 = days.into();
     let nanos = nanos_part
-        + (day_part - FixedPointNumber::from(whole_days))
-            * FixedPointNumber::from(24)
-            * FixedPointNumber::from(SECONDS_PER_HOUR as i64)
-            * FixedPointNumber::from(NANOS_PER_SECOND as i64);
+        + (day_part - whole_days.into())
+            * 24.into()
+            * (SECONDS_PER_HOUR as i64).into()
+            * (NANOS_PER_SECOND as i64).into();
 
     let whole_nanos: i64 = nanos.into();
 
@@ -1160,7 +1229,7 @@ fn align_interval_parts(
         )));
     }
 
-    Ok((whole_months as i32, whole_days as i32, whole_nanos))
+    Ok((whole_months.into(), whole_days.into(), whole_nanos.into()))
 }
 
 #[cfg(test)]
@@ -1902,11 +1971,208 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_point_parsing() {
+        // basic parsing
+        let result = FixedPointNumber::from_str("123.123").unwrap();
+        let expected = FixedPointNumber {
+            fixed: 123_123,
+            log_scale: -3,
+        };
+
+        assert_eq!(result, expected);
+        assert_eq!(f64::from(result), 123.123);
+
+        // optional zero in integer part
+        let result = FixedPointNumber::from_str(".3").unwrap();
+        let expected = FixedPointNumber::from_str("0.3").unwrap();
+
+        assert_eq!(result, expected);
+        assert_eq!(f64::from(result), 0.3);
+
+        // optional zero in fractional part
+        let result = FixedPointNumber::from_str("3.").unwrap();
+        let expected = FixedPointNumber::from_str("3.0").unwrap();
+
+        assert_eq!(result, expected);
+
+        // negative numbers
+        let result = FixedPointNumber::from_str("-3.5").unwrap();
+        let expected = FixedPointNumber {
+            fixed: -35,
+            log_scale: -1,
+        };
+
+        assert_eq!(result, expected);
+        assert_eq!(f64::from(result), -3.5);
+    }
+
+    #[test]
+    fn test_fixed_point_conversion() {
+        // test converting from double
+        let result = FixedPointNumber::from(123.123);
+        let expected = FixedPointNumber {
+            fixed: 123_123,
+            log_scale: -3,
+        };
+
+        assert_eq!(result, expected);
+        assert_eq!(f64::from(result), 123.123);
+
+        // test converting from negative double
+        let result = FixedPointNumber::from(-123.123);
+        let expected = FixedPointNumber {
+            fixed: -123_123,
+            log_scale: -3,
+        };
+
+        assert_eq!(result, expected);
+        assert_eq!(f64::from(result), -123.123);
+
+        // test converting from i64
+        let result = FixedPointNumber::from(123);
+        let expected = FixedPointNumber {
+            fixed: 123,
+            log_scale: 0,
+        };
+
+        assert_eq!(result, expected);
+        assert_eq!(i64::from(result), 123);
+
+        // test converting from negative integer
+        let result = FixedPointNumber::from(-123);
+        let expected = FixedPointNumber {
+            fixed: -123,
+            log_scale: 0,
+        };
+
+        assert_eq!(result, expected);
+        assert_eq!(i64::from(result), -123);
+
+        // test compacting large integer
+        let result = FixedPointNumber::from(123_000_000_000_000_000);
+        let expected = FixedPointNumber {
+            fixed: 123,
+            log_scale: 15,
+        };
+
+        assert_eq!(result, expected);
+        assert_eq!(i64::from(result), 123_000_000_000_000_000);
+
+        // test compacting large negative integer
+        let result = FixedPointNumber::from(-123_000_000_000_000_000);
+        let expected = FixedPointNumber {
+            fixed: -123,
+            log_scale: 15,
+        };
+
+        assert_eq!(result, expected);
+        assert_eq!(i64::from(result), -123_000_000_000_000_000);
+    }
+
+    #[test]
+    fn test_fixed_point_align() {
+        // align two integers with different scales
+        let lhs = FixedPointNumber::from(-10);
+        let rhs = FixedPointNumber::from(10_000);
+
+        let lhs_expected = FixedPointNumber {
+            fixed: -1,
+            log_scale: 1,
+        };
+        let rhs_expected = FixedPointNumber {
+            fixed: 1,
+            log_scale: 4,
+        };
+
+        assert_eq!(lhs, lhs_expected);
+        assert_eq!(rhs, rhs_expected);
+
+        let (lhs_result, rhs_result) = FixedPointNumber::align(&lhs, &rhs);
+        let lhs_expected = FixedPointNumber {
+            fixed: -1,
+            log_scale: 1,
+        };
+        let rhs_expected = FixedPointNumber {
+            fixed: 1000,
+            log_scale: 1,
+        };
+
+        assert_eq!(lhs_result, lhs_expected);
+        assert_eq!(rhs_result, rhs_expected);
+
+        // align two doubles with different scales and different signs
+        let lhs = FixedPointNumber::from(-0.0001);
+        let rhs = FixedPointNumber::from(123.123);
+
+        let lhs_expected = FixedPointNumber {
+            fixed: -1,
+            log_scale: -4,
+        };
+        let rhs_expected = FixedPointNumber {
+            fixed: 123_123,
+            log_scale: -3,
+        };
+
+        assert_eq!(lhs, lhs_expected);
+        assert_eq!(rhs, rhs_expected);
+
+        let (lhs_result, rhs_result) = FixedPointNumber::align(&lhs, &rhs);
+        let lhs_expected = FixedPointNumber {
+            fixed: -1,
+            log_scale: -4,
+        };
+        let rhs_expected = FixedPointNumber {
+            fixed: 123_1230,
+            log_scale: -4,
+        };
+
+        assert_eq!(lhs_result, lhs_expected);
+        assert_eq!(rhs_result, rhs_expected);
+    }
+
+    #[test]
+    fn test_fixed_point_arith() {
+        // test adding integers with same scale
+        let lhs = FixedPointNumber::from(0.3);
+        let rhs = FixedPointNumber::from(0.7);
+        let result = lhs + rhs;
+        let expected = FixedPointNumber {
+            fixed: 1,
+            log_scale: 0,
+        };
+
+        assert_eq!(result, expected);
+        assert_eq!(f64::from(result), 1.0);
+
+        // test multiplying compacted integers
+        let lhs = FixedPointNumber::from(123_000);
+        let rhs = FixedPointNumber::from(123_000_000);
+        let result = lhs * rhs;
+        let expected = FixedPointNumber {
+            fixed: 15129,
+            log_scale: 9,
+        };
+
+        assert_eq!(result, expected);
+
+        // test multiplying doubles with same scale
+        let lhs = FixedPointNumber::from(1.3);
+        let rhs = FixedPointNumber::from(1.7);
+        let result = lhs * rhs;
+        let expected = FixedPointNumber {
+            fixed: 221,
+            log_scale: -2,
+        };
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
     fn test_interval_precision() {
         let config = IntervalParseConfig::new(IntervalType::Month);
 
         let result = parse_interval("100000.1 days", &config).unwrap();
-        let expected = (0i32, 100000i32, (0.1 * NANOS_PER_DAY) as i64);
+        let expected = (0_i32, 100_000_i32, (0.1 * NANOS_PER_DAY) as i64);
 
         assert_eq!(result, expected);
     }
