@@ -503,11 +503,13 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         })
     }
 
-    /// Append a column chunk from another source without decoding it
+    /// Append an encoded column chunk from another source without decoding it
     ///
     /// This can be used for efficiently concatenating or projecting parquet data,
     /// or encoding parquet data to temporary in-memory buffers
-    pub fn splice_column<R: ChunkReader>(
+    ///
+    /// See [`Self::next_column`] for writing data that isn't already encoded
+    pub fn append_column<R: ChunkReader>(
         &mut self,
         reader: &R,
         mut close: ColumnCloseResult,
@@ -1666,7 +1668,7 @@ mod tests {
         for (write, close) in column_state {
             let buf = Bytes::from(write.into_inner().unwrap());
             row_group_writer
-                .splice_column(&buf, close.unwrap())
+                .append_column(&buf, close.unwrap())
                 .unwrap();
         }
         row_group_writer.close().unwrap();
