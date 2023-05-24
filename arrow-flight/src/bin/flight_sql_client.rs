@@ -49,7 +49,7 @@ where
         match parts.as_slice() {
             [key, value] => {
                 let key = K::from_str(key).map_err(|e| e.to_string())?;
-                let value = V::from_str(value).map_err(|e| e.to_string())?;
+                let value = V::from_str(value.trim()).map_err(|e| e.to_string())?;
                 Ok(Self { key, value })
             }
             _ => Err(format!(
@@ -108,7 +108,10 @@ async fn main() {
     setup_logging();
     let mut client = setup_client(args.client_args).await.expect("setup client");
 
-    let info = client.execute(args.query).await.expect("prepare statement");
+    let info = client
+        .execute(args.query, None)
+        .await
+        .expect("prepare statement");
     info!("got flight info");
 
     let schema = Arc::new(Schema::try_from(info.clone()).expect("valid schema"));

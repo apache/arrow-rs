@@ -104,12 +104,12 @@ impl<'a> ByteArrayWriter<'a> {
     /// Returns a new [`ByteArrayWriter`]
     pub fn new(
         descr: ColumnDescPtr,
-        props: &'a WriterPropertiesPtr,
+        props: WriterPropertiesPtr,
         page_writer: Box<dyn PageWriter + 'a>,
         on_close: OnCloseColumnChunk<'a>,
     ) -> Result<Self> {
         Ok(Self {
-            writer: GenericColumnWriter::new(descr, props.clone(), page_writer),
+            writer: GenericColumnWriter::new(descr, props, page_writer),
             on_close: Some(on_close),
         })
     }

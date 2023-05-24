@@ -30,17 +30,28 @@ use super::{
         FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
         PutResult, SchemaResult, Ticket,
     },
+    ActionBeginSavepointRequest, ActionBeginSavepointResult,
+    ActionBeginTransactionRequest, ActionBeginTransactionResult,
+    ActionCancelQueryRequest, ActionCancelQueryResult,
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    ActionCreatePreparedStatementResult, CommandGetCatalogs, CommandGetCrossReference,
-    CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
-    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
-    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
-    CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementUpdate,
-    DoPutUpdateResult, ProstMessageExt, SqlInfo, TicketStatementQuery,
+    ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
+    ActionEndSavepointRequest, ActionEndTransactionRequest, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
+    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
+    CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
+    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
+    CommandStatementSubstraitPlan, CommandStatementUpdate, DoPutUpdateResult,
+    ProstMessageExt, SqlInfo, TicketStatementQuery,
 };
 
 pub(crate) static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
 pub(crate) static CLOSE_PREPARED_STATEMENT: &str = "ClosePreparedStatement";
+pub(crate) static CREATE_PREPARED_SUBSTRAIT_PLAN: &str = "CreatePreparedSubstraitPlan";
+pub(crate) static BEGIN_TRANSACTION: &str = "BeginTransaction";
+pub(crate) static END_TRANSACTION: &str = "EndTransaction";
+pub(crate) static BEGIN_SAVEPOINT: &str = "BeginSavepoint";
+pub(crate) static END_SAVEPOINT: &str = "EndSavepoint";
+pub(crate) static CANCEL_QUERY: &str = "CancelQuery";
 
 /// Implements FlightSqlService to handle the flight sql protocol
 #[tonic::async_trait]
@@ -78,6 +89,13 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn get_flight_info_statement(
         &self,
         query: CommandStatementQuery,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo for executing a substrait plan.
+    async fn get_flight_info_substrait_plan(
+        &self,
+        query: CommandStatementSubstraitPlan,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
@@ -267,6 +285,13 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
         request: Request<Streaming<FlightData>>,
     ) -> Result<i64, Status>;
 
+    /// Execute a substrait plan
+    async fn do_put_substrait_plan(
+        &self,
+        query: CommandStatementSubstraitPlan,
+        request: Request<Streaming<FlightData>>,
+    ) -> Result<i64, Status>;
+
     // do_action
 
     /// Create a prepared statement from given SQL statement.
@@ -281,7 +306,49 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
         &self,
         query: ActionClosePreparedStatementRequest,
         request: Request<Action>,
-    );
+    ) -> Result<(), Status>;
+
+    /// Create a prepared substrait plan.
+    async fn do_action_create_prepared_substrait_plan(
+        &self,
+        query: ActionCreatePreparedSubstraitPlanRequest,
+        request: Request<Action>,
+    ) -> Result<ActionCreatePreparedStatementResult, Status>;
+
+    /// Begin a transaction
+    async fn do_action_begin_transaction(
+        &self,
+        query: ActionBeginTransactionRequest,
+        request: Request<Action>,
+    ) -> Result<ActionBeginTransactionResult, Status>;
+
+    /// End a transaction
+    async fn do_action_end_transaction(
+        &self,
+        query: ActionEndTransactionRequest,
+        request: Request<Action>,
+    ) -> Result<(), Status>;
+
+    /// Begin a savepoint
+    async fn do_action_begin_savepoint(
+        &self,
+        query: ActionBeginSavepointRequest,
+        request: Request<Action>,
+    ) -> Result<ActionBeginSavepointResult, Status>;
+
+    /// End a savepoint
+    async fn do_action_end_savepoint(
+        &self,
+        query: ActionEndSavepointRequest,
+        request: Request<Action>,
+    ) -> Result<(), Status>;
+
+    /// Cancel a query
+    async fn do_action_cancel_query(
+        &self,
+        query: ActionCancelQueryRequest,
+        request: Request<Action>,
+    ) -> Result<ActionCancelQueryResult, Status>;
 
     /// Register a new SqlInfo result, making it available when calling GetSqlInfo.
     async fn register_sql_info(&self, id: i32, result: &SqlInfo);
@@ -338,6 +405,9 @@ where
             Command::CommandPreparedStatementQuery(handle) => {
                 self.get_flight_info_prepared_statement(handle, request)
                     .await
+            }
+            Command::CommandStatementSubstraitPlan(handle) => {
+                self.get_flight_info_substrait_plan(handle, request).await
             }
             Command::CommandGetCatalogs(token) => {
                 self.get_flight_info_catalogs(token, request).await
@@ -450,6 +520,14 @@ where
             Command::CommandPreparedStatementQuery(command) => {
                 self.do_put_prepared_statement_query(command, request).await
             }
+            Command::CommandStatementSubstraitPlan(command) => {
+                let record_count = self.do_put_substrait_plan(command, request).await?;
+                let result = DoPutUpdateResult { record_count };
+                let output = futures::stream::iter(vec![Ok(PutResult {
+                    app_metadata: result.as_any().encode_to_vec().into(),
+                })]);
+                Ok(Response::new(Box::pin(output)))
+            }
             Command::CommandPreparedStatementUpdate(command) => {
                 let record_count = self
                     .do_put_prepared_statement_update(command, request)
@@ -485,9 +563,58 @@ where
                 Response Message: N/A"
                 .into(),
         };
+        let create_prepared_substrait_plan_action_type = ActionType {
+            r#type: CREATE_PREPARED_SUBSTRAIT_PLAN.to_string(),
+            description:
+                "Creates a reusable prepared substrait plan resource on the server.\n
+                Request Message: ActionCreatePreparedSubstraitPlanRequest\n
+                Response Message: ActionCreatePreparedStatementResult"
+                    .into(),
+        };
+        let begin_transaction_action_type = ActionType {
+            r#type: BEGIN_TRANSACTION.to_string(),
+            description: "Begins a transaction.\n
+                Request Message: ActionBeginTransactionRequest\n
+                Response Message: ActionBeginTransactionResult"
+                .into(),
+        };
+        let end_transaction_action_type = ActionType {
+            r#type: END_TRANSACTION.to_string(),
+            description: "Ends a transaction\n
+                Request Message: ActionEndTransactionRequest\n
+                Response Message: N/A"
+                .into(),
+        };
+        let begin_savepoint_action_type = ActionType {
+            r#type: BEGIN_SAVEPOINT.to_string(),
+            description: "Begins a savepoint.\n
+                Request Message: ActionBeginSavepointRequest\n
+                Response Message: ActionBeginSavepointResult"
+                .into(),
+        };
+        let end_savepoint_action_type = ActionType {
+            r#type: END_SAVEPOINT.to_string(),
+            description: "Ends a savepoint\n
+                Request Message: ActionEndSavepointRequest\n
+                Response Message: N/A"
+                .into(),
+        };
+        let cancel_query_action_type = ActionType {
+            r#type: CANCEL_QUERY.to_string(),
+            description: "Cancels a query\n
+                Request Message: ActionCancelQueryRequest\n
+                Response Message: ActionCancelQueryResult"
+                .into(),
+        };
         let actions: Vec<Result<ActionType, Status>> = vec![
             Ok(create_prepared_statement_action_type),
             Ok(close_prepared_statement_action_type),
+            Ok(create_prepared_substrait_plan_action_type),
+            Ok(begin_transaction_action_type),
+            Ok(end_transaction_action_type),
+            Ok(begin_savepoint_action_type),
+            Ok(end_savepoint_action_type),
+            Ok(cancel_query_action_type),
         ];
         let output = futures::stream::iter(actions);
         Ok(Response::new(Box::pin(output) as Self::ListActionsStream))
@@ -516,8 +643,7 @@ where
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
-        }
-        if request.get_ref().r#type == CLOSE_PREPARED_STATEMENT {
+        } else if request.get_ref().r#type == CLOSE_PREPARED_STATEMENT {
             let any =
                 Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
@@ -529,8 +655,101 @@ where
                         "Unable to unpack ActionClosePreparedStatementRequest.",
                     )
                 })?;
-            self.do_action_close_prepared_statement(cmd, request).await;
+            self.do_action_close_prepared_statement(cmd, request)
+                .await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
+        } else if request.get_ref().r#type == CREATE_PREPARED_SUBSTRAIT_PLAN {
+            let any =
+                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+
+            let cmd: ActionCreatePreparedSubstraitPlanRequest = any
+                .unpack()
+                .map_err(arrow_error_to_status)?
+                .ok_or_else(|| {
+                    Status::invalid_argument(
+                        "Unable to unpack ActionCreatePreparedSubstraitPlanRequest.",
+                    )
+                })?;
+            self.do_action_create_prepared_substrait_plan(cmd, request)
+                .await?;
+            return Ok(Response::new(Box::pin(futures::stream::empty())));
+        } else if request.get_ref().r#type == BEGIN_TRANSACTION {
+            let any =
+                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+
+            let cmd: ActionBeginTransactionRequest = any
+                .unpack()
+                .map_err(arrow_error_to_status)?
+                .ok_or_else(|| {
+                    Status::invalid_argument(
+                        "Unable to unpack ActionBeginTransactionRequest.",
+                    )
+                })?;
+            let stmt = self.do_action_begin_transaction(cmd, request).await?;
+            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+                body: stmt.as_any().encode_to_vec().into(),
+            })]);
+            return Ok(Response::new(Box::pin(output)));
+        } else if request.get_ref().r#type == END_TRANSACTION {
+            let any =
+                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+
+            let cmd: ActionEndTransactionRequest = any
+                .unpack()
+                .map_err(arrow_error_to_status)?
+                .ok_or_else(|| {
+                    Status::invalid_argument(
+                        "Unable to unpack ActionEndTransactionRequest.",
+                    )
+                })?;
+            self.do_action_end_transaction(cmd, request).await?;
+            return Ok(Response::new(Box::pin(futures::stream::empty())));
+        } else if request.get_ref().r#type == BEGIN_SAVEPOINT {
+            let any =
+                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+
+            let cmd: ActionBeginSavepointRequest = any
+                .unpack()
+                .map_err(arrow_error_to_status)?
+                .ok_or_else(|| {
+                    Status::invalid_argument(
+                        "Unable to unpack ActionBeginSavepointRequest.",
+                    )
+                })?;
+            let stmt = self.do_action_begin_savepoint(cmd, request).await?;
+            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+                body: stmt.as_any().encode_to_vec().into(),
+            })]);
+            return Ok(Response::new(Box::pin(output)));
+        } else if request.get_ref().r#type == END_SAVEPOINT {
+            let any =
+                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+
+            let cmd: ActionEndSavepointRequest = any
+                .unpack()
+                .map_err(arrow_error_to_status)?
+                .ok_or_else(|| {
+                    Status::invalid_argument(
+                        "Unable to unpack ActionEndSavepointRequest.",
+                    )
+                })?;
+            self.do_action_end_savepoint(cmd, request).await?;
+            return Ok(Response::new(Box::pin(futures::stream::empty())));
+        } else if request.get_ref().r#type == CANCEL_QUERY {
+            let any =
+                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+
+            let cmd: ActionCancelQueryRequest = any
+                .unpack()
+                .map_err(arrow_error_to_status)?
+                .ok_or_else(|| {
+                    Status::invalid_argument("Unable to unpack ActionCancelQueryRequest.")
+                })?;
+            let stmt = self.do_action_cancel_query(cmd, request).await?;
+            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+                body: stmt.as_any().encode_to_vec().into(),
+            })]);
+            return Ok(Response::new(Box::pin(output)));
         }
 
         Err(Status::invalid_argument(format!(
