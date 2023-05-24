@@ -137,6 +137,13 @@ impl Default for WriterProperties {
 }
 
 impl WriterProperties {
+    /// Create a new [`WriterProperties`] with the default settings
+    ///
+    /// See [`WriterProperties::builder`] for customising settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Returns builder for writer properties with default values.
     pub fn builder() -> WriterPropertiesBuilder {
         WriterPropertiesBuilder::with_defaults()
