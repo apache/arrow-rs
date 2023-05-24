@@ -184,7 +184,15 @@ impl ArrayReader for FixedSizeListArrayReader {
             }
             None => child_data_builder.freeze(),
         };
-        assert_eq!(list_len * self.fixed_size, child_data.len());
+
+        // Verify total number of elements is aligned with fixed list size
+        if list_len * self.fixed_size != child_data.len() {
+            return Err(general_err!(
+                "fixed-size list length must be a multiple of {} but array contains {} elements",
+                self.fixed_size,
+                child_data.len()
+            ));
+        }
 
         let mut list_builder = ArrayData::builder(self.get_data_type().clone())
             .len(list_len)
