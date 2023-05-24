@@ -19,7 +19,7 @@ use crate::array::{get_offsets, make_array, print_long_array};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
     iterator::GenericListArrayIter, new_empty_array, Array, ArrayAccessor, ArrayRef,
-    ArrowPrimitiveType,
+    ArrowPrimitiveType, FixedSizeListArray,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -310,9 +310,7 @@ impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericListArray<OffsetSiz
     }
 }
 
-impl<OffsetSize: 'static + OffsetSizeTrait> From<GenericListArray<OffsetSize>>
-    for ArrayData
-{
+impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>> for ArrayData {
     fn from(array: GenericListArray<OffsetSize>) -> Self {
         let len = array.len();
         let builder = ArrayDataBuilder::new(array.data_type)
@@ -322,6 +320,27 @@ impl<OffsetSize: 'static + OffsetSizeTrait> From<GenericListArray<OffsetSize>>
             .child_data(vec![array.values.to_data()]);
 
         unsafe { builder.build_unchecked() }
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray>
+    for GenericListArray<OffsetSize>
+{
+    fn from(value: FixedSizeListArray) -> Self {
+        let (field, size) = match value.data_type() {
+            DataType::FixedSizeList(f, size) => (f, *size as usize),
+            _ => unreachable!(),
+        };
+
+        let offsets =
+            OffsetBuffer::from_lengths(std::iter::repeat(size).take(value.len()));
+
+        Self {
+            data_type: Self::DATA_TYPE_CONSTRUCTOR(field.clone()),
+            nulls: value.nulls().cloned(),
+            values: value.values().clone(),
+            value_offsets: offsets,
+        }
     }
 }
 
@@ -509,7 +528,8 @@ pub type LargeListArray = GenericListArray<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{Int32Builder, ListBuilder};
+    use crate::builder::{FixedSizeListBuilder, Int32Builder, ListBuilder};
+    use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Int32Array, Int64Array};
     use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
@@ -1177,5 +1197,23 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Max offset of 5 exceeds length of values 2"
         );
+    }
+
+    #[test]
+    fn test_from_fixed_size_list() {
+        let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 3);
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[0, 0, 0]);
+        builder.append(false);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true);
+        let list: ListArray = builder.finish().into();
+
+        let values: Vec<_> = list
+            .iter()
+            .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
+            .collect();
+        assert_eq!(values, vec![Some(vec![1, 2, 3]), None, Some(vec![4, 5, 6])])
     }
 }
