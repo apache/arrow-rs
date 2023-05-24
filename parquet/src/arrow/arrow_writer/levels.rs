@@ -407,14 +407,23 @@ impl LevelInfoBuilder {
                 child.visit_leaves(|leaf| {
                     let rep_levels = leaf.rep_levels.as_mut().unwrap();
 
-                    // The index of the start of the current write range
-                    let start = rep_levels.len() - (values_end - values_start);
-                    let num_items = end_idx - start_idx;
-                    // Mark the start of each list in the child array
-                    for i in 0..num_items {
-                        let idx = start + i * fixed_size;
-                        rep_levels[idx] = ctx.rep_level - 1;
-                    }
+                    let row_indices = (0..fixed_size)
+                        .rev()
+                        .cycle()
+                        .take(values_end - values_start);
+
+                    // Step backward over the child rep levels and mark the start of each list
+                    rep_levels
+                        .iter_mut()
+                        .rev()
+                        // Filter out reps from nested children
+                        .filter(|&&mut r| r == ctx.rep_level)
+                        .zip(row_indices)
+                        .for_each(|(r, idx)| {
+                            if idx == 0 {
+                                *r = ctx.rep_level - 1;
+                            }
+                        });
                 })
             };
 
@@ -1713,6 +1722,43 @@ mod tests {
             max_def_level: 3,
             max_rep_level: 1,
         };
+        assert_eq!(list_level, &expected_level);
+    }
+
+    #[test]
+    fn test_fixed_size_list_of_var_lists() {
+        // [[[1, null, 3], null], [[4], []], [[5, 6], [null, null]], null]
+        let mut builder =
+            FixedSizeListBuilder::new(ListBuilder::new(Int32Builder::new()), 2);
+        builder.values().append_value([Some(1), None, Some(3)]);
+        builder.values().append_null();
+        builder.append(true);
+        builder.values().append_value([Some(4)]);
+        builder.values().append_value([]);
+        builder.append(true);
+        builder.values().append_value([Some(5), Some(6)]);
+        builder.values().append_value([None, None]);
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.append(false);
+        let a = builder.finish();
+
+        let item_field = Field::new("item", a.data_type().clone(), true);
+        let mut builder =
+            LevelInfoBuilder::try_new(&item_field, Default::default()).unwrap();
+        builder.write(&a, 0..4);
+        let levels = builder.finish();
+
+        let list_level = levels.get(0).unwrap();
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0]),
+            rep_levels: Some(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
+            non_null_indices: vec![0, 2, 3, 4, 5],
+            max_def_level: 5,
+            max_rep_level: 2,
+        };
+
         assert_eq!(list_level, &expected_level);
     }
 }
