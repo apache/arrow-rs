@@ -65,8 +65,7 @@ mod parquet_field;
 ///
 ///  let schema = samples.as_slice().schema();
 ///
-///  let props = Arc::new(WriterProperties::builder().build());
-///  let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+///  let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
 ///
 ///  let mut row_group = writer.next_row_group().unwrap();
 ///  samples.as_slice().write_to_row_group(&mut row_group).unwrap();

@@ -40,10 +40,7 @@
 //!
 //! let file = File::create("data.parquet").unwrap();
 //!
-//! // Default writer properties
-//! let props = WriterProperties::builder().build();
-//!
-//! let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
+//! let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
 //!
 //! writer.write(&batch).expect("Writing batch");
 //!

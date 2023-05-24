@@ -825,7 +825,7 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
         let row_group_writer = writer.next_row_group().unwrap();
         let res = row_group_writer.close();
@@ -860,7 +860,7 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
         let mut row_group_writer = writer.next_row_group().unwrap();
 
@@ -898,7 +898,7 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let writer =
             SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
@@ -1575,7 +1575,7 @@ mod tests {
         ";
 
         let schema = Arc::new(parse_message_type(message_type).unwrap());
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = SerializedFileWriter::new(vec![], schema, props).unwrap();
         let mut row_group_writer = writer.next_row_group().unwrap();
 

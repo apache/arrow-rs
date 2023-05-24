@@ -139,7 +139,7 @@ mod tests {
 
         assert_eq!(&schema, &generated_schema);
 
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer =
             SerializedFileWriter::new(file, generated_schema, props).unwrap();
 

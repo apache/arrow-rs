@@ -1746,11 +1746,10 @@ mod tests {
 
         {
             // Write using low-level parquet API (#1167)
-            let writer_props = Arc::new(WriterProperties::builder().build());
             let mut writer = SerializedFileWriter::new(
                 file.try_clone().unwrap(),
                 schema,
-                writer_props,
+                Default::default(),
             )
             .unwrap();
 
@@ -2288,7 +2287,7 @@ mod tests {
             }
         ";
         let schema = Arc::new(parse_message_type(MESSAGE_TYPE).unwrap());
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
 
         let mut buf = Vec::with_capacity(1024);
         let mut writer = SerializedFileWriter::new(&mut buf, schema, props).unwrap();
