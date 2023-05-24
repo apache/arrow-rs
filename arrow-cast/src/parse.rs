@@ -21,6 +21,8 @@ use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
+use num::CheckedMul;
+use std::ops::{Add, Mul, Sub};
 use std::str::FromStr;
 
 /// Parse nanoseconds from the first `N` values in digits, subtracting the offset `O`
@@ -804,7 +806,117 @@ impl FromStr for IntervalType {
 
 pub type MonthDayNano = (i32, i32, i64);
 
-type IntervalComponent = (f64, IntervalType);
+#[derive(Clone, Copy)]
+struct FixedPointNumber {
+    fixed: i64,
+    scale: usize,
+}
+
+impl FromStr for FixedPointNumber {
+    type Err = ArrowError;
+
+    fn from_str(s: &str) -> Result<Self, ArrowError> {
+        if s.is_empty() {
+            return Err(ArrowError::ParseError(
+                "Fixed point number cannot be empty".to_string(),
+            ));
+        }
+
+        let mut parts = s.split('.');
+
+        let integer = parts.next().unwrap();
+        let fractional = parts.next();
+
+        let combined = match fractional {
+            Some(fractional) => format!("{}{}", integer, fractional),
+            None => integer.to_string(),
+        };
+
+        let fractional_digits = match fractional {
+            Some(fractional) => fractional.len(),
+            None => 0,
+        };
+
+        let fixed = i64::from_str(&combined).map_err(|_| {
+            ArrowError::ParseError(format!("Failed to parse fixed point number: {s}"))
+        })?;
+
+        let scale = 10_usize.pow(fractional_digits as u32);
+
+        Ok(Self { fixed, scale })
+    }
+}
+
+impl Add<FixedPointNumber> for FixedPointNumber {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let fixed = self.fixed * (rhs.scale as i64) + rhs.fixed * (self.scale as i64);
+        let scale = self.scale * rhs.scale;
+        Self { fixed, scale }
+    }
+}
+
+impl Sub<FixedPointNumber> for FixedPointNumber {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        let fixed = self.fixed * (rhs.scale as i64) - rhs.fixed * (self.scale as i64);
+        let scale = self.scale * rhs.scale;
+        Self { fixed, scale }
+    }
+}
+
+impl Mul<FixedPointNumber> for FixedPointNumber {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        let fixed = self.fixed * rhs.fixed;
+        let scale = self.scale * rhs.scale;
+        Self { fixed, scale }
+    }
+}
+
+impl CheckedMul for FixedPointNumber {
+    fn checked_mul(&self, rhs: &Self) -> Option<Self> {
+        let fixed = self.fixed.checked_mul(rhs.fixed);
+        let scale = self.scale.checked_mul(rhs.scale);
+
+        match (fixed, scale) {
+            (Some(fixed), Some(scale)) => Some(Self { fixed, scale }),
+            _ => None,
+        }
+    }
+}
+
+impl From<i64> for FixedPointNumber {
+    fn from(value: i64) -> Self {
+        Self {
+            fixed: value,
+            scale: 1,
+        }
+    }
+}
+
+impl From<FixedPointNumber> for f64 {
+    fn from(val: FixedPointNumber) -> Self {
+        val.fixed as f64 / val.scale as f64
+    }
+}
+
+impl From<FixedPointNumber> for i64 {
+    fn from(val: FixedPointNumber) -> Self {
+        val.fixed / val.scale as i64
+    }
+}
+
+impl From<FixedPointNumber> for i32 {
+    fn from(val: FixedPointNumber) -> Self {
+        (val.fixed / val.scale as i64) as i32
+    }
+}
+
+type IntervalComponent = (FixedPointNumber, IntervalType);
 
 fn month_day_nano_from_interval_component(
     interval: IntervalComponent,
@@ -813,33 +925,74 @@ fn month_day_nano_from_interval_component(
 
     match unit {
         IntervalType::Century => {
-            align_interval_parts(amount.mul_checked(1200_f64)?, 0.0, 0.0)
+            let scale = FixedPointNumber::from(1200);
+            let months = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
+                "Overflow converting centuries to months".to_string(),
+            ))?;
+            align_interval_parts(months, 0.into(), 0.into())
         }
         IntervalType::Decade => {
-            align_interval_parts(amount.mul_checked(120_f64)?, 0.0, 0.0)
+            let scale = FixedPointNumber::from(120);
+            let months = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
+                "Overflow converting decades to months".to_string(),
+            ))?;
+            align_interval_parts(months, 0.into(), 0.into())
         }
-        IntervalType::Year => align_interval_parts(amount.mul_checked(12_f64)?, 0.0, 0.0),
-        IntervalType::Month => align_interval_parts(amount, 0.0, 0.0),
-        IntervalType::Week => align_interval_parts(0.0, amount * 7_f64, 0.0),
-        IntervalType::Day => align_interval_parts(0.0, amount, 0.0),
-        IntervalType::Hour => Ok((
-            0,
-            0,
-            (amount.mul_checked(SECONDS_PER_HOUR * NANOS_PER_SECOND))? as i64,
-        )),
-        IntervalType::Minute => Ok((
-            0,
-            0,
-            (amount.mul_checked(60_f64 * NANOS_PER_SECOND))? as i64,
-        )),
+        IntervalType::Year => {
+            let scale = &FixedPointNumber::from(12);
+            let months = amount.checked_mul(scale).ok_or(ArrowError::ParseError(
+                "Overflow converting years to months".to_string(),
+            ))?;
+            align_interval_parts(months, 0.into(), 0.into())
+        }
+        IntervalType::Month => align_interval_parts(amount, 0.into(), 0.into()),
+        IntervalType::Week => {
+            let scale = FixedPointNumber::from(7);
+            let days = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
+                "Overflow converting weeks to days".to_string(),
+            ))?;
+            align_interval_parts(0.into(), days, 0.into())
+        }
+        IntervalType::Day => align_interval_parts(0.into(), amount, 0.into()),
+        IntervalType::Hour => {
+            let scale = FixedPointNumber::from(
+                (SECONDS_PER_HOUR as i64) * (NANOS_PER_SECOND as i64),
+            );
+            let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
+                "Overflow converting hours to nanoseconds".to_string(),
+            ))?;
+            Ok((0, 0, nanos.into()))
+        }
+        IntervalType::Minute => {
+            let scale = FixedPointNumber::from(60 * NANOS_PER_SECOND as i64);
+            let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
+                "Overflow converting minutes to nanoseconds".to_string(),
+            ))?;
+
+            Ok((0, 0, nanos.into()))
+        }
         IntervalType::Second => {
-            Ok((0, 0, (amount.mul_checked(NANOS_PER_SECOND))? as i64))
+            let scale = FixedPointNumber::from(NANOS_PER_SECOND as i64);
+            let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
+                "Overflow converting seconds to nanoseconds".to_string(),
+            ))?;
+            Ok((0, 0, nanos.into()))
         }
         IntervalType::Millisecond => {
-            Ok((0, 0, (amount.mul_checked(1_000_000f64))? as i64))
+            let scale = FixedPointNumber::from(1_000_000);
+            let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
+                "Overflow converting milliseconds to nanoseconds".to_string(),
+            ))?;
+            Ok((0, 0, nanos.into()))
         }
-        IntervalType::Microsecond => Ok((0, 0, (amount.mul_checked(1_000f64)?) as i64)),
-        IntervalType::Nanosecond => Ok((0, 0, amount as i64)),
+        IntervalType::Microsecond => {
+            let scale = FixedPointNumber::from(1_000);
+            let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
+                "Overflow converting microseconds to nanoseconds".to_string(),
+            ))?;
+            Ok((0, 0, nanos.into()))
+        }
+        IntervalType::Nanosecond => Ok((0, 0, amount.into())),
     }
 }
 
@@ -867,7 +1020,7 @@ fn parse_interval_components(
 
     // parse amounts
     let (amounts, invalid_amounts) = raw_amounts
-        .map(f64::from_str)
+        .map(FixedPointNumber::from_str)
         .partition::<Vec<_>, _>(Result::is_ok);
 
     // invalid amounts?
@@ -891,11 +1044,12 @@ fn parse_interval_components(
     }
 
     // collect parsed results
-    let mut amounts = amounts.into_iter().map(Result::unwrap);
+    let amounts = amounts.into_iter().map(Result::unwrap).collect::<Vec<_>>();
     let units = units.into_iter().map(Result::unwrap).collect::<Vec<_>>();
 
     // out-of-bounds amounts?
-    for amount in amounts.clone() {
+    for amount in amounts.iter() {
+        let amount: f64 = (*amount).into();
         if amount > (i64::MAX as f64) {
             return Err(ArrowError::ParseError(format!(
                 "Interval field value out of range: {value:?}"
@@ -905,7 +1059,7 @@ fn parse_interval_components(
 
     // if only an amount is specified, use the default unit
     if amounts.len() == 1 && units.is_empty() {
-        return Ok(vec![(amounts.next().unwrap(), config.default_unit)]);
+        return Ok(vec![(amounts[0], config.default_unit)]);
     };
 
     // duplicate units?
@@ -920,7 +1074,7 @@ fn parse_interval_components(
         observed_interval_types |= *unit as u16;
     }
 
-    let result = amounts.zip(units.iter().copied());
+    let result = amounts.iter().copied().zip(units.iter().copied());
 
     Ok(result.collect::<Vec<_>>())
 }
@@ -970,33 +1124,43 @@ fn parse_interval(
 /// INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
 /// INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
 fn align_interval_parts(
-    month_part: f64,
-    day_part: f64,
-    nanos_part: f64,
+    month_part: FixedPointNumber,
+    day_part: FixedPointNumber,
+    nanos_part: FixedPointNumber,
 ) -> Result<MonthDayNano, ArrowError> {
     // Convert fractional month to days, It's not supported by Arrow types, but anyway
-    let day_part = day_part + (month_part - (month_part as i64) as f64) * 30_f64;
+    let whole_months: i64 = month_part.into();
+    let days = day_part
+        + (month_part - FixedPointNumber::from(whole_months))
+            * FixedPointNumber::from(30);
 
-    // Convert fractional days to hours
-    let nanos_part = nanos_part
-        + (day_part - ((day_part as i64) as f64))
-            * 24_f64
-            * SECONDS_PER_HOUR
-            * NANOS_PER_SECOND;
+    // Convert fractional days to nanos
+    let whole_days: i64 = days.into();
+    let nanos = nanos_part
+        + (day_part - FixedPointNumber::from(whole_days))
+            * FixedPointNumber::from(24)
+            * FixedPointNumber::from(SECONDS_PER_HOUR as i64)
+            * FixedPointNumber::from(NANOS_PER_SECOND as i64);
 
-    if month_part > i32::MAX as f64
-        || month_part < i32::MIN as f64
-        || day_part > i32::MAX as f64
-        || day_part < i32::MIN as f64
-        || nanos_part > i64::MAX as f64
-        || nanos_part < i64::MIN as f64
+    let whole_nanos: i64 = nanos.into();
+
+    let months: f64 = month_part.into();
+    let days: f64 = days.into();
+    let nanos: f64 = nanos.into();
+
+    if months > i32::MAX as f64
+        || months < i32::MIN as f64
+        || days > i32::MAX as f64
+        || days < i32::MIN as f64
+        || nanos > i64::MAX as f64
+        || nanos < i64::MIN as f64
     {
         return Err(ArrowError::ParseError(format!(
-            "Parsed interval field value out of range: {month_part} months {day_part} days {nanos_part} nanos"
+            "Parsed interval field value out of range: {months} months {days} days {nanos} nanos"
         )));
     }
 
-    Ok((month_part as i32, day_part as i32, nanos_part as i64))
+    Ok((whole_months as i32, whole_days as i32, whole_nanos))
 }
 
 #[cfg(test)]
@@ -1735,6 +1899,16 @@ mod tests {
             r#"ParseError("Invalid input syntax for type interval: \"1 century 2 centuries\". Repeated type 'centuries'")"#,
             format!("{err:?}")
         );
+    }
+
+    #[test]
+    fn test_interval_precision() {
+        let config = IntervalParseConfig::new(IntervalType::Month);
+
+        let result = parse_interval("100000.1 days", &config).unwrap();
+        let expected = (0i32, 100000i32, (0.1 * NANOS_PER_DAY) as i64);
+
+        assert_eq!(result, expected);
     }
 
     #[test]
