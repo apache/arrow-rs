@@ -461,6 +461,112 @@ impl FlightInfo {
     }
 }
 
+// TODO put it in its own module
+/// A builder for creating [`FlightInfo`]
+///
+/// # Example:
+/// ```
+/// TODO
+/// ```
+#[derive(Debug)]
+pub struct FlightInfoBuilder {
+    inner: FlightInfo,
+}
+
+impl FlightInfoBuilder {
+    /// Create a new `FlightInfoBuilder`
+    pub fn new() -> Self {
+        Self {
+            inner: FlightInfo {
+                schema: Bytes::new(),
+                flight_descriptor: None,
+                endpoint: vec![],
+                ordered: false,
+
+                // Flight says "Set these to -1 if unknown."
+                //
+                // https://github.com/apache/arrow-rs/blob/17ca4d51d0490f9c65f5adde144f677dbc8300e7/format/Flight.proto#L287-L289
+                total_records: -1,
+                total_bytes: -1,
+            },
+        }
+    }
+
+    /// Specify the schema for the response. Returns an error if the
+    /// Schema can not be encoded into IPC form.x
+    pub fn with_schema(mut self, schema: &Schema) -> ArrowResult<Self> {
+        let options = IpcWriteOptions::default();
+        let IpcMessage(schema) = SchemaAsIpc::new(schema, &options).try_into()?;
+
+        self.inner.schema = schema;
+        Ok(self)
+    }
+
+    /// Specify that the data described by this FlightInfo can be redeemed
+    /// from the current service returning the response. See
+    ///
+    ///
+    pub fn with_default_endpoint(self, ticket: Ticket) -> Self {
+        self.with_endpoint(FlightEndpoint {
+            ticket: Some(ticket),
+            // Flight Spec says
+            // https://github.com/apache/arrow-rs/blob/17ca4d51d0490f9c65f5adde144f677dbc8300e7/format/Flight.proto#L307C2-L312
+            //
+            // * If the list is empty, the expectation is that the ticket can only
+            // * be redeemed on the current service where the ticket was
+            // * generated.
+            location: vec![],
+        })
+    }
+
+    /// Add specific a endpoint
+    pub fn with_endpoint(mut self, endpoint: FlightEndpoint) -> Self {
+        self.inner.endpoint.push(endpoint);
+        self
+    }
+
+    /// Add specific a endpoint
+    pub fn with_descriptor(mut self, flight_descriptor: FlightDescriptor) -> Self {
+        self.inner.flight_descriptor = Some(flight_descriptor);
+        self
+    }
+
+    /// Set the number of records in the result, if known
+    pub fn with_total_records(mut self, total_records: i64) -> Self {
+        self.inner.total_records = total_records;
+        self
+    }
+
+    /// Set the number of bytes in the result, if known
+    pub fn with_total_bytes(mut self, total_bytes: i64) -> Self {
+        self.inner.total_bytes = total_bytes;
+        self
+    }
+
+    /// Specify ift the response is [ordered] across endpoints
+    ///
+    /// [ordered]: https://github.com/apache/arrow-rs/blob/17ca4d51d0490f9c65f5adde144f677dbc8300e7/format/Flight.proto#L269-L275
+    pub fn with_ordered(mut self, ordered: bool) -> Self {
+        self.inner.ordered = ordered;
+        self
+    }
+
+    /// Build / validate the FlightInfo
+    pub fn build(self) -> ArrowResult<FlightInfo> {
+        let flight_info = self.inner;
+
+        // TODO verify:
+
+        // schema must be set
+
+        // at least one endpoint must be set
+
+        // flight descriptor must be set (I think)
+
+        Ok(flight_info)
+    }
+}
+
 impl<'a> SchemaAsIpc<'a> {
     pub fn new(schema: &'a Schema, options: &'a IpcWriteOptions) -> Self {
         SchemaAsIpc {
