@@ -152,7 +152,7 @@ impl<W: Write> Debug for SerializedFileWriter<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // implement Debug so this can be used with #[derive(Debug)]
         // in client code rather than actually listing all the fields
-        f.debug_struct("SerializedFileWriter<W>")
+        f.debug_struct("SerializedFileWriter")
             .field("descr", &self.descr)
             .field("row_group_index", &self.row_group_index)
             .field("kv_metadatas", &self.kv_metadatas)

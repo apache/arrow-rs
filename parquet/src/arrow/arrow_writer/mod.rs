@@ -95,11 +95,10 @@ pub struct ArrowWriter<W: Write> {
 
 impl<W: Write> Debug for ArrowWriter<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut buffered_batches = 0;
+        let buffered_batches = self.buffer.len();
         let mut buffered_memory = 0;
 
         for batch in self.buffer.iter() {
-            buffered_batches += 1;
             for arr in batch.iter() {
                 buffered_memory += arr.get_array_memory_size()
             }
