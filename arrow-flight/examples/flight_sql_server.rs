@@ -29,7 +29,6 @@ use tonic::{Request, Response, Status, Streaming};
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
-use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::sql::sql_info::SqlInfoList;
 use arrow_flight::sql::{
     server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
@@ -222,26 +221,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
             ticket: Some(ticket),
             location: vec![loc],
         };
-        let endpoints = vec![endpoint];
+        let info = FlightInfo::new()
+            .with_schema(&schema)
+            .map_err(|e| status!("Unable to serialize schema", e))?
+            .with_descriptor(FlightDescriptor::new_cmd(vec![]))
+            .with_endpoint(endpoint)
+            .with_total_records(num_rows as i64)
+            .with_total_bytes(num_bytes as i64)
+            .with_ordered(false);
 
-        let message = SchemaAsIpc::new(&schema, &IpcWriteOptions::default())
-            .try_into()
-            .map_err(|e| status!("Unable to serialize schema", e))?;
-        let IpcMessage(schema_bytes) = message;
-
-        let flight_desc = FlightDescriptor {
-            r#type: DescriptorType::Cmd.into(),
-            cmd: Default::default(),
-            path: vec![],
-        };
-        let info = FlightInfo {
-            schema: schema_bytes,
-            flight_descriptor: Some(flight_desc),
-            endpoint: endpoints,
-            total_records: num_rows as i64,
-            total_bytes: num_bytes as i64,
-            ordered: false,
-        };
         let resp = Response::new(info);
         Ok(resp)
     }
@@ -292,32 +280,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
-        let ticket = Ticket {
-            ticket: query.encode_to_vec().into(),
-        };
+        let ticket = Ticket::new(query.encode_to_vec());
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
-        let options = IpcWriteOptions::default();
-
-        // encode the schema into the correct form
-        let IpcMessage(schema) = SchemaAsIpc::new(SqlInfoList::schema(), &options)
-            .try_into()
-            .expect("valid sql_info schema");
-
-        let endpoint = vec![FlightEndpoint {
-            ticket: Some(ticket),
-            // we assume users wnating to use this helper would reasonably
-            // never need to be distributed across multile endpoints?
-            location: vec![],
-        }];
-
-        let flight_info = FlightInfo {
-            schema,
-            flight_descriptor: Some(flight_descriptor),
-            endpoint,
-            total_records: -1,
-            total_bytes: -1,
-            ordered: false,
-        };
+        let flight_info = FlightInfo::new()
+            .with_schema(&SqlInfoList::schema())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
 
         Ok(tonic::Response::new(flight_info))
     }
