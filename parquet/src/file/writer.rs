@@ -25,7 +25,6 @@ use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
 use thrift::protocol::{TCompactOutputProtocol, TSerializable};
 
-use crate::basic::PageType;
 use crate::column::writer::{
     get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl,
 };
@@ -765,10 +764,7 @@ impl<'a, W: Write> PageWriter for SerializedPageWriter<'a, W> {
         spec.compressed_size = compressed_size + header_size;
         spec.offset = start_pos;
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
-        // Number of values is incremented for data pages only
-        if page_type == PageType::DATA_PAGE || page_type == PageType::DATA_PAGE_V2 {
-            spec.num_values = num_values;
-        }
+        spec.num_values = num_values;
 
         Ok(spec)
     }

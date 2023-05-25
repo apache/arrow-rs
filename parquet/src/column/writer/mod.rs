@@ -915,11 +915,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     fn update_metrics_for_page(&mut self, page_spec: PageWriteSpec) {
         self.column_metrics.total_uncompressed_size += page_spec.uncompressed_size as u64;
         self.column_metrics.total_compressed_size += page_spec.compressed_size as u64;
-        self.column_metrics.total_num_values += page_spec.num_values as u64;
         self.column_metrics.total_bytes_written += page_spec.bytes_written;
 
         match page_spec.page_type {
             PageType::DATA_PAGE | PageType::DATA_PAGE_V2 => {
+                self.column_metrics.total_num_values += page_spec.num_values as u64;
                 if self.column_metrics.data_page_offset.is_none() {
                     self.column_metrics.data_page_offset = Some(page_spec.offset);
                 }
@@ -1512,7 +1512,7 @@ mod tests {
             metadata.encodings(),
             &vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
         );
-        assert_eq!(metadata.num_values(), 8); // dictionary + value indexes
+        assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
         assert_eq!(metadata.uncompressed_size(), 20);
         assert_eq!(metadata.data_page_offset(), 0);
@@ -1639,7 +1639,7 @@ mod tests {
             metadata.encodings(),
             &vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
         );
-        assert_eq!(metadata.num_values(), 8); // dictionary + value indexes
+        assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
         assert_eq!(metadata.uncompressed_size(), 20);
         assert_eq!(metadata.data_page_offset(), 0);
