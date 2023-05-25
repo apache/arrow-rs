@@ -356,7 +356,7 @@ impl SqlInfoList {
 
         let endpoint = vec![FlightEndpoint {
             ticket: Some(ticket),
-            // we assume users wnating to use this helper would reasonably
+            // we assume users wanting to use this helper would reasonably
             // never need to be distributed across multile endpoints?
             location: vec![],
         }];
