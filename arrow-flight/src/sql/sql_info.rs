@@ -41,10 +41,7 @@ use prost::Message;
 
 use super::{CommandGetSqlInfo, ProstMessageExt, SqlInfo};
 use crate::error::Result;
-use crate::{
-    flight_descriptor::DescriptorType, FlightDescriptor, FlightEndpoint, FlightInfo,
-    IpcMessage, IpcWriteOptions, SchemaAsIpc, Ticket,
-};
+use crate::{FlightDescriptor, FlightInfo, FlightInfoBuilder, Ticket};
 
 /// Represents a dynamic value
 #[derive(Debug, Clone, PartialEq)]
@@ -343,42 +340,25 @@ impl SqlInfoList {
         ticket: Option<Ticket>,
         flight_descriptor: Option<FlightDescriptor>,
     ) -> FlightInfo {
-        let options = IpcWriteOptions::default();
-
-        // encode the schema into the correct form
-        let IpcMessage(schema) = SchemaAsIpc::new(&SQL_INFO_SCHEMA, &options)
-            .try_into()
-            .expect("valid sql_info schema");
-
         let ticket = ticket.unwrap_or_else(|| Ticket {
             ticket: CommandGetSqlInfo::default().as_any().encode_to_vec().into(),
         });
 
-        let endpoint = vec![FlightEndpoint {
-            ticket: Some(ticket),
-            // we assume users wnating to use this helper would reasonably
-            // never need to be distributed across multile endpoints?
-            location: vec![],
-        }];
-
-        let flight_descriptor = flight_descriptor.unwrap_or_else(|| FlightDescriptor {
-            r#type: DescriptorType::Cmd.into(),
-            cmd: CommandGetSqlInfo {
+        let flight_descriptor = flight_descriptor.unwrap_or_else(|| {
+            let cmd = CommandGetSqlInfo {
                 ..Default::default()
-            }
-            .encode_to_vec()
-            .into(),
-            ..Default::default()
+            };
+
+            FlightDescriptor::new_cmd(cmd.encode_to_vec())
         });
 
-        FlightInfo {
-            schema,
-            flight_descriptor: Some(flight_descriptor),
-            endpoint,
-            total_records: -1,
-            total_bytes: -1,
-            ordered: false,
-        }
+        FlightInfoBuilder::new()
+            .with_schema(&SQL_INFO_SCHEMA)
+            .expect("valid sql_info schema")
+            .with_default_endpoint(ticket)
+            .with_descriptor(flight_descriptor)
+            .build()
+            .unwrap()
     }
 }
 
