@@ -91,9 +91,6 @@ pub struct ArrowWriter<W: Write> {
     /// The in-progress row group if any
     in_progress: Option<ArrowRowGroupWriter>,
 
-    /// The total number of rows in the in_progress row group, if any
-    buffered_rows: usize,
-
     /// A copy of the Arrow schema.
     ///
     /// The schema is used to verify that each record batch written has the correct schema
@@ -108,8 +105,8 @@ impl<W: Write> Debug for ArrowWriter<W> {
         let buffered_memory = self.in_progress_size();
         f.debug_struct("ArrowWriter")
             .field("writer", &self.writer)
-            .field("buffer", &format_args!("{buffered_memory} bytes"))
-            .field("buffered_rows", &self.buffered_rows)
+            .field("in_progress_size", &format_args!("{buffered_memory} bytes"))
+            .field("in_progress_rows", &self.in_progress_rows())
             .field("arrow_schema", &self.arrow_schema)
             .field("max_row_group_size", &self.max_row_group_size)
             .finish()
@@ -140,7 +137,6 @@ impl<W: Write> ArrowWriter<W> {
         Ok(Self {
             writer: file_writer,
             in_progress: None,
-            buffered_rows: 0,
             arrow_schema,
             max_row_group_size,
         })
@@ -163,26 +159,24 @@ impl<W: Write> ArrowWriter<W> {
         }
     }
 
+    /// Returns the number of rows buffered in the in progress row group
+    pub fn in_progress_rows(&self) -> usize {
+        self.in_progress
+            .as_ref()
+            .map(|x| x.buffered_rows)
+            .unwrap_or_default()
+    }
+
     /// Encodes the provided [`RecordBatch`]
     ///
     /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_size`]
-    /// rows, the contents of `batch` will be distributed across multiple row groups such that all
-    /// but the final row group in the file contain [`WriterProperties::max_row_group_size`] rows
+    /// rows, the contents of `batch` will be written to one or more row groups such that all but
+    /// the final row group in the file contain [`WriterProperties::max_row_group_size`] rows
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         if batch.num_rows() == 0 {
             return Ok(());
         }
 
-        // If would exceed max_row_group_size, split batch
-        if self.buffered_rows + batch.num_rows() > self.max_row_group_size {
-            let to_write = self.max_row_group_size - self.buffered_rows;
-            let a = batch.slice(0, to_write);
-            let b = batch.slice(to_write, batch.num_rows() - to_write);
-            self.write(&a)?;
-            return self.write(&b);
-        }
-
-        self.buffered_rows += batch.num_rows();
         let in_progress = match &mut self.in_progress {
             Some(in_progress) => in_progress,
             x => x.insert(ArrowRowGroupWriter::new(
@@ -192,9 +186,18 @@ impl<W: Write> ArrowWriter<W> {
             )?),
         };
 
+        // If would exceed max_row_group_size, split batch
+        if in_progress.buffered_rows + batch.num_rows() > self.max_row_group_size {
+            let to_write = self.max_row_group_size - in_progress.buffered_rows;
+            let a = batch.slice(0, to_write);
+            let b = batch.slice(to_write, batch.num_rows() - to_write);
+            self.write(&a)?;
+            return self.write(&b);
+        }
+
         in_progress.write(batch)?;
 
-        if self.buffered_rows >= self.max_row_group_size {
+        if in_progress.buffered_rows >= self.max_row_group_size {
             self.flush()?
         }
         Ok(())
@@ -207,7 +210,6 @@ impl<W: Write> ArrowWriter<W> {
             None => return Ok(()),
         };
 
-        self.buffered_rows = 0;
         let mut row_group_writer = self.writer.next_row_group()?;
         for (chunk, close) in in_progress.close()? {
             row_group_writer.append_column(&chunk, close)?;
@@ -264,7 +266,7 @@ impl ChunkReader for ArrowColumnChunk {
     type T = ChainReader;
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
-        assert_eq!(start, 0);
+        assert_eq!(start, 0); // Assume append_column writes all data in one-shot
         Ok(ChainReader(self.data.clone().into_iter().peekable()))
     }
 
@@ -356,6 +358,7 @@ enum ArrowColumnWriter {
 struct ArrowRowGroupWriter {
     writers: Vec<(SharedColumnChunk, ArrowColumnWriter)>,
     schema: SchemaRef,
+    buffered_rows: usize,
 }
 
 impl ArrowRowGroupWriter {
@@ -372,10 +375,12 @@ impl ArrowRowGroupWriter {
         Ok(Self {
             writers,
             schema: arrow.clone(),
+            buffered_rows: 0,
         })
     }
 
     fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.buffered_rows += batch.num_rows();
         let mut writers = self.writers.iter_mut().map(|(_, x)| x);
         for (array, field) in batch.columns().iter().zip(&self.schema.fields) {
             let mut levels = calculate_array_levels(array, field)?.into_iter();
