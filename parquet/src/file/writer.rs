@@ -21,6 +21,7 @@
 use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
+use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
 use thrift::protocol::{TCompactOutputProtocol, TSerializable};
@@ -145,6 +146,18 @@ pub struct SerializedFileWriter<W: Write> {
     row_group_index: usize,
     // kv_metadatas will be appended to `props` when `write_metadata`
     kv_metadatas: Vec<KeyValue>,
+}
+
+impl<W: Write> Debug for SerializedFileWriter<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // implement Debug so this can be used with #[derive(Debug)]
+        // in client code rather than actually listing all the fields
+        f.debug_struct("SerializedFileWriter")
+            .field("descr", &self.descr)
+            .field("row_group_index", &self.row_group_index)
+            .field("kv_metadatas", &self.kv_metadatas)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<W: Write> SerializedFileWriter<W> {
