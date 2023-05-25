@@ -388,7 +388,7 @@ impl FlightData {
     /// # See Also
     ///
     /// See [`FlightDataEncoderBuilder`] for a higher level API to
-    /// convert a stream of [`RecordBatch`]es to `FlightData`
+    /// convert a stream of [`RecordBatch`]es to [`FlightData`]s
     ///
     /// [`FlightDataEncoderBuilder`]: crate::encode::FlightDataEncoderBuilder
     /// [`RecordBatch`]: arrow_array::RecordBatch
@@ -409,7 +409,7 @@ impl FlightData {
 }
 
 impl FlightDescriptor {
-    /// Create a new opaque [`CMD`] `FlightDescriptor` to generate a dataset.
+    /// Create a new opaque command [`CMD`] `FlightDescriptor` to generate a dataset.
     ///
     /// [`CMD`]: https://github.com/apache/arrow/blob/6bd31f37ae66bd35594b077cb2f830be57e08acd/format/Flight.proto#L224-L227
     pub fn new_cmd(cmd: impl Into<Bytes>) -> Self {
