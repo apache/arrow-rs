@@ -156,7 +156,7 @@ impl<W: Write> Debug for SerializedFileWriter<W> {
     }
 }
 
-impl<W: Write> SerializedFileWriter<W> {
+impl<W: Write + Send> SerializedFileWriter<W> {
     /// Creates new file writer.
     pub fn new(buf: W, schema: TypePtr, properties: WriterPropertiesPtr) -> Result<Self> {
         let mut buf = TrackedWrite::new(buf);
@@ -396,7 +396,7 @@ impl<W: Write> SerializedFileWriter<W> {
 /// - Once done writing a column, close column writer with `close`
 /// - Once all columns have been written, close row group writer with `close` method -
 /// it will return row group metadata and is no-op on already closed row group.
-pub struct SerializedRowGroupWriter<'a, W: Write> {
+pub struct SerializedRowGroupWriter<'a, W: Write + Send> {
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
     buf: &'a mut TrackedWrite<W>,
@@ -412,7 +412,7 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     on_close: Option<OnCloseRowGroup<'a>>,
 }
 
-impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
+impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     /// Creates a new `SerializedRowGroupWriter` with:
     ///
     /// - `schema_descr` - the schema to write
@@ -696,7 +696,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
-impl<'a, W: Write> PageWriter for SerializedPageWriter<'a, W> {
+impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
@@ -1266,7 +1266,7 @@ mod tests {
         compression: Compression,
     ) -> crate::format::FileMetaData
     where
-        W: Write,
+        W: Write + Send,
         R: ChunkReader + From<W> + 'static,
     {
         test_roundtrip::<W, R, Int32Type, _>(
@@ -1286,7 +1286,7 @@ mod tests {
         compression: Compression,
     ) -> crate::format::FileMetaData
     where
-        W: Write,
+        W: Write + Send,
         R: ChunkReader + From<W> + 'static,
         D: DataType,
         F: Fn(Row) -> D::T,

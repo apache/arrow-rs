@@ -40,7 +40,7 @@ mod dict_encoder;
 ///
 /// Currently this allocates internal buffers for the encoded values. After done putting
 /// values, caller should call `flush_buffer()` to get an immutable buffer pointer.
-pub trait Encoder<T: DataType> {
+pub trait Encoder<T: DataType>: Send {
     /// Encodes data from `values`.
     fn put(&mut self, values: &[T::T]) -> Result<()>;
 
