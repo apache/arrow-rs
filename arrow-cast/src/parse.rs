@@ -827,7 +827,7 @@ impl FixedPointNumber {
     }
 
     /// Aligns the higher-scale fixed point number to match the scale of the lower-scale fixed number.
-    /// This prepares both numbers for addition and subtraction.
+    /// This prepares both numbers for addition and subtraction, which both use FixedPointNumber::new to compact the result.
     fn align(
         lhs: &FixedPointNumber,
         rhs: &FixedPointNumber,
@@ -852,6 +852,51 @@ impl FixedPointNumber {
                 (lhs, *rhs)
             }
             (lhs, rhs) => (*lhs, *rhs),
+        }
+    }
+
+    pub fn trunc(&self) -> FixedPointNumber {
+        // assumes self is compacted
+        if self.log_scale >= 0 {
+            return *self;
+        }
+
+        let inv_scale = 10i64.pow(self.log_scale.unsigned_abs());
+
+        // if the fixed part is less than the inverse scale, the integer part is zero
+        if self.fixed.abs() < inv_scale {
+            return Self::default();
+        }
+
+        let fixed = if self.fixed.is_negative() {
+            -self.fixed.abs().div_euclid(inv_scale)
+        } else {
+            self.fixed.div_euclid(inv_scale)
+        };
+
+        Self {
+            fixed,
+            log_scale: 0,
+        }
+    }
+
+    pub fn fract(&self) -> FixedPointNumber {
+        // assumes self is compacted
+        if self.log_scale >= 0 {
+            return FixedPointNumber::default();
+        }
+
+        let inv_scale = 10i64.pow(self.log_scale.unsigned_abs());
+
+        let fixed = if self.fixed.is_negative() {
+            -self.fixed.abs().rem_euclid(inv_scale)
+        } else {
+            self.fixed.rem_euclid(inv_scale)
+        };
+
+        Self {
+            fixed,
+            log_scale: self.log_scale,
         }
     }
 }
@@ -901,6 +946,26 @@ impl Add<FixedPointNumber> for FixedPointNumber {
     }
 }
 
+impl Add<i64> for FixedPointNumber {
+    type Output = Self;
+
+    fn add(self, rhs: i64) -> Self::Output {
+        let rhs = FixedPointNumber::from(rhs);
+
+        self + rhs
+    }
+}
+
+impl Add<f64> for FixedPointNumber {
+    type Output = Self;
+
+    fn add(self, rhs: f64) -> Self::Output {
+        let rhs = FixedPointNumber::from(rhs);
+
+        self + rhs
+    }
+}
+
 impl CheckedAdd for FixedPointNumber {
     fn checked_add(&self, rhs: &Self) -> Option<Self> {
         let (lhs, rhs) = FixedPointNumber::align(self, rhs);
@@ -925,6 +990,16 @@ impl Sub<FixedPointNumber> for FixedPointNumber {
     }
 }
 
+impl Sub<i64> for FixedPointNumber {
+    type Output = Self;
+
+    fn sub(self, rhs: i64) -> Self::Output {
+        let rhs = FixedPointNumber::from(rhs);
+
+        self - rhs
+    }
+}
+
 impl Mul<FixedPointNumber> for FixedPointNumber {
     type Output = Self;
 
@@ -933,6 +1008,26 @@ impl Mul<FixedPointNumber> for FixedPointNumber {
         let log_scale = self.log_scale + rhs.log_scale;
 
         Self::new(fixed, log_scale)
+    }
+}
+
+impl Mul<i64> for FixedPointNumber {
+    type Output = Self;
+
+    fn mul(self, rhs: i64) -> Self::Output {
+        let rhs = FixedPointNumber::from(rhs);
+
+        self * rhs
+    }
+}
+
+impl Mul<f64> for FixedPointNumber {
+    type Output = Self;
+
+    fn mul(self, rhs: f64) -> Self::Output {
+        let rhs = FixedPointNumber::from(rhs);
+
+        self * rhs
     }
 }
 
@@ -1009,42 +1104,32 @@ impl FixedMonthDayNano {
     /// INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
     fn try_aligned(&self) -> Result<Self, ArrowError> {
         let Self(months, days, nanos) = self;
+        let months = *months;
+        let days = *days;
+        let nanos = *nanos;
 
         // Convert fractional part of months to days (not supported by Arrow types, but anyway)
-        let whole_months: i64 = (*months).into();
-        let days = (*days) + ((*months) - whole_months.into()) * 30.into();
+        let days = days + months.fract() * 30;
 
         // Convert fractional part of days to nanos
-        let whole_days: i64 = days.into();
-        let nanos = (*nanos)
-            + (days - whole_days.into())
-                * 24.into()
-                * (SECONDS_PER_HOUR as i64).into()
-                * (NANOS_PER_SECOND as i64).into();
+        let nanos = nanos + days.fract() * 24 * SECONDS_PER_HOUR * NANOS_PER_SECOND;
 
-        let whole_nanos: i64 = nanos.into();
-
-        let months: f64 = (*months).into();
-        let days: f64 = days.into();
-        let nanos: f64 = nanos.into();
-
-        if months > i32::MAX as f64
-            || months < i32::MIN as f64
-            || days > i32::MAX as f64
-            || days < i32::MIN as f64
-            || nanos > i64::MAX as f64
-            || nanos < i64::MIN as f64
+        if f64::from(months) > i32::MAX as f64
+            || f64::from(months) < i32::MIN as f64
+            || f64::from(days) > i32::MAX as f64
+            || f64::from(days) < i32::MIN as f64
+            || f64::from(nanos) > i64::MAX as f64
+            || f64::from(nanos) < i64::MIN as f64
         {
             return Err(ArrowError::ParseError(format!(
-                    "Parsed interval field value out of range: {months} months {days} days {nanos} nanos"
-                )));
+                "Parsed interval field value out of range: {} months {} days {} nanos",
+                f64::from(months),
+                f64::from(days),
+                f64::from(nanos)
+            )));
         }
 
-        Ok(FixedMonthDayNano(
-            whole_months.into(),
-            whole_days.into(),
-            whole_nanos.into(),
-        ))
+        Ok(FixedMonthDayNano(months.trunc(), days.trunc(), nanos))
     }
 }
 
@@ -2029,17 +2114,20 @@ mod tests {
         assert_eq!(f64::from(result), 123.123);
 
         // optional zero in integer part
-        let result = FixedPointNumber::from_str(".3").unwrap();
-        let expected = FixedPointNumber::from_str("0.3").unwrap();
+        let x = FixedPointNumber::from_str(".3").unwrap();
+        let y = FixedPointNumber::from_str("0.3").unwrap();
+        let expected = FixedPointNumber::new(3, -1);
 
-        assert_eq!(result, expected);
-        assert_eq!(f64::from(result), 0.3);
+        assert_eq!(x, expected);
+        assert_eq!(y, expected);
 
         // optional zero in fractional part
-        let result = FixedPointNumber::from_str("3.").unwrap();
-        let expected = FixedPointNumber::from_str("3.0").unwrap();
+        let x = FixedPointNumber::from_str("3.").unwrap();
+        let y = FixedPointNumber::from_str("3.0").unwrap();
+        let expected = FixedPointNumber::new(3, 0);
 
-        assert_eq!(result, expected);
+        assert_eq!(x, expected);
+        assert_eq!(y, expected);
 
         // negative numbers
         let result = FixedPointNumber::from_str("-3.5").unwrap();
@@ -2211,6 +2299,43 @@ mod tests {
         };
 
         assert_eq!(result, expected);
+
+        // trunc & fract
+        let x = FixedPointNumber::from(123.45);
+        let (trunc, fract) = (x.trunc(), x.fract());
+        let y = trunc + fract;
+
+        assert_eq!(trunc, FixedPointNumber::from(123));
+        assert_eq!(fract, FixedPointNumber::from(0.45));
+        assert_eq!(x, y);
+
+        // trunc & fract w/ small double
+        let x = FixedPointNumber::new(123, -6);
+        let (trunc, fract) = (x.trunc(), x.fract());
+
+        assert_eq!(trunc, FixedPointNumber::from(0));
+        assert_eq!(fract, x);
+
+        // trunc & fract w/ large integer
+        let x = FixedPointNumber::from(123_456_789_000);
+        let (trunc, fract) = (x.trunc(), x.fract());
+
+        assert_eq!(trunc, x);
+        assert_eq!(fract, FixedPointNumber::from(0));
+
+        // trunc & fract w/ negative double
+        let x = FixedPointNumber::from(-1.5);
+        let (trunc, fract) = (x.trunc(), x.fract());
+
+        assert_eq!(trunc, FixedPointNumber::from(-1));
+        assert_eq!(fract, FixedPointNumber::new(-5, -1));
+
+        // trunc & fract w/ negative double
+        let x = FixedPointNumber::from(-18.2);
+        let (trunc, fract) = (x.trunc(), x.fract());
+
+        assert_eq!(trunc, FixedPointNumber::from(-18));
+        assert_eq!(fract, FixedPointNumber::new(-2, -1));
     }
 
     #[test]
