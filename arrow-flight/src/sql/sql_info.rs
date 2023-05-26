@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Auxiliary module to handle [`CommandGetSqlInfo`] queries.
+//! Auxiliary module to handle [`crate::sql::CommandGetSqlInfo`] queries.
 //!
 //! [`crate::sql::CommandGetSqlInfo`] represents metadata requests againsts the Flight SQL server.
 //! Via this mechanism, the server can communicate supported capabilities to generic
