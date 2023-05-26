@@ -2174,6 +2174,12 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_send() {
+        fn test<T: Send>() {}
+        test::<ColumnWriterImpl<Int32Type>>();
+    }
+
     /// Performs write-read roundtrip with randomly generated values and levels.
     /// `max_size` is maximum number of values or levels (if `max_def_level` > 0) to write
     /// for a column.

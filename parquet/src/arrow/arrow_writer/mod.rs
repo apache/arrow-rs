@@ -117,7 +117,7 @@ impl<W: Write> Debug for ArrowWriter<W> {
     }
 }
 
-impl<W: Write> ArrowWriter<W> {
+impl<W: Write + Send> ArrowWriter<W> {
     /// Try to create a new Arrow writer
     ///
     /// The writer will fail if:
@@ -273,7 +273,7 @@ impl<W: Write> ArrowWriter<W> {
     }
 }
 
-impl<W: Write> RecordBatchWriter for ArrowWriter<W> {
+impl<W: Write + Send> RecordBatchWriter for ArrowWriter<W> {
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         self.write(batch).map_err(|e| e.into())
     }
@@ -284,7 +284,7 @@ impl<W: Write> RecordBatchWriter for ArrowWriter<W> {
     }
 }
 
-fn write_leaves<W: Write>(
+fn write_leaves<W: Write + Send>(
     row_group_writer: &mut SerializedRowGroupWriter<'_, W>,
     arrays: &[ArrayRef],
     levels: &mut [Vec<LevelInfo>],
