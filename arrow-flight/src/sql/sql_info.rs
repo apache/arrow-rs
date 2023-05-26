@@ -327,7 +327,7 @@ impl SqlInfoList {
         Ok(batch)
     }
 
-    /// Return the [`Schema`] for a GetSchema RPC call with [`CommandGetSqlInfo`]
+    /// Return the [`Schema`] for a GetSchema RPC call with [`crate::sql::CommandGetSqlInfo`]
     pub fn schema() -> &'static Schema {
         // It is always the same
         &SQL_INFO_SCHEMA
