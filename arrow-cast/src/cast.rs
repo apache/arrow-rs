@@ -5733,7 +5733,10 @@ mod tests {
                 i64::MAX - 2
             ))],
             IntervalUnit::DayTime,
-            r#"Parser error: Parsed interval field value out of range: 11068046444225730000000 months 331764692165666300000000 days 28663672503769583000000000000000000000 nanos"#
+            format!(
+                "Parser error: Overflow converting {} centuries to months",
+                i64::MAX - 2
+            )
         );
         test_unsafe_string_to_interval_err!(
             vec![Some(format!(
@@ -5743,7 +5746,10 @@ mod tests {
                 i64::MAX - 2
             ))],
             IntervalUnit::MonthDayNano,
-            r#"Parser error: Parsed interval field value out of range: 110680464442257310000 months 3043712772162076000000 days 262179884170819100000000000000000000 nanos"#
+            format!(
+                "Parser error: Overflow converting {} years to months",
+                i64::MAX - 2
+            )
         );
     }
 

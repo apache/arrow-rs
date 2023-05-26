@@ -22,6 +22,7 @@ use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
 use num::{CheckedAdd, CheckedMul};
+use std::fmt::{Display, Formatter};
 use std::ops::{Add, Mul, Sub};
 use std::str::FromStr;
 
@@ -1065,22 +1066,41 @@ impl From<f64> for FixedPointNumber {
 
 impl From<FixedPointNumber> for f64 {
     fn from(val: FixedPointNumber) -> Self {
-        let scale = 10_f64.powi(val.log_scale);
-        val.fixed as f64 * scale
+        if val.log_scale >= 0 {
+            let scale = 10_i64.pow(val.log_scale as u32);
+            (val.fixed * scale) as f64
+        } else {
+            let scale = 10_f64.powi(val.log_scale);
+            val.fixed as f64 * scale
+        }
     }
 }
 
 impl From<FixedPointNumber> for i64 {
     fn from(val: FixedPointNumber) -> Self {
-        let scale = 10_f64.powi(val.log_scale);
-        (val.fixed as f64 * scale).round() as i64
+        if val.log_scale >= 0 {
+            let scale = 10_i64.pow(val.log_scale as u32);
+            val.fixed * scale
+        } else {
+            let scale = 10_f64.powi(val.log_scale);
+            (val.fixed as f64 * scale).round() as i64
+        }
     }
 }
 
 impl From<FixedPointNumber> for i32 {
     fn from(val: FixedPointNumber) -> Self {
-        let scale = 10_f64.powi(val.log_scale);
-        (val.fixed as f64 * scale).round() as i32
+        i64::from(val) as i32
+    }
+}
+
+impl Display for FixedPointNumber {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.log_scale >= 0 {
+            write!(f, "{}", i64::from(*self))
+        } else {
+            write!(f, "{}", f64::from(*self))
+        }
     }
 }
 
@@ -1139,87 +1159,104 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
     fn try_from(interval: IntervalComponent) -> Result<Self, Self::Error> {
         let (amount, unit) = interval;
 
-        let result = match unit {
-            IntervalType::Century => {
-                let scale = FixedPointNumber::from(1200);
-                let months = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
-                    "Overflow converting centuries to months".to_string(),
-                ))?;
+        let result =
+            match unit {
+                IntervalType::Century => {
+                    let scale = 1200;
+                    let months = amount.checked_mul(&scale.into()).ok_or(
+                        ArrowError::ParseError(format!(
+                            "Overflow converting {amount} centuries to months"
+                        )),
+                    )?;
 
-                FixedMonthDayNano::new(months, 0.into(), 0.into())
-            }
-            IntervalType::Decade => {
-                let scale = FixedPointNumber::from(120);
-                let months = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
-                    "Overflow converting decades to months".to_string(),
-                ))?;
+                    FixedMonthDayNano::new(months, 0.into(), 0.into())
+                }
+                IntervalType::Decade => {
+                    let scale = 120;
+                    let months = amount.checked_mul(&scale.into()).ok_or(
+                        ArrowError::ParseError(format!(
+                            "Overflow converting {amount} decades to months"
+                        )),
+                    )?;
 
-                FixedMonthDayNano::new(months, 0.into(), 0.into())
-            }
-            IntervalType::Year => {
-                let scale = &FixedPointNumber::from(12);
-                let months = amount.checked_mul(scale).ok_or(ArrowError::ParseError(
-                    "Overflow converting years to months".to_string(),
-                ))?;
+                    FixedMonthDayNano::new(months, 0.into(), 0.into())
+                }
+                IntervalType::Year => {
+                    let scale = 12;
+                    let months = amount.checked_mul(&scale.into()).ok_or(
+                        ArrowError::ParseError(format!(
+                            "Overflow converting {amount} years to months"
+                        )),
+                    )?;
 
-                FixedMonthDayNano::new(months, 0.into(), 0.into())
-            }
-            IntervalType::Month => FixedMonthDayNano::new(amount, 0.into(), 0.into()),
-            IntervalType::Week => {
-                let scale = FixedPointNumber::from(7);
-                let days = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
-                    "Overflow converting weeks to days".to_string(),
-                ))?;
+                    FixedMonthDayNano::new(months, 0.into(), 0.into())
+                }
+                IntervalType::Month => FixedMonthDayNano::new(amount, 0.into(), 0.into()),
+                IntervalType::Week => {
+                    let scale = 7;
+                    let days = amount.checked_mul(&scale.into()).ok_or(
+                        ArrowError::ParseError(format!(
+                            "Overflow converting {amount} weeks to days"
+                        )),
+                    )?;
 
-                FixedMonthDayNano::new(0.into(), days, 0.into())
-            }
-            IntervalType::Day => FixedMonthDayNano::new(0.into(), amount, 0.into()),
-            IntervalType::Hour => {
-                let scale = FixedPointNumber::from(
-                    (SECONDS_PER_HOUR as i64) * (NANOS_PER_SECOND as i64),
-                );
-                let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
-                    "Overflow converting hours to nanoseconds".to_string(),
-                ))?;
+                    FixedMonthDayNano::new(0.into(), days, 0.into())
+                }
+                IntervalType::Day => FixedMonthDayNano::new(0.into(), amount, 0.into()),
+                IntervalType::Hour => {
+                    let scale = (SECONDS_PER_HOUR as i64) * (NANOS_PER_SECOND as i64);
+                    let nanos = amount.checked_mul(&scale.into()).ok_or(
+                        ArrowError::ParseError(format!(
+                            "Overflow converting {amount} hours to nanoseconds"
+                        )),
+                    )?;
 
-                FixedMonthDayNano::new(0.into(), 0.into(), nanos)
-            }
-            IntervalType::Minute => {
-                let scale = FixedPointNumber::from(60 * NANOS_PER_SECOND as i64);
-                let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
-                    "Overflow converting minutes to nanoseconds".to_string(),
-                ))?;
+                    FixedMonthDayNano::new(0.into(), 0.into(), nanos)
+                }
+                IntervalType::Minute => {
+                    let scale = 60 * (NANOS_PER_SECOND as i64);
+                    let nanos = amount.checked_mul(&scale.into()).ok_or(
+                        ArrowError::ParseError(format!(
+                            "Overflow converting {amount} minutes to nanoseconds"
+                        )),
+                    )?;
 
-                FixedMonthDayNano::new(0.into(), 0.into(), nanos)
-            }
-            IntervalType::Second => {
-                let scale = FixedPointNumber::from(NANOS_PER_SECOND as i64);
-                let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
-                    "Overflow converting seconds to nanoseconds".to_string(),
-                ))?;
+                    FixedMonthDayNano::new(0.into(), 0.into(), nanos)
+                }
+                IntervalType::Second => {
+                    let scale = NANOS_PER_SECOND as i64;
+                    let nanos = amount.checked_mul(&scale.into()).ok_or(
+                        ArrowError::ParseError(format!(
+                            "Overflow converting {amount} seconds to nanoseconds"
+                        )),
+                    )?;
 
-                FixedMonthDayNano::new(0.into(), 0.into(), nanos)
-            }
-            IntervalType::Millisecond => {
-                let scale = FixedPointNumber::from(1_000_000);
-                let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
-                    "Overflow converting milliseconds to nanoseconds".to_string(),
-                ))?;
+                    FixedMonthDayNano::new(0.into(), 0.into(), nanos)
+                }
+                IntervalType::Millisecond => {
+                    let scale = 1_000_000;
+                    let nanos = amount.checked_mul(&scale.into()).ok_or(
+                        ArrowError::ParseError(format!(
+                            "Overflow converting {amount} milliseconds to nanoseconds"
+                        )),
+                    )?;
 
-                FixedMonthDayNano::new(0.into(), 0.into(), nanos)
-            }
-            IntervalType::Microsecond => {
-                let scale = FixedPointNumber::from(1_000);
-                let nanos = amount.checked_mul(&scale).ok_or(ArrowError::ParseError(
-                    "Overflow converting microseconds to nanoseconds".to_string(),
-                ))?;
+                    FixedMonthDayNano::new(0.into(), 0.into(), nanos)
+                }
+                IntervalType::Microsecond => {
+                    let scale = 1_000;
+                    let nanos = amount.checked_mul(&scale.into()).ok_or(
+                        ArrowError::ParseError(format!(
+                            "Overflow converting {amount} microseconds to nanoseconds"
+                        )),
+                    )?;
 
-                FixedMonthDayNano::new(0.into(), 0.into(), nanos)
-            }
-            IntervalType::Nanosecond => {
-                FixedMonthDayNano::new(0.into(), 0.into(), amount)
-            }
-        };
+                    FixedMonthDayNano::new(0.into(), 0.into(), nanos)
+                }
+                IntervalType::Nanosecond => {
+                    FixedMonthDayNano::new(0.into(), 0.into(), amount)
+                }
+            };
 
         result.try_aligned()
     }
