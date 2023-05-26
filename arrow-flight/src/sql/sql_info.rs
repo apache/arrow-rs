@@ -17,7 +17,7 @@
 
 //! Auxiliary module to handle [`CommandGetSqlInfo`] queries.
 //!
-//! [`CommandGetSqlInfo`] represents metadata requests againsts the Flight SQL server.
+//! [`crate::sql::CommandGetSqlInfo`] represents metadata requests againsts the Flight SQL server.
 //! Via this mechanism, the server can communicate supported capabilities to generic
 //! Flight SQL clients.
 //!
