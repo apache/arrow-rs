@@ -22,6 +22,7 @@ use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
 use num::{CheckedAdd, CheckedMul};
+use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::ops::{Add, Mul, Sub};
 use std::str::FromStr;
@@ -827,14 +828,19 @@ impl FixedPointNumber {
         Self { fixed, log_scale }
     }
 
+    fn is_integer(&self) -> bool {
+        // assumes self is compacted
+        self.log_scale >= 0
+    }
+
     /// Aligns the higher-scale fixed point number to match the scale of the lower-scale fixed number.
     /// This prepares both numbers for addition and subtraction, which both use FixedPointNumber::new to compact the result.
     fn align(
         lhs: &FixedPointNumber,
         rhs: &FixedPointNumber,
     ) -> (FixedPointNumber, FixedPointNumber) {
-        match (lhs, rhs) {
-            (lhs, rhs) if lhs.log_scale < rhs.log_scale => {
+        match lhs.log_scale.cmp(&rhs.log_scale) {
+            Ordering::Less => {
                 let fixed =
                     rhs.fixed * 10_i64.pow((rhs.log_scale - lhs.log_scale) as u32);
                 let log_scale = lhs.log_scale;
@@ -843,7 +849,7 @@ impl FixedPointNumber {
 
                 (*lhs, rhs)
             }
-            (lhs, rhs) if lhs.log_scale > rhs.log_scale => {
+            Ordering::Greater => {
                 let fixed =
                     lhs.fixed * 10_i64.pow((lhs.log_scale - rhs.log_scale) as u32);
                 let log_scale = rhs.log_scale;
@@ -852,13 +858,13 @@ impl FixedPointNumber {
 
                 (lhs, *rhs)
             }
-            (lhs, rhs) => (*lhs, *rhs),
+            Ordering::Equal => (*lhs, *rhs),
         }
     }
 
     pub fn trunc(&self) -> FixedPointNumber {
         // assumes self is compacted
-        if self.log_scale >= 0 {
+        if self.is_integer() {
             return *self;
         }
 
@@ -875,15 +881,11 @@ impl FixedPointNumber {
             self.fixed.div_euclid(inv_scale)
         };
 
-        Self {
-            fixed,
-            log_scale: 0,
-        }
+        Self::new(fixed, 0)
     }
 
     pub fn fract(&self) -> FixedPointNumber {
-        // assumes self is compacted
-        if self.log_scale >= 0 {
+        if self.is_integer() {
             return FixedPointNumber::default();
         }
 
@@ -895,10 +897,7 @@ impl FixedPointNumber {
             self.fixed.rem_euclid(inv_scale)
         };
 
-        Self {
-            fixed,
-            log_scale: self.log_scale,
-        }
+        Self::new(fixed, self.log_scale)
     }
 }
 
@@ -1052,8 +1051,8 @@ impl From<i64> for FixedPointNumber {
 
 impl From<f64> for FixedPointNumber {
     fn from(value: f64) -> Self {
-        let mut log_scale = 0;
         let mut fixed = value;
+        let mut log_scale = 0;
 
         while fixed != fixed.round() {
             fixed *= 10_f64;
@@ -1066,7 +1065,7 @@ impl From<f64> for FixedPointNumber {
 
 impl From<FixedPointNumber> for f64 {
     fn from(val: FixedPointNumber) -> Self {
-        if val.log_scale >= 0 {
+        if val.is_integer() {
             let scale = 10_i64.pow(val.log_scale as u32);
             (val.fixed * scale) as f64
         } else {
@@ -1078,7 +1077,7 @@ impl From<FixedPointNumber> for f64 {
 
 impl From<FixedPointNumber> for i64 {
     fn from(val: FixedPointNumber) -> Self {
-        if val.log_scale >= 0 {
+        if val.is_integer() {
             let scale = 10_i64.pow(val.log_scale as u32);
             val.fixed * scale
         } else {
@@ -1096,7 +1095,7 @@ impl From<FixedPointNumber> for i32 {
 
 impl Display for FixedPointNumber {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.log_scale >= 0 {
+        if self.is_integer() {
             write!(f, "{}", i64::from(*self))
         } else {
             write!(f, "{}", f64::from(*self))
@@ -1118,11 +1117,11 @@ impl FixedMonthDayNano {
         Self(months, days, nanos)
     }
 
-    /// The fractional units must be spilled to smaller units.
+    /// Spill fractional units spilled to smaller units.
     /// [reference Postgresql doc](https://www.postgresql.org/docs/15/datatype-datetime.html#DATATYPE-INTERVAL-INPUT:~:text=Field%20values%20can,fractional%20on%20output.)
     /// INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
     /// INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
-    fn try_aligned(&self) -> Result<Self, ArrowError> {
+    fn try_align(&self) -> Result<Self, ArrowError> {
         let Self(months, days, nanos) = self;
         let months = *months;
         let days = *days;
@@ -1142,10 +1141,7 @@ impl FixedMonthDayNano {
             || f64::from(nanos) < i64::MIN as f64
         {
             return Err(ArrowError::ParseError(format!(
-                "Parsed interval field value out of range: {} months {} days {} nanos",
-                f64::from(months),
-                f64::from(days),
-                f64::from(nanos)
+                "Parsed interval field value out of range: {months} months {days} days {nanos} nanos"
             )));
         }
 
@@ -1258,7 +1254,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
                 }
             };
 
-        result.try_aligned()
+        result.try_align()
     }
 }
 
