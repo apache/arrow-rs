@@ -383,6 +383,15 @@ impl TryFrom<SchemaResult> for Schema {
 // FlightData, FlightDescriptor, etc..
 
 impl FlightData {
+    /// Create a new [`FlightData`].
+    ///
+    /// # See Also
+    ///
+    /// See [`FlightDataEncoderBuilder`] for a higher level API to
+    /// convert a stream of [`RecordBatch`]es to [`FlightData`]s
+    ///
+    /// [`FlightDataEncoderBuilder`]: crate::encode::FlightDataEncoderBuilder
+    /// [`RecordBatch`]: arrow_array::RecordBatch
     pub fn new(
         flight_descriptor: Option<FlightDescriptor>,
         message: IpcMessage,
@@ -400,6 +409,9 @@ impl FlightData {
 }
 
 impl FlightDescriptor {
+    /// Create a new opaque command [`CMD`] `FlightDescriptor` to generate a dataset.
+    ///
+    /// [`CMD`]: https://github.com/apache/arrow/blob/6bd31f37ae66bd35594b077cb2f830be57e08acd/format/Flight.proto#L224-L227
     pub fn new_cmd(cmd: impl Into<Bytes>) -> Self {
         FlightDescriptor {
             r#type: DescriptorType::Cmd.into(),
@@ -408,6 +420,9 @@ impl FlightDescriptor {
         }
     }
 
+    /// Create a new named path [`PATH`] `FlightDescriptor` that identifies a dataset
+    ///
+    /// [`PATH`]: https://github.com/apache/arrow/blob/6bd31f37ae66bd35594b077cb2f830be57e08acd/format/Flight.proto#L217-L222
     pub fn new_path(path: Vec<String>) -> Self {
         FlightDescriptor {
             r#type: DescriptorType::Path.into(),
@@ -418,6 +433,8 @@ impl FlightDescriptor {
 }
 
 impl FlightInfo {
+    /// Create a new [`FlightInfo`] that describes the access
+    /// coordinates for retrieval of a dataset.
     pub fn new(
         message: IpcMessage,
         flight_descriptor: Option<FlightDescriptor>,
