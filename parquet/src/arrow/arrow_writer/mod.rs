@@ -18,6 +18,7 @@
 //! Contains writer which writes arrow data into parquet data.
 
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -92,6 +93,30 @@ pub struct ArrowWriter<W: Write> {
     max_row_group_size: usize,
 }
 
+impl<W: Write> Debug for ArrowWriter<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let buffered_batches = self.buffer.len();
+        let mut buffered_memory = 0;
+
+        for batch in self.buffer.iter() {
+            for arr in batch.iter() {
+                buffered_memory += arr.get_array_memory_size()
+            }
+        }
+
+        f.debug_struct("ArrowWriter")
+            .field("writer", &self.writer)
+            .field(
+                "buffer",
+                &format!("{buffered_batches} , {buffered_memory} bytes"),
+            )
+            .field("buffered_rows", &self.buffered_rows)
+            .field("arrow_schema", &self.arrow_schema)
+            .field("max_row_group_size", &self.max_row_group_size)
+            .finish()
+    }
+}
+
 impl<W: Write> ArrowWriter<W> {
     /// Try to create a new Arrow writer
     ///
@@ -105,7 +130,7 @@ impl<W: Write> ArrowWriter<W> {
     ) -> Result<Self> {
         let schema = arrow_to_parquet_schema(&arrow_schema)?;
         // add serialized arrow schema
-        let mut props = props.unwrap_or_else(|| WriterProperties::builder().build());
+        let mut props = props.unwrap_or_default();
         add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
 
         let max_row_group_size = props.max_row_group_size();

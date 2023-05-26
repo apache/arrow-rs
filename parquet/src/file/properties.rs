@@ -27,7 +27,7 @@
 //! };
 //!
 //! // Create properties with default configuration.
-//! let props = WriterProperties::builder().build();
+//! let props = WriterProperties::default();
 //!
 //! // Use properties builder to set certain options and assemble the configuration.
 //! let props = WriterProperties::builder()
@@ -130,7 +130,20 @@ pub struct WriterProperties {
     sorting_columns: Option<Vec<SortingColumn>>,
 }
 
+impl Default for WriterProperties {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
 impl WriterProperties {
+    /// Create a new [`WriterProperties`] with the default settings
+    ///
+    /// See [`WriterProperties::builder`] for customising settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Returns builder for writer properties with default values.
     pub fn builder() -> WriterPropertiesBuilder {
         WriterPropertiesBuilder::with_defaults()
@@ -836,7 +849,7 @@ mod tests {
 
     #[test]
     fn test_writer_properties_default_settings() {
-        let props = WriterProperties::builder().build();
+        let props = WriterProperties::default();
         assert_eq!(props.data_pagesize_limit(), DEFAULT_PAGE_SIZE);
         assert_eq!(
             props.dictionary_pagesize_limit(),

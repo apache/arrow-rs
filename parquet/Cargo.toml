@@ -132,6 +132,10 @@ name = "parquet-rowcount"
 required-features = ["cli"]
 
 [[bin]]
+name = "parquet-concat"
+required-features = ["cli"]
+
+[[bin]]
 name = "parquet-fromcsv"
 required-features = ["arrow", "cli", "snap", "brotli", "flate2", "lz4", "zstd"]
 

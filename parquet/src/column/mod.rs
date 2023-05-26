@@ -63,9 +63,8 @@
 //!   }
 //! ";
 //! let schema = Arc::new(parse_message_type(message_type).unwrap());
-//! let props = Arc::new(WriterProperties::builder().build());
 //! let file = fs::File::create(path).unwrap();
-//! let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+//! let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
 //!
 //! let mut row_group_writer = writer.next_row_group().unwrap();
 //! while let Some(mut col_writer) = row_group_writer.next_column().unwrap() {

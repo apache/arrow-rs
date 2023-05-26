@@ -915,11 +915,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     fn update_metrics_for_page(&mut self, page_spec: PageWriteSpec) {
         self.column_metrics.total_uncompressed_size += page_spec.uncompressed_size as u64;
         self.column_metrics.total_compressed_size += page_spec.compressed_size as u64;
-        self.column_metrics.total_num_values += page_spec.num_values as u64;
         self.column_metrics.total_bytes_written += page_spec.bytes_written;
 
         match page_spec.page_type {
             PageType::DATA_PAGE | PageType::DATA_PAGE_V2 => {
+                self.column_metrics.total_num_values += page_spec.num_values as u64;
                 if self.column_metrics.data_page_offset.is_none() {
                     self.column_metrics.data_page_offset = Some(page_spec.offset);
                 }
@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn test_column_writer_inconsistent_def_rep_length() {
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 1, 1, props);
         let res = writer.write_batch(&[1, 2, 3, 4], Some(&[1, 1, 1]), Some(&[0, 0]));
         assert!(res.is_err());
@@ -1146,7 +1146,7 @@ mod tests {
     #[test]
     fn test_column_writer_invalid_def_levels() {
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 1, 0, props);
         let res = writer.write_batch(&[1, 2, 3, 4], None, None);
         assert!(res.is_err());
@@ -1161,7 +1161,7 @@ mod tests {
     #[test]
     fn test_column_writer_invalid_rep_levels() {
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 1, props);
         let res = writer.write_batch(&[1, 2, 3, 4], None, None);
         assert!(res.is_err());
@@ -1176,7 +1176,7 @@ mod tests {
     #[test]
     fn test_column_writer_not_enough_values_to_write() {
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 1, 0, props);
         let res = writer.write_batch(&[1, 2], Some(&[1, 1, 1, 1]), None);
         assert!(res.is_err());
@@ -1191,7 +1191,7 @@ mod tests {
     #[test]
     fn test_column_writer_write_only_one_dictionary_page() {
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
         writer.write_batch(&[1, 2, 3, 4], None, None).unwrap();
         // First page should be correctly written.
@@ -1499,7 +1499,7 @@ mod tests {
     #[test]
     fn test_column_writer_check_metadata() {
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
         writer.write_batch(&[1, 2, 3, 4], None, None).unwrap();
 
@@ -1512,7 +1512,7 @@ mod tests {
             metadata.encodings(),
             &vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
         );
-        assert_eq!(metadata.num_values(), 8); // dictionary + value indexes
+        assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
         assert_eq!(metadata.uncompressed_size(), 20);
         assert_eq!(metadata.data_page_offset(), 0);
@@ -1535,7 +1535,7 @@ mod tests {
     #[test]
     fn test_column_writer_check_byte_array_min_max() {
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer =
             get_test_decimals_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
         writer
@@ -1591,7 +1591,7 @@ mod tests {
     #[test]
     fn test_column_writer_uint32_converted_type_min_max() {
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = get_test_unsigned_int_given_as_converted_column_writer::<
             Int32Type,
         >(page_writer, 0, 0, props);
@@ -1639,7 +1639,7 @@ mod tests {
             metadata.encodings(),
             &vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
         );
-        assert_eq!(metadata.num_values(), 8); // dictionary + value indexes
+        assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
         assert_eq!(metadata.uncompressed_size(), 20);
         assert_eq!(metadata.data_page_offset(), 0);
@@ -1664,7 +1664,7 @@ mod tests {
         let mut buf = Vec::with_capacity(100);
         let mut write = TrackedWrite::new(&mut buf);
         let page_writer = Box::new(SerializedPageWriter::new(&mut write));
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
 
         writer.write_batch(&[1, 2, 3, 4], None, None).unwrap();
@@ -1772,25 +1772,25 @@ mod tests {
 
     #[test]
     fn test_column_writer_empty_column_roundtrip() {
-        let props = WriterProperties::builder().build();
+        let props = Default::default();
         column_roundtrip::<Int32Type>(props, &[], None, None);
     }
 
     #[test]
     fn test_column_writer_non_nullable_values_roundtrip() {
-        let props = WriterProperties::builder().build();
+        let props = Default::default();
         column_roundtrip_random::<Int32Type>(props, 1024, i32::MIN, i32::MAX, 0, 0);
     }
 
     #[test]
     fn test_column_writer_nullable_non_repeated_values_roundtrip() {
-        let props = WriterProperties::builder().build();
+        let props = Default::default();
         column_roundtrip_random::<Int32Type>(props, 1024, i32::MIN, i32::MAX, 10, 0);
     }
 
     #[test]
     fn test_column_writer_nullable_repeated_values_roundtrip() {
-        let props = WriterProperties::builder().build();
+        let props = Default::default();
         column_roundtrip_random::<Int32Type>(props, 1024, i32::MIN, i32::MAX, 10, 10);
     }
 
@@ -2121,7 +2121,7 @@ mod tests {
         // write data
         // and check the offset index and column index
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
         writer.write_batch(&[1, 2, 3, 4], None, None).unwrap();
         // first page
@@ -2433,7 +2433,7 @@ mod tests {
     /// Write data into parquet using [`get_test_page_writer`] and [`get_test_column_writer`] and returns generated statistics.
     fn statistics_roundtrip<T: DataType>(values: &[<T as DataType>::T]) -> Statistics {
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer = get_test_column_writer::<T>(page_writer, 0, 0, props);
         writer.write_batch(values, None, None).unwrap();
 

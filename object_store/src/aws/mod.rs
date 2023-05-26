@@ -84,7 +84,10 @@ pub type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCred
 pub use credential::{AwsAuthorizer, AwsCredential};
 
 /// Default metadata endpoint
-static METADATA_ENDPOINT: &str = "http://169.254.169.254";
+static DEFAULT_METADATA_ENDPOINT: &str = "http://169.254.169.254";
+
+/// ECS metadata endpoint
+static ECS_METADATA_ENDPOINT: &str = "http://169.254.170.2";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -607,7 +610,7 @@ impl AmazonS3Builder {
             std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
         {
             builder.metadata_endpoint =
-                Some(format!("{METADATA_ENDPOINT}{metadata_relative_uri}"));
+                Some(format!("{ECS_METADATA_ENDPOINT}{metadata_relative_uri}"));
         }
 
         builder
@@ -983,7 +986,7 @@ impl AmazonS3Builder {
                 imdsv1_fallback: self.imdsv1_fallback.get()?,
                 metadata_endpoint: self
                     .metadata_endpoint
-                    .unwrap_or_else(|| METADATA_ENDPOINT.into()),
+                    .unwrap_or_else(|| DEFAULT_METADATA_ENDPOINT.into()),
             };
 
             Arc::new(TokenCredentialProvider::new(
@@ -1177,7 +1180,8 @@ mod tests {
 
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
-        let metadata_uri = format!("{METADATA_ENDPOINT}{container_creds_relative_uri}");
+        let metadata_uri =
+            format!("{ECS_METADATA_ENDPOINT}{container_creds_relative_uri}");
         assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
         assert_eq!(
             builder.checksum_algorithm.unwrap().get().unwrap(),

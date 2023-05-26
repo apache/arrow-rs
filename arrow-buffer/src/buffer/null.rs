@@ -76,9 +76,35 @@ impl NullBuffer {
 
     /// Returns true if all nulls in `other` also exist in self
     pub fn contains(&self, other: &NullBuffer) -> bool {
+        if other.null_count == 0 {
+            return true;
+        }
         let lhs = self.inner().bit_chunks().iter_padded();
         let rhs = other.inner().bit_chunks().iter_padded();
         lhs.zip(rhs).all(|(l, r)| (l & !r) == 0)
+    }
+
+    /// Returns a new [`NullBuffer`] where each bit in the current null buffer
+    /// is repeated `count` times. This is useful for masking the nulls of
+    /// the child of a FixedSizeListArray based on its parent
+    pub fn expand(&self, count: usize) -> Self {
+        let capacity = self.buffer.len().checked_mul(count).unwrap();
+        let mut buffer = MutableBuffer::new_null(capacity);
+
+        // Expand each bit within `null_mask` into `element_len`
+        // bits, constructing the implicit mask of the child elements
+        for i in 0..self.buffer.len() {
+            if self.is_null(i) {
+                continue;
+            }
+            for j in 0..count {
+                crate::bit_util::set_bit(buffer.as_mut(), i * count + j)
+            }
+        }
+        Self {
+            buffer: BooleanBuffer::new(buffer.into(), 0, capacity),
+            null_count: self.null_count * count,
+        }
     }
 
     /// Returns the length of this [`NullBuffer`]
