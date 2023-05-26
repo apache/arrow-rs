@@ -820,6 +820,7 @@ impl FixedPointNumber {
         let mut fixed = fixed;
         let mut log_scale = log_scale;
 
+        // compact non-zero integers divisible by 10
         while fixed != 0 && fixed % 10 == 0 {
             fixed /= 10;
             log_scale += 1;
@@ -1121,7 +1122,7 @@ impl FixedMonthDayNano {
     /// [reference Postgresql doc](https://www.postgresql.org/docs/15/datatype-datetime.html#DATATYPE-INTERVAL-INPUT:~:text=Field%20values%20can,fractional%20on%20output.)
     /// INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
     /// INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
-    fn try_align(&self) -> Result<Self, ArrowError> {
+    fn align(&self) -> Self {
         let Self(months, days, nanos) = self;
         let months = *months;
         let days = *days;
@@ -1133,19 +1134,7 @@ impl FixedMonthDayNano {
         // Convert fractional part of days to nanos
         let nanos = nanos + days.fract() * 24 * SECONDS_PER_HOUR * NANOS_PER_SECOND;
 
-        if f64::from(months) > i32::MAX as f64
-            || f64::from(months) < i32::MIN as f64
-            || f64::from(days) > i32::MAX as f64
-            || f64::from(days) < i32::MIN as f64
-            || f64::from(nanos) > i64::MAX as f64
-            || f64::from(nanos) < i64::MIN as f64
-        {
-            return Err(ArrowError::ParseError(format!(
-                "Parsed interval field value out of range: {months} months {days} days {nanos} nanos"
-            )));
-        }
-
-        Ok(FixedMonthDayNano(months.trunc(), days.trunc(), nanos))
+        FixedMonthDayNano(months.trunc(), days.trunc(), nanos)
     }
 }
 
@@ -1254,7 +1243,27 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
                 }
             };
 
-        result.try_align()
+        Ok(result.align())
+    }
+}
+
+impl TryInto<MonthDayNano> for FixedMonthDayNano {
+    type Error = ArrowError;
+
+    fn try_into(self) -> Result<MonthDayNano, Self::Error> {
+        let FixedMonthDayNano(months, days, nanos) = self;
+
+        let months = months.try_into().or(Err(ArrowError::ParseError(format!(
+            "Parsed interval field value out of range: {months} months {days} days {nanos} nanos"
+        ))))?;
+        let days = days.try_into().or(Err(ArrowError::ParseError(format!(
+            "Parsed interval field value out of range: {months} months {days} days {nanos} nanos"
+        ))))?;
+        let nanos = nanos.try_into().or(Err(ArrowError::ParseError(format!(
+            "Parsed interval field value out of range: {months} months {days} days {nanos} nanos"
+        ))))?;
+
+        Ok((months, days, nanos))
     }
 }
 
@@ -1368,7 +1377,6 @@ fn parse_interval_components(
     Ok(result.collect::<Vec<_>>())
 }
 
-// TODO: `FixedMonthDayNano` -> `MonthDayNano` OR Into<MonthDayNano> impl for FixedMonthDayNano
 /// parse string value to a triple of aligned months, days, nanos using the supplied configuration.
 fn parse_interval(
     value: &str,
@@ -1392,8 +1400,7 @@ fn parse_interval(
                 },
             )?;
 
-    let FixedMonthDayNano(months, days, nanos) = result;
-    Ok((months.into(), days.into(), nanos.into()))
+    result.try_into()
 }
 
 #[cfg(test)]
