@@ -84,6 +84,7 @@ pub use gen::SqlSupportedPositionedCommands;
 pub use gen::SqlSupportedResultSetConcurrency;
 pub use gen::SqlSupportedResultSetType;
 pub use gen::SqlSupportedSubqueries;
+pub use gen::SqlSupportedTransaction;
 pub use gen::SqlSupportedTransactions;
 pub use gen::SqlSupportedUnions;
 pub use gen::SqlSupportsConvert;

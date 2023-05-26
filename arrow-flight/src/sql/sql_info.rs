@@ -341,3 +341,36 @@ static SQL_INFO_SCHEMA: Lazy<Schema> = Lazy::new(|| {
         Field::new("value", SqlInfoUnionBuilder::schema().clone(), false),
     ])
 });
+
+#[cfg(test)]
+mod tests {
+    use super::SqlInfoList;
+    use crate::sql::{SqlInfo, SqlSupportedTransaction};
+
+    #[test]
+    fn test_filter_sql_infos() {
+        let info_list = SqlInfoList::new()
+            .with_sql_info(SqlInfo::FlightSqlServerName, "server name")
+            .with_sql_info(
+                SqlInfo::FlightSqlServerTransaction,
+                SqlSupportedTransaction::Transaction as i32,
+            );
+
+        let batch = info_list.encode().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+
+        let batch = info_list
+            .filter(&[SqlInfo::FlightSqlServerTransaction as u32])
+            .encode()
+            .unwrap();
+        let ref_batch = SqlInfoList::new()
+            .with_sql_info(
+                SqlInfo::FlightSqlServerTransaction,
+                SqlSupportedTransaction::Transaction as i32,
+            )
+            .encode()
+            .unwrap();
+
+        assert_eq!(batch, ref_batch);
+    }
+}
