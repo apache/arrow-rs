@@ -56,8 +56,7 @@ mod tests {
     use std::{env, fs, io::Write, sync::Arc};
 
     use parquet::{
-        file::{properties::WriterProperties, writer::SerializedFileWriter},
-        record::RecordWriter,
+        file::writer::SerializedFileWriter, record::RecordWriter,
         schema::parser::parse_message_type,
     };
 

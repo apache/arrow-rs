@@ -248,7 +248,7 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
 ///
 /// It is reasonable to assume that all pages will be written in the correct order, e.g.
 /// dictionary page followed by data pages, or a set of data pages, etc.
-pub trait PageWriter {
+pub trait PageWriter: Send {
     /// Writes a page into the output stream/sink.
     /// Returns `PageWriteSpec` that contains information about written page metrics,
     /// including number of bytes, size, number of values, offset, etc.

@@ -96,7 +96,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
 
     (quote! {
     impl #generics ::parquet::record::RecordWriter<#derived_for #generics> for &[#derived_for #generics] {
-      fn write_to_row_group<W: ::std::io::Write>(
+      fn write_to_row_group<W: ::std::io::Write + Send>(
         &self,
         row_group_writer: &mut ::parquet::file::writer::SerializedRowGroupWriter<'_, W>
       ) -> Result<(), ::parquet::errors::ParquetError> {
