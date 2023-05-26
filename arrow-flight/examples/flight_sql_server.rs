@@ -295,7 +295,30 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let ticket = Ticket {
             ticket: query.encode_to_vec().into(),
         };
-        let flight_info = SqlInfoList::flight_info(Some(ticket), Some(flight_descriptor));
+
+        let options = IpcWriteOptions::default();
+
+        // encode the schema into the correct form
+        let IpcMessage(schema) = SchemaAsIpc::new(SqlInfoList::schema(), &options)
+            .try_into()
+            .expect("valid sql_info schema");
+
+        let endpoint = vec![FlightEndpoint {
+            ticket: Some(ticket),
+            // we assume users wnating to use this helper would reasonably
+            // never need to be distributed across multile endpoints?
+            location: vec![],
+        }];
+
+        let flight_info = FlightInfo {
+            schema,
+            flight_descriptor: Some(flight_descriptor),
+            endpoint,
+            total_records: -1,
+            total_bytes: -1,
+            ordered: false,
+        };
+
         Ok(tonic::Response::new(flight_info))
     }
 
