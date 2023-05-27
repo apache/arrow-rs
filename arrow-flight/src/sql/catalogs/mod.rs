@@ -23,6 +23,8 @@ use once_cell::sync::Lazy;
 
 use crate::error::Result;
 
+pub use db_schemas::{get_db_schemas_schema, GetSchemasBuilder};
+
 mod db_schemas;
 
 /// Returns the list of catalogs in the DataFusion catalog
