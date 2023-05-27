@@ -31,15 +31,17 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 # Cast is needed to work around https://github.com/apache/arrow-rs/issues/3389
 arrow-cast = { workspace = true }
+arrow-data = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
 base64 = { version = "0.21", default-features = false, features = ["std"] }
-tonic = { version = "0.9", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
+once_cell = { version = "1", optional = true }
 paste = { version = "1.0" }
 prost = { version = "0.11", default-features = false, features = ["prost-derive"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
-futures = { version = "0.3", default-features = false, features = ["alloc"] }
+tonic = { version = "0.9", default-features = false, features = ["transport", "codegen", "prost"] }
 
 # CLI-related dependencies
 clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
@@ -51,7 +53,7 @@ all-features = true
 
 [features]
 default = []
-flight-sql-experimental = []
+flight-sql-experimental = ["once_cell"]
 tls = ["tonic/tls"]
 
 # Enable CLI tools

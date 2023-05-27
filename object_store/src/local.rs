@@ -444,9 +444,12 @@ impl ObjectStore for LocalFileSystem {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         let path = self.config.path_to_filesystem(location)?;
-        maybe_spawn_blocking(move || {
-            std::fs::remove_file(&path).context(UnableToDeleteFileSnafu { path })?;
-            Ok(())
+        maybe_spawn_blocking(move || match std::fs::remove_file(&path) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(match e.kind() {
+                ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
+                _ => Error::UnableToDeleteFile { path, source: e }.into(),
+            }),
         })
         .await
     }

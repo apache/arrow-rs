@@ -100,7 +100,7 @@ pub struct ArrowWriter<W: Write> {
     max_row_group_size: usize,
 }
 
-impl<W: Write> Debug for ArrowWriter<W> {
+impl<W: Write + Send> Debug for ArrowWriter<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let buffered_memory = self.in_progress_size();
         f.debug_struct("ArrowWriter")
@@ -113,7 +113,7 @@ impl<W: Write> Debug for ArrowWriter<W> {
     }
 }
 
-impl<W: Write> ArrowWriter<W> {
+impl<W: Write + Send> ArrowWriter<W> {
     /// Try to create a new Arrow writer
     ///
     /// The writer will fail if:
@@ -238,7 +238,7 @@ impl<W: Write> ArrowWriter<W> {
     }
 }
 
-impl<W: Write> RecordBatchWriter for ArrowWriter<W> {
+impl<W: Write + Send> RecordBatchWriter for ArrowWriter<W> {
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         self.write(batch).map_err(|e| e.into())
     }

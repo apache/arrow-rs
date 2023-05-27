@@ -39,7 +39,8 @@ To test the S3 integration against [localstack](https://localstack.cloud/)
 First start up a container running localstack
 
 ```
-$ podman run --rm -it -e PROVIDER_OVERRIDE_S3=asf -p 4566:4566 -p 4510-4559:4510-4559 localstack/localstack 
+$ podman run -d -p 4566:4566 localstack/localstack:2.0
+$ podman run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
 ```
 
 Setup environment
@@ -87,13 +88,18 @@ $ podman run -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azur
 Create a bucket
 
 ```
-$ podman run --net=host mcr.microsoft.com/azure-cli az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://128.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://128.0.0.1:10001/devstoreaccount1;'
+$ podman run --net=host mcr.microsoft.com/azure-cli az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;'
 ```
 
 Run tests
 
-```
-$ cargo test --features azure
+```shell
+AZURE_USE_EMULATOR=1 \
+TEST_INTEGRATION=1 \
+OBJECT_STORE_BUCKET=test-bucket \
+AZURE_STORAGE_ACCOUNT=devstoreaccount1 \
+AZURE_STORAGE_ACCESS_KEY=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw== \
+cargo test --features azure
 ```
 
 ### GCP
