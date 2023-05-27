@@ -280,6 +280,22 @@ impl SqlInfoUnionBuilder {
 /// let batch = info_list.encode().unwrap();
 /// ```
 ///
+/// # Example
+/// ```
+/// # use arrow_flight::sql::{SqlInfoList, SqlInfo, SqlSupportedTransaction};
+/// // Create the list of metadata describing the server
+/// let info_list = SqlInfoList::new()
+///     .with_sql_info(SqlInfo::FlightSqlServerName, "server name")
+///     // ... add other SqlInfo here ..
+///     .with_sql_info(
+///         SqlInfo::FlightSqlServerTransaction,
+///         SqlSupportedTransaction::Transaction as i32,
+///     );
+///
+/// // Create the batch to send back to the client
+/// let batch = info_list.encode().unwrap();
+/// ```
+///
 /// [protos]: https://github.com/apache/arrow/blob/6d3d2fca2c9693231fa1e52c142ceef563fc23f9/format/FlightSql.proto#L71-L820
 /// [`CommandGetSqlInfo`]: crate::sql::CommandGetSqlInfo
 /// [`with_sql_info`]: SqlInfoList::with_sql_info
