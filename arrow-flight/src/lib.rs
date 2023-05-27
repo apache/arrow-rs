@@ -403,7 +403,7 @@ impl FlightData {
     /// let flight_data = FlightData::new()
     ///   .with_descriptor(FlightDescriptor::new_cmd("the command"))
     ///   .with_app_metadata("My apps metadata")
-    ///   .with_data_body(data_body)
+    ///   .with_data_body(data_body);
     /// ```
     ///
     /// [`FlightDataEncoderBuilder`]: crate::encode::FlightDataEncoderBuilder
