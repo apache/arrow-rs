@@ -53,8 +53,6 @@ pub fn get_tables_schema(include_schema: bool) -> SchemaRef {
 /// * table_type: utf8 not null,
 /// * (optional) table_schema: bytes not null (schema of the table as described
 ///   in Schema.fbs::Schema it is serialized as an IPC message.)
-///
-/// Applies filters for as described on [`get_tables`]
 pub struct GetTablesBuilder {
     // Optional filters to apply to schemas
     db_schema_filter_pattern: Option<String>,
@@ -75,6 +73,10 @@ pub struct GetTablesBuilder {
 impl GetTablesBuilder {
     /// Create a new instance of [`GetTablesBuilder`]
     ///
+    /// The builder handles filtering by schema and table patterns, the caller
+    /// is expected to only pass in tables that match the catalog and table_type
+    /// from the [`CommandGetTables`] request.
+    ///
     /// # Paramneters
     ///
     /// - `db_schema_filter_pattern`: Specifies a filter pattern for schemas to search for.
@@ -88,6 +90,8 @@ impl GetTablesBuilder {
     ///     - "%" means to match any substring with 0 or more characters.
     ///     - "_" means to match any one character.
     /// - `include_schema`: Specifies if the Arrow schema should be returned for found tables.
+    ///
+    /// [`CommandGetTables`]: crate::sql::CommandGetTables
     pub fn new(
         db_schema_filter_pattern: Option<impl Into<String>>,
         table_name_filter_pattern: Option<impl Into<String>>,

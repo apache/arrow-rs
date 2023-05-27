@@ -48,8 +48,6 @@ static GET_DB_SCHEMAS_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
 ///
 /// * catalog_name: utf8,
 /// * db_schema_name: utf8,
-///
-/// Applies filters for as described on [`get_db_schemas`]
 pub struct GetSchemasBuilder {
     // Optional filters to apply
     db_schema_filter_pattern: Option<String>,
@@ -62,6 +60,10 @@ pub struct GetSchemasBuilder {
 impl GetSchemasBuilder {
     /// Create a new instance of [`GetSchemasBuilder`]
     ///
+    /// The builder handles filtering by schemapatterns, the caller
+    /// is expected to only pass in tables that match the catalog
+    /// from the [`CommandGetDbSchemas`] request.
+    ///
     /// # Parameters
     ///
     /// - `db_schema_filter_pattern`: Specifies a filter pattern for schemas to search for.
@@ -69,6 +71,8 @@ impl GetSchemasBuilder {
     ///   In the pattern string, two special characters can be used to denote matching rules:
     ///     - "%" means to match any substring with 0 or more characters.
     ///     - "_" means to match any one character.
+    ///
+    /// [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
     pub fn new(db_schema_filter_pattern: Option<impl Into<String>>) -> Self {
         let catalog_name = StringBuilder::new();
         let db_schema_name = StringBuilder::new();
