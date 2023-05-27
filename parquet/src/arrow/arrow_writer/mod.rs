@@ -147,13 +147,13 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.writer.flushed_row_groups()
     }
 
-    /// Returns the length in bytes of the current in progress row group
+    /// Returns the estimated length in bytes of the current in progress row group
     pub fn in_progress_size(&self) -> usize {
         match &self.in_progress {
             Some(in_progress) => in_progress
                 .writers
                 .iter()
-                .map(|(x, _)| x.lock().unwrap().length)
+                .map(|(_, x)| x.get_estimated_total_bytes() as usize)
                 .sum(),
             None => 0,
         }
@@ -352,6 +352,16 @@ impl PageWriter for ArrowPageWriter {
 enum ArrowColumnWriter {
     ByteArray(GenericColumnWriter<'static, ByteArrayEncoder>),
     Column(ColumnWriter<'static>),
+}
+
+impl ArrowColumnWriter {
+    /// Returns the estimated total bytes for this column writer
+    fn get_estimated_total_bytes(&self) -> u64 {
+        match self {
+            ArrowColumnWriter::ByteArray(c) => c.get_estimated_total_bytes(),
+            ArrowColumnWriter::Column(c) => c.get_estimated_total_bytes(),
+        }
+    }
 }
 
 /// Encodes [`RecordBatch`] to a parquet row group
@@ -2530,5 +2540,41 @@ mod tests {
         assert_eq!(back.schema(), file_schema);
         assert_ne!(back.schema(), batch.schema());
         assert_eq!(back.column(0).as_ref(), batch.column(0).as_ref());
+    }
+
+    #[test]
+    fn in_progress_accounting() {
+        // define schema
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        // create some data
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+
+        // build a record batch
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+        let mut writer = ArrowWriter::try_new(vec![], batch.schema(), None).unwrap();
+
+        // starts empty
+        assert_eq!(writer.in_progress_size(), 0);
+        assert_eq!(writer.in_progress_rows(), 0);
+        writer.write(&batch).unwrap();
+
+        // updated on write
+        let initial_size = writer.in_progress_size();
+        assert!(initial_size > 0);
+        assert_eq!(writer.in_progress_rows(), 5);
+
+        // updated on second write
+        writer.write(&batch).unwrap();
+        assert!(writer.in_progress_size() > initial_size);
+        assert_eq!(writer.in_progress_rows(), 10);
+
+        // cleared on flush
+        writer.flush().unwrap();
+        assert_eq!(writer.in_progress_size(), 0);
+        assert_eq!(writer.in_progress_rows(), 0);
+
+        writer.close().unwrap();
     }
 }
