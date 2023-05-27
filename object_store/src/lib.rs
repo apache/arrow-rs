@@ -386,6 +386,63 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> Result<()>;
 
+    /// Delete all the objects at the specified locations
+    ///
+    /// When supported, this method will use bulk operations that delete more
+    /// than one object per a request. The default implementation will call
+    /// the single object delete method for each location, but with up to 10
+    /// concurrent requests.
+    ///
+    /// The returned stream yields the results of the delete operations in the
+    /// same order as the input locations. However, some errors will be from
+    /// an overall call to a bulk delete operation, and not from a specific
+    /// location.
+    ///
+    /// If the object did not exist, the result may be an error or a success,
+    /// depending on the behavior of the underlying store. For example, local
+    /// filesystems, GCP, and Azure return an error, while S3 and in-memory will
+    /// return Ok. If it is an error, it will be [`Error::NotFound`].
+    ///
+    /// ```
+    /// # use object_store::local::LocalFileSystem;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let root = tempfile::TempDir::new().unwrap();
+    /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+    /// use object_store::{ObjectStore, ObjectMeta};
+    /// use object_store::path::Path;
+    /// use futures::{StreamExt, TryStreamExt};
+    /// use bytes::Bytes;
+    ///
+    /// // Create two objects
+    /// store.put(&Path::from("foo"), Bytes::from("foo")).await?;
+    /// store.put(&Path::from("bar"), Bytes::from("bar")).await?;
+    ///
+    /// // List object
+    /// let locations = store.list(None).await?
+    ///   .map(|meta: Result<ObjectMeta, _>| meta.map(|m| m.location))
+    ///   .boxed();
+    ///
+    /// // Delete them
+    /// store.delete_stream(locations).try_collect::<Vec<Path>>().await?;
+    /// # Ok(())
+    /// # }
+    /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    /// # rt.block_on(example()).unwrap();
+    /// ```
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        locations
+            .map(|location| async {
+                let location = location?;
+                self.delete(&location).await?;
+                Ok(location)
+            })
+            .buffered(10)
+            .boxed()
+    }
+
     /// List all the objects with the given prefix.
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
@@ -513,6 +570,13 @@ impl ObjectStore for Box<dyn ObjectStore> {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.as_ref().delete(location).await
+    }
+
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        self.as_ref().delete_stream(locations)
     }
 
     async fn list(
@@ -1119,6 +1183,49 @@ mod tests {
             assert_eq!(actual, expected, "{prefix:?} - {offset:?}");
         }
 
+        // Test bulk delete
+        let paths = vec![
+            Path::from("a/a.file"),
+            Path::from("a/a/b.file"),
+            Path::from("aa/a.file"),
+            Path::from("does_not_exist"),
+            Path::from("I'm a < & weird path"),
+            Path::from("ab/a.file"),
+            Path::from("a/😀.file"),
+        ];
+
+        storage.put(&paths[4], "foo".into()).await.unwrap();
+
+        let out_paths = storage
+            .delete_stream(futures::stream::iter(paths.clone()).map(Ok).boxed())
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(out_paths.len(), paths.len());
+
+        let expect_errors = [3];
+
+        for (i, input_path) in paths.iter().enumerate() {
+            let err = storage.head(input_path).await.unwrap_err();
+            assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
+            if expect_errors.contains(&i) {
+                // Some object stores will report NotFound, but others (such as S3) will
+                // report success regardless.
+                match &out_paths[i] {
+                    Err(Error::NotFound { path: out_path, .. }) => {
+                        assert!(out_path.ends_with(&input_path.to_string()));
+                    }
+                    Ok(out_path) => {
+                        assert_eq!(out_path, input_path);
+                    }
+                    _ => panic!("unexpected error"),
+                }
+            } else {
+                assert_eq!(out_paths[i].as_ref().unwrap(), input_path);
+            }
+        }
+
         delete_fixtures(storage).await;
     }
 
@@ -1471,11 +1578,17 @@ mod tests {
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {
-        let paths = flatten_list_stream(storage, None).await.unwrap();
-
-        for f in &paths {
-            storage.delete(f).await.unwrap();
-        }
+        let paths = storage
+            .list(None)
+            .await
+            .unwrap()
+            .map_ok(|meta| meta.location)
+            .boxed();
+        storage
+            .delete_stream(paths)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
     }
 
     /// Test that the returned stream does not borrow the lifetime of Path
