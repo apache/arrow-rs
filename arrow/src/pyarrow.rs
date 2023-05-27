@@ -248,10 +248,6 @@ impl FromPyArrow for ArrowArrayStreamReader {
         let stream_reader = ArrowArrayStreamReader::try_new(stream)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
-        unsafe {
-            drop(Box::from_raw(stream_ptr));
-        }
-
         Ok(stream_reader)
     }
 }
