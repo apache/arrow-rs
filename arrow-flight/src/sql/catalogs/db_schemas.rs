@@ -30,8 +30,9 @@ use once_cell::sync::Lazy;
 use super::lexsort_to_indices;
 use crate::error::*;
 
-/// Return the schema of the RecordBatch that will be returned from
-/// [`get_db_schemas`].
+/// Return the schema of the RecordBatch that will be returned from [`CommandGetDbSchemas`]
+///
+/// [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
 pub fn get_db_schemas_schema() -> SchemaRef {
     Arc::clone(&GET_DB_SCHEMAS_SCHEMA)
 }

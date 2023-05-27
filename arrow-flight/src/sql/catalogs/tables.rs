@@ -33,10 +33,11 @@ use super::lexsort_to_indices;
 use crate::error::*;
 use crate::{IpcMessage, IpcWriteOptions, SchemaAsIpc};
 
-/// Return the schema of the RecordBatch that will be returned from
-/// [`get_tables`].
+/// Return the schema of the RecordBatch that will be returned from [`CommandGetTables`]
 ///
-/// Note the schema differs based on the values of `include_schema`
+/// Note the schema differs based on the values of `include_schema
+///
+/// [`CommandGetTables`]: crate::sql::CommandGetTables
 pub fn get_tables_schema(include_schema: bool) -> SchemaRef {
     if include_schema {
         Arc::clone(&GET_TABLES_SCHEMA_WITH_TABLE_SCHEMA)

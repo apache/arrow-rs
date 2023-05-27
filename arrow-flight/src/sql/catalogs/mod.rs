@@ -52,7 +52,9 @@ pub fn get_catalogs_batch(mut catalog_names: Vec<String>) -> Result<RecordBatch>
     Ok(batch)
 }
 
-/// Returns the schema that will result from [`get_catalogs`]
+/// Returns the schema that will result from [`CommandGetCatalogs`]
+///
+/// [`CommandGetCatalogs`]: crate::sql::CommandGetCatalogs
 pub fn get_catalogs_schema() -> &'static Schema {
     &GET_CATALOG_SCHEMA
 }
