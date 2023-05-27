@@ -1578,7 +1578,6 @@ mod tests {
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {
-        // let paths = flatten_list_stream(storage, None).await.unwrap();
         let paths = storage
             .list(None)
             .await
