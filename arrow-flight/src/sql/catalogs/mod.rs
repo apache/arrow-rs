@@ -17,15 +17,18 @@
 
 use std::sync::Arc;
 
-use arrow_array::{RecordBatch, StringArray};
+use arrow_array::{ArrayRef, RecordBatch, StringArray, UInt32Array};
+use arrow_row::{RowConverter, SortField};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use once_cell::sync::Lazy;
 
 use crate::error::Result;
 
 pub use db_schemas::{get_db_schemas_schema, GetSchemasBuilder};
+pub use tables::{get_tables_schema, GetTablesBuilder};
 
 mod db_schemas;
+mod tables;
 
 /// Returns the list of catalogs in the DataFusion catalog
 pub fn get_catalogs_batch(mut catalog_names: Vec<String>) -> Result<RecordBatch> {
@@ -52,3 +55,15 @@ static GET_CATALOG_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
         false,
     )]))
 });
+
+fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
+    let fields = arrays
+        .iter()
+        .map(|a| SortField::new(a.data_type().clone()))
+        .collect();
+    let mut converter = RowConverter::new(fields).unwrap();
+    let rows = converter.convert_columns(arrays).unwrap();
+    let mut sort: Vec<_> = rows.iter().enumerate().collect();
+    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+    UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
+}

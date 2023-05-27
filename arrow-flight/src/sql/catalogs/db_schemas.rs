@@ -17,19 +17,19 @@
 
 use std::sync::Arc;
 
-use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch, UInt32Array};
-use arrow_row::{RowConverter, SortField};
+use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
 use arrow_string::like::like_utf8_scalar;
 use once_cell::sync::Lazy;
 
+use super::lexsort_to_indices;
 use crate::error::*;
 
 /// Return the schema of the RecordBatch that will be returned from
 /// [`get_db_schemas`].
-pub fn get_db_schemas_schema() -> &'static Schema {
-    &GET_DB_SCHEMAS_SCHEMA
+pub fn get_db_schemas_schema() -> SchemaRef {
+    Arc::clone(&GET_DB_SCHEMAS_SCHEMA)
 }
 
 /// The schema for GetDbSchemas
@@ -123,18 +123,6 @@ impl GetSchemasBuilder {
 
         Ok(RecordBatch::try_new(get_db_schemas_schema(), columns)?)
     }
-}
-
-fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
-    let fields = arrays
-        .iter()
-        .map(|a| SortField::new(a.data_type().clone()))
-        .collect();
-    let mut converter = RowConverter::new(fields).unwrap();
-    let rows = converter.convert_columns(arrays).unwrap();
-    let mut sort: Vec<_> = rows.iter().enumerate().collect();
-    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-    UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
 }
 
 #[cfg(test)]

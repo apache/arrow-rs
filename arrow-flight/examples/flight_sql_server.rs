@@ -299,9 +299,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let options = IpcWriteOptions::default();
 
         // encode the schema into the correct form
-        let IpcMessage(schema) = SchemaAsIpc::new(get_db_schemas_schema(), &options)
-            .try_into()
-            .expect("valid schemas schema");
+        let IpcMessage(schema) =
+            SchemaAsIpc::new(get_db_schemas_schema().as_ref(), &options)
+                .try_into()
+                .expect("valid schemas schema");
 
         let endpoint = vec![FlightEndpoint {
             ticket: Some(ticket),
@@ -494,7 +495,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
-            .with_schema(Arc::new(get_db_schemas_schema().clone()))
+            .with_schema(get_db_schemas_schema())
             .build(futures::stream::once(async { batch }))
             .map_err(Status::from);
         Ok(Response::new(Box::pin(stream)))
