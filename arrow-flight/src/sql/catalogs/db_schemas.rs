@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`GetSchemasBuilder`] for building responses to [`CommandGetDbSchemas`] queries.
+//!
+//! [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
+
 use std::sync::Arc;
 
 use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch};
@@ -57,6 +61,14 @@ pub struct GetSchemasBuilder {
 
 impl GetSchemasBuilder {
     /// Create a new instance of [`GetSchemasBuilder`]
+    ///
+    /// # Parameters
+    ///
+    /// - `db_schema_filter_pattern`: Specifies a filter pattern for schemas to search for.
+    ///   When no pattern is provided, the pattern will not be used to narrow the search.
+    ///   In the pattern string, two special characters can be used to denote matching rules:
+    ///     - "%" means to match any substring with 0 or more characters.
+    ///     - "_" means to match any one character.
     pub fn new(db_schema_filter_pattern: Option<impl Into<String>>) -> Self {
         let catalog_name = StringBuilder::new();
         let db_schema_name = StringBuilder::new();

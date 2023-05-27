@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`GetTablesBuilder`] for building responses to [`CommandGetTables`] queries.
+//!
+//! [`CommandGetTables`]: crate::sql::CommandGetTables
+
 use std::sync::Arc;
 
 use arrow_arith::boolean::and;
@@ -56,17 +60,37 @@ pub struct GetTablesBuilder {
     db_schema_filter_pattern: Option<String>,
     // Optional filters to apply to tables
     table_name_filter_pattern: Option<String>,
+    // array builder for catalog names
     catalog_name: StringBuilder,
+    // array builder for db schema names
     db_schema_name: StringBuilder,
+    // array builder for tables names
     table_name: StringBuilder,
+    // array builder for table types
     table_type: StringBuilder,
+    // array builder for table schemas
     table_schema: Option<BinaryBuilder>,
 }
 
 impl GetTablesBuilder {
+    /// Create a new instance of [`GetTablesBuilder`]
+    ///
+    /// # Paramneters
+    ///
+    /// - `db_schema_filter_pattern`: Specifies a filter pattern for schemas to search for.
+    ///   When no pattern is provided, the pattern will not be used to narrow the search.
+    ///   In the pattern string, two special characters can be used to denote matching rules:
+    ///     - "%" means to match any substring with 0 or more characters.
+    ///     - "_" means to match any one character.
+    /// - `table_name_filter_pattern`: Specifies a filter pattern for tables to search for.
+    ///   When no pattern is provided, all tables matching other filters are searched.
+    ///   In the pattern string, two special characters can be used to denote matching rules:
+    ///     - "%" means to match any substring with 0 or more characters.
+    ///     - "_" means to match any one character.
+    /// - `include_schema`: Specifies if the Arrow schema should be returned for found tables.
     pub fn new(
-        db_schema_filter_pattern: Option<String>,
-        table_name_filter_pattern: Option<String>,
+        db_schema_filter_pattern: Option<impl Into<String>>,
+        table_name_filter_pattern: Option<impl Into<String>>,
         include_schema: bool,
     ) -> Self {
         let catalog_name = StringBuilder::new();
@@ -81,8 +105,8 @@ impl GetTablesBuilder {
         };
 
         Self {
-            db_schema_filter_pattern,
-            table_name_filter_pattern,
+            db_schema_filter_pattern: db_schema_filter_pattern.map(|s| s.into()),
+            table_name_filter_pattern: table_name_filter_pattern.map(|t| t.into()),
             catalog_name,
             db_schema_name,
             table_name,
@@ -94,10 +118,10 @@ impl GetTablesBuilder {
     /// Append a row
     pub fn append(
         &mut self,
-        catalog_name: &str,
-        schema_name: &str,
-        table_name: &str,
-        table_type: &str,
+        catalog_name: impl AsRef<str>,
+        schema_name: impl AsRef<str>,
+        table_name: impl AsRef<str>,
+        table_type: impl AsRef<str>,
         table_schema: &Schema,
     ) -> Result<()> {
         self.catalog_name.append_value(catalog_name);
@@ -194,8 +218,9 @@ impl GetTablesBuilder {
             batch
         };
 
-        // Order filtered results by catalog_name, then db_schema_name, then table_name
-        let sort_cols = filtered_batch.project(&[0, 1, 2])?;
+        // Order filtered results by catalog_name, then db_schema_name, then table_name, then table_type
+        // https://github.com/apache/arrow/blob/130f9e981aa98c25de5f5bfe55185db270cec313/format/FlightSql.proto#LL1202C1-L1202C1
+        let sort_cols = filtered_batch.project(&[0, 1, 2, 3])?;
         let indices = lexsort_to_indices(sort_cols.columns());
         let columns = filtered_batch
             .columns()
@@ -230,3 +255,129 @@ static GET_TABLES_SCHEMA_WITH_TABLE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
         Field::new("table_schema", DataType::Binary, false),
     ]))
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::{StringArray, UInt32Array};
+
+    fn get_ref_batch() -> RecordBatch {
+        RecordBatch::try_new(
+            get_tables_schema(false),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    "a_catalog",
+                    "a_catalog",
+                    "a_catalog",
+                    "a_catalog",
+                    "b_catalog",
+                    "b_catalog",
+                    "b_catalog",
+                    "b_catalog",
+                ])) as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    "a_schema", "a_schema", "b_schema", "b_schema", "a_schema",
+                    "a_schema", "b_schema", "b_schema",
+                ])) as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    "a_table", "b_table", "a_table", "b_table", "a_table", "a_table",
+                    "b_table", "b_table",
+                ])) as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    "TABLE", "TABLE", "TABLE", "TABLE", "TABLE", "VIEW", "TABLE", "VIEW",
+                ])) as ArrayRef,
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_tables_are_filterd() {
+        let ref_batch = get_ref_batch();
+        let dummy_schema = Schema::empty();
+
+        let tables = [
+            ("a_catalog", "a_schema", "a_table", "TABLE"),
+            ("a_catalog", "a_schema", "b_table", "TABLE"),
+            ("a_catalog", "b_schema", "a_table", "TABLE"),
+            ("a_catalog", "b_schema", "b_table", "TABLE"),
+            ("b_catalog", "a_schema", "a_table", "TABLE"),
+            ("b_catalog", "a_schema", "a_table", "VIEW"),
+            ("b_catalog", "b_schema", "b_table", "TABLE"),
+            ("b_catalog", "b_schema", "b_table", "VIEW"),
+        ];
+        let mut builder = GetTablesBuilder::new(None::<String>, None::<String>, false);
+        for (catalog_name, schema_name, table_name, table_type) in tables {
+            builder
+                .append(
+                    catalog_name,
+                    schema_name,
+                    table_name,
+                    table_type,
+                    &dummy_schema,
+                )
+                .unwrap();
+        }
+        let table_batch = builder.build().unwrap();
+        assert_eq!(table_batch, ref_batch);
+
+        let mut builder = GetTablesBuilder::new(Some("a%"), Some("a%"), false);
+        for (catalog_name, schema_name, table_name, table_type) in tables {
+            builder
+                .append(
+                    catalog_name,
+                    schema_name,
+                    table_name,
+                    table_type,
+                    &dummy_schema,
+                )
+                .unwrap();
+        }
+        let table_batch = builder.build().unwrap();
+
+        let indices = UInt32Array::from(vec![0, 4, 5]);
+        let ref_filtered = RecordBatch::try_new(
+            get_tables_schema(false),
+            ref_batch
+                .columns()
+                .iter()
+                .map(|c| take(c, &indices, None))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(table_batch, ref_filtered);
+    }
+
+    #[test]
+    fn test_tables_are_sorted() {
+        let ref_batch = get_ref_batch();
+        let dummy_schema = Schema::empty();
+
+        let tables = [
+            ("b_catalog", "a_schema", "a_table", "TABLE"),
+            ("b_catalog", "b_schema", "b_table", "TABLE"),
+            ("b_catalog", "b_schema", "b_table", "VIEW"),
+            ("b_catalog", "a_schema", "a_table", "VIEW"),
+            ("a_catalog", "a_schema", "a_table", "TABLE"),
+            ("a_catalog", "b_schema", "a_table", "TABLE"),
+            ("a_catalog", "b_schema", "b_table", "TABLE"),
+            ("a_catalog", "a_schema", "b_table", "TABLE"),
+        ];
+        let mut builder = GetTablesBuilder::new(None::<String>, None::<String>, false);
+        for (catalog_name, schema_name, table_name, table_type) in tables {
+            builder
+                .append(
+                    catalog_name,
+                    schema_name,
+                    table_name,
+                    table_type,
+                    &dummy_schema,
+                )
+                .unwrap();
+        }
+        let table_batch = builder.build().unwrap();
+        assert_eq!(table_batch, ref_batch);
+    }
+}
