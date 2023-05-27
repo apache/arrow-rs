@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int32Array, StringArray};
-use arrow::pyarrow::PyArrowConvert;
+use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use arrow::record_batch::RecordBatch;
 use pyo3::Python;
 use std::sync::Arc;
