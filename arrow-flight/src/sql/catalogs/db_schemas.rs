@@ -28,8 +28,8 @@ use crate::error::*;
 
 /// Return the schema of the RecordBatch that will be returned from
 /// [`get_db_schemas`].
-pub fn get_db_schemas_schema() -> SchemaRef {
-    Arc::clone(&GET_DB_SCHEMAS_SCHEMA)
+pub fn get_db_schemas_schema() -> &'static Schema {
+    &GET_DB_SCHEMAS_SCHEMA
 }
 
 /// The schema for GetDbSchemas
