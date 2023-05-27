@@ -84,6 +84,7 @@ pub use gen::SqlSupportedPositionedCommands;
 pub use gen::SqlSupportedResultSetConcurrency;
 pub use gen::SqlSupportedResultSetType;
 pub use gen::SqlSupportedSubqueries;
+pub use gen::SqlSupportedTransaction;
 pub use gen::SqlSupportedTransactions;
 pub use gen::SqlSupportedUnions;
 pub use gen::SqlSupportsConvert;
@@ -92,8 +93,11 @@ pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
 
+pub use sql_info::SqlInfoList;
+
 pub mod client;
 pub mod server;
+pub mod sql_info;
 
 /// ProstMessageExt are useful utility methods for prost::Message types
 pub trait ProstMessageExt: prost::Message + Default {
