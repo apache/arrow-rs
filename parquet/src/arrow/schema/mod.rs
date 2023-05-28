@@ -70,7 +70,7 @@ pub fn parquet_to_arrow_schema_by_columns(
 }
 
 /// Extracts the arrow metadata
-pub(crate) fn parquet_to_array_schema_and_fields(
+pub fn parquet_to_array_schema_and_fields(
     parquet_schema: &SchemaDescriptor,
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
