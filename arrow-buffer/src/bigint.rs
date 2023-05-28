@@ -29,6 +29,7 @@ pub enum I256Error {
     ParseI256Error,
     /// Division by zero
     DivideByZero,
+    /// Division overflow
     DivideOverflow,
 }
 
