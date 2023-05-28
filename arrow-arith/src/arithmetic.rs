@@ -1675,6 +1675,16 @@ pub fn multiply_fixed_point(
             .with_precision_and_scale(precision, required_scale);
     }
 
+    if required_scale > product_scale {
+        return Err(ArrowError::ComputeError(format!(
+            "Required scale {} is greater than product scale {}",
+            required_scale, product_scale
+        )));
+    }
+
+    let divisor =
+        i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
+
     binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
         let a = i256::from_i128(a);
         let b = i256::from_i128(b);
