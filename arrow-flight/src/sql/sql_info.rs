@@ -101,7 +101,7 @@ impl From<&HashMap<i32, Vec<i32>>> for SqlInfoValue {
     fn from(value: &HashMap<i32, Vec<i32>>) -> Self {
         Self::ListMap(
             value
-                .into_iter()
+                .iter()
                 .map(|(k, v)| (k.to_owned(), v.to_owned()))
                 .collect(),
         )
@@ -457,7 +457,9 @@ mod tests {
     use std::collections::HashMap;
 
     use super::SqlInfoList;
-    use crate::sql::{SqlInfo, SqlNullOrdering, SqlSupportedTransaction};
+    use crate::sql::{
+        SqlInfo, SqlNullOrdering, SqlSupportedTransaction, SqlSupportsConvert,
+    };
     use arrow_array::RecordBatch;
     use arrow_cast::pretty::pretty_format_batches;
 
@@ -474,7 +476,13 @@ mod tests {
     #[test]
     fn test_sql_infos() {
         let mut convert: HashMap<i32, Vec<i32>> = HashMap::new();
-        convert.insert(42, vec![1, 2, 3]);
+        convert.insert(
+            SqlSupportsConvert::SqlConvertInteger as i32,
+            vec![
+                SqlSupportsConvert::SqlConvertFloat as i32,
+                SqlSupportsConvert::SqlConvertReal as i32,
+            ],
+        );
 
         let batch = SqlInfoList::new()
             // str
@@ -495,16 +503,16 @@ mod tests {
             .unwrap();
 
         let expected = vec![
-            "+-----------+-------------------------------------------+",
-            "| info_name | value                                     |",
-            "+-----------+-------------------------------------------+",
-            "| 500       | {bool_value=false}                        |",
-            "| 504       | {string_value=\"}                          |",
-            "| 507       | {int32_bitmask=0}                         |",
-            "| 508       | {string_list=[SELECT, DELETE]}            |",
-            "| 517       | {int32_to_int32_list_map={42: [1, 2, 3]}} |",
-            "| 541       | {bigint_value=2147483647}                 |",
-            "+-----------+-------------------------------------------+",
+            "+-----------+----------------------------------------+",
+            "| info_name | value                                  |",
+            "+-----------+----------------------------------------+",
+            "| 500       | {bool_value=false}                     |",
+            "| 504       | {string_value=\"}                       |",
+            "| 507       | {int32_bitmask=0}                      |",
+            "| 508       | {string_list=[SELECT, DELETE]}         |",
+            "| 517       | {int32_to_int32_list_map={7: [6, 13]}} |",
+            "| 541       | {bigint_value=2147483647}              |",
+            "+-----------+----------------------------------------+",
         ];
 
         assert_batches_eq(&[batch], &expected);
