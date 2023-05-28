@@ -27,7 +27,7 @@ use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 
 use crate::arrow::array_reader::{
-    build_array_reader, ArrayReader, FileReaderRowGroupCollection, RowGroupCollection,
+    build_array_reader, ArrayReader, FileReaderRowGroupCollection,
 };
 use crate::arrow::schema::parquet_to_array_schema_and_fields;
 use crate::arrow::schema::ParquetField;
@@ -41,6 +41,7 @@ use crate::schema::types::SchemaDescriptor;
 mod filter;
 mod selection;
 
+pub use crate::arrow::array_reader::RowGroupCollection;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 
