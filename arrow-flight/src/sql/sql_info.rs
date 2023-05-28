@@ -262,7 +262,7 @@ impl SqlInfoUnionBuilder {
 /// Servers construct a [`SqlInfoList`] by adding infos via
 /// [`with_sql_info`] and build the response using [`encode`].
 ///
-/// The availabe configuration options are defined in the [Flight SQL protos][protos].
+/// The available configuration options are defined in the [Flight SQL protos][protos].
 ///
 /// # Example
 /// ```
