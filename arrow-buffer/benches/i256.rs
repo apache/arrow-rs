@@ -54,7 +54,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     }
 
-    c.bench_function(&format!("i256_div"), |b| {
+    c.bench_function("i256_div", |b| {
         b.iter(|| {
             for number_a in create_i256_vec(10) {
                 for number_b in create_i256_vec(5) {
@@ -65,7 +65,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
-    c.bench_function(&format!("i256_rem"), |b| {
+    c.bench_function("i256_rem", |b| {
         b.iter(|| {
             for number_a in create_i256_vec(10) {
                 for number_b in create_i256_vec(5) {
