@@ -26,7 +26,7 @@ use std::str::FromStr;
 #[derive(Debug)]
 pub enum I256Error {
     /// An opaque error similar to [`std::num::ParseIntError`]
-    ParseI256Error,
+    ParseError,
     /// Division by zero
     DivideByZero,
     /// Division overflow
@@ -35,14 +35,14 @@ pub enum I256Error {
 
 impl From<ParseIntError> for I256Error {
     fn from(_: ParseIntError) -> Self {
-        I256Error::ParseI256Error
+        I256Error::ParseError
     }
 }
 
 impl std::fmt::Display for I256Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            I256Error::ParseI256Error => write!(f, "Failed to parse as i256"),
+            I256Error::ParseError => write!(f, "Failed to parse as i256"),
             I256Error::DivideByZero => write!(f, "Division by zero"),
             I256Error::DivideOverflow => write!(f, "Division overflow"),
         }
@@ -93,7 +93,7 @@ impl FromStr for i256 {
 
         if !s.as_bytes()[0].is_ascii_digit() {
             // Ensures no duplicate sign
-            return Err(I256Error::ParseI256Error);
+            return Err(I256Error::ParseError);
         }
 
         parse_impl(s, negative)
@@ -113,7 +113,7 @@ fn parse_impl(s: &str, negative: bool) -> Result<i256, I256Error> {
     let split = s.len() - 38;
     if !s.as_bytes()[split].is_ascii_digit() {
         // Ensures not splitting codepoint and no sign
-        return Err(I256Error::ParseI256Error);
+        return Err(I256Error::ParseError);
     }
     let (hs, ls) = s.split_at(split);
 
@@ -128,7 +128,7 @@ fn parse_impl(s: &str, negative: bool) -> Result<i256, I256Error> {
 
     high.checked_mul(i256::from_i128(10_i128.pow(38)))
         .and_then(|high| high.checked_add(low))
-        .ok_or(I256Error::ParseI256Error)
+        .ok_or(I256Error::ParseError)
 }
 
 impl PartialOrd for i256 {
@@ -1158,8 +1158,7 @@ mod tests {
                 let (result, overflow) = number_a
                     .checked_div(number_b)
                     .map(|a| (a, false))
-                    .or(Some((i256::ZERO, true)))
-                    .unwrap();
+                    .unwrap_or((i256::ZERO, true));
 
                 if expected_overflow {
                     assert!(overflow);
@@ -1205,8 +1204,7 @@ mod tests {
                 let (result, overflow) = number_a
                     .checked_rem(number_b)
                     .map(|a| (a, false))
-                    .or(Some((i256::ZERO, true)))
-                    .unwrap();
+                    .unwrap_or((i256::ZERO, true));
 
                 if expected_overflow {
                     assert!(overflow);
