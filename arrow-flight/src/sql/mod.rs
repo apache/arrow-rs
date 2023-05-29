@@ -27,6 +27,7 @@
 //! 2. Helpers for encoding and decoding FlightSQL messages: [`Any`] and [`Command`]
 //! 3. A [`FlightSqlServiceClient`] for interacting with FlightSQL servers.
 //! 4. A [`FlightSqlService`] to help building FlightSQL servers from [`FlightService`].
+//! 5. Structures to build responses for FlightSQL metadata APIs: [`SqlInfoList`]
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 //! [Apache Arrow]: https://arrow.apache.org
