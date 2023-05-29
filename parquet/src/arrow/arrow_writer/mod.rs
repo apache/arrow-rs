@@ -17,16 +17,21 @@
 
 //! Contains writer which writes arrow data into parquet data.
 
-use std::collections::VecDeque;
+use bytes::Bytes;
 use std::fmt::Debug;
-use std::io::Write;
-use std::sync::Arc;
+use std::io::{Read, Write};
+use std::iter::Peekable;
+use std::slice::Iter;
+use std::sync::{Arc, Mutex};
+use std::vec::IntoIter;
+use thrift::protocol::{TCompactOutputProtocol, TSerializable};
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Decimal128Type, Int32Type, Int64Type, UInt32Type, UInt64Type};
-use arrow_array::{
-    types, Array, ArrayRef, FixedSizeListArray, RecordBatch, RecordBatchWriter,
+use arrow_array::types::{
+    Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type,
+    UInt64Type,
 };
+use arrow_array::{Array, FixedSizeListArray, RecordBatch, RecordBatchWriter};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
 use super::schema::{
@@ -34,14 +39,19 @@ use super::schema::{
     decimal_length_from_precision,
 };
 
-use crate::arrow::arrow_writer::byte_array::ByteArrayWriter;
-use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
-use crate::data_type::{ByteArray, DataType, FixedLenByteArray};
+use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
+use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
+use crate::column::writer::encoder::ColumnValueEncoder;
+use crate::column::writer::{
+    get_column_writer, ColumnCloseResult, ColumnWriter, GenericColumnWriter,
+};
+use crate::data_type::{ByteArray, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{KeyValue, RowGroupMetaDataPtr};
-use crate::file::properties::WriterProperties;
+use crate::file::metadata::{ColumnChunkMetaData, KeyValue, RowGroupMetaDataPtr};
+use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
+use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::SerializedFileWriter;
-use crate::file::writer::SerializedRowGroupWriter;
+use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use levels::{calculate_array_levels, LevelInfo};
 
 mod byte_array;
@@ -49,8 +59,8 @@ mod levels;
 
 /// Arrow writer
 ///
-/// Writes Arrow `RecordBatch`es to a Parquet writer, buffering up `RecordBatch` in order
-/// to produce row groups with `max_row_group_size` rows. Any remaining rows will be
+/// Writes Arrow `RecordBatch`es to a Parquet writer. Multiple [`RecordBatch`] will be encoded
+/// to the same row group, up to `max_row_group_size` rows. Any remaining rows will be
 /// flushed on close, leading the final row group in the output file to potentially
 /// contain fewer than `max_row_group_size` rows
 ///
@@ -78,11 +88,8 @@ pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,
 
-    /// For each column, maintain an ordered queue of arrays to write
-    buffer: Vec<VecDeque<ArrayRef>>,
-
-    /// The total number of rows currently buffered
-    buffered_rows: usize,
+    /// The in-progress row group if any
+    in_progress: Option<ArrowRowGroupWriter>,
 
     /// A copy of the Arrow schema.
     ///
@@ -93,24 +100,13 @@ pub struct ArrowWriter<W: Write> {
     max_row_group_size: usize,
 }
 
-impl<W: Write> Debug for ArrowWriter<W> {
+impl<W: Write + Send> Debug for ArrowWriter<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let buffered_batches = self.buffer.len();
-        let mut buffered_memory = 0;
-
-        for batch in self.buffer.iter() {
-            for arr in batch.iter() {
-                buffered_memory += arr.get_array_memory_size()
-            }
-        }
-
+        let buffered_memory = self.in_progress_size();
         f.debug_struct("ArrowWriter")
             .field("writer", &self.writer)
-            .field(
-                "buffer",
-                &format!("{buffered_batches} , {buffered_memory} bytes"),
-            )
-            .field("buffered_rows", &self.buffered_rows)
+            .field("in_progress_size", &format_args!("{buffered_memory} bytes"))
+            .field("in_progress_rows", &self.in_progress_rows())
             .field("arrow_schema", &self.arrow_schema)
             .field("max_row_group_size", &self.max_row_group_size)
             .finish()
@@ -140,8 +136,7 @@ impl<W: Write + Send> ArrowWriter<W> {
 
         Ok(Self {
             writer: file_writer,
-            buffer: vec![Default::default(); arrow_schema.fields().len()],
-            buffered_rows: 0,
+            in_progress: None,
             arrow_schema,
             max_row_group_size,
         })
@@ -152,43 +147,75 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.writer.flushed_row_groups()
     }
 
-    /// Enqueues the provided `RecordBatch` to be written
-    ///
-    /// If following this there are more than `max_row_group_size` rows buffered,
-    /// this will flush out one or more row groups with `max_row_group_size` rows,
-    /// and drop any fully written `RecordBatch`
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        // validate batch schema against writer's supplied schema
-        let batch_schema = batch.schema();
-        if !(Arc::ptr_eq(&self.arrow_schema, &batch_schema)
-            || self.arrow_schema.contains(&batch_schema))
-        {
-            return Err(ParquetError::ArrowError(
-                "Record batch schema does not match writer schema".to_string(),
-            ));
+    /// Returns the estimated length in bytes of the current in progress row group
+    pub fn in_progress_size(&self) -> usize {
+        match &self.in_progress {
+            Some(in_progress) => in_progress
+                .writers
+                .iter()
+                .map(|(_, x)| x.get_estimated_total_bytes() as usize)
+                .sum(),
+            None => 0,
         }
-
-        for (buffer, column) in self.buffer.iter_mut().zip(batch.columns()) {
-            buffer.push_back(column.clone())
-        }
-
-        self.buffered_rows += batch.num_rows();
-        self.flush_completed()?;
-
-        Ok(())
     }
 
-    /// Flushes buffered data until there are less than `max_row_group_size` rows buffered
-    fn flush_completed(&mut self) -> Result<()> {
-        while self.buffered_rows >= self.max_row_group_size {
-            self.flush_rows(self.max_row_group_size)?;
+    /// Returns the number of rows buffered in the in progress row group
+    pub fn in_progress_rows(&self) -> usize {
+        self.in_progress
+            .as_ref()
+            .map(|x| x.buffered_rows)
+            .unwrap_or_default()
+    }
+
+    /// Encodes the provided [`RecordBatch`]
+    ///
+    /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_size`]
+    /// rows, the contents of `batch` will be written to one or more row groups such that all but
+    /// the final row group in the file contain [`WriterProperties::max_row_group_size`] rows
+    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
+        let in_progress = match &mut self.in_progress {
+            Some(in_progress) => in_progress,
+            x => x.insert(ArrowRowGroupWriter::new(
+                self.writer.schema_descr(),
+                self.writer.properties(),
+                &self.arrow_schema,
+            )?),
+        };
+
+        // If would exceed max_row_group_size, split batch
+        if in_progress.buffered_rows + batch.num_rows() > self.max_row_group_size {
+            let to_write = self.max_row_group_size - in_progress.buffered_rows;
+            let a = batch.slice(0, to_write);
+            let b = batch.slice(to_write, batch.num_rows() - to_write);
+            self.write(&a)?;
+            return self.write(&b);
+        }
+
+        in_progress.write(batch)?;
+
+        if in_progress.buffered_rows >= self.max_row_group_size {
+            self.flush()?
         }
         Ok(())
     }
 
     /// Flushes all buffered rows into a new row group
     pub fn flush(&mut self) -> Result<()> {
-        self.flush_rows(self.buffered_rows)
+        let in_progress = match self.in_progress.take() {
+            Some(in_progress) => in_progress,
+            None => return Ok(()),
+        };
+
+        let mut row_group_writer = self.writer.next_row_group()?;
+        for (chunk, close) in in_progress.close()? {
+            row_group_writer.append_column(&chunk, close)?;
+        }
+        row_group_writer.close()?;
+        Ok(())
     }
 
     /// Additional [`KeyValue`] metadata to be written in addition to those from [`WriterProperties`]
@@ -196,68 +223,6 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// This method provide a way to append kv_metadata after write RecordBatch
     pub fn append_key_value_metadata(&mut self, kv_metadata: KeyValue) {
         self.writer.append_key_value_metadata(kv_metadata)
-    }
-
-    /// Flushes `num_rows` from the buffer into a new row group
-    fn flush_rows(&mut self, num_rows: usize) -> Result<()> {
-        if num_rows == 0 {
-            return Ok(());
-        }
-
-        assert!(
-            num_rows <= self.buffered_rows,
-            "cannot flush {} rows only have {}",
-            num_rows,
-            self.buffered_rows
-        );
-
-        assert!(
-            num_rows <= self.max_row_group_size,
-            "cannot flush {} rows would exceed max row group size of {}",
-            num_rows,
-            self.max_row_group_size
-        );
-
-        let mut row_group_writer = self.writer.next_row_group()?;
-
-        for (col_buffer, field) in self.buffer.iter_mut().zip(self.arrow_schema.fields())
-        {
-            // Collect the number of arrays to append
-            let mut remaining = num_rows;
-            let mut arrays = Vec::with_capacity(col_buffer.len());
-            while remaining != 0 {
-                match col_buffer.pop_front() {
-                    Some(next) if next.len() > remaining => {
-                        col_buffer
-                            .push_front(next.slice(remaining, next.len() - remaining));
-                        arrays.push(next.slice(0, remaining));
-                        remaining = 0;
-                    }
-                    Some(next) => {
-                        remaining -= next.len();
-                        arrays.push(next);
-                    }
-                    _ => break,
-                }
-            }
-
-            let mut levels = arrays
-                .iter()
-                .map(|array| {
-                    let mut levels = calculate_array_levels(array, field)?;
-                    // Reverse levels as we pop() them when writing arrays
-                    levels.reverse();
-                    Ok(levels)
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            write_leaves(&mut row_group_writer, &arrays, &mut levels)?;
-        }
-
-        row_group_writer.close()?;
-        self.buffered_rows -= num_rows;
-
-        Ok(())
     }
 
     /// Flushes any outstanding data and returns the underlying writer.
@@ -284,156 +249,284 @@ impl<W: Write + Send> RecordBatchWriter for ArrowWriter<W> {
     }
 }
 
-fn write_leaves<W: Write + Send>(
-    row_group_writer: &mut SerializedRowGroupWriter<'_, W>,
-    arrays: &[ArrayRef],
-    levels: &mut [Vec<LevelInfo>],
-) -> Result<()> {
-    assert_eq!(arrays.len(), levels.len());
-    assert!(!arrays.is_empty());
+/// A list of [`Bytes`] comprising a single column chunk
+#[derive(Default)]
+struct ArrowColumnChunk {
+    length: usize,
+    data: Vec<Bytes>,
+}
 
-    let data_type = arrays.first().unwrap().data_type().clone();
-    assert!(arrays.iter().all(|a| a.data_type() == &data_type));
+impl Length for ArrowColumnChunk {
+    fn len(&self) -> u64 {
+        self.length as _
+    }
+}
 
-    match &data_type {
-        ArrowDataType::Null
-        | ArrowDataType::Boolean
-        | ArrowDataType::Int8
-        | ArrowDataType::Int16
-        | ArrowDataType::Int32
-        | ArrowDataType::Int64
-        | ArrowDataType::UInt8
-        | ArrowDataType::UInt16
-        | ArrowDataType::UInt32
-        | ArrowDataType::UInt64
-        | ArrowDataType::Float32
-        | ArrowDataType::Float64
-        | ArrowDataType::Timestamp(_, _)
-        | ArrowDataType::Date32
-        | ArrowDataType::Date64
-        | ArrowDataType::Time32(_)
-        | ArrowDataType::Time64(_)
-        | ArrowDataType::Duration(_)
-        | ArrowDataType::Interval(_)
-        | ArrowDataType::Decimal128(_, _)
-        | ArrowDataType::Decimal256(_, _)
-        | ArrowDataType::FixedSizeBinary(_) => {
-            let mut col_writer = row_group_writer.next_column()?.unwrap();
-            for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
-                write_leaf(col_writer.untyped(), array, levels.pop().expect("Levels exhausted"))?;
-            }
-            col_writer.close()
-        }
-        ArrowDataType::LargeBinary
-        | ArrowDataType::Binary
-        | ArrowDataType::Utf8
-        | ArrowDataType::LargeUtf8 => {
-            let mut col_writer = row_group_writer.next_column_with_factory(ByteArrayWriter::new)?.unwrap();
-            for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
-                col_writer.write(array, levels.pop().expect("Levels exhausted"))?;
-            }
-            col_writer.close()
-        }
-        ArrowDataType::List(_) => {
-            let arrays: Vec<_> = arrays.iter().map(|array|{
-                array.as_list::<i32>().values().clone()
-            }).collect();
+impl ChunkReader for ArrowColumnChunk {
+    type T = ChainReader;
 
-            write_leaves(row_group_writer, &arrays, levels)?;
-            Ok(())
-        }
-        ArrowDataType::LargeList(_) => {
-            let arrays: Vec<_> = arrays.iter().map(|array|{
-                array.as_list::<i64>().values().clone()
-            }).collect();
-            write_leaves(row_group_writer, &arrays, levels)?;
-            Ok(())
-        }
-        ArrowDataType::Struct(fields) => {
-            // Groups child arrays by field
-            let mut field_arrays = vec![Vec::with_capacity(arrays.len()); fields.len()];
+    fn get_read(&self, start: u64) -> Result<Self::T> {
+        assert_eq!(start, 0); // Assume append_column writes all data in one-shot
+        Ok(ChainReader(self.data.clone().into_iter().peekable()))
+    }
 
-            for array in arrays {
-                let struct_array: &arrow_array::StructArray = array
-                    .as_any()
-                    .downcast_ref::<arrow_array::StructArray>()
-                    .expect("Unable to get struct array");
+    fn get_bytes(&self, _start: u64, _length: usize) -> Result<Bytes> {
+        unimplemented!()
+    }
+}
 
-                assert_eq!(struct_array.columns().len(), fields.len());
+/// A [`Read`] for an iterator of [`Bytes`]
+struct ChainReader(Peekable<IntoIter<Bytes>>);
 
-                for (child_array, field) in field_arrays.iter_mut().zip(struct_array.columns()) {
-                    child_array.push(field.clone())
+impl Read for ChainReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let buffer = loop {
+            match self.0.peek_mut() {
+                Some(b) if b.is_empty() => {
+                    self.0.next();
+                    continue;
                 }
+                Some(b) => break b,
+                None => return Ok(0),
             }
+        };
 
-            for field in field_arrays {
-                write_leaves(row_group_writer, &field, levels)?;
-            }
+        let len = buffer.len().min(out.len());
+        let b = buffer.split_to(len);
+        out[..len].copy_from_slice(&b);
+        Ok(len)
+    }
+}
 
-            Ok(())
-        }
-        ArrowDataType::Map(_, _) => {
-            let mut keys = Vec::with_capacity(arrays.len());
-            let mut values = Vec::with_capacity(arrays.len());
-            for array in arrays {
-                let map_array: &arrow_array::MapArray = array
-                    .as_any()
-                    .downcast_ref::<arrow_array::MapArray>()
-                    .expect("Unable to get map array");
-                keys.push(map_array.keys().clone());
-                values.push(map_array.values().clone());
-            }
+/// A shared [`ArrowColumnChunk`]
+///
+/// This allows it to be owned by [`ArrowPageWriter`] whilst allowing access via
+/// [`ArrowRowGroupWriter`] on flush, without requiring self-referential borrows
+type SharedColumnChunk = Arc<Mutex<ArrowColumnChunk>>;
 
-            write_leaves(row_group_writer, &keys, levels)?;
-            write_leaves(row_group_writer, &values, levels)?;
-            Ok(())
-        }
-        ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
-            ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
-                let mut col_writer = row_group_writer.next_column_with_factory(ByteArrayWriter::new)?.unwrap();
-                for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
-                    col_writer.write(array, levels.pop().expect("Levels exhausted"))?;
-                }
-                col_writer.close()
-            }
-            _ => {
-                let mut col_writer = row_group_writer.next_column()?.unwrap();
-                for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
-                    write_leaf(col_writer.untyped(), array, levels.pop().expect("Levels exhausted"))?;
-                }
-                col_writer.close()
-            }
-        }
-        ArrowDataType::Float16 => Err(ParquetError::ArrowError(
-            "Float16 arrays not supported".to_string(),
-        )),
-        ArrowDataType::FixedSizeList(_, _) => {
-            let arrays: Vec<_> = arrays.iter().map(|array|{
-                array.as_any().downcast_ref::<FixedSizeListArray>()
-                    .expect("unable to get fixed-size list array")
-                    .values()
-                    .clone()
-            }).collect();
-            write_leaves(row_group_writer, &arrays, levels)?;
-            Ok(())
-        },
-        ArrowDataType::Union(_, _) | ArrowDataType::RunEndEncoded(_, _) => {
-            Err(ParquetError::NYI(
-                format!(
-                    "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
-                )
-            ))
+#[derive(Default)]
+struct ArrowPageWriter {
+    buffer: SharedColumnChunk,
+}
+
+impl PageWriter for ArrowPageWriter {
+    fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
+        let mut buf = self.buffer.try_lock().unwrap();
+        let page_header = page.to_thrift_header();
+        let header = {
+            let mut header = Vec::with_capacity(1024);
+            let mut protocol = TCompactOutputProtocol::new(&mut header);
+            page_header.write_to_out_protocol(&mut protocol)?;
+            Bytes::from(header)
+        };
+
+        let data = page.compressed_page().buffer().clone();
+        let compressed_size = data.len() + header.len();
+
+        let mut spec = PageWriteSpec::new();
+        spec.page_type = page.page_type();
+        spec.num_values = page.num_values();
+        spec.uncompressed_size = page.uncompressed_size() + header.len();
+        spec.offset = buf.length as u64;
+        spec.compressed_size = compressed_size;
+        spec.bytes_written = compressed_size as u64;
+
+        buf.length += compressed_size;
+        buf.data.push(header);
+        buf.data.push(data.into());
+
+        Ok(spec)
+    }
+
+    fn write_metadata(&mut self, _metadata: &ColumnChunkMetaData) -> Result<()> {
+        // Skip writing metadata as won't be copied anyway
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Encodes a leaf column to [`ArrowPageWriter`]
+enum ArrowColumnWriter {
+    ByteArray(GenericColumnWriter<'static, ByteArrayEncoder>),
+    Column(ColumnWriter<'static>),
+}
+
+impl ArrowColumnWriter {
+    /// Returns the estimated total bytes for this column writer
+    fn get_estimated_total_bytes(&self) -> u64 {
+        match self {
+            ArrowColumnWriter::ByteArray(c) => c.get_estimated_total_bytes(),
+            ArrowColumnWriter::Column(c) => c.get_estimated_total_bytes(),
         }
     }
 }
 
+/// Encodes [`RecordBatch`] to a parquet row group
+struct ArrowRowGroupWriter {
+    writers: Vec<(SharedColumnChunk, ArrowColumnWriter)>,
+    schema: SchemaRef,
+    buffered_rows: usize,
+}
+
+impl ArrowRowGroupWriter {
+    fn new(
+        parquet: &SchemaDescriptor,
+        props: &WriterPropertiesPtr,
+        arrow: &SchemaRef,
+    ) -> Result<Self> {
+        let mut writers = Vec::with_capacity(arrow.fields.len());
+        let mut leaves = parquet.columns().iter();
+        for field in &arrow.fields {
+            get_arrow_column_writer(field.data_type(), props, &mut leaves, &mut writers)?;
+        }
+        Ok(Self {
+            writers,
+            schema: arrow.clone(),
+            buffered_rows: 0,
+        })
+    }
+
+    fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.buffered_rows += batch.num_rows();
+        let mut writers = self.writers.iter_mut().map(|(_, x)| x);
+        for (array, field) in batch.columns().iter().zip(&self.schema.fields) {
+            let mut levels = calculate_array_levels(array, field)?.into_iter();
+            write_leaves(&mut writers, &mut levels, array.as_ref())?;
+        }
+        Ok(())
+    }
+
+    fn close(self) -> Result<Vec<(ArrowColumnChunk, ColumnCloseResult)>> {
+        self.writers
+            .into_iter()
+            .map(|(chunk, writer)| {
+                let close_result = match writer {
+                    ArrowColumnWriter::ByteArray(c) => c.close()?,
+                    ArrowColumnWriter::Column(c) => c.close()?,
+                };
+
+                let chunk = Arc::try_unwrap(chunk).ok().unwrap().into_inner().unwrap();
+                Ok((chunk, close_result))
+            })
+            .collect()
+    }
+}
+
+/// Get an [`ArrowColumnWriter`] along with a reference to its [`SharedColumnChunk`]
+fn get_arrow_column_writer(
+    data_type: &ArrowDataType,
+    props: &WriterPropertiesPtr,
+    leaves: &mut Iter<'_, ColumnDescPtr>,
+    out: &mut Vec<(SharedColumnChunk, ArrowColumnWriter)>,
+) -> Result<()> {
+    let col = |desc: &ColumnDescPtr| {
+        let page_writer = Box::<ArrowPageWriter>::default();
+        let chunk = page_writer.buffer.clone();
+        let writer = get_column_writer(desc.clone(), props.clone(), page_writer);
+        (chunk, ArrowColumnWriter::Column(writer))
+    };
+
+    let bytes = |desc: &ColumnDescPtr| {
+        let page_writer = Box::<ArrowPageWriter>::default();
+        let chunk = page_writer.buffer.clone();
+        let writer = GenericColumnWriter::new(desc.clone(), props.clone(), page_writer);
+        (chunk, ArrowColumnWriter::ByteArray(writer))
+    };
+
+    match data_type {
+        _ if data_type.is_primitive() => out.push(col(leaves.next().unwrap())),
+        ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => out.push(col(leaves.next().unwrap())),
+        ArrowDataType::LargeBinary
+        | ArrowDataType::Binary
+        | ArrowDataType::Utf8
+        | ArrowDataType::LargeUtf8 => {
+            out.push(bytes(leaves.next().unwrap()))
+        }
+        ArrowDataType::List(f)
+        | ArrowDataType::LargeList(f)
+        | ArrowDataType::FixedSizeList(f, _) => {
+            get_arrow_column_writer(f.data_type(), props, leaves, out)?
+        }
+        ArrowDataType::Struct(fields) => {
+            for field in fields {
+                get_arrow_column_writer(field.data_type(), props, leaves, out)?
+            }
+        }
+        ArrowDataType::Map(f, _) => match f.data_type() {
+            ArrowDataType::Struct(f) => {
+                get_arrow_column_writer(f[0].data_type(), props, leaves, out)?;
+                get_arrow_column_writer(f[1].data_type(), props, leaves, out)?
+            }
+            _ => unreachable!("invalid map type"),
+        }
+        ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
+            ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
+                out.push(bytes(leaves.next().unwrap()))
+            }
+            _ => {
+                out.push(col(leaves.next().unwrap()))
+            }
+        }
+       _ => return Err(ParquetError::NYI(
+           format!(
+               "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
+           )
+       ))
+    }
+    Ok(())
+}
+
+/// Write the leaves of `array` in depth-first order to `writers` with `levels`
+fn write_leaves<'a, W>(
+    writers: &mut W,
+    levels: &mut IntoIter<LevelInfo>,
+    array: &(dyn Array + 'static),
+) -> Result<()>
+where
+    W: Iterator<Item = &'a mut ArrowColumnWriter>,
+{
+    match array.data_type() {
+        ArrowDataType::List(_) => {
+            write_leaves(writers, levels, array.as_list::<i32>().values().as_ref())?
+        }
+        ArrowDataType::LargeList(_) => {
+            write_leaves(writers, levels, array.as_list::<i64>().values().as_ref())?
+        }
+        ArrowDataType::FixedSizeList(_, _) => {
+            let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+            write_leaves(writers, levels, array.values().as_ref())?
+        }
+        ArrowDataType::Struct(_) => {
+            for column in array.as_struct().columns() {
+                write_leaves(writers, levels, column.as_ref())?
+            }
+        }
+        ArrowDataType::Map(_, _) => {
+            let map = array.as_map();
+            write_leaves(writers, levels, map.keys().as_ref())?;
+            write_leaves(writers, levels, map.values().as_ref())?
+        }
+        _ => {
+            let levels = levels.next().unwrap();
+            match writers.next().unwrap() {
+                ArrowColumnWriter::Column(c) => write_leaf(c, array, levels)?,
+                ArrowColumnWriter::ByteArray(c) => write_primitive(c, array, levels)?,
+            };
+        }
+    }
+    Ok(())
+}
+
 fn write_leaf(
     writer: &mut ColumnWriter<'_>,
-    column: &ArrayRef,
+    column: &dyn Array,
     levels: LevelInfo,
-) -> Result<i64> {
+) -> Result<usize> {
     let indices = levels.non_null_indices();
-    let written = match writer {
+    match writer {
         ColumnWriter::Int32ColumnWriter(ref mut typed) => {
             match column.data_type() {
                 ArrowDataType::Date64 => {
@@ -442,26 +535,26 @@ fn write_leaf(
                     let array = arrow_cast::cast(&array, &ArrowDataType::Int32)?;
 
                     let array = array.as_primitive::<Int32Type>();
-                    write_primitive(typed, array.values(), levels)?
+                    write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::UInt32 => {
                     let values = column.as_primitive::<UInt32Type>().values();
                     // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
                     // `(i32::MAX as u32)..u32::MAX` to `i32::MIN..0`
                     let array = values.inner().typed_data::<i32>();
-                    write_primitive(typed, array, levels)?
+                    write_primitive(typed, array, levels)
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int32 to represent the decimal with low precision
                     let array = column
                         .as_primitive::<Decimal128Type>()
-                        .unary::<_, types::Int32Type>(|v| v as i32);
-                    write_primitive(typed, array.values(), levels)?
+                        .unary::<_, Int32Type>(|v| v as i32);
+                    write_primitive(typed, array.values(), levels)
                 }
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
                     let array = array.as_primitive::<Int32Type>();
-                    write_primitive(typed, array.values(), levels)?
+                    write_primitive(typed, array.values(), levels)
                 }
             }
         }
@@ -471,32 +564,32 @@ fn write_leaf(
                 get_bool_array_slice(array, indices).as_slice(),
                 levels.def_levels(),
                 levels.rep_levels(),
-            )?
+            )
         }
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
             match column.data_type() {
                 ArrowDataType::Int64 => {
                     let array = column.as_primitive::<Int64Type>();
-                    write_primitive(typed, array.values(), levels)?
+                    write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::UInt64 => {
                     let values = column.as_primitive::<UInt64Type>().values();
                     // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
                     // `(i64::MAX as u64)..u64::MAX` to `i64::MIN..0`
                     let array = values.inner().typed_data::<i64>();
-                    write_primitive(typed, array, levels)?
+                    write_primitive(typed, array, levels)
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int64 to represent the decimal with low precision
                     let array = column
                         .as_primitive::<Decimal128Type>()
-                        .unary::<_, types::Int64Type>(|v| v as i64);
-                    write_primitive(typed, array.values(), levels)?
+                        .unary::<_, Int64Type>(|v| v as i64);
+                    write_primitive(typed, array.values(), levels)
                 }
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
                     let array = array.as_primitive::<Int64Type>();
-                    write_primitive(typed, array.values(), levels)?
+                    write_primitive(typed, array.values(), levels)
                 }
             }
         }
@@ -504,18 +597,12 @@ fn write_leaf(
             unreachable!("Currently unreachable because data type not supported")
         }
         ColumnWriter::FloatColumnWriter(ref mut typed) => {
-            let array = column
-                .as_any()
-                .downcast_ref::<arrow_array::Float32Array>()
-                .expect("Unable to get Float32 array");
-            write_primitive(typed, array.values(), levels)?
+            let array = column.as_primitive::<Float32Type>();
+            write_primitive(typed, array.values(), levels)
         }
         ColumnWriter::DoubleColumnWriter(ref mut typed) => {
-            let array = column
-                .as_any()
-                .downcast_ref::<arrow_array::Float64Array>()
-                .expect("Unable to get Float64 array");
-            write_primitive(typed, array.values(), levels)?
+            let array = column.as_primitive::<Float64Type>();
+            write_primitive(typed, array.values(), levels)
         }
         ColumnWriter::ByteArrayColumnWriter(_) => {
             unreachable!("should use ByteArrayWriter")
@@ -553,10 +640,7 @@ fn write_leaf(
                     get_fsb_array_slice(array, indices)
                 }
                 ArrowDataType::Decimal128(_, _) => {
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::Decimal128Array>()
-                        .unwrap();
+                    let array = column.as_primitive::<Decimal128Type>();
                     get_decimal_array_slice(array, indices)
                 }
                 _ => {
@@ -566,19 +650,14 @@ fn write_leaf(
                     ));
                 }
             };
-            typed.write_batch(
-                bytes.as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
-            )?
+            typed.write_batch(bytes.as_slice(), levels.def_levels(), levels.rep_levels())
         }
-    };
-    Ok(written as i64)
+    }
 }
 
-fn write_primitive<T: DataType>(
-    writer: &mut ColumnWriterImpl<'_, T>,
-    values: &[T::T],
+fn write_primitive<E: ColumnValueEncoder>(
+    writer: &mut GenericColumnWriter<E>,
+    values: &E::Values,
     levels: LevelInfo,
 ) -> Result<usize> {
     writer.write_batch_internal(
@@ -2461,5 +2540,41 @@ mod tests {
         assert_eq!(back.schema(), file_schema);
         assert_ne!(back.schema(), batch.schema());
         assert_eq!(back.column(0).as_ref(), batch.column(0).as_ref());
+    }
+
+    #[test]
+    fn in_progress_accounting() {
+        // define schema
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        // create some data
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+
+        // build a record batch
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+        let mut writer = ArrowWriter::try_new(vec![], batch.schema(), None).unwrap();
+
+        // starts empty
+        assert_eq!(writer.in_progress_size(), 0);
+        assert_eq!(writer.in_progress_rows(), 0);
+        writer.write(&batch).unwrap();
+
+        // updated on write
+        let initial_size = writer.in_progress_size();
+        assert!(initial_size > 0);
+        assert_eq!(writer.in_progress_rows(), 5);
+
+        // updated on second write
+        writer.write(&batch).unwrap();
+        assert!(writer.in_progress_size() > initial_size);
+        assert_eq!(writer.in_progress_rows(), 10);
+
+        // cleared on flush
+        writer.flush().unwrap();
+        assert_eq!(writer.in_progress_size(), 0);
+        assert_eq!(writer.in_progress_rows(), 0);
+
+        writer.close().unwrap();
     }
 }
