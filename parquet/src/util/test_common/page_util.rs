@@ -22,7 +22,7 @@ use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, Encoder};
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::Result;
-use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
+use crate::schema::types::ColumnDescPtr;
 use crate::util::memory::ByteBufferPtr;
 use std::iter::Peekable;
 use std::mem;
@@ -204,20 +204,12 @@ impl<P: Iterator<Item = Page> + Send> Iterator for InMemoryPageReader<P> {
 /// A utility page iterator which stores page readers in memory, used for tests.
 #[derive(Clone)]
 pub struct InMemoryPageIterator<I: Iterator<Item = Vec<Page>>> {
-    schema: SchemaDescPtr,
-    column_desc: ColumnDescPtr,
     page_reader_iter: I,
 }
 
 impl<I: Iterator<Item = Vec<Page>>> InMemoryPageIterator<I> {
-    pub fn new(
-        schema: SchemaDescPtr,
-        column_desc: ColumnDescPtr,
-        pages: impl IntoIterator<Item = Vec<Page>, IntoIter = I>,
-    ) -> Self {
+    pub fn new(pages: impl IntoIterator<Item = Vec<Page>, IntoIter = I>) -> Self {
         Self {
-            schema,
-            column_desc,
             page_reader_iter: pages.into_iter(),
         }
     }
@@ -233,12 +225,4 @@ impl<I: Iterator<Item = Vec<Page>>> Iterator for InMemoryPageIterator<I> {
     }
 }
 
-impl<I: Iterator<Item = Vec<Page>> + Send> PageIterator for InMemoryPageIterator<I> {
-    fn schema(&mut self) -> Result<SchemaDescPtr> {
-        Ok(self.schema.clone())
-    }
-
-    fn column_schema(&mut self) -> Result<ColumnDescPtr> {
-        Ok(self.column_desc.clone())
-    }
-}
+impl<I: Iterator<Item = Vec<Page>> + Send> PageIterator for InMemoryPageIterator<I> {}

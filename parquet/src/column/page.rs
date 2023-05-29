@@ -21,7 +21,6 @@ use crate::basic::{Encoding, PageType};
 use crate::errors::{ParquetError, Result};
 use crate::file::{metadata::ColumnChunkMetaData, statistics::Statistics};
 use crate::format::PageHeader;
-use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 use crate::util::memory::ByteBufferPtr;
 
 /// Parquet Page definition.
@@ -269,13 +268,7 @@ pub trait PageWriter {
 }
 
 /// An iterator over pages of one specific column in a parquet file.
-pub trait PageIterator: Iterator<Item = Result<Box<dyn PageReader>>> + Send {
-    /// Get schema of parquet file.
-    fn schema(&mut self) -> Result<SchemaDescPtr>;
-
-    /// Get column schema of this page iterator.
-    fn column_schema(&mut self) -> Result<ColumnDescPtr>;
-}
+pub trait PageIterator: Iterator<Item = Result<Box<dyn PageReader>>> + Send {}
 
 #[cfg(test)]
 mod tests {

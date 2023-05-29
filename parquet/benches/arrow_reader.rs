@@ -76,7 +76,6 @@ pub fn seedable_rng() -> StdRng {
 
 // support byte array for decimal
 fn build_encoded_decimal_bytes_page_iterator<T>(
-    schema: SchemaDescPtr,
     column_desc: ColumnDescPtr,
     null_density: f32,
     encoding: Encoding,
@@ -136,11 +135,10 @@ where
         }
         pages.push(column_chunk_pages);
     }
-    InMemoryPageIterator::new(schema, column_desc, pages)
+    InMemoryPageIterator::new(pages)
 }
 
 fn build_encoded_primitive_page_iterator<T>(
-    schema: SchemaDescPtr,
     column_desc: ColumnDescPtr,
     null_density: f32,
     encoding: Encoding,
@@ -185,11 +183,10 @@ where
         pages.push(column_chunk_pages);
     }
 
-    InMemoryPageIterator::new(schema, column_desc, pages)
+    InMemoryPageIterator::new(pages)
 }
 
 fn build_dictionary_encoded_primitive_page_iterator<T>(
-    schema: SchemaDescPtr,
     column_desc: ColumnDescPtr,
     null_density: f32,
 ) -> impl PageIterator + Clone
@@ -254,11 +251,10 @@ where
         pages.push(column_chunk_pages.into());
     }
 
-    InMemoryPageIterator::new(schema, column_desc, pages)
+    InMemoryPageIterator::new(pages)
 }
 
 fn build_plain_encoded_string_page_iterator(
-    schema: SchemaDescPtr,
     column_desc: ColumnDescPtr,
     null_density: f32,
 ) -> impl PageIterator + Clone {
@@ -297,11 +293,10 @@ fn build_plain_encoded_string_page_iterator(
         pages.push(column_chunk_pages);
     }
 
-    InMemoryPageIterator::new(schema, column_desc, pages)
+    InMemoryPageIterator::new(pages)
 }
 
 fn build_dictionary_encoded_string_page_iterator(
-    schema: SchemaDescPtr,
     column_desc: ColumnDescPtr,
     null_density: f32,
 ) -> impl PageIterator + Clone {
@@ -363,7 +358,7 @@ fn build_dictionary_encoded_string_page_iterator(
         pages.push(column_chunk_pages.into());
     }
 
-    InMemoryPageIterator::new(schema, column_desc, pages)
+    InMemoryPageIterator::new(pages)
 }
 
 fn bench_array_reader(mut array_reader: Box<dyn ArrayReader>) -> usize {
@@ -471,7 +466,6 @@ fn create_string_byte_array_dictionary_reader(
 
 fn bench_byte_decimal<T>(
     group: &mut BenchmarkGroup<WallTime>,
-    schema: &SchemaDescPtr,
     mandatory_column_desc: &ColumnDescPtr,
     optional_column_desc: &ColumnDescPtr,
     min: i128,
@@ -485,7 +479,6 @@ fn bench_byte_decimal<T>(
 
     // plain encoded, no NULLs
     let data = build_encoded_decimal_bytes_page_iterator::<T>(
-        schema.clone(),
         mandatory_column_desc.clone(),
         0.0,
         Encoding::PLAIN,
@@ -504,7 +497,6 @@ fn bench_byte_decimal<T>(
     });
 
     let data = build_encoded_decimal_bytes_page_iterator::<T>(
-        schema.clone(),
         optional_column_desc.clone(),
         0.0,
         Encoding::PLAIN,
@@ -524,7 +516,6 @@ fn bench_byte_decimal<T>(
 
     // half null
     let data = build_encoded_decimal_bytes_page_iterator::<T>(
-        schema.clone(),
         optional_column_desc.clone(),
         0.5,
         Encoding::PLAIN,
@@ -545,7 +536,6 @@ fn bench_byte_decimal<T>(
 
 fn bench_primitive<T>(
     group: &mut BenchmarkGroup<WallTime>,
-    schema: &SchemaDescPtr,
     mandatory_column_desc: &ColumnDescPtr,
     optional_column_desc: &ColumnDescPtr,
     min: usize,
@@ -558,7 +548,6 @@ fn bench_primitive<T>(
 
     // plain encoded, no NULLs
     let data = build_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         mandatory_column_desc.clone(),
         0.0,
         Encoding::PLAIN,
@@ -577,7 +566,6 @@ fn bench_primitive<T>(
     });
 
     let data = build_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         optional_column_desc.clone(),
         0.0,
         Encoding::PLAIN,
@@ -595,7 +583,6 @@ fn bench_primitive<T>(
 
     // plain encoded, half NULLs
     let data = build_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         optional_column_desc.clone(),
         0.5,
         Encoding::PLAIN,
@@ -613,7 +600,6 @@ fn bench_primitive<T>(
 
     // binary packed, no NULLs
     let data = build_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         mandatory_column_desc.clone(),
         0.0,
         Encoding::DELTA_BINARY_PACKED,
@@ -632,7 +618,6 @@ fn bench_primitive<T>(
     });
 
     let data = build_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         optional_column_desc.clone(),
         0.0,
         Encoding::DELTA_BINARY_PACKED,
@@ -650,7 +635,6 @@ fn bench_primitive<T>(
 
     // binary packed skip , no NULLs
     let data = build_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         mandatory_column_desc.clone(),
         0.0,
         Encoding::DELTA_BINARY_PACKED,
@@ -669,7 +653,6 @@ fn bench_primitive<T>(
     });
 
     let data = build_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         optional_column_desc.clone(),
         0.0,
         Encoding::DELTA_BINARY_PACKED,
@@ -687,7 +670,6 @@ fn bench_primitive<T>(
 
     // binary packed, half NULLs
     let data = build_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         optional_column_desc.clone(),
         0.5,
         Encoding::DELTA_BINARY_PACKED,
@@ -705,7 +687,6 @@ fn bench_primitive<T>(
 
     // dictionary encoded, no NULLs
     let data = build_dictionary_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         mandatory_column_desc.clone(),
         0.0,
     );
@@ -721,7 +702,6 @@ fn bench_primitive<T>(
     });
 
     let data = build_dictionary_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         optional_column_desc.clone(),
         0.0,
     );
@@ -736,7 +716,6 @@ fn bench_primitive<T>(
 
     // dictionary encoded, half NULLs
     let data = build_dictionary_encoded_primitive_page_iterator::<T>(
-        schema.clone(),
         optional_column_desc.clone(),
         0.5,
     );
@@ -758,7 +737,6 @@ fn decimal_benches(c: &mut Criterion) {
     let mut group = c.benchmark_group("arrow_array_reader/INT32/Decimal128Array");
     bench_primitive::<Int32Type>(
         &mut group,
-        &schema,
         &mandatory_decimal1_leaf_desc,
         &optional_decimal1_leaf_desc,
         // precision is 8: the max is 99999999
@@ -773,7 +751,6 @@ fn decimal_benches(c: &mut Criterion) {
     let optional_decimal2_leaf_desc = schema.column(9);
     bench_primitive::<Int64Type>(
         &mut group,
-        &schema,
         &mandatory_decimal2_leaf_desc,
         &optional_decimal2_leaf_desc,
         // precision is 16: the max is 9999999999999999
@@ -788,7 +765,6 @@ fn decimal_benches(c: &mut Criterion) {
     let optional_decimal3_leaf_desc = schema.column(11);
     bench_byte_decimal::<ByteArrayType>(
         &mut group,
-        &schema,
         &mandatory_decimal3_leaf_desc,
         &optional_decimal3_leaf_desc,
         // precision is 16: the max is 9999999999999999
@@ -803,7 +779,6 @@ fn decimal_benches(c: &mut Criterion) {
     let optional_decimal4_leaf_desc = schema.column(13);
     bench_byte_decimal::<FixedLenByteArrayType>(
         &mut group,
-        &schema,
         &mandatory_decimal4_leaf_desc,
         &optional_decimal4_leaf_desc,
         // precision is 16: the max is 9999999999999999
@@ -829,7 +804,6 @@ fn add_benches(c: &mut Criterion) {
     let mut group = c.benchmark_group("arrow_array_reader/Int32Array");
     bench_primitive::<Int32Type>(
         &mut group,
-        &schema,
         &mandatory_int32_column_desc,
         &optional_int32_column_desc,
         0,
@@ -843,7 +817,6 @@ fn add_benches(c: &mut Criterion) {
     let mut group = c.benchmark_group("arrow_array_reader/Int64Array");
     bench_primitive::<Int64Type>(
         &mut group,
-        &schema,
         &mandatory_int64_column_desc,
         &optional_int64_column_desc,
         0,
@@ -858,7 +831,6 @@ fn add_benches(c: &mut Criterion) {
 
     // string, plain encoded, no NULLs
     let plain_string_no_null_data = build_plain_encoded_string_page_iterator(
-        schema.clone(),
         mandatory_string_column_desc.clone(),
         0.0,
     );
@@ -874,7 +846,6 @@ fn add_benches(c: &mut Criterion) {
     });
 
     let plain_string_no_null_data = build_plain_encoded_string_page_iterator(
-        schema.clone(),
         optional_string_column_desc.clone(),
         0.0,
     );
@@ -891,7 +862,6 @@ fn add_benches(c: &mut Criterion) {
 
     // string, plain encoded, half NULLs
     let plain_string_half_null_data = build_plain_encoded_string_page_iterator(
-        schema.clone(),
         optional_string_column_desc.clone(),
         0.5,
     );
@@ -908,7 +878,6 @@ fn add_benches(c: &mut Criterion) {
 
     // string, dictionary encoded, no NULLs
     let dictionary_string_no_null_data = build_dictionary_encoded_string_page_iterator(
-        schema.clone(),
         mandatory_string_column_desc.clone(),
         0.0,
     );
@@ -924,7 +893,6 @@ fn add_benches(c: &mut Criterion) {
     });
 
     let dictionary_string_no_null_data = build_dictionary_encoded_string_page_iterator(
-        schema.clone(),
         optional_string_column_desc.clone(),
         0.0,
     );
@@ -941,7 +909,6 @@ fn add_benches(c: &mut Criterion) {
 
     // string, dictionary encoded, half NULLs
     let dictionary_string_half_null_data = build_dictionary_encoded_string_page_iterator(
-        schema.clone(),
         optional_string_column_desc.clone(),
         0.5,
     );
