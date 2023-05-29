@@ -44,7 +44,6 @@ pub enum SqlInfoValue {
     BigInt(i64),
     Bitmask(i32),
     StringList(Vec<String>),
-    // TODO support more exotic metadata that requires the map of lists
     ListMap(BTreeMap<i32, Vec<i32>>),
 }
 
