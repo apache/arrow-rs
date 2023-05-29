@@ -24,7 +24,7 @@ use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
-use arrow_schema::{DataType, Field, Schema, SchemaBuilder};
+use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
 
 fn get_repetition(t: &Type) -> Repetition {
     let info = t.get_basic_info();
@@ -35,6 +35,7 @@ fn get_repetition(t: &Type) -> Repetition {
 }
 
 /// Representation of a parquet file, in terms of arrow schema elements
+#[derive(Debug, Clone)]
 pub struct ParquetField {
     /// The level which represents an insertion into the current list
     /// i.e. guaranteed to be > 0 for a list type
@@ -82,6 +83,7 @@ impl ParquetField {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum ParquetFieldType {
     Primitive {
         /// The index of the column in parquet
@@ -554,13 +556,13 @@ fn convert_field(
 
 /// Computes the [`ParquetField`] for the provided [`SchemaDescriptor`] with `leaf_columns` listing
 /// the indexes of leaf columns to project, and `embedded_arrow_schema` the optional
-/// [`Schema`] embedded in the parquet metadata
+/// [`Fields`] embedded in the parquet metadata
 ///
 /// Note: This does not support out of order column projection
 pub fn convert_schema(
     schema: &SchemaDescriptor,
     mask: ProjectionMask,
-    embedded_arrow_schema: Option<&Schema>,
+    embedded_arrow_schema: Option<&Fields>,
 ) -> Result<Option<ParquetField>> {
     let mut visitor = Visitor {
         next_col_idx: 0,
@@ -570,7 +572,7 @@ pub fn convert_schema(
     let context = VisitorContext {
         rep_level: 0,
         def_level: 0,
-        data_type: embedded_arrow_schema.map(|s| DataType::Struct(s.fields().clone())),
+        data_type: embedded_arrow_schema.map(|fields| DataType::Struct(fields.clone())),
     };
 
     visitor.dispatch(&schema.root_schema_ptr(), context)

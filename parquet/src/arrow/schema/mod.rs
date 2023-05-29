@@ -45,7 +45,8 @@ mod primitive;
 use crate::arrow::ProjectionMask;
 pub(crate) use complex::{ParquetField, ParquetFieldType};
 
-/// Convert Parquet schema to Arrow schema including optional metadata.
+/// Convert Parquet schema to Arrow schema including optional metadata
+///
 /// Attempts to decode any existing Arrow schema metadata, falling back
 /// to converting the Parquet schema column-wise
 pub fn parquet_to_arrow_schema(
@@ -66,11 +67,11 @@ pub fn parquet_to_arrow_schema_by_columns(
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema> {
-    Ok(parquet_to_array_schema_and_fields(parquet_schema, mask, key_value_metadata)?.0)
+    Ok(parquet_to_arrow_schema_and_fields(parquet_schema, mask, key_value_metadata)?.0)
 }
 
 /// Extracts the arrow metadata
-pub(crate) fn parquet_to_array_schema_and_fields(
+pub(crate) fn parquet_to_arrow_schema_and_fields(
     parquet_schema: &SchemaDescriptor,
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
@@ -88,15 +89,50 @@ pub(crate) fn parquet_to_array_schema_and_fields(
         });
     }
 
-    match complex::convert_schema(parquet_schema, mask, maybe_schema.as_ref())? {
+    let hint = maybe_schema.as_ref().map(|s| s.fields());
+    let field_levels = parquet_to_arrow_field_levels(parquet_schema, mask, hint)?;
+    let schema = Schema::new_with_metadata(field_levels.fields, metadata);
+    Ok((schema, field_levels.levels))
+}
+
+/// Stores the parquet level information for a set of arrow [`Fields`]
+#[derive(Debug, Clone)]
+pub struct FieldLevels {
+    pub(crate) fields: Fields,
+    pub(crate) levels: Option<ParquetField>,
+}
+
+/// Convert a parquet [`SchemaDescriptor`] to its corresponding arrow representation
+///
+/// Columns not included within [`ProjectionMask`] will be ignored.
+///
+/// Where a field type in `hint` is compatible with the corresponding parquet type in `schema`, it
+/// will be used, otherwise the default arrow type for the given parquet column type will be used.
+///
+/// This is to accommodate arrow types that cannot be round-tripped through parquet natively.
+/// Depending on the parquet writer, this can lead to a mismatch between a file's parquet schema
+/// and its embedded arrow schema. The parquet `schema` must be treated as authoritative in such
+/// an event. See [#1663](https://github.com/apache/arrow-rs/issues/1663) for more information
+///
+/// Note: this is a low-level API, most users will want to make use of the higher-level
+/// [`parquet_to_arrow_schema`] for decoding metadata from a parquet file.
+pub fn parquet_to_arrow_field_levels(
+    schema: &SchemaDescriptor,
+    mask: ProjectionMask,
+    hint: Option<&Fields>,
+) -> Result<FieldLevels> {
+    match complex::convert_schema(schema, mask, hint)? {
         Some(field) => match &field.arrow_type {
-            DataType::Struct(fields) => Ok((
-                Schema::new_with_metadata(fields.clone(), metadata),
-                Some(field),
-            )),
+            DataType::Struct(fields) => Ok(FieldLevels {
+                fields: fields.clone(),
+                levels: Some(field),
+            }),
             _ => unreachable!(),
         },
-        None => Ok((Schema::new_with_metadata(Fields::empty(), metadata), None)),
+        None => Ok(FieldLevels {
+            fields: Fields::empty(),
+            levels: None,
+        }),
     }
 }
 
