@@ -27,6 +27,7 @@
 //! 2. Helpers for encoding and decoding FlightSQL messages: [`Any`] and [`Command`]
 //! 3. A [`FlightSqlServiceClient`] for interacting with FlightSQL servers.
 //! 4. A [`FlightSqlService`] to help building FlightSQL servers from [`FlightService`].
+//! 5. Structures to build responses for FlightSQL metadata APIs: [`SqlInfoList`]
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 //! [Apache Arrow]: https://arrow.apache.org
@@ -84,6 +85,7 @@ pub use gen::SqlSupportedPositionedCommands;
 pub use gen::SqlSupportedResultSetConcurrency;
 pub use gen::SqlSupportedResultSetType;
 pub use gen::SqlSupportedSubqueries;
+pub use gen::SqlSupportedTransaction;
 pub use gen::SqlSupportedTransactions;
 pub use gen::SqlSupportedUnions;
 pub use gen::SqlSupportsConvert;
@@ -92,8 +94,11 @@ pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
 
+pub use sql_info::SqlInfoList;
+
 pub mod client;
 pub mod server;
+pub mod sql_info;
 
 /// ProstMessageExt are useful utility methods for prost::Message types
 pub trait ProstMessageExt: prost::Message + Default {

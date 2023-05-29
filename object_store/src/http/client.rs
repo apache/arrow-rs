@@ -225,7 +225,13 @@ impl Client {
             .delete(url)
             .send_retry(&self.retry_config)
             .await
-            .context(RequestSnafu)?;
+            .map_err(|source| match source.status() {
+                Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
+                    source: Box::new(source),
+                    path: path.to_string(),
+                },
+                _ => Error::Request { source }.into(),
+            })?;
         Ok(())
     }
 
