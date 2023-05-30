@@ -363,12 +363,9 @@ mod tests {
             .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
             .unwrap();
 
-        let column_desc = schema.column(0);
-        let page_iterator = EmptyPageIterator::new(schema);
-
         let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
-            Box::new(page_iterator),
-            column_desc,
+            Box::<EmptyPageIterator>::default(),
+            schema.column(0),
             None,
         )
         .unwrap();
@@ -410,8 +407,7 @@ mod tests {
                 true,
                 2,
             );
-            let page_iterator =
-                InMemoryPageIterator::new(schema, column_desc.clone(), page_lists);
+            let page_iterator = InMemoryPageIterator::new(page_lists);
 
             let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
                 Box::new(page_iterator),
@@ -474,11 +470,7 @@ mod tests {
                     true,
                     2,
                 );
-                let page_iterator = InMemoryPageIterator::new(
-                    schema.clone(),
-                    column_desc.clone(),
-                    page_lists,
-                );
+                let page_iterator = InMemoryPageIterator::new(page_lists);
                 let mut array_reader = PrimitiveArrayReader::<$arrow_parquet_type>::new(
                     Box::new(page_iterator),
                     column_desc.clone(),
@@ -610,8 +602,7 @@ mod tests {
                 2,
             );
 
-            let page_iterator =
-                InMemoryPageIterator::new(schema, column_desc.clone(), page_lists);
+            let page_iterator = InMemoryPageIterator::new(page_lists);
 
             let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
                 Box::new(page_iterator),
@@ -690,8 +681,7 @@ mod tests {
                 true,
                 2,
             );
-            let page_iterator =
-                InMemoryPageIterator::new(schema, column_desc.clone(), page_lists);
+            let page_iterator = InMemoryPageIterator::new(page_lists);
 
             let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
                 Box::new(page_iterator),
@@ -753,8 +743,7 @@ mod tests {
                 true,
                 2,
             );
-            let page_iterator =
-                InMemoryPageIterator::new(schema, column_desc.clone(), page_lists);
+            let page_iterator = InMemoryPageIterator::new(page_lists);
 
             let mut array_reader = PrimitiveArrayReader::<Int64Type>::new(
                 Box::new(page_iterator),
