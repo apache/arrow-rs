@@ -26,9 +26,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::data_type::{ByteArray, ByteArrayType};
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::Result;
-use crate::schema::types::{
-    ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, Type,
-};
+use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
 use crate::util::memory::ByteBufferPtr;
 
 /// Returns a descriptor for a UTF-8 column
@@ -197,15 +195,8 @@ impl ArrayReader for InMemoryArrayReader {
 }
 
 /// Iterator for testing reading empty columns
-pub struct EmptyPageIterator {
-    schema: SchemaDescPtr,
-}
-
-impl EmptyPageIterator {
-    pub fn new(schema: SchemaDescPtr) -> Self {
-        EmptyPageIterator { schema }
-    }
-}
+#[derive(Default)]
+pub struct EmptyPageIterator {}
 
 impl Iterator for EmptyPageIterator {
     type Item = Result<Box<dyn PageReader>>;
@@ -215,12 +206,4 @@ impl Iterator for EmptyPageIterator {
     }
 }
 
-impl PageIterator for EmptyPageIterator {
-    fn schema(&mut self) -> Result<SchemaDescPtr> {
-        Ok(self.schema.clone())
-    }
-
-    fn column_schema(&mut self) -> Result<ColumnDescPtr> {
-        Ok(self.schema.column(0))
-    }
-}
+impl PageIterator for EmptyPageIterator {}

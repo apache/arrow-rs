@@ -19,16 +19,18 @@
 //!
 //! [`CommandGetSqlInfo`]: crate::sql::CommandGetSqlInfo
 
-use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use arrow_array::array::{Array, UnionArray};
 use arrow_array::builder::{
     ArrayBuilder, BooleanBuilder, Int32Builder, Int64Builder, Int8Builder, ListBuilder,
-    StringBuilder, UInt32Builder,
+    MapBuilder, StringBuilder, UInt32Builder,
 };
 use arrow_array::RecordBatch;
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, Schema, UnionFields, UnionMode};
+use arrow_schema::{DataType, Field, Fields, Schema, UnionFields, UnionMode};
 use once_cell::sync::Lazy;
 
 use super::SqlInfo;
@@ -42,8 +44,7 @@ pub enum SqlInfoValue {
     BigInt(i64),
     Bitmask(i32),
     StringList(Vec<String>),
-    // TODO support more exotic metadata that requires the map of lists
-    //ListMap(BTreeMap<i32, Vec<i32>>),
+    ListMap(BTreeMap<i32, Vec<i32>>),
 }
 
 impl From<&str> for SqlInfoValue {
@@ -77,6 +78,35 @@ impl From<&[&str]> for SqlInfoValue {
     }
 }
 
+impl From<Vec<String>> for SqlInfoValue {
+    fn from(values: Vec<String>) -> Self {
+        Self::StringList(values)
+    }
+}
+
+impl From<BTreeMap<i32, Vec<i32>>> for SqlInfoValue {
+    fn from(value: BTreeMap<i32, Vec<i32>>) -> Self {
+        Self::ListMap(value)
+    }
+}
+
+impl From<HashMap<i32, Vec<i32>>> for SqlInfoValue {
+    fn from(value: HashMap<i32, Vec<i32>>) -> Self {
+        Self::ListMap(value.into_iter().collect())
+    }
+}
+
+impl From<&HashMap<i32, Vec<i32>>> for SqlInfoValue {
+    fn from(value: &HashMap<i32, Vec<i32>>) -> Self {
+        Self::ListMap(
+            value
+                .iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect(),
+        )
+    }
+}
+
 /// Something that can be converted into u32 (the represenation of a [`SqlInfo`] name)
 pub trait SqlInfoName {
     fn as_u32(&self) -> u32;
@@ -99,8 +129,7 @@ impl SqlInfoName for u32 {
 
 /// Handles creating the dense [`UnionArray`] described by [flightsql]
 ///
-///
-/// NOT YET COMPLETE: The int32_to_int32_list_map
+/// incrementally build types/offset of the dense union. See [Union Spec] for details.
 ///
 /// ```text
 /// *  value: dense_union<
@@ -113,6 +142,7 @@ impl SqlInfoName for u32 {
 /// * >
 /// ```
 ///[flightsql]: (https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/FlightSql.proto#L32-L43
+///[Union Spec]: https://arrow.apache.org/docs/format/Columnar.html#dense-union
 struct SqlInfoUnionBuilder {
     // Values for each child type
     string_values: StringBuilder,
@@ -120,12 +150,7 @@ struct SqlInfoUnionBuilder {
     bigint_values: Int64Builder,
     int32_bitmask_values: Int32Builder,
     string_list_values: ListBuilder<StringBuilder>,
-
-    /// incrementally build types/offset of the dense union,
-    ///
-    /// See [Union Spec] for details.
-    ///
-    /// [Union Spec]: https://arrow.apache.org/docs/format/Columnar.html#dense-union
+    int32_to_int32_list_map_values: MapBuilder<Int32Builder, ListBuilder<Int32Builder>>,
     type_ids: Int8Builder,
     offsets: Int32Builder,
 }
@@ -141,6 +166,29 @@ static UNION_TYPE: Lazy<DataType> = Lazy::new(|| {
         Field::new(
             "string_list",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+        Field::new(
+            "int32_to_int32_list_map",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("keys", DataType::Int32, false),
+                        Field::new(
+                            "values",
+                            DataType::List(Arc::new(Field::new(
+                                "item",
+                                DataType::Int32,
+                                true,
+                            ))),
+                            true,
+                        ),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
             true,
         ),
     ];
@@ -159,6 +207,11 @@ impl SqlInfoUnionBuilder {
             bigint_values: Int64Builder::new(),
             int32_bitmask_values: Int32Builder::new(),
             string_list_values: ListBuilder::new(StringBuilder::new()),
+            int32_to_int32_list_map_values: MapBuilder::new(
+                None,
+                Int32Builder::new(),
+                ListBuilder::new(Int32Builder::new()),
+            ),
             type_ids: Int8Builder::new(),
             offsets: Int32Builder::new(),
         }
@@ -170,7 +223,7 @@ impl SqlInfoUnionBuilder {
     }
 
     /// Append the specified value to this builder
-    pub fn append_value(&mut self, v: &SqlInfoValue) {
+    pub fn append_value(&mut self, v: &SqlInfoValue) -> Result<()> {
         // typeid is which child and len is the child array's length
         // *after* adding the value
         let (type_id, len) = match v {
@@ -199,11 +252,24 @@ impl SqlInfoUnionBuilder {
                 self.string_list_values.append(true);
                 (4, self.string_list_values.len())
             }
+            SqlInfoValue::ListMap(values) => {
+                // build map
+                for (k, v) in values.clone() {
+                    self.int32_to_int32_list_map_values.keys().append_value(k);
+                    self.int32_to_int32_list_map_values
+                        .values()
+                        .append_value(v.into_iter().map(Some));
+                }
+                // complete the list
+                self.int32_to_int32_list_map_values.append(true)?;
+                (5, self.int32_to_int32_list_map_values.len())
+            }
         };
 
         self.type_ids.append_value(type_id);
         let len = i32::try_from(len).expect("offset fit in i32");
         self.offsets.append_value(len - 1);
+        Ok(())
     }
 
     /// Complete the construction and build the [`UnionArray`]
@@ -214,6 +280,7 @@ impl SqlInfoUnionBuilder {
             mut bigint_values,
             mut int32_bitmask_values,
             mut string_list_values,
+            mut int32_to_int32_list_map_values,
             mut type_ids,
             mut offsets,
         } = self;
@@ -237,6 +304,7 @@ impl SqlInfoUnionBuilder {
             bigint_values.finish().into_data(),
             int32_bitmask_values.finish().into_data(),
             string_list_values.finish().into_data(),
+            int32_to_int32_list_map_values.finish().into_data(),
         ];
 
         let data = ArrayData::try_new(
@@ -342,7 +410,7 @@ impl SqlInfoList {
 
         for (&name, value) in self.infos.iter() {
             name_builder.append_value(name);
-            value_builder.append_value(value)
+            value_builder.append_value(value)?
         }
 
         let batch = RecordBatch::try_from_iter(vec![
@@ -369,8 +437,12 @@ static SQL_INFO_SCHEMA: Lazy<Schema> = Lazy::new(|| {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::SqlInfoList;
-    use crate::sql::{SqlInfo, SqlNullOrdering, SqlSupportedTransaction};
+    use crate::sql::{
+        SqlInfo, SqlNullOrdering, SqlSupportedTransaction, SqlSupportsConvert,
+    };
     use arrow_array::RecordBatch;
     use arrow_cast::pretty::pretty_format_batches;
 
@@ -386,6 +458,15 @@ mod tests {
 
     #[test]
     fn test_sql_infos() {
+        let mut convert: HashMap<i32, Vec<i32>> = HashMap::new();
+        convert.insert(
+            SqlSupportsConvert::SqlConvertInteger as i32,
+            vec![
+                SqlSupportsConvert::SqlConvertFloat as i32,
+                SqlSupportsConvert::SqlConvertReal as i32,
+            ],
+        );
+
         let batch = SqlInfoList::new()
             // str
             .with_sql_info(SqlInfo::SqlIdentifierQuoteChar, r#"""#)
@@ -400,19 +481,21 @@ mod tests {
             .with_sql_info(SqlInfo::SqlMaxBinaryLiteralLength, i32::MAX as i64)
             // [str]
             .with_sql_info(SqlInfo::SqlKeywords, &["SELECT", "DELETE"] as &[&str])
+            .with_sql_info(SqlInfo::SqlSupportsConvert, &convert)
             .encode()
             .unwrap();
 
         let expected = vec![
-            "+-----------+--------------------------------+",
-            "| info_name | value                          |",
-            "+-----------+--------------------------------+",
-            "| 500       | {bool_value=false}             |",
-            "| 504       | {string_value=\"}               |",
-            "| 507       | {int32_bitmask=0}              |",
-            "| 508       | {string_list=[SELECT, DELETE]} |",
-            "| 541       | {bigint_value=2147483647}      |",
-            "+-----------+--------------------------------+",
+            "+-----------+----------------------------------------+",
+            "| info_name | value                                  |",
+            "+-----------+----------------------------------------+",
+            "| 500       | {bool_value=false}                     |",
+            "| 504       | {string_value=\"}                       |",
+            "| 507       | {int32_bitmask=0}                      |",
+            "| 508       | {string_list=[SELECT, DELETE]}         |",
+            "| 517       | {int32_to_int32_list_map={7: [6, 13]}} |",
+            "| 541       | {bigint_value=2147483647}              |",
+            "+-----------+----------------------------------------+",
         ];
 
         assert_batches_eq(&[batch], &expected);

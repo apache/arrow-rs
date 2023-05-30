@@ -31,7 +31,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::*;
 pub use crate::file::serialized_reader::{SerializedFileReader, SerializedPageReader};
 use crate::record::reader::RowIter;
-use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, Type as SchemaType};
+use crate::schema::types::Type as SchemaType;
 
 use crate::basic::Type;
 
@@ -264,16 +264,4 @@ impl Iterator for FilePageIterator {
     }
 }
 
-impl PageIterator for FilePageIterator {
-    fn schema(&mut self) -> Result<SchemaDescPtr> {
-        Ok(self
-            .file_reader
-            .metadata()
-            .file_metadata()
-            .schema_descr_ptr())
-    }
-
-    fn column_schema(&mut self) -> Result<ColumnDescPtr> {
-        self.schema().map(|s| s.column(self.column_index))
-    }
-}
+impl PageIterator for FilePageIterator {}
