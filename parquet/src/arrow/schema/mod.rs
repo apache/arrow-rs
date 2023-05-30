@@ -589,7 +589,7 @@ mod tests {
         let arrow_fields = Fields::from(vec![
             Field::new("decimal1", DataType::Decimal128(4, 2), false),
             Field::new("decimal2", DataType::Decimal128(12, 2), false),
-            Field::new("decimal3", DataType::Decimal128(30, 2), false),
+            Field::new("decimal3", DataType::Decimal256(30, 2), false),
             Field::new("decimal4", DataType::Decimal128(33, 2), false),
         ]);
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
@@ -1443,7 +1443,7 @@ mod tests {
             ),
             Field::new("decimal_int32", DataType::Decimal128(8, 2), false),
             Field::new("decimal_int64", DataType::Decimal128(16, 2), false),
-            Field::new("decimal_fix_length", DataType::Decimal128(30, 2), false),
+            Field::new("decimal_fix_length", DataType::Decimal256(30, 2), false),
         ];
         let arrow_schema = Schema::new(arrow_fields);
         let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema).unwrap();
@@ -1614,7 +1614,7 @@ mod tests {
                 // ),
                 Field::new("c35", DataType::Null, true),
                 Field::new("c36", DataType::Decimal128(2, 1), false),
-                Field::new("c37", DataType::Decimal128(50, 20), false),
+                Field::new("c37", DataType::Decimal256(50, 20), false),
                 Field::new("c38", DataType::Decimal128(18, 12), true),
                 Field::new_map(
                     "c39",

@@ -21,7 +21,7 @@ use super::super::errors::ParquetError;
 use super::super::file::writer::SerializedRowGroupWriter;
 
 pub trait RecordWriter<T> {
-    fn write_to_row_group<W: std::io::Write>(
+    fn write_to_row_group<W: std::io::Write + Send>(
         &self,
         row_group_writer: &mut SerializedRowGroupWriter<W>,
     ) -> Result<(), ParquetError>;

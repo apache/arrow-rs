@@ -36,7 +36,7 @@ pub trait ColumnValues {
 }
 
 #[cfg(feature = "arrow")]
-impl<T: arrow_array::Array> ColumnValues for T {
+impl ColumnValues for dyn arrow_array::Array {
     fn len(&self) -> usize {
         arrow_array::Array::len(self)
     }
