@@ -609,7 +609,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn should_dict_fallback(&self) -> bool {
         match self.encoder.estimated_dict_page_size() {
-            Some(size) => size >= self.props.dictionary_pagesize_limit(),
+            Some(size) => size >= self.props.dictionary_page_size_limit(),
             None => false,
         }
     }
@@ -627,7 +627,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         self.page_metrics.num_buffered_rows as usize
             >= self.props.data_page_row_count_limit()
-            || self.encoder.estimated_data_page_size() >= self.props.data_pagesize_limit()
+            || self.encoder.estimated_data_page_size()
+                >= self.props.data_page_size_limit()
     }
 
     /// Performs dictionary fallback.
@@ -1839,8 +1840,8 @@ mod tests {
     #[test]
     fn test_column_writer_dictionary_fallback_small_data_page() {
         let props = WriterProperties::builder()
-            .set_dictionary_pagesize_limit(32)
-            .set_data_pagesize_limit(32)
+            .set_dictionary_page_size_limit(32)
+            .set_data_page_size_limit(32)
             .build();
         column_roundtrip_random::<Int32Type>(props, 1024, i32::MIN, i32::MAX, 10, 10);
     }
@@ -1899,7 +1900,7 @@ mod tests {
         let page_writer = Box::new(SerializedPageWriter::new(&mut write));
         let props = Arc::new(
             WriterProperties::builder()
-                .set_data_pagesize_limit(10)
+                .set_data_page_size_limit(10)
                 .set_write_batch_size(3) // write 3 values at a time
                 .build(),
         );

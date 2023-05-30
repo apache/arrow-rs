@@ -1240,7 +1240,7 @@ mod tests {
 
         fn writer_props(&self) -> WriterProperties {
             let builder = WriterProperties::builder()
-                .set_data_pagesize_limit(self.max_data_page_size)
+                .set_data_page_size_limit(self.max_data_page_size)
                 .set_write_batch_size(self.write_batch_size)
                 .set_writer_version(self.writer_version)
                 .set_statistics_enabled(self.enabled_statistics);
@@ -1248,7 +1248,7 @@ mod tests {
             let builder = match self.encoding {
                 Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => builder
                     .set_dictionary_enabled(true)
-                    .set_dictionary_pagesize_limit(self.max_dict_page_size),
+                    .set_dictionary_page_size_limit(self.max_dict_page_size),
                 _ => builder
                     .set_dictionary_enabled(false)
                     .set_encoding(self.encoding),
