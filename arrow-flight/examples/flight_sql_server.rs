@@ -222,7 +222,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             location: vec![loc],
         };
         let info = FlightInfo::new()
-            .with_schema(&schema)
+            .try_with_schema(&schema)
             .map_err(|e| status!("Unable to serialize schema", e))?
             .with_descriptor(FlightDescriptor::new_cmd(vec![]))
             .with_endpoint(endpoint)
@@ -284,7 +284,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
-            .with_schema(SqlInfoList::schema())
+            .try_with_schema(SqlInfoList::schema())
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);

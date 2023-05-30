@@ -480,7 +480,7 @@ impl FlightInfo {
     /// // Create a new FlightInfo
     /// let flight_info = FlightInfo::new()
     ///   // Encode the Arrow schema
-    ///   .with_schema(&get_schema())
+    ///   .try_with_schema(&get_schema())
     ///   .expect("encoding failed")
     ///   .with_descriptor(
     ///      FlightDescriptor::new_cmd("a command")
@@ -518,7 +518,7 @@ impl FlightInfo {
     /// encodes it using the default IPC options.
     ///
     /// Returns an error if `schema` can not be encoded into IPC form.
-    pub fn with_schema(mut self, schema: &Schema) -> ArrowResult<Self> {
+    pub fn try_with_schema(mut self, schema: &Schema) -> ArrowResult<Self> {
         let options = IpcWriteOptions::default();
         let IpcMessage(schema) = SchemaAsIpc::new(schema, &options).try_into()?;
         self.schema = schema;

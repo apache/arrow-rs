@@ -167,7 +167,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let batch = Self::fake_result().unwrap();
 
         let info = FlightInfo::new()
-            .with_schema(&batch.schema())
+            .try_with_schema(&batch.schema())
             .expect("encoding schema")
             .with_endpoint(
                 FlightEndpoint::new().with_ticket(Ticket::new(
