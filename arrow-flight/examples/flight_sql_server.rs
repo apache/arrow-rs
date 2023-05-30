@@ -30,7 +30,7 @@ use tonic::{Request, Response, Status, Streaming};
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
-use arrow_flight::flight_descriptor::DescriptorType;
+
 use arrow_flight::sql::catalogs::{
     get_catalogs_batch, get_catalogs_schema, get_db_schemas_schema, get_tables_schema,
     GetSchemasBuilder, GetTablesBuilder,
