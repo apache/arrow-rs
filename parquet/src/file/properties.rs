@@ -392,8 +392,8 @@ impl WriterPropertiesBuilder {
 
     /// Sets best effort maximum number of rows in a data page.
     ///
-    /// The parquet writer will attempt to limit the number of rows in each
-    /// `DataPage` to this many bytes. Reducing this value will result
+    /// The parquet writer will attempt to limit the number of rows in
+    /// each `DataPage` to this value. Reducing this value will result
     /// in larger parquet files, but may improve the effectiveness of
     /// page index based predicate pushdown during reading.
     ///
@@ -415,6 +415,12 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets best effort maximum dictionary page size, in bytes.
+    ///
+    /// The parquet writer will attempt to limit the size of each
+    /// `DataPage` used to store dictionaries to this many
+    /// bytes. Reducing this value will result in larger parquet
+    /// files, but may improve the effectiveness of page index based
+    /// predicate pushdown during reading.
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
