@@ -27,7 +27,8 @@ use hashbrown::HashMap;
 use std::any::Any;
 use std::sync::Arc;
 
-/// Generic array builder for `DictionaryArray` that stores generic byte values.
+/// Builder for [`DictionaryArray`] of [`GenericByteArray`]
+///
 /// For example to map a set of byte indices to String values. Note that
 /// the use of a `HashMap` here will not scale to very large arrays or
 /// result in an ordered dictionary.
@@ -338,9 +339,7 @@ fn get_bytes<T: ByteArrayType>(values: &GenericByteBuilder<T>, idx: usize) -> &[
     &values[start_offset..end_offset]
 }
 
-/// Array builder for `DictionaryArray` that stores Strings. For example to map a set of byte indices
-/// to String values. Note that the use of a `HashMap` here will not scale to very large
-/// arrays or result in an ordered dictionary.
+/// Builder for [`DictionaryArray`] of [`StringArray`](crate::array::StringArray)
 ///
 /// ```
 /// // Create a dictionary array indexed by bytes whose values are Strings.
@@ -376,15 +375,11 @@ fn get_bytes<T: ByteArrayType>(values: &GenericByteBuilder<T>, idx: usize) -> &[
 pub type StringDictionaryBuilder<K> =
     GenericByteDictionaryBuilder<K, GenericStringType<i32>>;
 
-/// Array builder for `DictionaryArray` that stores large Strings. For example to map a set of byte indices
-/// to String values. Note that the use of a `HashMap` here will not scale to very large
-/// arrays or result in an ordered dictionary.
+/// Builder for [`DictionaryArray`] of [`LargeStringArray`](crate::array::LargeStringArray)
 pub type LargeStringDictionaryBuilder<K> =
     GenericByteDictionaryBuilder<K, GenericStringType<i64>>;
 
-/// Array builder for `DictionaryArray` that stores binary. For example to map a set of byte indices
-/// to binary values. Note that the use of a `HashMap` here will not scale to very large
-/// arrays or result in an ordered dictionary.
+/// Builder for [`DictionaryArray`] of [`BinaryArray`](crate::array::BinaryArray)
 ///
 /// ```
 /// // Create a dictionary array indexed by bytes whose values are binary.
@@ -420,9 +415,7 @@ pub type LargeStringDictionaryBuilder<K> =
 pub type BinaryDictionaryBuilder<K> =
     GenericByteDictionaryBuilder<K, GenericBinaryType<i32>>;
 
-/// Array builder for `DictionaryArray` that stores large binary. For example to map a set of byte indices
-/// to binary values. Note that the use of a `HashMap` here will not scale to very large
-/// arrays or result in an ordered dictionary.
+/// Builder for [`DictionaryArray`] of [`LargeBinaryArray`](crate::array::LargeBinaryArray)
 pub type LargeBinaryDictionaryBuilder<K> =
     GenericByteDictionaryBuilder<K, GenericBinaryType<i64>>;
 

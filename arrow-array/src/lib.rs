@@ -19,42 +19,6 @@
 //! all having the same type. This crate provides concrete implementations of each type, as
 //! well as an [`Array`] trait that can be used for type-erasure.
 //!
-//! # Downcasting an Array
-//!
-//! Arrays are often passed around as a dynamically typed [`&dyn Array`] or [`ArrayRef`].
-//! For example, [`RecordBatch`](`crate::RecordBatch`) stores columns as [`ArrayRef`].
-//!
-//! Whilst these arrays can be passed directly to the [`compute`], [`csv`], [`json`], etc... APIs,
-//! it is often the case that you wish to interact with the data directly.
-//!
-//! This requires downcasting to the concrete type of the array:
-//!
-//! ```
-//! # use arrow_array::{Array, Float32Array, Int32Array};
-//!
-//! fn sum_int32(array: &dyn Array) -> i32 {
-//!     let integers: &Int32Array = array.as_any().downcast_ref().unwrap();
-//!     integers.iter().map(|val| val.unwrap_or_default()).sum()
-//! }
-//!
-//! // Note: the values for positions corresponding to nulls will be arbitrary
-//! fn as_f32_slice(array: &dyn Array) -> &[f32] {
-//!     array.as_any().downcast_ref::<Float32Array>().unwrap().values()
-//! }
-//! ```
-//!
-//! The [`cast::AsArray`] extension trait can make this more ergonomic
-//!
-//! ```
-//! # use arrow_array::Array;
-//! # use arrow_array::cast::{AsArray, as_primitive_array};
-//! # use arrow_array::types::Float32Type;
-//!
-//! fn as_f32_slice(array: &dyn Array) -> &[f32] {
-//!     array.as_primitive::<Float32Type>().values()
-//! }
-//! ```
-
 //! # Building an Array
 //!
 //! Most [`Array`] implementations can be constructed directly from iterators or [`Vec`]
@@ -62,7 +26,7 @@
 //! ```
 //! # use arrow_array::{Int32Array, ListArray, StringArray};
 //! # use arrow_array::types::Int32Type;
-//!
+//! #
 //! Int32Array::from(vec![1, 2]);
 //! Int32Array::from(vec![Some(1), None]);
 //! Int32Array::from_iter([1, 2, 3, 4]);
@@ -91,30 +55,59 @@
 //!
 //! // Append a single primitive value
 //! builder.append_value(1);
-//!
 //! // Append a null value
 //! builder.append_null();
-//!
 //! // Append a slice of primitive values
 //! builder.append_slice(&[2, 3, 4]);
 //!
 //! // Build the array
 //! let array = builder.finish();
 //!
-//! assert_eq!(
-//!     5,
-//!     array.len(),
-//!     "The array has 5 values, counting the null value"
-//! );
-//!
-//! assert_eq!(2, array.value(2), "Get the value with index 2");
-//!
-//! assert_eq!(
-//!     &array.values()[3..5],
-//!     &[3, 4],
-//!     "Get slice of len 2 starting at idx 3"
-//! )
+//! assert_eq!(5, array.len());
+//! assert_eq!(2, array.value(2));
+//! assert_eq!(&array.values()[3..5], &[3, 4])
 //! ```
+//!
+//! # Low-level API
+//!
+//! Internally, arrays consist of one or more shared memory regions backed by a [`Buffer`],
+//! the number and meaning of which depend on the array’s data type, as documented in
+//! the [Arrow specification].
+//!
+//! For example, the type [`Int16Array`] represents an array of 16-bit integers and consists of:
+//!
+//! * An optional [`NullBuffer`] identifying any null values
+//! * A contiguous [`ScalarBuffer<i16>`] of values
+//!
+//! Similarly, the type [`StringArray`] represents an array of UTF-8 strings and consists of:
+//!
+//! * An optional [`NullBuffer`] identifying any null values
+//! * An offsets [`OffsetBuffer<i32>`] identifying valid UTF-8 sequences within the values buffer
+//! * A values [`Buffer`] of UTF-8 encoded string data
+//!
+//! Array constructors such as [`PrimitiveArray::try_new`] provide the ability to cheaply
+//! construct an array from these parts, with functions such as [`PrimitiveArray::into_parts`]
+//! providing the reverse operation.
+//!
+//! ```
+//! # use arrow_array::{Array, Int32Array, StringArray};
+//! # use arrow_buffer::OffsetBuffer;
+//! #
+//! // Create a Int32Array from Vec without copying
+//! let array = Int32Array::new(vec![1, 2, 3].into(), None);
+//! assert_eq!(array.values(), &[1, 2, 3]);
+//! assert_eq!(array.null_count(), 0);
+//!
+//! // Create a StringArray from parts
+//! let offsets = OffsetBuffer::new(vec![0, 5, 10].into());
+//! let array = StringArray::new(offsets, b"helloworld".into(), None);
+//! let values: Vec<_> = array.iter().map(|x| x.unwrap()).collect();
+//! assert_eq!(values, &["hello", "world"]);
+//! ```
+//!
+//! As [`Buffer`], and its derivatives, can be created from [`Vec`] without copying, this provides
+//! an efficient way to not only interoperate with other Rust code, but also implement kernels
+//! optimised for the arrow data layout - e.g. by handling buffers instead of values.
 //!
 //! # Zero-Copy Slicing
 //!
@@ -122,32 +115,57 @@
 //! data. Internally this just increments some ref-counts, and so is incredibly cheap
 //!
 //! ```rust
-//! # use std::sync::Arc;
-//! # use arrow_array::{ArrayRef, Int32Array};
-//! let array = Arc::new(Int32Array::from_iter([1, 2, 3])) as ArrayRef;
+//! # use arrow_array::Int32Array;
+//! let array = Int32Array::from_iter([1, 2, 3]);
 //!
 //! // Slice with offset 1 and length 2
 //! let sliced = array.slice(1, 2);
-//! let ints = sliced.as_any().downcast_ref::<Int32Array>().unwrap();
-//! assert_eq!(ints.values(), &[2, 3]);
+//! assert_eq!(sliced.values(), &[2, 3]);
 //! ```
 //!
-//! # Internal Representation
+//! # Downcasting an Array
 //!
-//! Internally, arrays are represented by one or several [`Buffer`], the number and meaning of
-//! which depend on the array’s data type, as documented in the [Arrow specification].
+//! Arrays are often passed around as a dynamically typed [`&dyn Array`] or [`ArrayRef`].
+//! For example, [`RecordBatch`](`crate::RecordBatch`) stores columns as [`ArrayRef`].
 //!
-//! For example, the type [`Int16Array`] represents an array of 16-bit integers and consists of:
+//! Whilst these arrays can be passed directly to the [`compute`], [`csv`], [`json`], etc... APIs,
+//! it is often the case that you wish to interact with the concrete arrays directly.
 //!
-//! * An optional [`NullBuffer`] identifying any null values
-//! * A contiguous [`Buffer`] of 16-bit integers
+//! This requires downcasting to the concrete type of the array:
 //!
-//! Similarly, the type [`StringArray`] represents an array of UTF-8 strings and consists of:
+//! ```
+//! # use arrow_array::{Array, Float32Array, Int32Array};
 //!
-//! * An optional [`NullBuffer`] identifying any null values
-//! * An offsets [`Buffer`] of 32-bit integers identifying valid UTF-8 sequences within the values buffer
-//! * A values [`Buffer`] of UTF-8 encoded string data
+//! // Safely downcast an `Array` to an `Int32Array` and compute the sum
+//! // using native i32 values
+//! fn sum_int32(array: &dyn Array) -> i32 {
+//!     let integers: &Int32Array = array.as_any().downcast_ref().unwrap();
+//!     integers.iter().map(|val| val.unwrap_or_default()).sum()
+//! }
 //!
+//! // Safely downcasts the array to a `Float32Array` and returns a &[f32] view of the data
+//! // Note: the values for positions corresponding to nulls will be arbitrary (but still valid f32)
+//! fn as_f32_slice(array: &dyn Array) -> &[f32] {
+//!     array.as_any().downcast_ref::<Float32Array>().unwrap().values()
+//! }
+//! ```
+//!
+//! The [`cast::AsArray`] extension trait can make this more ergonomic
+//!
+//! ```
+//! # use arrow_array::Array;
+//! # use arrow_array::cast::{AsArray, as_primitive_array};
+//! # use arrow_array::types::Float32Type;
+//!
+//! fn as_f32_slice(array: &dyn Array) -> &[f32] {
+//!     array.as_primitive::<Float32Type>().values()
+//! }
+//! ```
+//!
+//! [`ScalarBuffer<T>`]: arrow_buffer::ScalarBuffer
+//! [`ScalarBuffer<i16>`]: arrow_buffer::ScalarBuffer
+//! [`OffsetBuffer<i32>`]: arrow_buffer::OffsetBuffer
+//! [`NullBuffer`]: arrow_buffer::NullBuffer
 //! [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html
 //! [`&dyn Array`]: Array
 //! [`NullBuffer`]: arrow_buffer::NullBuffer
@@ -165,6 +183,7 @@ pub use array::*;
 mod record_batch;
 pub use record_batch::{
     RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader,
+    RecordBatchWriter,
 };
 
 mod arithmetic;

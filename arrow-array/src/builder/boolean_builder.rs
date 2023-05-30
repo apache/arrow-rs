@@ -24,7 +24,7 @@ use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-///  Array builder for fixed-width primitive types
+/// Builder for [`BooleanArray`]
 ///
 /// # Example
 ///

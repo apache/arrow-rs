@@ -67,8 +67,7 @@ pub use union_array::*;
 mod run_array;
 pub use run_array::*;
 
-/// Trait for dealing with different types of array at runtime when the type of the
-/// array is not known in advance.
+/// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`](std::any::Any) so that it can be
     /// downcasted to a specific implementation.
@@ -237,7 +236,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     fn get_array_memory_size(&self) -> usize;
 }
 
-/// A reference-counted reference to a generic `Array`.
+/// A reference-counted reference to a generic `Array`
 pub type ArrayRef = Arc<dyn Array>;
 
 /// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`

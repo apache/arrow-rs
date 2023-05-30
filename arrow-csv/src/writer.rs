@@ -193,6 +193,16 @@ impl<W: Write> Writer<W> {
     }
 }
 
+impl<W: Write> RecordBatchWriter for Writer<W> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        self.write(batch)
+    }
+
+    fn close(self) -> Result<(), ArrowError> {
+        Ok(())
+    }
+}
+
 /// A CSV writer builder
 #[derive(Clone, Debug)]
 pub struct WriterBuilder {

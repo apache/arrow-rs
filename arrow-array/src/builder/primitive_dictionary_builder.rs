@@ -45,9 +45,7 @@ impl<T: ToByteSlice> PartialEq for Value<T> {
 
 impl<T: ToByteSlice> Eq for Value<T> {}
 
-/// Array builder for `DictionaryArray`. For example to map a set of byte indices
-/// to f32 values. Note that the use of a `HashMap` here will not scale to very large
-/// arrays or result in an ordered dictionary.
+/// Builder for [`DictionaryArray`] of [`PrimitiveArray`](crate::array::PrimitiveArray)
 ///
 /// # Example:
 ///

@@ -23,8 +23,8 @@ use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::{
     make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader,
-    ListArrayReader, MapArrayReader, NullArrayReader, PrimitiveArrayReader,
-    RowGroupCollection, StructArrayReader,
+    FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
+    PrimitiveArrayReader, RowGroupCollection, StructArrayReader,
 };
 use crate::arrow::schema::{ParquetField, ParquetFieldType};
 use crate::arrow::ProjectionMask;
@@ -63,6 +63,9 @@ fn build_reader(
             DataType::Struct(_) => build_struct_reader(field, mask, row_groups),
             DataType::List(_) => build_list_reader(field, mask, false, row_groups),
             DataType::LargeList(_) => build_list_reader(field, mask, true, row_groups),
+            DataType::FixedSizeList(_, _) => {
+                build_fixed_size_list_reader(field, mask, row_groups)
+            }
             d => unimplemented!("reading group type {} not implemented", d),
         },
     }
@@ -158,6 +161,43 @@ fn build_list_reader(
                     field.rep_level,
                     field.nullable,
                 )) as _,
+            };
+            Some(reader)
+        }
+        None => None,
+    };
+    Ok(reader)
+}
+
+/// Build array reader for fixed-size list type.
+fn build_fixed_size_list_reader(
+    field: &ParquetField,
+    mask: &ProjectionMask,
+    row_groups: &dyn RowGroupCollection,
+) -> Result<Option<Box<dyn ArrayReader>>> {
+    let children = field.children().unwrap();
+    assert_eq!(children.len(), 1);
+
+    let reader = match build_reader(&children[0], mask, row_groups)? {
+        Some(item_reader) => {
+            let item_type = item_reader.get_data_type().clone();
+            let reader = match &field.arrow_type {
+                &DataType::FixedSizeList(ref f, size) => {
+                    let data_type = DataType::FixedSizeList(
+                        Arc::new(f.as_ref().clone().with_data_type(item_type)),
+                        size,
+                    );
+
+                    Box::new(FixedSizeListArrayReader::new(
+                        item_reader,
+                        size as usize,
+                        data_type,
+                        field.def_level,
+                        field.rep_level,
+                        field.nullable,
+                    )) as _
+                }
+                _ => unimplemented!(),
             };
             Some(reader)
         }

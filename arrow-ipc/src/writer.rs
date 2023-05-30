@@ -857,6 +857,16 @@ impl<W: Write> FileWriter<W> {
     }
 }
 
+impl<W: Write> RecordBatchWriter for FileWriter<W> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        self.write(batch)
+    }
+
+    fn close(mut self) -> Result<(), ArrowError> {
+        self.finish()
+    }
+}
+
 pub struct StreamWriter<W: Write> {
     /// The object to write to
     writer: BufWriter<W>,
@@ -988,6 +998,16 @@ impl<W: Write> StreamWriter<W> {
             self.finish()?;
         }
         self.writer.into_inner().map_err(ArrowError::from)
+    }
+}
+
+impl<W: Write> RecordBatchWriter for StreamWriter<W> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        self.write(batch)
+    }
+
+    fn close(mut self) -> Result<(), ArrowError> {
+        self.finish()
     }
 }
 
@@ -1374,8 +1394,8 @@ mod tests {
     use std::io::Seek;
     use std::sync::Arc;
 
-    use arrow_array::builder::PrimitiveRunBuilder;
     use arrow_array::builder::UnionBuilder;
+    use arrow_array::builder::{ListBuilder, PrimitiveRunBuilder, UInt32Builder};
     use arrow_array::types::*;
     use arrow_schema::DataType;
 
@@ -2105,5 +2125,40 @@ mod tests {
             let actual: Vec<Option<i32>> = typed.into_iter().collect();
             assert_eq!(expected, actual);
         }
+    }
+
+    #[test]
+    fn encode_lists() {
+        let val_inner = Field::new("item", DataType::UInt32, true);
+        let val_list_field = Field::new_list("val", val_inner, false);
+
+        let schema = Arc::new(Schema::new(vec![val_list_field]));
+
+        let values = {
+            let u32 = UInt32Builder::new();
+            let mut ls = ListBuilder::new(u32);
+
+            for list in vec![vec![1u32, 2, 3], vec![4, 5, 6], vec![7, 8, 9, 10]] {
+                for value in list {
+                    ls.values().append_value(value);
+                }
+                ls.append(true)
+            }
+
+            ls.finish()
+        };
+
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)]).unwrap();
+        let batch = batch.slice(1, 1);
+
+        let mut writer = FileWriter::try_new(Vec::<u8>::new(), &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        let data = writer.into_inner().unwrap();
+
+        let mut reader = FileReader::try_new(Cursor::new(data), None).unwrap();
+        let batch2 = reader.next().unwrap().unwrap();
+        assert_eq!(batch, batch2);
     }
 }

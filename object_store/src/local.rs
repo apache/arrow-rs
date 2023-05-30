@@ -19,7 +19,7 @@
 use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -56,7 +56,7 @@ pub(crate) enum Error {
     },
 
     #[snafu(display("Unable to access metadata for {}: {}", path, source))]
-    UnableToAccessMetadata {
+    Metadata {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
         path: String,
     },
@@ -360,10 +360,27 @@ impl ObjectStore for LocalFileSystem {
         Err(super::Error::NotImplemented)
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let path = self.config.path_to_filesystem(location)?;
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        if options.if_match.is_some() || options.if_none_match.is_some() {
+            return Err(super::Error::NotSupported {
+                source: "ETags not supported by LocalFileSystem".to_string().into(),
+            });
+        }
+
+        let location = location.clone();
+        let path = self.config.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
             let file = open_file(&path)?;
+            if options.if_unmodified_since.is_some()
+                || options.if_modified_since.is_some()
+            {
+                let metadata = file.metadata().map_err(|e| Error::Metadata {
+                    source: e.into(),
+                    path: location.to_string(),
+                })?;
+                options.check_modified(&location, last_modified(&metadata))?;
+            }
+
             Ok(GetResult::File(file, path))
         })
         .await
@@ -402,18 +419,23 @@ impl ObjectStore for LocalFileSystem {
 
         maybe_spawn_blocking(move || {
             let metadata = match metadata(&path) {
-                Err(e) => Err(if e.kind() == ErrorKind::NotFound {
-                    Error::NotFound {
+                Err(e) => Err(match e.kind() {
+                    ErrorKind::NotFound => Error::NotFound {
                         path: path.clone(),
                         source: e,
-                    }
-                } else {
-                    Error::UnableToAccessMetadata {
+                    },
+                    _ => Error::Metadata {
                         source: e.into(),
                         path: location.to_string(),
-                    }
+                    },
                 }),
-                Ok(m) => Ok(m),
+                Ok(m) => match m.is_file() {
+                    true => Ok(m),
+                    false => Err(Error::NotFound {
+                        path,
+                        source: io::Error::new(ErrorKind::NotFound, "is not file"),
+                    }),
+                },
             }?;
             convert_metadata(metadata, location)
         })
@@ -422,9 +444,12 @@ impl ObjectStore for LocalFileSystem {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         let path = self.config.path_to_filesystem(location)?;
-        maybe_spawn_blocking(move || {
-            std::fs::remove_file(&path).context(UnableToDeleteFileSnafu { path })?;
-            Ok(())
+        maybe_spawn_blocking(move || match std::fs::remove_file(&path) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(match e.kind() {
+                ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
+                _ => Error::UnableToDeleteFile { path, source: e }.into(),
+            }),
         })
         .await
     }
@@ -861,38 +886,45 @@ fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<By
 }
 
 fn open_file(path: &PathBuf) -> Result<File> {
-    let file = File::open(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Error::NotFound {
+    let file = match File::open(path).and_then(|f| Ok((f.metadata()?, f))) {
+        Err(e) => Err(match e.kind() {
+            ErrorKind::NotFound => Error::NotFound {
                 path: path.clone(),
                 source: e,
-            }
-        } else {
-            Error::UnableToOpenFile {
+            },
+            _ => Error::UnableToOpenFile {
                 path: path.clone(),
                 source: e,
-            }
-        }
-    })?;
+            },
+        }),
+        Ok((metadata, file)) => match metadata.is_file() {
+            true => Ok(file),
+            false => Err(Error::NotFound {
+                path: path.clone(),
+                source: io::Error::new(ErrorKind::NotFound, "not a file"),
+            }),
+        },
+    }?;
     Ok(file)
 }
 
 fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
-    let metadata = entry
-        .metadata()
-        .map_err(|e| Error::UnableToAccessMetadata {
-            source: e.into(),
-            path: location.to_string(),
-        })?;
+    let metadata = entry.metadata().map_err(|e| Error::Metadata {
+        source: e.into(),
+        path: location.to_string(),
+    })?;
     convert_metadata(metadata, location)
 }
 
-fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<ObjectMeta> {
-    let last_modified: DateTime<Utc> = metadata
+fn last_modified(metadata: &std::fs::Metadata) -> DateTime<Utc> {
+    metadata
         .modified()
         .expect("Modified file time should be supported on this platform")
-        .into();
+        .into()
+}
 
+fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<ObjectMeta> {
+    let last_modified = last_modified(&metadata);
     let size = usize::try_from(metadata.len()).context(FileSizeOverflowedUsizeSnafu {
         path: location.as_ref(),
     })?;
@@ -956,13 +988,7 @@ fn convert_walkdir_result(
 mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
-    use crate::{
-        tests::{
-            copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
-            list_with_delimiter, put_get_delete_list, rename_and_copy, stream_get,
-        },
-        Error as ObjectStoreError, ObjectStore,
-    };
+    use crate::tests::*;
     use futures::TryStreamExt;
     use tempfile::{NamedTempFile, TempDir};
     use tokio::io::AsyncWriteExt;
@@ -973,6 +999,7 @@ mod tests {
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
         put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
@@ -1085,7 +1112,7 @@ mod tests {
         let err = get_nonexistent_object(&integration, Some(location))
             .await
             .unwrap_err();
-        if let ObjectStoreError::NotFound { path, source } = err {
+        if let crate::Error::NotFound { path, source } = err {
             let source_variant = source.downcast_ref::<std::io::Error>();
             assert!(
                 matches!(source_variant, Some(std::io::Error { .. }),),
@@ -1117,19 +1144,23 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(target_family = "windows")]
     async fn test_list_root() {
-        let integration = LocalFileSystem::new();
-        let result = integration.list_with_delimiter(None).await;
-        if cfg!(target_family = "windows") {
-            let r = result.unwrap_err().to_string();
-            assert!(
-                r.contains("Unable to convert URL \"file:///\" to filesystem path"),
-                "{}",
-                r
-            );
-        } else {
-            result.unwrap();
-        }
+        let fs = LocalFileSystem::new();
+        let r = fs.list_with_delimiter(None).await.unwrap_err().to_string();
+
+        assert!(
+            r.contains("Unable to convert URL \"file:///\" to filesystem path"),
+            "{}",
+            r
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn test_list_root() {
+        let fs = LocalFileSystem::new();
+        fs.list_with_delimiter(None).await.unwrap();
     }
 
     async fn check_list(

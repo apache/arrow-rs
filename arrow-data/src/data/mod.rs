@@ -19,7 +19,6 @@
 //! common attributes and operations for Arrow array.
 
 use crate::bit_iterator::BitSliceIterator;
-use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, UnionMode};
@@ -1143,7 +1142,7 @@ impl ArrayData {
         match &self.data_type {
             DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
                 if !f.is_nullable() {
-                    self.validate_non_nullable(None, 0, &self.child_data[0])?
+                    self.validate_non_nullable(None, &self.child_data[0])?
                 }
             }
             DataType::FixedSizeList(field, len) => {
@@ -1152,40 +1151,17 @@ impl ArrayData {
                     match &self.nulls {
                         Some(nulls) => {
                             let element_len = *len as usize;
-                            let mut buffer =
-                                MutableBuffer::new_null(element_len * self.len);
-
-                            // Expand each bit within `null_mask` into `element_len`
-                            // bits, constructing the implicit mask of the child elements
-                            for i in 0..self.len {
-                                if nulls.is_null(i) {
-                                    continue;
-                                }
-                                for j in 0..element_len {
-                                    bit_util::set_bit(
-                                        buffer.as_mut(),
-                                        i * element_len + j,
-                                    )
-                                }
-                            }
-                            let mask = buffer.into();
-                            self.validate_non_nullable(Some(&mask), 0, child)?;
+                            let expanded = nulls.expand(element_len);
+                            self.validate_non_nullable(Some(&expanded), child)?;
                         }
-                        None => self.validate_non_nullable(None, 0, child)?,
+                        None => self.validate_non_nullable(None, child)?,
                     }
                 }
             }
             DataType::Struct(fields) => {
                 for (field, child) in fields.iter().zip(&self.child_data) {
                     if !field.is_nullable() {
-                        match &self.nulls {
-                            Some(n) => self.validate_non_nullable(
-                                Some(n.buffer()),
-                                n.offset(),
-                                child,
-                            )?,
-                            None => self.validate_non_nullable(None, 0, child)?,
-                        }
+                        self.validate_non_nullable(self.nulls(), child)?
                     }
                 }
             }
@@ -1198,12 +1174,11 @@ impl ArrayData {
     /// Verifies that `child` contains no nulls not present in `mask`
     fn validate_non_nullable(
         &self,
-        mask: Option<&Buffer>,
-        offset: usize,
+        mask: Option<&NullBuffer>,
         child: &ArrayData,
     ) -> Result<(), ArrowError> {
         let mask = match mask {
-            Some(mask) => mask.as_ref(),
+            Some(mask) => mask,
             None => return match child.null_count() {
                 0 => Ok(()),
                 _ => Err(ArrowError::InvalidArgumentError(format!(
@@ -1215,23 +1190,13 @@ impl ArrayData {
         };
 
         match child.nulls() {
-            Some(nulls) => {
-                let mask = BitChunks::new(mask, offset, child.len);
-                let nulls = BitChunks::new(nulls.validity(), nulls.offset(), child.len);
-                mask
-                    .iter_padded()
-                    .zip(nulls.iter_padded())
-                    .try_for_each(|(m, c)| {
-                    if (m & !c) != 0 {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "non-nullable child of type {} contains nulls not present in parent",
-                            child.data_type
-                        )))
-                    }
-                    Ok(())
-                })
+            Some(nulls) if !mask.contains(nulls) => {
+                Err(ArrowError::InvalidArgumentError(format!(
+                    "non-nullable child of type {} contains nulls not present in parent",
+                    child.data_type
+                )))
             }
-            None => Ok(()),
+            _ => Ok(()),
         }
     }
 
@@ -1976,6 +1941,7 @@ mod tests {
         assert!(!int_data.ptr_eq(&float_data));
         assert!(int_data.ptr_eq(&int_data));
 
+        #[allow(clippy::redundant_clone)]
         let int_data_clone = int_data.clone();
         assert_eq!(int_data, int_data_clone);
         assert!(int_data.ptr_eq(&int_data_clone));
@@ -2003,6 +1969,7 @@ mod tests {
 
         assert!(string_data.ptr_eq(&string_data));
 
+        #[allow(clippy::redundant_clone)]
         let string_data_cloned = string_data.clone();
         assert!(string_data_cloned.ptr_eq(&string_data));
         assert!(string_data.ptr_eq(&string_data_cloned));

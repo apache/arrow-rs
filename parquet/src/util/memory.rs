@@ -114,6 +114,12 @@ impl From<Bytes> for ByteBufferPtr {
     }
 }
 
+impl From<ByteBufferPtr> for Bytes {
+    fn from(value: ByteBufferPtr) -> Self {
+        value.data
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

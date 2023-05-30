@@ -24,12 +24,12 @@ use arrow::array::new_empty_array;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
-use arrow::array::{Array, ArrayData, ArrayRef, Int64Array, make_array};
+use arrow::array::{make_array, Array, ArrayData, ArrayRef, Int64Array};
 use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
 use arrow::ffi_stream::ArrowArrayStreamReader;
-use arrow::pyarrow::{PyArrowConvert, PyArrowException, PyArrowType};
+use arrow::pyarrow::{FromPyArrow, PyArrowException, PyArrowType, ToPyArrow};
 use arrow::record_batch::RecordBatch;
 
 fn to_py_err(err: ArrowError) -> PyErr {
@@ -88,7 +88,8 @@ fn substring(
     let array = make_array(array.0);
 
     // substring
-    let array = kernels::substring::substring(array.as_ref(), start, None).map_err(to_py_err)?;
+    let array =
+        kernels::substring::substring(array.as_ref(), start, None).map_err(to_py_err)?;
 
     Ok(array.to_data().into())
 }
@@ -99,7 +100,8 @@ fn concatenate(array: PyArrowType<ArrayData>, py: Python) -> PyResult<PyObject> 
     let array = make_array(array.0);
 
     // concat
-    let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).map_err(to_py_err)?;
+    let array =
+        kernels::concat::concat(&[array.as_ref(), array.as_ref()]).map_err(to_py_err)?;
 
     array.to_data().to_pyarrow(py)
 }

@@ -43,6 +43,15 @@ pub trait RecordBatchReader: Iterator<Item = Result<RecordBatch, ArrowError>> {
     }
 }
 
+/// Trait for types that can write `RecordBatch`'s.
+pub trait RecordBatchWriter {
+    /// Write a single batch to the writer.
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError>;
+
+    /// Write footer or termination data, then mark the writer as done.
+    fn close(self) -> Result<(), ArrowError>;
+}
+
 /// A two-dimensional batch of column-oriented data with a defined
 /// [schema](arrow_schema::Schema).
 ///

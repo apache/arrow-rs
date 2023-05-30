@@ -25,7 +25,7 @@ use arrow_schema::{ArrowError, DataType, Field, UnionFields, UnionMode};
 use std::any::Any;
 use std::sync::Arc;
 
-/// An Array that can represent slots of varying types.
+/// An array of [values of varying types](https://arrow.apache.org/docs/format/Columnar.html#union-layout)
 ///
 /// Each slot in a [UnionArray] can have a value chosen from a number
 /// of types.  Each of the possible types are named like the fields of

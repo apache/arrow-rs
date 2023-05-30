@@ -245,11 +245,17 @@ pub mod throttle;
 mod client;
 
 #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
-pub use client::{backoff::BackoffConfig, retry::RetryConfig};
+pub use client::{backoff::BackoffConfig, retry::RetryConfig, CredentialProvider};
+
+#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
+mod config;
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
 mod multipart;
+mod parse;
 mod util;
+
+pub use parse::{parse_url, parse_url_opts};
 
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
@@ -340,11 +346,24 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 
     /// Return the bytes that are stored at the specified location.
-    async fn get(&self, location: &Path) -> Result<GetResult>;
+    async fn get(&self, location: &Path) -> Result<GetResult> {
+        self.get_opts(location, GetOptions::default()).await
+    }
+
+    /// Perform a get request with options
+    ///
+    /// Note: options.range will be ignored if [`GetResult::File`]
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte range
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes>;
+    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+        let options = GetOptions {
+            range: Some(range),
+            ..Default::default()
+        };
+        self.get_opts(location, options).await?.bytes().await
+    }
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte ranges
@@ -366,6 +385,63 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> Result<()>;
+
+    /// Delete all the objects at the specified locations
+    ///
+    /// When supported, this method will use bulk operations that delete more
+    /// than one object per a request. The default implementation will call
+    /// the single object delete method for each location, but with up to 10
+    /// concurrent requests.
+    ///
+    /// The returned stream yields the results of the delete operations in the
+    /// same order as the input locations. However, some errors will be from
+    /// an overall call to a bulk delete operation, and not from a specific
+    /// location.
+    ///
+    /// If the object did not exist, the result may be an error or a success,
+    /// depending on the behavior of the underlying store. For example, local
+    /// filesystems, GCP, and Azure return an error, while S3 and in-memory will
+    /// return Ok. If it is an error, it will be [`Error::NotFound`].
+    ///
+    /// ```
+    /// # use object_store::local::LocalFileSystem;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let root = tempfile::TempDir::new().unwrap();
+    /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+    /// use object_store::{ObjectStore, ObjectMeta};
+    /// use object_store::path::Path;
+    /// use futures::{StreamExt, TryStreamExt};
+    /// use bytes::Bytes;
+    ///
+    /// // Create two objects
+    /// store.put(&Path::from("foo"), Bytes::from("foo")).await?;
+    /// store.put(&Path::from("bar"), Bytes::from("bar")).await?;
+    ///
+    /// // List object
+    /// let locations = store.list(None).await?
+    ///   .map(|meta: Result<ObjectMeta, _>| meta.map(|m| m.location))
+    ///   .boxed();
+    ///
+    /// // Delete them
+    /// store.delete_stream(locations).try_collect::<Vec<Path>>().await?;
+    /// # Ok(())
+    /// # }
+    /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    /// # rt.block_on(example()).unwrap();
+    /// ```
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        locations
+            .map(|location| async {
+                let location = location?;
+                self.delete(&location).await?;
+                Ok(location)
+            })
+            .buffered(10)
+            .boxed()
+    }
 
     /// List all the objects with the given prefix.
     ///
@@ -472,6 +548,10 @@ impl ObjectStore for Box<dyn ObjectStore> {
         self.as_ref().get(location).await
     }
 
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        self.as_ref().get_opts(location, options).await
+    }
+
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         self.as_ref().get_range(location, range).await
     }
@@ -490,6 +570,13 @@ impl ObjectStore for Box<dyn ObjectStore> {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.as_ref().delete(location).await
+    }
+
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        self.as_ref().delete_stream(locations)
     }
 
     async fn list(
@@ -550,6 +637,66 @@ pub struct ObjectMeta {
     pub size: usize,
     /// The unique identifier for the object
     pub e_tag: Option<String>,
+}
+
+/// Options for a get request, such as range
+#[derive(Debug, Default)]
+pub struct GetOptions {
+    /// Request will succeed if the `ObjectMeta::e_tag` matches
+    /// otherwise returning [`Error::Precondition`]
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-if-match>
+    pub if_match: Option<String>,
+    /// Request will succeed if the `ObjectMeta::e_tag` does not match
+    /// otherwise returning [`Error::NotModified`]
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.2>
+    pub if_none_match: Option<String>,
+    /// Request will succeed if the object has been modified since
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.3>
+    pub if_modified_since: Option<DateTime<Utc>>,
+    /// Request will succeed if the object has not been modified since
+    /// otherwise returning [`Error::Precondition`]
+    ///
+    /// Some stores, such as S3, will only return `NotModified` for exact
+    /// timestamp matches, instead of for any timestamp greater than or equal.
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.4>
+    pub if_unmodified_since: Option<DateTime<Utc>>,
+    /// Request transfer of only the specified range of bytes
+    /// otherwise returning [`Error::NotModified`]
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
+    pub range: Option<Range<usize>>,
+}
+
+impl GetOptions {
+    /// Returns an error if the modification conditions on this request are not satisfied
+    fn check_modified(
+        &self,
+        location: &Path,
+        last_modified: DateTime<Utc>,
+    ) -> Result<()> {
+        if let Some(date) = self.if_modified_since {
+            if last_modified <= date {
+                return Err(Error::NotModified {
+                    path: location.to_string(),
+                    source: format!("{} >= {}", date, last_modified).into(),
+                });
+            }
+        }
+
+        if let Some(date) = self.if_unmodified_since {
+            if last_modified > date {
+                return Err(Error::Precondition {
+                    path: location.to_string(),
+                    source: format!("{} < {}", date, last_modified).into(),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Result for a get request
@@ -696,6 +843,18 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    #[snafu(display("Request precondition failure for path {}: {}", path, source))]
+    Precondition {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[snafu(display("Object at location {} not modified: {}", path, source))]
+    NotModified {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
     #[snafu(display("Operation not yet implemented."))]
     NotImplemented,
 
@@ -784,6 +943,14 @@ mod tests {
         assert!(result.objects.is_empty());
         assert_eq!(result.common_prefixes.len(), 1);
         assert_eq!(result.common_prefixes[0], Path::from("test_dir"));
+
+        // Should return not found
+        let err = storage.get(&Path::from("test_dir")).await.unwrap_err();
+        assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
+        // Should return not found
+        let err = storage.head(&Path::from("test_dir")).await.unwrap_err();
+        assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
 
         // List everything starting with a prefix that should return results
         let prefix = Path::from("test_dir");
@@ -1016,7 +1183,129 @@ mod tests {
             assert_eq!(actual, expected, "{prefix:?} - {offset:?}");
         }
 
+        // Test bulk delete
+        let paths = vec![
+            Path::from("a/a.file"),
+            Path::from("a/a/b.file"),
+            Path::from("aa/a.file"),
+            Path::from("does_not_exist"),
+            Path::from("I'm a < & weird path"),
+            Path::from("ab/a.file"),
+            Path::from("a/😀.file"),
+        ];
+
+        storage.put(&paths[4], "foo".into()).await.unwrap();
+
+        let out_paths = storage
+            .delete_stream(futures::stream::iter(paths.clone()).map(Ok).boxed())
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(out_paths.len(), paths.len());
+
+        let expect_errors = [3];
+
+        for (i, input_path) in paths.iter().enumerate() {
+            let err = storage.head(input_path).await.unwrap_err();
+            assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
+            if expect_errors.contains(&i) {
+                // Some object stores will report NotFound, but others (such as S3) will
+                // report success regardless.
+                match &out_paths[i] {
+                    Err(Error::NotFound { path: out_path, .. }) => {
+                        assert!(out_path.ends_with(&input_path.to_string()));
+                    }
+                    Ok(out_path) => {
+                        assert_eq!(out_path, input_path);
+                    }
+                    _ => panic!("unexpected error"),
+                }
+            } else {
+                assert_eq!(out_paths[i].as_ref().unwrap(), input_path);
+            }
+        }
+
         delete_fixtures(storage).await;
+    }
+
+    pub(crate) async fn get_opts(storage: &dyn ObjectStore) {
+        let path = Path::from("test");
+        storage.put(&path, "foo".into()).await.unwrap();
+        let meta = storage.head(&path).await.unwrap();
+
+        let options = GetOptions {
+            if_unmodified_since: Some(meta.last_modified),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Ok(_) | Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let options = GetOptions {
+            if_unmodified_since: Some(meta.last_modified + chrono::Duration::hours(10)),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Ok(_) | Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let options = GetOptions {
+            if_unmodified_since: Some(meta.last_modified - chrono::Duration::hours(10)),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Err(Error::Precondition { .. } | Error::NotSupported { .. }) => {}
+            d => panic!("{d:?}"),
+        }
+
+        let options = GetOptions {
+            if_modified_since: Some(meta.last_modified),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Err(Error::NotModified { .. } | Error::NotSupported { .. }) => {}
+            d => panic!("{d:?}"),
+        }
+
+        let options = GetOptions {
+            if_modified_since: Some(meta.last_modified - chrono::Duration::hours(10)),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Ok(_) | Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        if let Some(tag) = meta.e_tag {
+            let options = GetOptions {
+                if_match: Some(tag.clone()),
+                ..GetOptions::default()
+            };
+            storage.get_opts(&path, options).await.unwrap();
+
+            let options = GetOptions {
+                if_match: Some("invalid".to_string()),
+                ..GetOptions::default()
+            };
+            let err = storage.get_opts(&path, options).await.unwrap_err();
+            assert!(matches!(err, Error::Precondition { .. }), "{err}");
+
+            let options = GetOptions {
+                if_none_match: Some(tag.clone()),
+                ..GetOptions::default()
+            };
+            let err = storage.get_opts(&path, options).await.unwrap_err();
+            assert!(matches!(err, Error::NotModified { .. }), "{err}");
+
+            let options = GetOptions {
+                if_none_match: Some("invalid".to_string()),
+                ..GetOptions::default()
+            };
+            storage.get_opts(&path, options).await.unwrap();
+        }
     }
 
     fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
@@ -1289,11 +1578,17 @@ mod tests {
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {
-        let paths = flatten_list_stream(storage, None).await.unwrap();
-
-        for f in &paths {
-            storage.delete(f).await.unwrap();
-        }
+        let paths = storage
+            .list(None)
+            .await
+            .unwrap()
+            .map_ok(|meta| meta.location)
+            .boxed();
+        storage
+            .delete_stream(paths)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
     }
 
     /// Test that the returned stream does not borrow the lifetime of Path

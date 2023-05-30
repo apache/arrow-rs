@@ -51,12 +51,12 @@ pub struct CommandGetSqlInfo {
 /// The returned schema will be:
 /// <
 ///    type_name: utf8 not null (The name of the data type, for example: VARCHAR, INTEGER, etc),
-///    data_type: int not null (The SQL data type),
-///    column_size: int (The maximum size supported by that column.
-///                      In case of exact numeric types, this represents the maximum precision.
-///                      In case of string types, this represents the character length.
-///                      In case of datetime data types, this represents the length in characters of the string representation.
-///                      NULL is returned for data types where column size is not applicable.),
+///    data_type: int32 not null (The SQL data type),
+///    column_size: int32 (The maximum size supported by that column.
+///                        In case of exact numeric types, this represents the maximum precision.
+///                        In case of string types, this represents the character length.
+///                        In case of datetime data types, this represents the length in characters of the string representation.
+///                        NULL is returned for data types where column size is not applicable.),
 ///    literal_prefix: utf8 (Character or characters used to prefix a literal, NULL is returned for
 ///                          data types where a literal prefix is not applicable.),
 ///    literal_suffix: utf8 (Character or characters used to terminate a literal,
@@ -65,11 +65,11 @@ pub struct CommandGetSqlInfo {
 ///                         (A list of keywords corresponding to which parameters can be used when creating
 ///                          a column for that specific type.
 ///                          NULL is returned if there are no parameters for the data type definition.),
-///    nullable: int not null (Shows if the data type accepts a NULL value. The possible values can be seen in the
-///                            Nullable enum.),
+///    nullable: int32 not null (Shows if the data type accepts a NULL value. The possible values can be seen in the
+///                              Nullable enum.),
 ///    case_sensitive: bool not null (Shows if a character data type is case-sensitive in collations and comparisons),
-///    searchable: int not null (Shows how the data type is used in a WHERE clause. The possible values can be seen in the
-///                              Searchable enum.),
+///    searchable: int32 not null (Shows how the data type is used in a WHERE clause. The possible values can be seen in the
+///                                Searchable enum.),
 ///    unsigned_attribute: bool (Shows if the data type is unsigned. NULL is returned if the attribute is
 ///                              not applicable to the data type or the data type is not numeric.),
 ///    fixed_prec_scale: bool not null (Shows if the data type has predefined fixed precision and scale.),
@@ -77,26 +77,26 @@ pub struct CommandGetSqlInfo {
 ///                          is not applicable to the data type or the data type is not numeric.),
 ///    local_type_name: utf8 (Localized version of the data source-dependent name of the data type. NULL
 ///                           is returned if a localized name is not supported by the data source),
-///    minimum_scale: int (The minimum scale of the data type on the data source.
-///                        If a data type has a fixed scale, the MINIMUM_SCALE and MAXIMUM_SCALE
-///                        columns both contain this value. NULL is returned if scale is not applicable.),
-///    maximum_scale: int (The maximum scale of the data type on the data source.
-///                        NULL is returned if scale is not applicable.),
-///    sql_data_type: int not null (The value of the SQL DATA TYPE which has the same values
-///                                 as data_type value. Except for interval and datetime, which
-///                                 uses generic values. More info about those types can be
-///                                 obtained through datetime_subcode. The possible values can be seen
-///                                 in the XdbcDataType enum.),
-///    datetime_subcode: int (Only used when the SQL DATA TYPE is interval or datetime. It contains
-///                           its sub types. For type different from interval and datetime, this value
-///                           is NULL. The possible values can be seen in the XdbcDatetimeSubcode enum.),
-///    num_prec_radix: int (If the data type is an approximate numeric type, this column contains
-///                         the value 2 to indicate that COLUMN_SIZE specifies a number of bits. For
-///                         exact numeric types, this column contains the value 10 to indicate that
-///                         column size specifies a number of decimal digits. Otherwise, this column is NULL.),
-///    interval_precision: int (If the data type is an interval data type, then this column contains the value
-///                             of the interval leading precision. Otherwise, this column is NULL. This fields
-///                             is only relevant to be used by ODBC).
+///    minimum_scale: int32 (The minimum scale of the data type on the data source.
+///                          If a data type has a fixed scale, the MINIMUM_SCALE and MAXIMUM_SCALE
+///                          columns both contain this value. NULL is returned if scale is not applicable.),
+///    maximum_scale: int32 (The maximum scale of the data type on the data source.
+///                          NULL is returned if scale is not applicable.),
+///    sql_data_type: int32 not null (The value of the SQL DATA TYPE which has the same values
+///                                   as data_type value. Except for interval and datetime, which
+///                                   uses generic values. More info about those types can be
+///                                   obtained through datetime_subcode. The possible values can be seen
+///                                   in the XdbcDataType enum.),
+///    datetime_subcode: int32 (Only used when the SQL DATA TYPE is interval or datetime. It contains
+///                             its sub types. For type different from interval and datetime, this value
+///                             is NULL. The possible values can be seen in the XdbcDatetimeSubcode enum.),
+///    num_prec_radix: int32 (If the data type is an approximate numeric type, this column contains
+///                           the value 2 to indicate that COLUMN_SIZE specifies a number of bits. For
+///                           exact numeric types, this column contains the value 10 to indicate that
+///                           column size specifies a number of decimal digits. Otherwise, this column is NULL.),
+///    interval_precision: int32 (If the data type is an interval data type, then this column contains the value
+///                               of the interval leading precision. Otherwise, this column is NULL. This fields
+///                               is only relevant to be used by ODBC).
 /// >
 /// The returned data should be ordered by data_type and then by type_name.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -246,7 +246,7 @@ pub struct CommandGetTableTypes {}
 ///   table_name: utf8 not null,
 ///   column_name: utf8 not null,
 ///   key_name: utf8,
-///   key_sequence: int not null
+///   key_sequence: int32 not null
 /// >
 /// The returned data should be ordered by catalog_name, db_schema_name, table_name, key_name, then key_sequence.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -285,11 +285,11 @@ pub struct CommandGetPrimaryKeys {
 ///   fk_db_schema_name: utf8,
 ///   fk_table_name: utf8 not null,
 ///   fk_column_name: utf8 not null,
-///   key_sequence: int not null,
+///   key_sequence: int32 not null,
 ///   fk_key_name: utf8,
 ///   pk_key_name: utf8,
-///   update_rule: uint1 not null,
-///   delete_rule: uint1 not null
+///   update_rule: uint8 not null,
+///   delete_rule: uint8 not null
 /// >
 /// The returned data should be ordered by fk_catalog_name, fk_db_schema_name, fk_table_name, fk_key_name, then key_sequence.
 /// update_rule and delete_rule returns a byte that is equivalent to actions declared on UpdateDeleteRules enum.
@@ -328,11 +328,11 @@ pub struct CommandGetExportedKeys {
 ///   fk_db_schema_name: utf8,
 ///   fk_table_name: utf8 not null,
 ///   fk_column_name: utf8 not null,
-///   key_sequence: int not null,
+///   key_sequence: int32 not null,
 ///   fk_key_name: utf8,
 ///   pk_key_name: utf8,
-///   update_rule: uint1 not null,
-///   delete_rule: uint1 not null
+///   update_rule: uint8 not null,
+///   delete_rule: uint8 not null
 /// >
 /// The returned data should be ordered by pk_catalog_name, pk_db_schema_name, pk_table_name, pk_key_name, then key_sequence.
 /// update_rule and delete_rule returns a byte that is equivalent to actions:
@@ -378,11 +378,11 @@ pub struct CommandGetImportedKeys {
 ///   fk_db_schema_name: utf8,
 ///   fk_table_name: utf8 not null,
 ///   fk_column_name: utf8 not null,
-///   key_sequence: int not null,
+///   key_sequence: int32 not null,
 ///   fk_key_name: utf8,
 ///   pk_key_name: utf8,
-///   update_rule: uint1 not null,
-///   delete_rule: uint1 not null
+///   update_rule: uint8 not null,
+///   delete_rule: uint8 not null
 /// >
 /// The returned data should be ordered by pk_catalog_name, pk_db_schema_name, pk_table_name, pk_key_name, then key_sequence.
 /// update_rule and delete_rule returns a byte that is equivalent to actions:
@@ -435,13 +435,49 @@ pub struct ActionCreatePreparedStatementRequest {
     /// The valid SQL string to create a prepared statement for.
     #[prost(string, tag = "1")]
     pub query: ::prost::alloc::string::String,
+    /// Create/execute the prepared statement as part of this transaction (if
+    /// unset, executions of the prepared statement will be auto-committed).
+    #[prost(bytes = "bytes", optional, tag = "2")]
+    pub transaction_id: ::core::option::Option<::prost::bytes::Bytes>,
 }
 ///
-/// Wrap the result of a "GetPreparedStatement" action.
+/// An embedded message describing a Substrait plan to execute.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubstraitPlan {
+    /// The serialized substrait.Plan to create a prepared statement for.
+    /// XXX(ARROW-16902): this is bytes instead of an embedded message
+    /// because Protobuf does not really support one DLL using Protobuf
+    /// definitions from another DLL.
+    #[prost(bytes = "bytes", tag = "1")]
+    pub plan: ::prost::bytes::Bytes,
+    /// The Substrait release, e.g. "0.12.0". This information is not
+    /// tracked in the plan itself, so this is the only way for consumers
+    /// to potentially know if they can handle the plan.
+    #[prost(string, tag = "2")]
+    pub version: ::prost::alloc::string::String,
+}
+///
+/// Request message for the "CreatePreparedSubstraitPlan" action on a Flight SQL enabled backend.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActionCreatePreparedSubstraitPlanRequest {
+    /// The serialized substrait.Plan to create a prepared statement for.
+    #[prost(message, optional, tag = "1")]
+    pub plan: ::core::option::Option<SubstraitPlan>,
+    /// Create/execute the prepared statement as part of this transaction (if
+    /// unset, executions of the prepared statement will be auto-committed).
+    #[prost(bytes = "bytes", optional, tag = "2")]
+    pub transaction_id: ::core::option::Option<::prost::bytes::Bytes>,
+}
+///
+/// Wrap the result of a "CreatePreparedStatement" or "CreatePreparedSubstraitPlan" action.
 ///
 /// The resultant PreparedStatement can be closed either:
 /// - Manually, through the "ClosePreparedStatement" action;
 /// - Automatically, by a server timeout.
+///
+/// The result should be wrapped in a google.protobuf.Any message.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionCreatePreparedStatementResult {
@@ -468,6 +504,182 @@ pub struct ActionClosePreparedStatementRequest {
     pub prepared_statement_handle: ::prost::bytes::Bytes,
 }
 ///
+/// Request message for the "BeginTransaction" action.
+/// Begins a transaction.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActionBeginTransactionRequest {}
+///
+/// Request message for the "BeginSavepoint" action.
+/// Creates a savepoint within a transaction.
+///
+/// Only supported if FLIGHT_SQL_TRANSACTION is
+/// FLIGHT_SQL_TRANSACTION_SUPPORT_SAVEPOINT.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActionBeginSavepointRequest {
+    /// The transaction to which a savepoint belongs.
+    #[prost(bytes = "bytes", tag = "1")]
+    pub transaction_id: ::prost::bytes::Bytes,
+    /// Name for the savepoint.
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+}
+///
+/// The result of a "BeginTransaction" action.
+///
+/// The transaction can be manipulated with the "EndTransaction" action, or
+/// automatically via server timeout. If the transaction times out, then it is
+/// automatically rolled back.
+///
+/// The result should be wrapped in a google.protobuf.Any message.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActionBeginTransactionResult {
+    /// Opaque handle for the transaction on the server.
+    #[prost(bytes = "bytes", tag = "1")]
+    pub transaction_id: ::prost::bytes::Bytes,
+}
+///
+/// The result of a "BeginSavepoint" action.
+///
+/// The transaction can be manipulated with the "EndSavepoint" action.
+/// If the associated transaction is committed, rolled back, or times
+/// out, then the savepoint is also invalidated.
+///
+/// The result should be wrapped in a google.protobuf.Any message.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActionBeginSavepointResult {
+    /// Opaque handle for the savepoint on the server.
+    #[prost(bytes = "bytes", tag = "1")]
+    pub savepoint_id: ::prost::bytes::Bytes,
+}
+///
+/// Request message for the "EndTransaction" action.
+///
+/// Commit (COMMIT) or rollback (ROLLBACK) the transaction.
+///
+/// If the action completes successfully, the transaction handle is
+/// invalidated, as are all associated savepoints.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActionEndTransactionRequest {
+    /// Opaque handle for the transaction on the server.
+    #[prost(bytes = "bytes", tag = "1")]
+    pub transaction_id: ::prost::bytes::Bytes,
+    /// Whether to commit/rollback the given transaction.
+    #[prost(enumeration = "action_end_transaction_request::EndTransaction", tag = "2")]
+    pub action: i32,
+}
+/// Nested message and enum types in `ActionEndTransactionRequest`.
+pub mod action_end_transaction_request {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum EndTransaction {
+        Unspecified = 0,
+        /// Commit the transaction.
+        Commit = 1,
+        /// Roll back the transaction.
+        Rollback = 2,
+    }
+    impl EndTransaction {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                EndTransaction::Unspecified => "END_TRANSACTION_UNSPECIFIED",
+                EndTransaction::Commit => "END_TRANSACTION_COMMIT",
+                EndTransaction::Rollback => "END_TRANSACTION_ROLLBACK",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "END_TRANSACTION_UNSPECIFIED" => Some(Self::Unspecified),
+                "END_TRANSACTION_COMMIT" => Some(Self::Commit),
+                "END_TRANSACTION_ROLLBACK" => Some(Self::Rollback),
+                _ => None,
+            }
+        }
+    }
+}
+///
+/// Request message for the "EndSavepoint" action.
+///
+/// Release (RELEASE) the savepoint or rollback (ROLLBACK) to the
+/// savepoint.
+///
+/// Releasing a savepoint invalidates that savepoint.  Rolling back to
+/// a savepoint does not invalidate the savepoint, but invalidates all
+/// savepoints created after the current savepoint.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActionEndSavepointRequest {
+    /// Opaque handle for the savepoint on the server.
+    #[prost(bytes = "bytes", tag = "1")]
+    pub savepoint_id: ::prost::bytes::Bytes,
+    /// Whether to rollback/release the given savepoint.
+    #[prost(enumeration = "action_end_savepoint_request::EndSavepoint", tag = "2")]
+    pub action: i32,
+}
+/// Nested message and enum types in `ActionEndSavepointRequest`.
+pub mod action_end_savepoint_request {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum EndSavepoint {
+        Unspecified = 0,
+        /// Release the savepoint.
+        Release = 1,
+        /// Roll back to a savepoint.
+        Rollback = 2,
+    }
+    impl EndSavepoint {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                EndSavepoint::Unspecified => "END_SAVEPOINT_UNSPECIFIED",
+                EndSavepoint::Release => "END_SAVEPOINT_RELEASE",
+                EndSavepoint::Rollback => "END_SAVEPOINT_ROLLBACK",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "END_SAVEPOINT_UNSPECIFIED" => Some(Self::Unspecified),
+                "END_SAVEPOINT_RELEASE" => Some(Self::Release),
+                "END_SAVEPOINT_ROLLBACK" => Some(Self::Rollback),
+                _ => None,
+            }
+        }
+    }
+}
+///
 /// Represents a SQL query. Used in the command member of FlightDescriptor
 /// for the following RPC calls:
 ///   - GetSchema: return the Arrow schema of the query.
@@ -489,6 +701,36 @@ pub struct CommandStatementQuery {
     /// The SQL syntax.
     #[prost(string, tag = "1")]
     pub query: ::prost::alloc::string::String,
+    /// Include the query as part of this transaction (if unset, the query is auto-committed).
+    #[prost(bytes = "bytes", optional, tag = "2")]
+    pub transaction_id: ::core::option::Option<::prost::bytes::Bytes>,
+}
+///
+/// Represents a Substrait plan. Used in the command member of FlightDescriptor
+/// for the following RPC calls:
+///   - GetSchema: return the Arrow schema of the query.
+///     Fields on this schema may contain the following metadata:
+///     - ARROW:FLIGHT:SQL:CATALOG_NAME      - Table's catalog name
+///     - ARROW:FLIGHT:SQL:DB_SCHEMA_NAME    - Database schema name
+///     - ARROW:FLIGHT:SQL:TABLE_NAME        - Table name
+///     - ARROW:FLIGHT:SQL:TYPE_NAME         - The data source-specific name for the data type of the column.
+///     - ARROW:FLIGHT:SQL:PRECISION         - Column precision/size
+///     - ARROW:FLIGHT:SQL:SCALE             - Column scale/decimal digits if applicable
+///     - ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT - "1" indicates if the column is auto incremented, "0" otherwise.
+///     - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case sensitive, "0" otherwise.
+///     - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
+///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
+///   - GetFlightInfo: execute the query.
+///   - DoPut: execute the query.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommandStatementSubstraitPlan {
+    /// A serialized substrait.Plan
+    #[prost(message, optional, tag = "1")]
+    pub plan: ::core::option::Option<SubstraitPlan>,
+    /// Include the query as part of this transaction (if unset, the query is auto-committed).
+    #[prost(bytes = "bytes", optional, tag = "2")]
+    pub transaction_id: ::core::option::Option<::prost::bytes::Bytes>,
 }
 /// *
 /// Represents a ticket resulting from GetFlightInfo with a CommandStatementQuery.
@@ -533,6 +775,9 @@ pub struct CommandStatementUpdate {
     /// The SQL syntax.
     #[prost(string, tag = "1")]
     pub query: ::prost::alloc::string::String,
+    /// Include the query as part of this transaction (if unset, the query is auto-committed).
+    #[prost(bytes = "bytes", optional, tag = "2")]
+    pub transaction_id: ::core::option::Option<::prost::bytes::Bytes>,
 }
 ///
 /// Represents a SQL update query. Used in the command member of FlightDescriptor
@@ -557,6 +802,93 @@ pub struct DoPutUpdateResult {
     #[prost(int64, tag = "1")]
     pub record_count: i64,
 }
+///
+/// Request message for the "CancelQuery" action.
+///
+/// Explicitly cancel a running query.
+///
+/// This lets a single client explicitly cancel work, no matter how many clients
+/// are involved/whether the query is distributed or not, given server support.
+/// The transaction/statement is not rolled back; it is the application's job to
+/// commit or rollback as appropriate. This only indicates the client no longer
+/// wishes to read the remainder of the query results or continue submitting
+/// data.
+///
+/// This command is idempotent.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActionCancelQueryRequest {
+    /// The result of the GetFlightInfo RPC that initiated the query.
+    /// XXX(ARROW-16902): this must be a serialized FlightInfo, but is
+    /// rendered as bytes because Protobuf does not really support one
+    /// DLL using Protobuf definitions from another DLL.
+    #[prost(bytes = "bytes", tag = "1")]
+    pub info: ::prost::bytes::Bytes,
+}
+///
+/// The result of cancelling a query.
+///
+/// The result should be wrapped in a google.protobuf.Any message.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActionCancelQueryResult {
+    #[prost(enumeration = "action_cancel_query_result::CancelResult", tag = "1")]
+    pub result: i32,
+}
+/// Nested message and enum types in `ActionCancelQueryResult`.
+pub mod action_cancel_query_result {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum CancelResult {
+        /// The cancellation status is unknown. Servers should avoid using
+        /// this value (send a NOT_FOUND error if the requested query is
+        /// not known). Clients can retry the request.
+        Unspecified = 0,
+        /// The cancellation request is complete. Subsequent requests with
+        /// the same payload may return CANCELLED or a NOT_FOUND error.
+        Cancelled = 1,
+        /// The cancellation request is in progress. The client may retry
+        /// the cancellation request.
+        Cancelling = 2,
+        /// The query is not cancellable. The client should not retry the
+        /// cancellation request.
+        NotCancellable = 3,
+    }
+    impl CancelResult {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                CancelResult::Unspecified => "CANCEL_RESULT_UNSPECIFIED",
+                CancelResult::Cancelled => "CANCEL_RESULT_CANCELLED",
+                CancelResult::Cancelling => "CANCEL_RESULT_CANCELLING",
+                CancelResult::NotCancellable => "CANCEL_RESULT_NOT_CANCELLABLE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "CANCEL_RESULT_UNSPECIFIED" => Some(Self::Unspecified),
+                "CANCEL_RESULT_CANCELLED" => Some(Self::Cancelled),
+                "CANCEL_RESULT_CANCELLING" => Some(Self::Cancelling),
+                "CANCEL_RESULT_NOT_CANCELLABLE" => Some(Self::NotCancellable),
+                _ => None,
+            }
+        }
+    }
+}
 /// Options for CommandGetSqlInfo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -574,6 +906,49 @@ pub enum SqlInfo {
     /// - false: if read-write
     /// - true: if read only
     FlightSqlServerReadOnly = 3,
+    ///
+    /// Retrieves a boolean value indicating whether the Flight SQL Server supports executing
+    /// SQL queries.
+    ///
+    /// Note that the absence of this info (as opposed to a false value) does not necessarily
+    /// mean that SQL is not supported, as this property was not originally defined.
+    FlightSqlServerSql = 4,
+    ///
+    /// Retrieves a boolean value indicating whether the Flight SQL Server supports executing
+    /// Substrait plans.
+    FlightSqlServerSubstrait = 5,
+    ///
+    /// Retrieves a string value indicating the minimum supported Substrait version, or null
+    /// if Substrait is not supported.
+    FlightSqlServerSubstraitMinVersion = 6,
+    ///
+    /// Retrieves a string value indicating the maximum supported Substrait version, or null
+    /// if Substrait is not supported.
+    FlightSqlServerSubstraitMaxVersion = 7,
+    ///
+    /// Retrieves an int32 indicating whether the Flight SQL Server supports the
+    /// BeginTransaction/EndTransaction/BeginSavepoint/EndSavepoint actions.
+    ///
+    /// Even if this is not supported, the database may still support explicit "BEGIN
+    /// TRANSACTION"/"COMMIT" SQL statements (see SQL_TRANSACTIONS_SUPPORTED); this property
+    /// is only about whether the server implements the Flight SQL API endpoints.
+    ///
+    /// The possible values are listed in `SqlSupportedTransaction`.
+    FlightSqlServerTransaction = 8,
+    ///
+    /// Retrieves a boolean value indicating whether the Flight SQL Server supports explicit
+    /// query cancellation (the CancelQuery action).
+    FlightSqlServerCancel = 9,
+    ///
+    /// Retrieves an int32 indicating the timeout (in milliseconds) for prepared statement handles.
+    ///
+    /// If 0, there is no timeout.  Servers should reset the timeout when the handle is used in a command.
+    FlightSqlServerStatementTimeout = 100,
+    ///
+    /// Retrieves an int32 indicating the timeout (in milliseconds) for transactions, since transactions are not tied to a connection.
+    ///
+    /// If 0, there is no timeout.  Servers should reset the timeout when the handle is used in a command.
+    FlightSqlServerTransactionTimeout = 101,
     ///
     /// Retrieves a boolean value indicating whether the Flight SQL Server supports CREATE and DROP of catalogs.
     ///
@@ -1125,6 +1500,22 @@ impl SqlInfo {
             SqlInfo::FlightSqlServerVersion => "FLIGHT_SQL_SERVER_VERSION",
             SqlInfo::FlightSqlServerArrowVersion => "FLIGHT_SQL_SERVER_ARROW_VERSION",
             SqlInfo::FlightSqlServerReadOnly => "FLIGHT_SQL_SERVER_READ_ONLY",
+            SqlInfo::FlightSqlServerSql => "FLIGHT_SQL_SERVER_SQL",
+            SqlInfo::FlightSqlServerSubstrait => "FLIGHT_SQL_SERVER_SUBSTRAIT",
+            SqlInfo::FlightSqlServerSubstraitMinVersion => {
+                "FLIGHT_SQL_SERVER_SUBSTRAIT_MIN_VERSION"
+            }
+            SqlInfo::FlightSqlServerSubstraitMaxVersion => {
+                "FLIGHT_SQL_SERVER_SUBSTRAIT_MAX_VERSION"
+            }
+            SqlInfo::FlightSqlServerTransaction => "FLIGHT_SQL_SERVER_TRANSACTION",
+            SqlInfo::FlightSqlServerCancel => "FLIGHT_SQL_SERVER_CANCEL",
+            SqlInfo::FlightSqlServerStatementTimeout => {
+                "FLIGHT_SQL_SERVER_STATEMENT_TIMEOUT"
+            }
+            SqlInfo::FlightSqlServerTransactionTimeout => {
+                "FLIGHT_SQL_SERVER_TRANSACTION_TIMEOUT"
+            }
             SqlInfo::SqlDdlCatalog => "SQL_DDL_CATALOG",
             SqlInfo::SqlDdlSchema => "SQL_DDL_SCHEMA",
             SqlInfo::SqlDdlTable => "SQL_DDL_TABLE",
@@ -1241,6 +1632,22 @@ impl SqlInfo {
             "FLIGHT_SQL_SERVER_VERSION" => Some(Self::FlightSqlServerVersion),
             "FLIGHT_SQL_SERVER_ARROW_VERSION" => Some(Self::FlightSqlServerArrowVersion),
             "FLIGHT_SQL_SERVER_READ_ONLY" => Some(Self::FlightSqlServerReadOnly),
+            "FLIGHT_SQL_SERVER_SQL" => Some(Self::FlightSqlServerSql),
+            "FLIGHT_SQL_SERVER_SUBSTRAIT" => Some(Self::FlightSqlServerSubstrait),
+            "FLIGHT_SQL_SERVER_SUBSTRAIT_MIN_VERSION" => {
+                Some(Self::FlightSqlServerSubstraitMinVersion)
+            }
+            "FLIGHT_SQL_SERVER_SUBSTRAIT_MAX_VERSION" => {
+                Some(Self::FlightSqlServerSubstraitMaxVersion)
+            }
+            "FLIGHT_SQL_SERVER_TRANSACTION" => Some(Self::FlightSqlServerTransaction),
+            "FLIGHT_SQL_SERVER_CANCEL" => Some(Self::FlightSqlServerCancel),
+            "FLIGHT_SQL_SERVER_STATEMENT_TIMEOUT" => {
+                Some(Self::FlightSqlServerStatementTimeout)
+            }
+            "FLIGHT_SQL_SERVER_TRANSACTION_TIMEOUT" => {
+                Some(Self::FlightSqlServerTransactionTimeout)
+            }
             "SQL_DDL_CATALOG" => Some(Self::SqlDdlCatalog),
             "SQL_DDL_SCHEMA" => Some(Self::SqlDdlSchema),
             "SQL_DDL_TABLE" => Some(Self::SqlDdlTable),
@@ -1350,6 +1757,43 @@ impl SqlInfo {
             "SQL_STORED_FUNCTIONS_USING_CALL_SYNTAX_SUPPORTED" => {
                 Some(Self::SqlStoredFunctionsUsingCallSyntaxSupported)
             }
+            _ => None,
+        }
+    }
+}
+/// The level of support for Flight SQL transaction RPCs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SqlSupportedTransaction {
+    /// Unknown/not indicated/no support
+    None = 0,
+    /// Transactions, but not savepoints.
+    /// A savepoint is a mark within a transaction that can be individually
+    /// rolled back to. Not all databases support savepoints.
+    Transaction = 1,
+    /// Transactions and savepoints
+    Savepoint = 2,
+}
+impl SqlSupportedTransaction {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            SqlSupportedTransaction::None => "SQL_SUPPORTED_TRANSACTION_NONE",
+            SqlSupportedTransaction::Transaction => {
+                "SQL_SUPPORTED_TRANSACTION_TRANSACTION"
+            }
+            SqlSupportedTransaction::Savepoint => "SQL_SUPPORTED_TRANSACTION_SAVEPOINT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SQL_SUPPORTED_TRANSACTION_NONE" => Some(Self::None),
+            "SQL_SUPPORTED_TRANSACTION_TRANSACTION" => Some(Self::Transaction),
+            "SQL_SUPPORTED_TRANSACTION_SAVEPOINT" => Some(Self::Savepoint),
             _ => None,
         }
     }

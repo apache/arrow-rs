@@ -29,41 +29,47 @@
 //! to abort the upload and drop those unneeded parts. In addition, you may wish to
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
-use std::collections::BTreeSet;
 use std::io;
-use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
-use reqwest::header::RANGE;
+use futures::stream::BoxStream;
+use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{header, Client, Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::client::pagination::stream_paginated;
+use crate::client::get::{GetClient, GetClientExt};
+use crate::client::list::{ListClient, ListClientExt};
+use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
+use crate::client::{
+    ClientConfigKey, CredentialProvider, GetOptionsExt, StaticCredentialProvider,
+    TokenCredentialProvider,
+};
 use crate::{
-    client::token::TokenCache,
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
-    util::{format_http_range, format_prefix},
-    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
-    RetryConfig,
+    ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Result, RetryConfig,
 };
 
-use self::credential::{
-    default_gcs_base_url, ApplicationDefaultCredentials, InstanceCredentialProvider,
-    ServiceAccountCredentials, TokenProvider,
+use credential::{
+    application_default_credentials, default_gcs_base_url, InstanceCredentialProvider,
+    ServiceAccountCredentials,
 };
 
 mod credential;
+
+const STORE: &str = "GCS";
+
+/// [`CredentialProvider`] for [`GoogleCloudStorage`]
+pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
+pub use credential::GcpCredential;
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -80,6 +86,9 @@ enum Error {
 
     #[snafu(display("Error getting list response body: {}", source))]
     ListResponseBody { source: reqwest::Error },
+
+    #[snafu(display("Got invalid list response: {}", source))]
+    InvalidListResponse { source: quick_xml::de::DeError },
 
     #[snafu(display("Error performing get request {}: {}", path, source))]
     GetRequest {
@@ -99,14 +108,11 @@ enum Error {
         path: String,
     },
 
-    #[snafu(display("Error performing copy request {}: {}", path, source))]
-    CopyRequest {
+    #[snafu(display("Error performing put request {}: {}", path, source))]
+    PutRequest {
         source: crate::client::retry::Error,
         path: String,
     },
-
-    #[snafu(display("Error performing put request: {}", source))]
-    PutRequest { source: crate::client::retry::Error },
 
     #[snafu(display("Error getting put response body: {}", source))]
     PutResponseBody { source: reqwest::Error },
@@ -117,9 +123,6 @@ enum Error {
     #[snafu(display("Missing bucket name"))]
     MissingBucketName {},
 
-    #[snafu(display("Could not find either metadata credentials or configuration properties to initialize GCS credentials."))]
-    MissingCredentials,
-
     #[snafu(display(
         "One of service account path or service account key may be provided."
     ))]
@@ -127,12 +130,6 @@ enum Error {
 
     #[snafu(display("GCP credential error: {}", source))]
     Credential { source: credential::Error },
-
-    #[snafu(display("Already exists: {}", path))]
-    AlreadyExists {
-        source: crate::client::retry::Error,
-        path: String,
-    },
 
     #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
     UnableToParseUrl {
@@ -158,46 +155,16 @@ impl From<Error> for super::Error {
         match err {
             Error::GetRequest { source, path }
             | Error::DeleteRequest { source, path }
-            | Error::CopyRequest { source, path }
-                if matches!(source.status(), Some(StatusCode::NOT_FOUND)) =>
-            {
-                Self::NotFound {
-                    path,
-                    source: Box::new(source),
-                }
-            }
-            Error::AlreadyExists { source, path } => Self::AlreadyExists {
-                source: Box::new(source),
-                path,
-            },
+            | Error::PutRequest { source, path } => source.error(STORE, path),
             Error::UnknownConfigurationKey { key } => {
-                Self::UnknownConfigurationKey { store: "GCS", key }
+                Self::UnknownConfigurationKey { store: STORE, key }
             }
             _ => Self::Generic {
-                store: "GCS",
+                store: STORE,
                 source: Box::new(err),
             },
         }
     }
-}
-
-#[derive(serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct ListResponse {
-    next_page_token: Option<String>,
-    #[serde(default)]
-    prefixes: Vec<String>,
-    #[serde(default)]
-    items: Vec<Object>,
-}
-
-#[derive(serde::Deserialize, Debug)]
-struct Object {
-    name: String,
-    size: String,
-    updated: DateTime<Utc>,
-    #[serde(rename = "etag")]
-    e_tag: Option<String>,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -233,13 +200,19 @@ impl std::fmt::Display for GoogleCloudStorage {
     }
 }
 
+impl GoogleCloudStorage {
+    /// Returns the [`GcpCredentialProvider`] used by [`GoogleCloudStorage`]
+    pub fn credentials(&self) -> &GcpCredentialProvider {
+        &self.client.credentials
+    }
+}
+
 #[derive(Debug)]
 struct GoogleCloudStorageClient {
     client: Client,
     base_url: String,
 
-    token_provider: Option<Arc<Box<dyn TokenProvider>>>,
-    token_cache: TokenCache<String>,
+    credentials: GcpCredentialProvider,
 
     bucket_name: String,
     bucket_name_encoded: String,
@@ -252,69 +225,19 @@ struct GoogleCloudStorageClient {
 }
 
 impl GoogleCloudStorageClient {
-    async fn get_token(&self) -> Result<String> {
-        if let Some(token_provider) = &self.token_provider {
-            Ok(self
-                .token_cache
-                .get_or_insert_with(|| {
-                    token_provider.fetch_token(&self.client, &self.retry_config)
-                })
-                .await
-                .context(CredentialSnafu)?)
-        } else {
-            Ok("".to_owned())
-        }
+    async fn get_credential(&self) -> Result<Arc<GcpCredential>> {
+        self.credentials.get_credential().await
     }
 
     fn object_url(&self, path: &Path) -> String {
-        let encoded =
-            percent_encoding::utf8_percent_encode(path.as_ref(), NON_ALPHANUMERIC);
-        format!(
-            "{}/storage/v1/b/{}/o/{}",
-            self.base_url, self.bucket_name_encoded, encoded
-        )
+        let encoded = utf8_percent_encode(path.as_ref(), NON_ALPHANUMERIC);
+        format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, encoded)
     }
 
-    /// Perform a get request <https://cloud.google.com/storage/docs/json_api/v1/objects/get>
-    async fn get_request(
-        &self,
-        path: &Path,
-        range: Option<Range<usize>>,
-        head: bool,
-    ) -> Result<Response> {
-        let token = self.get_token().await?;
-        let url = self.object_url(path);
-
-        let mut builder = self.client.request(Method::GET, url);
-
-        if let Some(range) = range {
-            builder = builder.header(RANGE, format_http_range(range));
-        }
-
-        let alt = match head {
-            true => "json",
-            false => "media",
-        };
-
-        let response = builder
-            .bearer_auth(token)
-            .query(&[("alt", alt)])
-            .send_retry(&self.retry_config)
-            .await
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
-            })?;
-
-        Ok(response)
-    }
-
-    /// Perform a put request <https://cloud.google.com/storage/docs/json_api/v1/objects/insert>
+    /// Perform a put request <https://cloud.google.com/storage/docs/xml-api/put-object-upload>
     async fn put_request(&self, path: &Path, payload: Bytes) -> Result<()> {
-        let token = self.get_token().await?;
-        let url = format!(
-            "{}/upload/storage/v1/b/{}/o",
-            self.base_url, self.bucket_name_encoded
-        );
+        let credential = self.get_credential().await?;
+        let url = self.object_url(path);
 
         let content_type = self
             .client_options
@@ -322,22 +245,23 @@ impl GoogleCloudStorageClient {
             .unwrap_or("application/octet-stream");
 
         self.client
-            .request(Method::POST, url)
-            .bearer_auth(token)
+            .request(Method::PUT, url)
+            .bearer_auth(&credential.bearer)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, payload.len())
-            .query(&[("uploadType", "media"), ("name", path.as_ref())])
             .body(payload)
             .send_retry(&self.retry_config)
             .await
-            .context(PutRequestSnafu)?;
+            .context(PutRequestSnafu {
+                path: path.as_ref(),
+            })?;
 
         Ok(())
     }
 
     /// Initiate a multi-part upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
     async fn multipart_initiate(&self, path: &Path) -> Result<MultipartId> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
         let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
 
         let content_type = self
@@ -348,13 +272,15 @@ impl GoogleCloudStorageClient {
         let response = self
             .client
             .request(Method::POST, &url)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, "0")
             .query(&[("uploads", "")])
             .send_retry(&self.retry_config)
             .await
-            .context(PutRequestSnafu)?;
+            .context(PutRequestSnafu {
+                path: path.as_ref(),
+            })?;
 
         let data = response.bytes().await.context(PutResponseBodySnafu)?;
         let result: InitiateMultipartUploadResult = quick_xml::de::from_reader(
@@ -375,30 +301,30 @@ impl GoogleCloudStorageClient {
         path: &str,
         multipart_id: &MultipartId,
     ) -> Result<()> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
         let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
 
         self.client
             .request(Method::DELETE, &url)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .header(header::CONTENT_TYPE, "application/octet-stream")
             .header(header::CONTENT_LENGTH, "0")
             .query(&[("uploadId", multipart_id)])
             .send_retry(&self.retry_config)
             .await
-            .context(PutRequestSnafu)?;
+            .context(PutRequestSnafu { path })?;
 
         Ok(())
     }
 
-    /// Perform a delete request <https://cloud.google.com/storage/docs/json_api/v1/objects/delete>
+    /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
     async fn delete_request(&self, path: &Path) -> Result<()> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
         let url = self.object_url(path);
 
         let builder = self.client.request(Method::DELETE, url);
         builder
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .send_retry(&self.retry_config)
             .await
             .context(DeleteRequestSnafu {
@@ -408,77 +334,98 @@ impl GoogleCloudStorageClient {
         Ok(())
     }
 
-    /// Perform a copy request <https://cloud.google.com/storage/docs/json_api/v1/objects/copy>
+    /// Perform a copy request <https://cloud.google.com/storage/docs/xml-api/put-object-copy>
     async fn copy_request(
         &self,
         from: &Path,
         to: &Path,
         if_not_exists: bool,
     ) -> Result<()> {
-        let token = self.get_token().await?;
+        let credential = self.get_credential().await?;
+        let url = self.object_url(to);
 
-        let source =
-            percent_encoding::utf8_percent_encode(from.as_ref(), NON_ALPHANUMERIC);
-        let destination =
-            percent_encoding::utf8_percent_encode(to.as_ref(), NON_ALPHANUMERIC);
-        let url = format!(
-            "{}/storage/v1/b/{}/o/{}/copyTo/b/{}/o/{}",
-            self.base_url,
-            self.bucket_name_encoded,
-            source,
-            self.bucket_name_encoded,
-            destination
-        );
+        let from = utf8_percent_encode(from.as_ref(), NON_ALPHANUMERIC);
+        let source = format!("{}/{}", self.bucket_name_encoded, from);
 
-        let mut builder = self.client.request(Method::POST, url);
+        let mut builder = self
+            .client
+            .request(Method::PUT, url)
+            .header("x-goog-copy-source", source);
 
         if if_not_exists {
-            builder = builder.query(&[("ifGenerationMatch", "0")]);
+            builder = builder.header("x-goog-if-generation-match", 0);
         }
 
         builder
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             // Needed if reqwest is compiled with native-tls instead of rustls-tls
             // See https://github.com/apache/arrow-rs/pull/3921
             .header(header::CONTENT_LENGTH, 0)
             .send_retry(&self.retry_config)
             .await
-            .map_err(|err| {
-                if err
-                    .status()
-                    .map(|status| status == reqwest::StatusCode::PRECONDITION_FAILED)
-                    .unwrap_or_else(|| false)
-                {
-                    Error::AlreadyExists {
-                        source: err,
-                        path: to.to_string(),
-                    }
-                } else {
-                    Error::CopyRequest {
-                        source: err,
-                        path: from.to_string(),
-                    }
-                }
+            .map_err(|err| match err.status() {
+                Some(StatusCode::PRECONDITION_FAILED) => crate::Error::AlreadyExists {
+                    source: Box::new(err),
+                    path: to.to_string(),
+                },
+                _ => err.error(STORE, from.to_string()),
             })?;
 
         Ok(())
     }
+}
 
-    /// Perform a list request <https://cloud.google.com/storage/docs/json_api/v1/objects/list>
+#[async_trait]
+impl GetClient for GoogleCloudStorageClient {
+    const STORE: &'static str = STORE;
+
+    /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
+    async fn get_request(
+        &self,
+        path: &Path,
+        options: GetOptions,
+        head: bool,
+    ) -> Result<Response> {
+        let credential = self.get_credential().await?;
+        let url = self.object_url(path);
+
+        let method = match head {
+            true => Method::HEAD,
+            false => Method::GET,
+        };
+
+        let response = self
+            .client
+            .request(method, url)
+            .bearer_auth(&credential.bearer)
+            .with_get_options(options)
+            .send_retry(&self.retry_config)
+            .await
+            .context(GetRequestSnafu {
+                path: path.as_ref(),
+            })?;
+
+        Ok(response)
+    }
+}
+
+#[async_trait]
+impl ListClient for GoogleCloudStorageClient {
+    /// Perform a list request <https://cloud.google.com/storage/docs/xml-api/get-bucket-list>
     async fn list_request(
         &self,
         prefix: Option<&str>,
         delimiter: bool,
         page_token: Option<&str>,
-    ) -> Result<ListResponse> {
-        let token = self.get_token().await?;
+        offset: Option<&str>,
+    ) -> Result<(ListResult, Option<String>)> {
+        assert!(offset.is_none()); // Not yet supported
 
-        let url = format!(
-            "{}/storage/v1/b/{}/o",
-            self.base_url, self.bucket_name_encoded
-        );
+        let credential = self.get_credential().await?;
+        let url = format!("{}/{}", self.base_url, self.bucket_name_encoded);
 
-        let mut query = Vec::with_capacity(4);
+        let mut query = Vec::with_capacity(5);
+        query.push(("list-type", "2"));
         if delimiter {
             query.push(("delimiter", DELIMITER))
         }
@@ -488,43 +435,30 @@ impl GoogleCloudStorageClient {
         }
 
         if let Some(page_token) = page_token {
-            query.push(("pageToken", page_token))
+            query.push(("continuation-token", page_token))
         }
 
         if let Some(max_results) = &self.max_list_results {
-            query.push(("maxResults", max_results))
+            query.push(("max-keys", max_results))
         }
 
-        let response: ListResponse = self
+        let response = self
             .client
             .request(Method::GET, url)
             .query(&query)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .send_retry(&self.retry_config)
             .await
             .context(ListRequestSnafu)?
-            .json()
+            .bytes()
             .await
             .context(ListResponseBodySnafu)?;
 
-        Ok(response)
-    }
+        let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
+            .context(InvalidListResponseSnafu)?;
 
-    /// Perform a list operation automatically handling pagination
-    fn list_paginated(
-        &self,
-        prefix: Option<&Path>,
-        delimiter: bool,
-    ) -> BoxStream<'_, Result<ListResponse>> {
-        let prefix = format_prefix(prefix);
-        stream_paginated(prefix, move |prefix, token| async move {
-            let mut r = self
-                .list_request(prefix.as_deref(), delimiter, token.as_deref())
-                .await?;
-            let next_token = r.next_page_token.take();
-            Ok((r, prefix, next_token))
-        })
-        .boxed()
+        let token = response.next_continuation_token.take();
+        Ok((response.try_into()?, token))
     }
 }
 
@@ -548,9 +482,9 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             self.client.base_url, self.client.bucket_name_encoded, self.encoded_path
         );
 
-        let token = self
+        let credential = self
             .client
-            .get_token()
+            .get_credential()
             .await
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
@@ -558,7 +492,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             .client
             .client
             .request(Method::PUT, &url)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .query(&[
                 ("partNumber", format!("{}", part_idx + 1)),
                 ("uploadId", upload_id),
@@ -602,9 +536,9 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             })
             .collect();
 
-        let token = self
+        let credential = self
             .client
-            .get_token()
+            .get_credential()
             .await
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
@@ -620,7 +554,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
         self.client
             .client
             .request(Method::POST, &url)
-            .bearer_auth(token)
+            .bearer_auth(&credential.bearer)
             .query(&[("uploadId", upload_id)])
             .body(data)
             .send_retry(&self.client.retry_config)
@@ -666,35 +600,12 @@ impl ObjectStore for GoogleCloudStorage {
         Ok(())
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let response = self.client.get_request(location, None, false).await?;
-        let stream = response
-            .bytes_stream()
-            .map_err(|source| crate::Error::Generic {
-                store: "GCS",
-                source: Box::new(source),
-            })
-            .boxed();
-
-        Ok(GetResult::Stream(stream))
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let response = self
-            .client
-            .get_request(location, Some(range), false)
-            .await?;
-        Ok(response.bytes().await.context(GetResponseBodySnafu {
-            path: location.as_ref(),
-        })?)
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        self.client.get_opts(location, options).await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let response = self.client.get_request(location, None, true).await?;
-        let object = response.json().await.context(GetResponseBodySnafu {
-            path: location.as_ref(),
-        })?;
-        convert_object_meta(&object)
+        self.client.head(location).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
@@ -705,43 +616,11 @@ impl ObjectStore for GoogleCloudStorage {
         &self,
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        let stream = self
-            .client
-            .list_paginated(prefix, false)
-            .map_ok(|r| {
-                futures::stream::iter(
-                    r.items.into_iter().map(|x| convert_object_meta(&x)),
-                )
-            })
-            .try_flatten()
-            .boxed();
-
-        Ok(stream)
+        self.client.list(prefix).await
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.client.list_paginated(prefix, true);
-
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let response = result?;
-
-            for p in response.prefixes {
-                common_prefixes.insert(Path::parse(p)?);
-            }
-
-            objects.reserve(response.items.len());
-            for object in &response.items {
-                objects.push(convert_object_meta(object)?);
-            }
-        }
-
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
-        })
+        self.client.list_with_delimiter(prefix).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -782,33 +661,23 @@ pub struct GoogleCloudStorageBuilder {
     retry_config: RetryConfig,
     /// Client options
     client_options: ClientOptions,
+    /// Credentials
+    credentials: Option<GcpCredentialProvider>,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
 ///
-/// Configuration via keys can be done via the [`try_with_option`](GoogleCloudStorageBuilder::try_with_option)
-/// or [`try_with_options`](GoogleCloudStorageBuilder::try_with_options) methods on the builder.
+/// Configuration via keys can be done via [`GoogleCloudStorageBuilder::with_config`]
 ///
 /// # Example
 /// ```
-/// use std::collections::HashMap;
-/// use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
-///
-/// let options = HashMap::from([
-///     ("google_service_account", "my-service-account"),
-/// ]);
-/// let typed_options = vec![
-///     (GoogleConfigKey::Bucket, "my-bucket"),
-/// ];
-/// let azure = GoogleCloudStorageBuilder::new()
-///     .try_with_options(options)
-///     .unwrap()
-///     .try_with_options(typed_options)
-///     .unwrap()
-///     .try_with_option(GoogleConfigKey::Bucket, "my-new-bucket")
-///     .unwrap();
+/// # use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+/// let builder = GoogleCloudStorageBuilder::new()
+///     .with_config("google_service_account".parse().unwrap(), "my-service-account")
+///     .with_config(GoogleConfigKey::Bucket, "my-bucket");
 /// ```
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum GoogleConfigKey {
     /// Path to the service account file
     ///
@@ -841,6 +710,9 @@ pub enum GoogleConfigKey {
     ///
     /// See [`GoogleCloudStorageBuilder::with_application_credentials`].
     ApplicationCredentials,
+
+    /// Client options
+    Client(ClientConfigKey),
 }
 
 impl AsRef<str> for GoogleConfigKey {
@@ -850,6 +722,7 @@ impl AsRef<str> for GoogleConfigKey {
             Self::ServiceAccountKey => "google_service_account_key",
             Self::Bucket => "google_bucket",
             Self::ApplicationCredentials => "google_application_credentials",
+            Self::Client(key) => key.as_ref(),
         }
     }
 }
@@ -870,7 +743,10 @@ impl FromStr for GoogleConfigKey {
                 Ok(Self::Bucket)
             }
             "google_application_credentials" => Ok(Self::ApplicationCredentials),
-            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            _ => match s.parse() {
+                Ok(key) => Ok(Self::Client(key)),
+                Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            },
         }
     }
 }
@@ -885,6 +761,7 @@ impl Default for GoogleCloudStorageBuilder {
             retry_config: Default::default(),
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
+            credentials: None,
         }
     }
 }
@@ -923,10 +800,8 @@ impl GoogleCloudStorageBuilder {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("GOOGLE_") {
-                    if let Ok(config_key) =
-                        GoogleConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
-                        builder = builder.try_with_option(config_key, value).unwrap();
+                    if let Ok(config_key) = key.to_ascii_lowercase().parse() {
+                        builder = builder.with_config(config_key, value);
                     }
                 }
             }
@@ -957,12 +832,8 @@ impl GoogleCloudStorageBuilder {
     }
 
     /// Set an option on the builder via a key - value pair.
-    pub fn try_with_option(
-        mut self,
-        key: impl AsRef<str>,
-        value: impl Into<String>,
-    ) -> Result<Self> {
-        match GoogleConfigKey::from_str(key.as_ref())? {
+    pub fn with_config(mut self, key: GoogleConfigKey, value: impl Into<String>) -> Self {
+        match key {
             GoogleConfigKey::ServiceAccount => {
                 self.service_account_path = Some(value.into())
             }
@@ -973,11 +844,26 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::ApplicationCredentials => {
                 self.application_credentials_path = Some(value.into())
             }
+            GoogleConfigKey::Client(key) => {
+                self.client_options = self.client_options.with_config(key, value)
+            }
         };
-        Ok(self)
+        self
+    }
+
+    /// Set an option on the builder via a key - value pair.
+    #[deprecated(note = "Use with_config")]
+    pub fn try_with_option(
+        self,
+        key: impl AsRef<str>,
+        value: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(self.with_config(key.as_ref().parse()?, value))
     }
 
     /// Hydrate builder from key value pairs
+    #[deprecated(note = "Use with_config")]
+    #[allow(deprecated)]
     pub fn try_with_options<
         I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
     >(
@@ -1009,6 +895,7 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::ApplicationCredentials => {
                 self.application_credentials_path.clone()
             }
+            GoogleConfigKey::Client(key) => self.client_options.get_config_value(key),
         }
     }
 
@@ -1087,6 +974,12 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Set the credential provider overriding any other options
+    pub fn with_credentials(mut self, credentials: GcpCredentialProvider) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
@@ -1133,10 +1026,11 @@ impl GoogleCloudStorageBuilder {
             };
 
         // Then try to initialize from the application credentials file, or the environment.
-        let application_default_credentials = ApplicationDefaultCredentials::new(
+        let application_default_credentials = application_default_credentials(
             self.application_credentials_path.as_deref(),
-        )
-        .context(CredentialSnafu)?;
+            &self.client_options,
+            &self.retry_config,
+        )?;
 
         let disable_oauth = service_account_credentials
             .as_ref()
@@ -1152,29 +1046,26 @@ impl GoogleCloudStorageBuilder {
         let scope = "https://www.googleapis.com/auth/devstorage.full_control";
         let audience = "https://www.googleapis.com/oauth2/v4/token";
 
-        let token_provider = if disable_oauth {
-            None
+        let credentials = if let Some(credentials) = self.credentials {
+            credentials
+        } else if disable_oauth {
+            Arc::new(StaticCredentialProvider::new(GcpCredential {
+                bearer: "".to_string(),
+            })) as _
+        } else if let Some(credentials) = service_account_credentials {
+            Arc::new(TokenCredentialProvider::new(
+                credentials.oauth_provider(scope, audience)?,
+                self.client_options.client()?,
+                self.retry_config.clone(),
+            )) as _
+        } else if let Some(credentials) = application_default_credentials {
+            credentials
         } else {
-            let best_provider = if let Some(credentials) = service_account_credentials {
-                Some(
-                    credentials
-                        .token_provider(scope, audience)
-                        .context(CredentialSnafu)?,
-                )
-            } else if let Some(credentials) = application_default_credentials {
-                Some(Box::new(credentials) as Box<dyn TokenProvider>)
-            } else {
-                Some(Box::new(
-                    InstanceCredentialProvider::new(
-                        audience,
-                        self.client_options.clone(),
-                    )
-                    .context(CredentialSnafu)?,
-                ) as Box<dyn TokenProvider>)
-            };
-
-            // A provider is required at this point, bail out if we don't have one.
-            Some(best_provider.ok_or(Error::MissingCredentials)?)
+            Arc::new(TokenCredentialProvider::new(
+                InstanceCredentialProvider::new(audience),
+                self.client_options.clone().with_allow_http(true).client()?,
+                self.retry_config.clone(),
+            )) as _
         };
 
         let encoded_bucket_name =
@@ -1184,8 +1075,7 @@ impl GoogleCloudStorageBuilder {
             client: Arc::new(GoogleCloudStorageClient {
                 client,
                 base_url: gcs_base_url,
-                token_provider: token_provider.map(Arc::new),
-                token_cache: Default::default(),
+                credentials,
                 bucket_name,
                 bucket_name_encoded: encoded_bucket_name,
                 retry_config: self.retry_config,
@@ -1196,20 +1086,6 @@ impl GoogleCloudStorageBuilder {
     }
 }
 
-fn convert_object_meta(object: &Object) -> Result<ObjectMeta> {
-    let location = Path::parse(&object.name)?;
-    let last_modified = object.updated;
-    let size = object.size.parse().context(InvalidSizeSnafu)?;
-    let e_tag = object.e_tag.clone();
-
-    Ok(ObjectMeta {
-        location,
-        last_modified,
-        size,
-        e_tag,
-    })
-}
-
 #[cfg(test)]
 mod test {
     use bytes::Bytes;
@@ -1218,13 +1094,7 @@ mod test {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    use crate::{
-        tests::{
-            copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
-            list_with_delimiter, put_get_delete_list, rename_and_copy, stream_get,
-        },
-        Error as ObjectStoreError, ObjectStore,
-    };
+    use crate::tests::*;
 
     use super::*;
 
@@ -1293,6 +1163,8 @@ mod test {
             // Fake GCS server does not yet implement XML Multipart uploads
             // https://github.com/fsouza/fake-gcs-server/issues/852
             stream_get(&integration).await;
+            // Fake GCS server doesn't currently honor preconditions
+            get_opts(&integration).await;
         }
     }
 
@@ -1305,7 +1177,7 @@ mod test {
         let err = integration.get(&location).await.unwrap_err();
 
         assert!(
-            matches!(err, ObjectStoreError::NotFound { .. }),
+            matches!(err, crate::Error::NotFound { .. }),
             "unexpected error type: {err}"
         );
     }
@@ -1324,7 +1196,7 @@ mod test {
             .unwrap_err();
 
         assert!(
-            matches!(err, ObjectStoreError::NotFound { .. }),
+            matches!(err, crate::Error::NotFound { .. }),
             "unexpected error type: {err}"
         );
     }
@@ -1337,7 +1209,7 @@ mod test {
 
         let err = integration.delete(&location).await.unwrap_err();
         assert!(
-            matches!(err, ObjectStoreError::NotFound { .. }),
+            matches!(err, crate::Error::NotFound { .. }),
             "unexpected error type: {err}"
         );
     }
@@ -1353,7 +1225,7 @@ mod test {
 
         let err = integration.delete(&location).await.unwrap_err();
         assert!(
-            matches!(err, ObjectStoreError::NotFound { .. }),
+            matches!(err, crate::Error::NotFound { .. }),
             "unexpected error type: {err}"
         );
     }
@@ -1449,31 +1321,12 @@ mod test {
             ("google_bucket_name", google_bucket_name.clone()),
         ]);
 
-        let builder = GoogleCloudStorageBuilder::new()
-            .try_with_options(&options)
-            .unwrap();
-        assert_eq!(
-            builder.service_account_path.unwrap(),
-            google_service_account.as_str()
-        );
-        assert_eq!(builder.bucket_name.unwrap(), google_bucket_name.as_str());
-    }
+        let builder = options
+            .iter()
+            .fold(GoogleCloudStorageBuilder::new(), |builder, (key, value)| {
+                builder.with_config(key.parse().unwrap(), value)
+            });
 
-    #[test]
-    fn gcs_test_config_from_typed_map() {
-        let google_service_account = "object_store:fake_service_account".to_string();
-        let google_bucket_name = "object_store:fake_bucket".to_string();
-        let options = HashMap::from([
-            (
-                GoogleConfigKey::ServiceAccount,
-                google_service_account.clone(),
-            ),
-            (GoogleConfigKey::Bucket, google_bucket_name.clone()),
-        ]);
-
-        let builder = GoogleCloudStorageBuilder::new()
-            .try_with_options(&options)
-            .unwrap();
         assert_eq!(
             builder.service_account_path.unwrap(),
             google_service_account.as_str()
@@ -1485,17 +1338,10 @@ mod test {
     fn gcs_test_config_get_value() {
         let google_service_account = "object_store:fake_service_account".to_string();
         let google_bucket_name = "object_store:fake_bucket".to_string();
-        let options = HashMap::from([
-            (
-                GoogleConfigKey::ServiceAccount,
-                google_service_account.clone(),
-            ),
-            (GoogleConfigKey::Bucket, google_bucket_name.clone()),
-        ]);
-
         let builder = GoogleCloudStorageBuilder::new()
-            .try_with_options(&options)
-            .unwrap();
+            .with_config(GoogleConfigKey::ServiceAccount, &google_service_account)
+            .with_config(GoogleConfigKey::Bucket, &google_bucket_name);
+
         assert_eq!(
             builder
                 .get_config_value(&GoogleConfigKey::ServiceAccount)
@@ -1509,19 +1355,6 @@ mod test {
     }
 
     #[test]
-    fn gcs_test_config_fallible_options() {
-        let google_service_account = "object_store:fake_service_account".to_string();
-        let google_bucket_name = "object_store:fake_bucket".to_string();
-        let options = HashMap::from([
-            ("google_service_account", google_service_account),
-            ("invalid-key", google_bucket_name),
-        ]);
-
-        let builder = GoogleCloudStorageBuilder::new().try_with_options(&options);
-        assert!(builder.is_err());
-    }
-
-    #[test]
     fn gcs_test_config_aliases() {
         // Service account path
         for alias in [
@@ -1531,16 +1364,14 @@ mod test {
             "service_account_path",
         ] {
             let builder = GoogleCloudStorageBuilder::new()
-                .try_with_options([(alias, "/fake/path.json")])
-                .unwrap();
+                .with_config(alias.parse().unwrap(), "/fake/path.json");
             assert_eq!("/fake/path.json", builder.service_account_path.unwrap());
         }
 
         // Service account key
         for alias in ["google_service_account_key", "service_account_key"] {
             let builder = GoogleCloudStorageBuilder::new()
-                .try_with_options([(alias, FAKE_KEY)])
-                .unwrap();
+                .with_config(alias.parse().unwrap(), FAKE_KEY);
             assert_eq!(FAKE_KEY, builder.service_account_key.unwrap());
         }
 
@@ -1552,8 +1383,7 @@ mod test {
             "bucket_name",
         ] {
             let builder = GoogleCloudStorageBuilder::new()
-                .try_with_options([(alias, "fake_bucket")])
-                .unwrap();
+                .with_config(alias.parse().unwrap(), "fake_bucket");
             assert_eq!("fake_bucket", builder.bucket_name.unwrap());
         }
     }

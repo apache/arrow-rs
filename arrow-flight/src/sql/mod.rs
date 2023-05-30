@@ -27,6 +27,7 @@
 //! 2. Helpers for encoding and decoding FlightSQL messages: [`Any`] and [`Command`]
 //! 3. A [`FlightSqlServiceClient`] for interacting with FlightSQL servers.
 //! 4. A [`FlightSqlService`] to help building FlightSQL servers from [`FlightService`].
+//! 5. Structures to build responses for FlightSQL metadata APIs: [`SqlInfoList`]
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 //! [Apache Arrow]: https://arrow.apache.org
@@ -46,9 +47,18 @@ mod gen {
     include!("arrow.flight.protocol.sql.rs");
 }
 
+pub use gen::ActionBeginSavepointRequest;
+pub use gen::ActionBeginSavepointResult;
+pub use gen::ActionBeginTransactionRequest;
+pub use gen::ActionBeginTransactionResult;
+pub use gen::ActionCancelQueryRequest;
+pub use gen::ActionCancelQueryResult;
 pub use gen::ActionClosePreparedStatementRequest;
 pub use gen::ActionCreatePreparedStatementRequest;
 pub use gen::ActionCreatePreparedStatementResult;
+pub use gen::ActionCreatePreparedSubstraitPlanRequest;
+pub use gen::ActionEndSavepointRequest;
+pub use gen::ActionEndTransactionRequest;
 pub use gen::CommandGetCatalogs;
 pub use gen::CommandGetCrossReference;
 pub use gen::CommandGetDbSchemas;
@@ -62,6 +72,7 @@ pub use gen::CommandGetXdbcTypeInfo;
 pub use gen::CommandPreparedStatementQuery;
 pub use gen::CommandPreparedStatementUpdate;
 pub use gen::CommandStatementQuery;
+pub use gen::CommandStatementSubstraitPlan;
 pub use gen::CommandStatementUpdate;
 pub use gen::DoPutUpdateResult;
 pub use gen::SqlInfo;
@@ -74,6 +85,7 @@ pub use gen::SqlSupportedPositionedCommands;
 pub use gen::SqlSupportedResultSetConcurrency;
 pub use gen::SqlSupportedResultSetType;
 pub use gen::SqlSupportedSubqueries;
+pub use gen::SqlSupportedTransaction;
 pub use gen::SqlSupportedTransactions;
 pub use gen::SqlSupportedUnions;
 pub use gen::SqlSupportsConvert;
@@ -82,8 +94,11 @@ pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
 
+pub use sql_info::SqlInfoList;
+
 pub mod client;
 pub mod server;
+pub mod sql_info;
 
 /// ProstMessageExt are useful utility methods for prost::Message types
 pub trait ProstMessageExt: prost::Message + Default {
@@ -120,6 +135,7 @@ macro_rules! prost_message_ext {
                 /// # use arrow_flight::sql::{Any, CommandStatementQuery, Command};
                 /// let flightsql_message = CommandStatementQuery {
                 ///   query: "SELECT * FROM foo".to_string(),
+                ///   transaction_id: None,
                 /// };
                 ///
                 /// // Given a packed FlightSQL Any message
@@ -203,9 +219,18 @@ macro_rules! prost_message_ext {
 
 // Implement ProstMessageExt for all structs defined in FlightSql.proto
 prost_message_ext!(
+    ActionBeginSavepointRequest,
+    ActionBeginSavepointResult,
+    ActionBeginTransactionRequest,
+    ActionBeginTransactionResult,
+    ActionCancelQueryRequest,
+    ActionCancelQueryResult,
     ActionClosePreparedStatementRequest,
     ActionCreatePreparedStatementRequest,
     ActionCreatePreparedStatementResult,
+    ActionCreatePreparedSubstraitPlanRequest,
+    ActionEndSavepointRequest,
+    ActionEndTransactionRequest,
     CommandGetCatalogs,
     CommandGetCrossReference,
     CommandGetDbSchemas,
@@ -219,6 +244,7 @@ prost_message_ext!(
     CommandPreparedStatementQuery,
     CommandPreparedStatementUpdate,
     CommandStatementQuery,
+    CommandStatementSubstraitPlan,
     CommandStatementUpdate,
     DoPutUpdateResult,
     TicketStatementQuery,
@@ -296,6 +322,7 @@ mod tests {
     fn test_prost_any_pack_unpack() {
         let query = CommandStatementQuery {
             query: "select 1".to_string(),
+            transaction_id: None,
         };
         let any = Any::pack(&query).unwrap();
         assert!(any.is::<CommandStatementQuery>());
@@ -307,6 +334,7 @@ mod tests {
     fn test_command() {
         let query = CommandStatementQuery {
             query: "select 1".to_string(),
+            transaction_id: None,
         };
         let any = Any::pack(&query).unwrap();
         let cmd: Command = any.try_into().unwrap();

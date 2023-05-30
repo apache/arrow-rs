@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::azure::STORE;
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
+use crate::client::{CredentialProvider, TokenProvider};
 use crate::util::hmac_sha256;
 use crate::RetryConfig;
+use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -36,6 +39,7 @@ use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
 use std::process::Command;
 use std::str;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use url::Url;
 
@@ -50,7 +54,16 @@ pub(crate) const RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 const CONTENT_TYPE_JSON: &str = "application/json";
 const MSI_SECRET_ENV_KEY: &str = "IDENTITY_HEADER";
 const MSI_API_VERSION: &str = "2019-08-01";
+
+/// OIDC scope used when interacting with OAuth2 APIs
+///
+/// <https://learn.microsoft.com/en-us/azure/active-directory/develop/scopes-oidc#the-default-scope>
 const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
+
+/// Resource ID used when obtaining an access token from the metadata endpoint
+///
+/// <https://learn.microsoft.com/en-us/azure/storage/blobs/authorize-access-azure-active-directory#microsoft-authentication-library-msal>
+const AZURE_STORAGE_RESOURCE: &str = "https://storage.azure.com";
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -72,19 +85,30 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Provides credentials for use when signing requests
-#[derive(Debug)]
-pub enum CredentialProvider {
-    AccessKey(String),
-    BearerToken(String),
-    SASToken(Vec<(String, String)>),
-    TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
+impl From<Error> for crate::Error {
+    fn from(value: Error) -> Self {
+        Self::Generic {
+            store: STORE,
+            source: Box::new(value),
+        }
+    }
 }
 
-pub(crate) enum AzureCredential {
+/// An Azure storage credential
+#[derive(Debug, Eq, PartialEq)]
+pub enum AzureCredential {
+    /// A shared access key
+    ///
+    /// <https://learn.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key>
     AccessKey(String),
+    /// A shared access signature
+    ///
+    /// <https://learn.microsoft.com/en-us/rest/api/storageservices/delegate-access-with-shared-access-signature>
     SASToken(Vec<(String, String)>),
-    AuthorizationToken(HeaderValue),
+    /// An authorization token
+    ///
+    /// <https://learn.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory>
+    BearerToken(String),
 }
 
 /// A list of known Azure authority hosts
@@ -146,9 +170,7 @@ impl CredentialExt for RequestBuilder {
 
                 Self::from_parts(client, request)
             }
-            AzureCredential::AuthorizationToken(token) => {
-                self.header(AUTHORIZATION, token)
-            }
+            AzureCredential::BearerToken(token) => self.bearer_auth(token),
             AzureCredential::SASToken(query_pairs) => self.query(&query_pairs),
         }
     }
@@ -282,15 +304,6 @@ fn lexy_sort<'a>(
     values
 }
 
-#[async_trait::async_trait]
-pub trait TokenCredential: std::fmt::Debug + Send + Sync + 'static {
-    async fn fetch_token(
-        &self,
-        client: &Client,
-        retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>>;
-}
-
 #[derive(Deserialize, Debug)]
 struct TokenResponse {
     access_token: String,
@@ -329,13 +342,15 @@ impl ClientSecretOAuthProvider {
 }
 
 #[async_trait::async_trait]
-impl TokenCredential for ClientSecretOAuthProvider {
+impl TokenProvider for ClientSecretOAuthProvider {
+    type Credential = AzureCredential;
+
     /// Fetch a token
     async fn fetch_token(
         &self,
         client: &Client,
         retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
+    ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let response: TokenResponse = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
@@ -352,12 +367,10 @@ impl TokenCredential for ClientSecretOAuthProvider {
             .await
             .context(TokenResponseBodySnafu)?;
 
-        let token = TemporaryToken {
-            token: response.access_token,
+        Ok(TemporaryToken {
+            token: Arc::new(AzureCredential::BearerToken(response.access_token)),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
-        };
-
-        Ok(token)
+        })
     }
 }
 
@@ -383,22 +396,20 @@ struct MsiTokenResponse {
 /// This authentication type works in Azure VMs, App Service and Azure Functions applications, as well as the Azure Cloud Shell
 /// <https://learn.microsoft.com/en-gb/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http>
 #[derive(Debug)]
-pub struct ImdsManagedIdentityOAuthProvider {
+pub struct ImdsManagedIdentityProvider {
     msi_endpoint: String,
     client_id: Option<String>,
     object_id: Option<String>,
     msi_res_id: Option<String>,
-    client: Client,
 }
 
-impl ImdsManagedIdentityOAuthProvider {
-    /// Create a new [`ImdsManagedIdentityOAuthProvider`] for an azure backed store
+impl ImdsManagedIdentityProvider {
+    /// Create a new [`ImdsManagedIdentityProvider`] for an azure backed store
     pub fn new(
         client_id: Option<String>,
         object_id: Option<String>,
         msi_res_id: Option<String>,
         msi_endpoint: Option<String>,
-        client: Client,
     ) -> Self {
         let msi_endpoint = msi_endpoint.unwrap_or_else(|| {
             "http://169.254.169.254/metadata/identity/oauth2/token".to_owned()
@@ -409,22 +420,23 @@ impl ImdsManagedIdentityOAuthProvider {
             client_id,
             object_id,
             msi_res_id,
-            client,
         }
     }
 }
 
 #[async_trait::async_trait]
-impl TokenCredential for ImdsManagedIdentityOAuthProvider {
+impl TokenProvider for ImdsManagedIdentityProvider {
+    type Credential = AzureCredential;
+
     /// Fetch a token
     async fn fetch_token(
         &self,
-        _client: &Client,
+        client: &Client,
         retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
+    ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let mut query_items = vec![
             ("api-version", MSI_API_VERSION),
-            ("resource", AZURE_STORAGE_SCOPE),
+            ("resource", AZURE_STORAGE_RESOURCE),
         ];
 
         let mut identity = None;
@@ -441,8 +453,7 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             query_items.push((key, value));
         }
 
-        let mut builder = self
-            .client
+        let mut builder = client
             .request(Method::GET, &self.msi_endpoint)
             .header("metadata", "true")
             .query(&query_items);
@@ -459,12 +470,10 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             .await
             .context(TokenResponseBodySnafu)?;
 
-        let token = TemporaryToken {
-            token: response.access_token,
+        Ok(TemporaryToken {
+            token: Arc::new(AzureCredential::BearerToken(response.access_token)),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
-        };
-
-        Ok(token)
+        })
     }
 }
 
@@ -502,13 +511,15 @@ impl WorkloadIdentityOAuthProvider {
 }
 
 #[async_trait::async_trait]
-impl TokenCredential for WorkloadIdentityOAuthProvider {
+impl TokenProvider for WorkloadIdentityOAuthProvider {
+    type Credential = AzureCredential;
+
     /// Fetch a token
     async fn fetch_token(
         &self,
         client: &Client,
         retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
+    ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let token_str = std::fs::read_to_string(&self.federated_token_file)
             .map_err(|_| Error::FederatedTokenFile)?;
 
@@ -533,12 +544,10 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
             .await
             .context(TokenResponseBodySnafu)?;
 
-        let token = TemporaryToken {
-            token: response.access_token,
+        Ok(TemporaryToken {
+            token: Arc::new(AzureCredential::BearerToken(response.access_token)),
             expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
-        };
-
-        Ok(token)
+        })
     }
 }
 
@@ -576,23 +585,16 @@ struct AzureCliTokenResponse {
 
 #[derive(Default, Debug)]
 pub struct AzureCliCredential {
-    _private: (),
+    cache: TokenCache<Arc<AzureCredential>>,
 }
 
 impl AzureCliCredential {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-#[async_trait::async_trait]
-impl TokenCredential for AzureCliCredential {
     /// Fetch a token
-    async fn fetch_token(
-        &self,
-        _client: &Client,
-        _retry: &RetryConfig,
-    ) -> Result<TemporaryToken<String>> {
+    async fn fetch_token(&self) -> Result<TemporaryToken<Arc<AzureCredential>>> {
         // on window az is a cmd and it should be called like this
         // see https://doc.rust-lang.org/nightly/std/process/struct.Command.html
         let program = if cfg!(target_os = "windows") {
@@ -633,7 +635,9 @@ impl TokenCredential for AzureCliCredential {
                 let duration = token_response.expires_on.naive_local()
                     - chrono::Local::now().naive_local();
                 Ok(TemporaryToken {
-                    token: token_response.access_token,
+                    token: Arc::new(AzureCredential::BearerToken(
+                        token_response.access_token,
+                    )),
                     expiry: Some(
                         Instant::now()
                             + duration.to_std().map_err(|_| Error::AzureCli {
@@ -657,6 +661,15 @@ impl TokenCredential for AzureCliCredential {
                 }),
             },
         }
+    }
+}
+
+#[async_trait]
+impl CredentialProvider for AzureCliCredential {
+    type Credential = AzureCredential;
+
+    async fn get_credential(&self) -> crate::Result<Arc<Self::Credential>> {
+        Ok(self.cache.get_or_insert_with(|| self.fetch_token()).await?)
     }
 }
 
@@ -709,12 +722,11 @@ mod tests {
             ))
         });
 
-        let credential = ImdsManagedIdentityOAuthProvider::new(
+        let credential = ImdsManagedIdentityProvider::new(
             Some("client_id".into()),
             None,
             None,
             Some(format!("{endpoint}/metadata/identity/oauth2/token")),
-            client.clone(),
         );
 
         let token = credential
@@ -722,7 +734,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(&token.token, "TOKEN");
+        assert_eq!(
+            token.token.as_ref(),
+            &AzureCredential::BearerToken("TOKEN".into())
+        );
     }
 
     #[tokio::test]
@@ -770,6 +785,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(&token.token, "TOKEN");
+        assert_eq!(
+            token.token.as_ref(),
+            &AzureCredential::BearerToken("TOKEN".into())
+        );
     }
 }

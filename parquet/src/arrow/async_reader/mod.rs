@@ -107,10 +107,6 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
-use crate::file::page_index::index::Index;
-use crate::file::page_index::index_reader::{
-    acc_range, decode_column_index, decode_offset_index,
-};
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use crate::format::PageLocation;
 
@@ -243,53 +239,10 @@ impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
             && metadata.column_index().is_none()
             && metadata.offset_index().is_none()
         {
-            let fetch = metadata.row_groups().iter().flat_map(|r| r.columns()).fold(
-                None,
-                |a, c| {
-                    let a = acc_range(a, c.column_index_range());
-                    acc_range(a, c.offset_index_range())
-                },
-            );
-
-            if let Some(fetch) = fetch {
-                let bytes = input.get_bytes(fetch.clone()).await?;
-                let get = |r: Range<usize>| {
-                    &bytes[(r.start - fetch.start)..(r.end - fetch.start)]
-                };
-
-                let mut offset_index = Vec::with_capacity(metadata.num_row_groups());
-                let mut column_index = Vec::with_capacity(metadata.num_row_groups());
-                for rg in metadata.row_groups() {
-                    let columns = rg.columns();
-                    let mut rg_offset_index = Vec::with_capacity(columns.len());
-                    let mut rg_column_index = Vec::with_capacity(columns.len());
-
-                    for chunk in rg.columns() {
-                        let t = chunk.column_type();
-                        let c = match chunk.column_index_range() {
-                            Some(range) => decode_column_index(get(range), t)?,
-                            None => Index::NONE,
-                        };
-
-                        let o = match chunk.offset_index_range() {
-                            Some(range) => decode_offset_index(get(range))?,
-                            None => return Err(general_err!("missing offset index")),
-                        };
-
-                        rg_column_index.push(c);
-                        rg_offset_index.push(o);
-                    }
-                    offset_index.push(rg_offset_index);
-                    column_index.push(rg_column_index);
-                }
-
-                metadata = Arc::new(ParquetMetaData::new_with_page_index(
-                    metadata.file_metadata().clone(),
-                    metadata.row_groups().to_vec(),
-                    Some(column_index),
-                    Some(offset_index),
-                ));
-            }
+            let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
+            let mut loader = MetadataLoader::new(&mut input, m);
+            loader.load_page_index(true, true).await?;
+            metadata = Arc::new(loader.finish())
         }
 
         Self::new_builder(AsyncReader(input), metadata, options)
@@ -482,8 +435,8 @@ impl<T> std::fmt::Debug for StreamState<T> {
     }
 }
 
-/// An asynchronous [`Stream`] of [`RecordBatch`] for a parquet file that can be
-/// constructed using [`ParquetRecordBatchStreamBuilder`]
+/// An asynchronous [`Stream`](https://docs.rs/futures/latest/futures/stream/trait.Stream.html) of [`RecordBatch`]
+/// for a parquet file that can be constructed using [`ParquetRecordBatchStreamBuilder`].
 pub struct ParquetRecordBatchStream<T> {
     metadata: Arc<ParquetMetaData>,
 

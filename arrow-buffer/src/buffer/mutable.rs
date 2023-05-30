@@ -36,7 +36,7 @@ use super::Buffer;
 /// Use [MutableBuffer::push] to insert an item, [MutableBuffer::extend_from_slice]
 /// to insert many items, and `into` to convert it to [`Buffer`].
 ///
-/// For a safe, strongly typed API consider using `Vec`
+/// For a safe, strongly typed API consider using [`Vec`] and [`ScalarBuffer`](crate::ScalarBuffer)
 ///
 /// Note: this may be deprecated in a future release ([#1176](https://github.com/apache/arrow-rs/issues/1176))
 ///
@@ -383,8 +383,7 @@ impl MutableBuffer {
     /// ```
     #[inline]
     pub fn extend_from_slice<T: ArrowNativeType>(&mut self, items: &[T]) {
-        let len = items.len();
-        let additional = len * std::mem::size_of::<T>();
+        let additional = mem::size_of_val(items);
         self.reserve(additional);
         unsafe {
             // this assumes that `[ToByteSlice]` can be copied directly

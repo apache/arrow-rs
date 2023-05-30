@@ -30,10 +30,10 @@ use crate::{
     Array, ArrayAccessor, ArrayRef, PrimitiveArray,
 };
 
+/// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
 ///
-/// A run-end encoding (REE) is a variation of [run-length encoding (RLE)](https://en.wikipedia.org/wiki/Run-length_encoding).
-///
-/// This encoding is good for representing data containing same values repeated consecutively.
+/// This encoding is variation on [run-length encoding (RLE)](https://en.wikipedia.org/wiki/Run-length_encoding)
+/// and is good for representing data containing same values repeated consecutively.
 ///
 /// [`RunArray`] contains `run_ends` array and `values` array of same length.
 /// The `run_ends` array stores the indexes at which the run ends. The `values` array
@@ -428,7 +428,7 @@ impl<'a, T: RunEndIndexType> FromIterator<&'a str> for RunArray<T> {
 }
 
 ///
-/// A [`RunArray`] array where run ends are stored using `i16` data type.
+/// A [`RunArray`] with `i16` run ends
 ///
 /// # Example: Using `collect`
 /// ```
@@ -443,7 +443,7 @@ impl<'a, T: RunEndIndexType> FromIterator<&'a str> for RunArray<T> {
 pub type Int16RunArray = RunArray<Int16Type>;
 
 ///
-/// A [`RunArray`] array where run ends are stored using `i32` data type.
+/// A [`RunArray`] with `i32` run ends
 ///
 /// # Example: Using `collect`
 /// ```
@@ -458,7 +458,7 @@ pub type Int16RunArray = RunArray<Int16Type>;
 pub type Int32RunArray = RunArray<Int32Type>;
 
 ///
-/// A [`RunArray`] array where run ends are stored using `i64` data type.
+/// A [`RunArray`] with `i64` run ends
 ///
 /// # Example: Using `collect`
 /// ```
@@ -472,8 +472,9 @@ pub type Int32RunArray = RunArray<Int32Type>;
 /// ```
 pub type Int64RunArray = RunArray<Int64Type>;
 
-/// A strongly-typed wrapper around a [`RunArray`] that implements [`ArrayAccessor`]
-/// and [`IntoIterator`] allowing fast access to its elements
+/// A [`RunArray`] typed typed on its child values array
+///
+/// Implements [`ArrayAccessor`] and [`IntoIterator`] allowing fast access to its elements
 ///
 /// ```
 /// use arrow_array::{RunArray, StringArray, types::Int32Type};

@@ -785,7 +785,6 @@ mod tests {
     use crate::file::page_index::index_reader::{
         read_columns_indexes, read_pages_locations,
     };
-    use crate::file::properties::WriterProperties;
     use crate::file::writer::SerializedFileWriter;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
@@ -1716,12 +1715,9 @@ mod tests {
 
         let schema = parse_message_type(message_type).unwrap();
         let mut out = Vec::with_capacity(1024);
-        let mut writer = SerializedFileWriter::new(
-            &mut out,
-            Arc::new(schema),
-            Arc::new(WriterProperties::builder().build()),
-        )
-        .unwrap();
+        let mut writer =
+            SerializedFileWriter::new(&mut out, Arc::new(schema), Default::default())
+                .unwrap();
 
         let mut r = writer.next_row_group().unwrap();
         let mut c = r.next_column().unwrap().unwrap();

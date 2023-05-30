@@ -31,8 +31,6 @@
 //! [rfc2518]: https://datatracker.ietf.org/doc/html/rfc2518
 //! [WebDAV]: https://en.wikipedia.org/wiki/WebDAV
 
-use std::ops::Range;
-
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -45,8 +43,8 @@ use url::Url;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
-    RetryConfig,
+    ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Result, RetryConfig,
 };
 
 mod client;
@@ -61,15 +59,6 @@ enum Error {
         source: url::ParseError,
         url: String,
     },
-
-    #[snafu(display("Object is a directory"))]
-    IsDirectory,
-
-    #[snafu(display("PROPFIND response contained no valid objects"))]
-    NoObjects,
-
-    #[snafu(display("PROPFIND response contained more than one object"))]
-    MultipleObjects,
 
     #[snafu(display("Request error: {}", source))]
     Reqwest { source: reqwest::Error },
@@ -119,25 +108,14 @@ impl ObjectStore for HttpStore {
         Err(super::Error::NotImplemented)
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let response = self.client.get(location, None).await?;
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let response = self.client.get(location, options).await?;
         let stream = response
             .bytes_stream()
             .map_err(|source| Error::Reqwest { source }.into())
             .boxed();
 
         Ok(GetResult::Stream(stream))
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let bytes = self
-            .client
-            .get(location, Some(range))
-            .await?
-            .bytes()
-            .await
-            .context(ReqwestSnafu)?;
-        Ok(bytes)
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
@@ -147,12 +125,17 @@ impl ObjectStore for HttpStore {
                 let response = status.response.into_iter().next().unwrap();
                 response.check_ok()?;
                 match response.is_dir() {
-                    true => Err(Error::IsDirectory.into()),
+                    true => Err(crate::Error::NotFound {
+                        path: location.to_string(),
+                        source: "Is directory".to_string().into(),
+                    }),
                     false => response.object_meta(self.client.base_url()),
                 }
             }
-            0 => Err(Error::NoObjects.into()),
-            _ => Err(Error::MultipleObjects.into()),
+            x => Err(crate::Error::NotFound {
+                path: location.to_string(),
+                source: format!("Expected 1 result, got {x}").into(),
+            }),
         }
     }
 

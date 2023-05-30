@@ -24,7 +24,7 @@ use arrow_schema::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
 
-///  Array builder for [`FixedSizeListArray`]
+///  Builder for [`FixedSizeListArray`]
 /// ```
 /// use arrow_array::{builder::{Int32Builder, FixedSizeListBuilder}, Array, Int32Array};
 /// let values_builder = Int32Builder::new();

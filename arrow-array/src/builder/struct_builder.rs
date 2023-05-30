@@ -24,7 +24,7 @@ use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
 
-/// Array builder for Struct types.
+/// Builder for [`StructArray`]
 ///
 /// Note that callers should make sure that methods of all the child field builders are
 /// properly called to maintain the consistency of the data structure.
@@ -109,9 +109,13 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::UInt16 => Box::new(UInt16Builder::with_capacity(capacity)),
         DataType::UInt32 => Box::new(UInt32Builder::with_capacity(capacity)),
         DataType::UInt64 => Box::new(UInt64Builder::with_capacity(capacity)),
+        DataType::Float16 => Box::new(Float16Builder::with_capacity(capacity)),
         DataType::Float32 => Box::new(Float32Builder::with_capacity(capacity)),
         DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
         DataType::Binary => Box::new(BinaryBuilder::with_capacity(capacity, 1024)),
+        DataType::LargeBinary => {
+            Box::new(LargeBinaryBuilder::with_capacity(capacity, 1024))
+        }
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
@@ -119,7 +123,14 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             Decimal128Builder::with_capacity(capacity)
                 .with_data_type(DataType::Decimal128(*p, *s)),
         ),
+        DataType::Decimal256(p, s) => Box::new(
+            Decimal256Builder::with_capacity(capacity)
+                .with_data_type(DataType::Decimal256(*p, *s)),
+        ),
         DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, 1024)),
+        DataType::LargeUtf8 => {
+            Box::new(LargeStringBuilder::with_capacity(capacity, 1024))
+        }
         DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
         DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),
         DataType::Time32(TimeUnit::Second) => {

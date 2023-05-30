@@ -65,8 +65,7 @@ mod parquet_field;
 ///
 ///  let schema = samples.as_slice().schema();
 ///
-///  let props = Arc::new(WriterProperties::builder().build());
-///  let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+///  let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
 ///
 ///  let mut row_group = writer.next_row_group().unwrap();
 ///  samples.as_slice().write_to_row_group(&mut row_group).unwrap();
@@ -97,7 +96,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
 
     (quote! {
     impl #generics ::parquet::record::RecordWriter<#derived_for #generics> for &[#derived_for #generics] {
-      fn write_to_row_group<W: ::std::io::Write>(
+      fn write_to_row_group<W: ::std::io::Write + Send>(
         &self,
         row_group_writer: &mut ::parquet::file::writer::SerializedRowGroupWriter<'_, W>
       ) -> Result<(), ::parquet::errors::ParquetError> {

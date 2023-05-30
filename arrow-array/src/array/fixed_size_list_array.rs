@@ -19,13 +19,13 @@ use crate::array::print_long_array;
 use crate::builder::{FixedSizeListBuilder, PrimitiveBuilder};
 use crate::{make_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType};
 use arrow_buffer::buffer::NullBuffer;
+use arrow_buffer::ArrowNativeType;
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
-/// A list array where each element is a fixed-size sequence of values with the same
-/// type whose maximum length is represented by a i32.
+/// An array of [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout)
 ///
 /// # Example
 ///
@@ -59,9 +59,6 @@ use std::sync::Arc;
 /// assert_eq!( &[3, 4, 5], list1.as_any().downcast_ref::<Int32Array>().unwrap().values());
 /// assert_eq!( &[6, 7, 8], list2.as_any().downcast_ref::<Int32Array>().unwrap().values());
 /// ```
-///
-/// For non generic lists, you may wish to consider using
-/// [crate::array::FixedSizeBinaryArray]
 #[derive(Clone)]
 pub struct FixedSizeListArray {
     data_type: DataType, // Must be DataType::FixedSizeList(value_length)
@@ -72,6 +69,114 @@ pub struct FixedSizeListArray {
 }
 
 impl FixedSizeListArray {
+    /// Create a new [`FixedSizeListArray`] with `size` element size, panicking on failure
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`Self::try_new`] returns an error
+    pub fn new(
+        field: FieldRef,
+        size: i32,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        Self::try_new(field, size, values, nulls).unwrap()
+    }
+
+    /// Create a new [`FixedSizeListArray`] from the provided parts, returning an error on failure
+    ///
+    /// # Errors
+    ///
+    /// * `size < 0`
+    /// * `values.len() / size != nulls.len()`
+    /// * `values.data_type() != field.data_type()`
+    /// * `!field.is_nullable() && !nulls.expand(size).contains(values.nulls())`
+    pub fn try_new(
+        field: FieldRef,
+        size: i32,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Result<Self, ArrowError> {
+        let s = size.to_usize().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Size cannot be negative, got {}",
+                size
+            ))
+        })?;
+
+        let len = values.len() / s;
+        if let Some(n) = nulls.as_ref() {
+            if n.len() != len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of null buffer for FixedSizeListArray, expected {} got {}",
+                    len,
+                    n.len(),
+                )));
+            }
+        }
+
+        if field.data_type() != values.data_type() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "FixedSizeListArray expected data type {} got {} for {:?}",
+                field.data_type(),
+                values.data_type(),
+                field.name()
+            )));
+        }
+
+        if let Some(a) = values.nulls() {
+            let nulls_valid = field.is_nullable()
+                || nulls
+                    .as_ref()
+                    .map(|n| n.expand(size as _).contains(a))
+                    .unwrap_or_default();
+
+            if !nulls_valid {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Found unmasked nulls for non-nullable FixedSizeListArray field {:?}",
+                    field.name()
+                )));
+            }
+        }
+
+        let data_type = DataType::FixedSizeList(field, size);
+        Ok(Self {
+            data_type,
+            values,
+            value_length: size,
+            nulls,
+            len,
+        })
+    }
+
+    /// Create a new [`FixedSizeListArray`] of length `len` where all values are null
+    ///
+    /// # Panics
+    ///
+    /// Panics if
+    ///
+    /// * `size < 0`
+    /// * `size * len` would overflow `usize`
+    pub fn new_null(field: FieldRef, size: i32, len: usize) -> Self {
+        let capacity = size.to_usize().unwrap().checked_mul(len).unwrap();
+        Self {
+            values: make_array(ArrayData::new_null(field.data_type(), capacity)),
+            data_type: DataType::FixedSizeList(field, size),
+            nulls: Some(NullBuffer::new_null(len)),
+            value_length: size,
+            len,
+        }
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(self) -> (FieldRef, i32, ArrayRef, Option<NullBuffer>) {
+        let f = match self.data_type {
+            DataType::FixedSizeList(f, _) => f,
+            _ => unreachable!(),
+        };
+        (f, self.value_length, self.values, self.nulls)
+    }
+
     /// Returns a reference to the values of this list.
     pub fn values(&self) -> &ArrayRef {
         &self.values
@@ -289,7 +394,8 @@ mod tests {
     use super::*;
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use arrow_buffer::{bit_util, Buffer};
+    use crate::Int32Array;
+    use arrow_buffer::{bit_util, BooleanBuffer, Buffer};
     use arrow_schema::Field;
 
     #[test]
@@ -463,5 +569,53 @@ mod tests {
         let list_array = FixedSizeListArray::from(list_data);
 
         list_array.value(10);
+    }
+
+    #[test]
+    fn test_fixed_size_list_constructors() {
+        let values = Arc::new(Int32Array::from_iter([
+            Some(1),
+            Some(2),
+            None,
+            None,
+            Some(3),
+            Some(4),
+        ]));
+
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let list = FixedSizeListArray::new(field.clone(), 2, values.clone(), None);
+        assert_eq!(list.len(), 3);
+
+        let nulls = NullBuffer::new_null(3);
+        let list = FixedSizeListArray::new(field.clone(), 2, values.clone(), Some(nulls));
+        assert_eq!(list.len(), 3);
+
+        let list = FixedSizeListArray::new(field.clone(), 4, values.clone(), None);
+        assert_eq!(list.len(), 1);
+
+        let err = FixedSizeListArray::try_new(field.clone(), -1, values.clone(), None)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Size cannot be negative, got -1"
+        );
+
+        let nulls = NullBuffer::new_null(2);
+        let err = FixedSizeListArray::try_new(field, 2, values.clone(), Some(nulls))
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for FixedSizeListArray, expected 3 got 2");
+
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let err = FixedSizeListArray::try_new(field.clone(), 2, values.clone(), None)
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Invalid argument error: Found unmasked nulls for non-nullable FixedSizeListArray field \"item\"");
+
+        // Valid as nulls in child masked by parent
+        let nulls = NullBuffer::new(BooleanBuffer::new(vec![0b0000101].into(), 0, 3));
+        FixedSizeListArray::new(field, 2, values.clone(), Some(nulls));
+
+        let field = Arc::new(Field::new("item", DataType::Int64, true));
+        let err = FixedSizeListArray::try_new(field, 2, values, None).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid argument error: FixedSizeListArray expected data type Int64 got Int32 for \"item\"");
     }
 }

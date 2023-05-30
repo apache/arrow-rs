@@ -69,6 +69,35 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         Self(buffer.into_buffer().into())
     }
 
+    /// Create a new [`OffsetBuffer`] from the iterator of slice lengths
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_lengths([1, 3, 5]);
+    /// assert_eq!(offsets.as_ref(), &[0, 1, 4, 9]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
+    pub fn from_lengths<I>(lengths: I) -> Self
+    where
+        I: IntoIterator<Item = usize>,
+    {
+        let iter = lengths.into_iter();
+        let mut out = Vec::with_capacity(iter.size_hint().0 + 1);
+        out.push(O::usize_as(0));
+
+        let mut acc = 0_usize;
+        for length in iter {
+            acc = acc.checked_add(length).expect("usize overflow");
+            out.push(O::usize_as(acc))
+        }
+        // Check for overflow
+        O::from_usize(acc).expect("offset overflow");
+        Self(out.into())
+    }
+
     /// Returns the inner [`ScalarBuffer`]
     pub fn inner(&self) -> &ScalarBuffer<O> {
         &self.0
@@ -138,5 +167,28 @@ mod tests {
     #[should_panic(expected = "offsets must be monotonically increasing")]
     fn non_monotonic_offsets() {
         OffsetBuffer::new(vec![1, 2, 0].into());
+    }
+
+    #[test]
+    fn from_lengths() {
+        let buffer = OffsetBuffer::<i32>::from_lengths([2, 6, 3, 7, 2]);
+        assert_eq!(buffer.as_ref(), &[0, 2, 8, 11, 18, 20]);
+
+        let half_max = i32::MAX / 2;
+        let buffer =
+            OffsetBuffer::<i32>::from_lengths([half_max as usize, half_max as usize]);
+        assert_eq!(buffer.as_ref(), &[0, half_max, half_max * 2]);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn from_lengths_offset_overflow() {
+        OffsetBuffer::<i32>::from_lengths([i32::MAX as usize, 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn from_lengths_usize_overflow() {
+        OffsetBuffer::<i32>::from_lengths([usize::MAX, 1]);
     }
 }

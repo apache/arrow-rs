@@ -92,7 +92,7 @@
 //! assert_eq!(sum(&TimestampNanosecondArray::from(vec![1, 2, 3])), 6);
 //! ```
 //!
-//! And the following is generic over all arrays with comparable values
+//! And the following is generic over all arrays with comparable values:
 //!
 //! ```rust
 //! # use arrow::array::{ArrayAccessor, ArrayIter, Int32Array, StringArray};
@@ -109,7 +109,7 @@
 //! assert_eq!(min(&StringArray::from(vec!["b", "a", "c"])), Some("a"));
 //! ```
 //!
-//! For more examples, consult the [arrow_array] docs.
+//! For more examples, and details consult the [arrow_array] docs.
 //!
 //! # Type Erasure / Trait Objects
 //!
@@ -317,19 +317,6 @@
 //! assert_eq!(string.value(1), "foo");
 //! ```
 //!
-//! # Memory and Buffers
-//!
-//! Advanced users may wish to interact with the underlying buffers of an [`Array`], for example,
-//! for FFI or high-performance conversion from other formats. This interface is provided by
-//! [`ArrayData`] which stores the [`Buffer`] comprising an [`Array`], and can be accessed
-//! with [`Array::to_data`](array::Array::to_data)
-//!
-//! The APIs for constructing [`ArrayData`] come in safe, and unsafe variants, with the former
-//! performing extensive, but potentially expensive validation to ensure the buffers are well-formed.
-//!
-//! An [`ArrayRef`] can be cheaply created from an [`ArrayData`] using [`make_array`],
-//! or by using the appropriate [`From`] conversion on the concrete [`Array`] implementation.
-//!
 //! # Safety and Security
 //!
 //! Like many crates, this crate makes use of unsafe where prudent. However, it endeavours to be
@@ -389,7 +376,9 @@ pub use arrow_json as json;
 pub mod pyarrow;
 
 pub mod record_batch {
-    pub use arrow_array::{RecordBatch, RecordBatchOptions, RecordBatchReader};
+    pub use arrow_array::{
+        RecordBatch, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
+    };
 }
 pub use arrow_array::temporal_conversions;
 pub use arrow_row as row;

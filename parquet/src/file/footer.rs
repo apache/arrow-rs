@@ -61,16 +61,19 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
         ));
     }
 
-    let metadata =
-        chunk_reader.get_bytes(file_size - footer_metadata_len as u64, metadata_len)?;
-
-    decode_metadata(&metadata)
+    let start = file_size - footer_metadata_len as u64;
+    read_metadata(chunk_reader.get_read(start)?)
 }
 
 /// Decodes [`ParquetMetaData`] from the provided bytes
 pub fn decode_metadata(metadata_read: &[u8]) -> Result<ParquetMetaData> {
+    read_metadata(metadata_read)
+}
+
+/// Decodes [`ParquetMetaData`] from the provided [`Read`]
+pub(crate) fn read_metadata<R: Read>(read: R) -> Result<ParquetMetaData> {
     // TODO: row group filtering
-    let mut prot = TCompactInputProtocol::new(metadata_read);
+    let mut prot = TCompactInputProtocol::new(read);
     let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not parse metadata: {e}")))?;
     let schema = types::from_thrift(&t_file_metadata.schema)?;
