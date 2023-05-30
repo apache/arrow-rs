@@ -754,15 +754,15 @@ pub fn parse_interval_month_day_nano(
     ))
 }
 
-const SECONDS_PER_HOUR: f64 = 3_600_f64;
-const NANOS_PER_MILLIS: f64 = 1_000_000_f64;
-const NANOS_PER_SECOND: f64 = 1_000_f64 * NANOS_PER_MILLIS;
+const SECONDS_PER_HOUR: i64 = 3_600;
+const NANOS_PER_MILLIS: i64 = 1_000_000;
+const NANOS_PER_SECOND: i64 = 1_000 * NANOS_PER_MILLIS;
 #[cfg(test)]
-const NANOS_PER_MINUTE: f64 = 60_f64 * NANOS_PER_SECOND;
+const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
 #[cfg(test)]
-const NANOS_PER_HOUR: f64 = 60_f64 * NANOS_PER_MINUTE;
+const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
 #[cfg(test)]
-const NANOS_PER_DAY: f64 = 24_f64 * NANOS_PER_HOUR;
+const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
 #[rustfmt::skip]
 #[derive(Clone, Copy)]
@@ -1189,7 +1189,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
                 }
                 IntervalType::Day => FixedMonthDayNano::new(0.into(), amount, 0.into()),
                 IntervalType::Hour => {
-                    let scale = (SECONDS_PER_HOUR as i64) * (NANOS_PER_SECOND as i64);
+                    let scale = SECONDS_PER_HOUR * NANOS_PER_SECOND;
                     let nanos = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
                             "Overflow converting {amount} hours to nanoseconds"
@@ -1199,7 +1199,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
                     FixedMonthDayNano::new(0.into(), 0.into(), nanos)
                 }
                 IntervalType::Minute => {
-                    let scale = 60 * (NANOS_PER_SECOND as i64);
+                    let scale = 60 * NANOS_PER_SECOND;
                     let nanos = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
                             "Overflow converting {amount} minutes to nanoseconds"
@@ -1209,7 +1209,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
                     FixedMonthDayNano::new(0.into(), 0.into(), nanos)
                 }
                 IntervalType::Second => {
-                    let scale = NANOS_PER_SECOND as i64;
+                    let scale = NANOS_PER_SECOND;
                     let nanos = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
                             "Overflow converting {amount} seconds to nanoseconds"
@@ -2013,12 +2013,12 @@ mod tests {
         );
 
         assert_eq!(
-            (-1i32, -18i32, (-0.2 * NANOS_PER_DAY) as i64),
+            (-1i32, -18i32, -(NANOS_PER_DAY / 5) as i64),
             parse_interval("-1.5 months -3.2 days", &config).unwrap(),
         );
 
         assert_eq!(
-            (2i32, 10i32, (9.0 * NANOS_PER_HOUR) as i64),
+            (2i32, 10i32, 9 * NANOS_PER_HOUR),
             parse_interval("2.1 months 7.25 days 3 hours", &config).unwrap(),
         );
 
@@ -2055,22 +2055,22 @@ mod tests {
         );
 
         assert_eq!(
-            (0i32, 7i32, (3f64 * NANOS_PER_HOUR) as i64),
+            (0i32, 7i32, 3 * NANOS_PER_HOUR),
             parse_interval("7 days 3 hours", &config).unwrap(),
         );
 
         assert_eq!(
-            (0i32, 7i32, (5f64 * NANOS_PER_MINUTE) as i64),
+            (0i32, 7i32, 5 * NANOS_PER_MINUTE),
             parse_interval("7 days 5 minutes", &config).unwrap(),
         );
 
         assert_eq!(
-            (0i32, 7i32, (-5f64 * NANOS_PER_MINUTE) as i64),
+            (0i32, 7i32, -5 * NANOS_PER_MINUTE),
             parse_interval("7 days -5 minutes", &config).unwrap(),
         );
 
         assert_eq!(
-            (0i32, -7i32, (5f64 * NANOS_PER_HOUR) as i64),
+            (0i32, -7i32, 5 * NANOS_PER_HOUR),
             parse_interval("-7 days 5 hours", &config).unwrap(),
         );
 
@@ -2078,25 +2078,27 @@ mod tests {
             (
                 0i32,
                 -7i32,
-                (-5f64 * NANOS_PER_HOUR
-                    - 5f64 * NANOS_PER_MINUTE
-                    - 5f64 * NANOS_PER_SECOND) as i64
+                -5 * NANOS_PER_HOUR - 5 * NANOS_PER_MINUTE - 5 * NANOS_PER_SECOND
             ),
             parse_interval("-7 days -5 hours -5 minutes -5 seconds", &config).unwrap(),
         );
 
         assert_eq!(
-            (12i32, 0i32, (25f64 * NANOS_PER_MILLIS) as i64),
+            (12i32, 0i32, 25 * NANOS_PER_MILLIS),
             parse_interval("1 year 25 millisecond", &config).unwrap(),
         );
 
         assert_eq!(
-            (12i32, 1i32, (0.000000001 * NANOS_PER_SECOND) as i64),
+            (
+                12i32,
+                1i32,
+                (NANOS_PER_SECOND as f64 * 0.000000001_f64) as i64
+            ),
             parse_interval("1 year 1 day 0.000000001 seconds", &config).unwrap(),
         );
 
         assert_eq!(
-            (12i32, 1i32, (0.1 * NANOS_PER_MILLIS) as i64),
+            (12i32, 1i32, (NANOS_PER_MILLIS / 10) as i64),
             parse_interval("1 year 1 day 0.1 milliseconds", &config).unwrap(),
         );
 
@@ -2111,12 +2113,12 @@ mod tests {
         );
 
         assert_eq!(
-            (1i32, 0i32, (-NANOS_PER_SECOND) as i64),
+            (1i32, 0i32, -NANOS_PER_SECOND),
             parse_interval("1 month -1 second", &config).unwrap(),
         );
 
         assert_eq!(
-            (-13i32, -8i32, (- NANOS_PER_HOUR - NANOS_PER_MINUTE - NANOS_PER_SECOND - 1.11 * NANOS_PER_MILLIS) as i64),
+            (-13i32, -8i32, (-NANOS_PER_HOUR - NANOS_PER_MINUTE - NANOS_PER_SECOND - (1.11_f64 * NANOS_PER_MILLIS as f64) as i64) as i64),
             parse_interval("-1 year -1 month -1 week -1 day -1 hour -1 minute -1 second -1.11 millisecond", &config).unwrap(),
         );
     }
@@ -2383,7 +2385,7 @@ mod tests {
         let config = IntervalParseConfig::new(IntervalType::Month);
 
         let result = parse_interval("100000.1 days", &config).unwrap();
-        let expected = (0_i32, 100_000_i32, (0.1 * NANOS_PER_DAY) as i64);
+        let expected = (0_i32, 100_000_i32, (NANOS_PER_DAY / 10) as i64);
 
         assert_eq!(result, expected);
     }
