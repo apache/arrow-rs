@@ -61,7 +61,7 @@ pub struct GetSchemasBuilder {
 impl GetSchemasBuilder {
     /// Create a new instance of [`GetSchemasBuilder`]
     ///
-    /// The builder handles filtering by schemapatterns, the caller
+    /// The builder handles filtering by schema patterns, the caller
     /// is expected to only pass in tables that match the catalog
     /// from the [`CommandGetDbSchemas`] request.
     ///
@@ -95,7 +95,7 @@ impl GetSchemasBuilder {
         Ok(())
     }
 
-    /// builds the correct schema
+    /// builds a `RecordBatch` with the correct schema for a `CommandGetDbSchemas` response
     pub fn build(self) -> Result<RecordBatch> {
         let Self {
             db_schema_filter_pattern,
@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn test_schemas_are_filterd() {
+    fn test_schemas_are_filtered() {
         let ref_batch = get_ref_batch();
 
         let mut builder = GetSchemasBuilder::new(None::<String>);

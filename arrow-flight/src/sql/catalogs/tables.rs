@@ -145,7 +145,7 @@ impl GetTablesBuilder {
         Ok(())
     }
 
-    /// builds the correct schema
+    /// builds a `RecordBatch` for `CommandGetTables`
     pub fn build(self) -> Result<RecordBatch> {
         let Self {
             db_schema_filter_pattern,
@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tables_are_filterd() {
+    fn test_tables_are_filtered() {
         let ref_batch = get_ref_batch();
         let dummy_schema = Schema::empty();
 

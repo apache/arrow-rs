@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Builders and function for building responses to infromation schema requests
+//! Builders and function for building responses to information schema requests
 //!
 //! - [`get_catalogs_batch`] and [`get_catalogs_schema`] for building responses to [`CommandGetCatalogs`] queries.
 //! - [`GetSchemasBuilder`] and [`get_db_schemas_schema`] for building responses to [`CommandGetDbSchemas`] queries.
@@ -40,7 +40,7 @@ pub use tables::{get_tables_schema, GetTablesBuilder};
 mod db_schemas;
 mod tables;
 
-/// Returns the RecordBatch for
+/// Returns the RecordBatch for `CommandGetCatalogs` 
 pub fn get_catalogs_batch(mut catalog_names: Vec<String>) -> Result<RecordBatch> {
     catalog_names.sort_unstable();
 
