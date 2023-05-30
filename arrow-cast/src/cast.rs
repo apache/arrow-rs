@@ -242,15 +242,6 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
                 MonthDayNano => false, // Native type is i128
             }
         }
-        (Int64, Interval(to_type)) => {
-            match to_type {
-                IntervalUnit::YearMonth => false,
-                IntervalUnit::DayTime => true,
-                IntervalUnit::MonthDayNano => false,
-            }
-        }
-        (Duration(_), Interval(IntervalUnit::MonthDayNano)) => true,
-        (Interval(IntervalUnit::MonthDayNano), Duration(_)) => true,
         (Int32, Interval(to_type)) => match to_type {
             YearMonth => true,
             DayTime => false,
@@ -265,6 +256,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Interval(MonthDayNano), Duration(_)) => true,
         (Interval(IntervalUnit::YearMonth), Interval(IntervalUnit::MonthDayNano)) => true,
         (Interval(IntervalUnit::DayTime), Interval(IntervalUnit::MonthDayNano)) => true,
+        (Interval(IntervalUnit::MonthDayNano), Interval(IntervalUnit::YearMonth)) => true,
+        (Interval(IntervalUnit::MonthDayNano), Interval(IntervalUnit::DayTime)) => true,
         (_, _) => false,
     }
 }
@@ -423,51 +416,120 @@ where
 /// Cast the array from interval year month to month day nano
 fn cast_interval_year_month_to_interval_month_day_nano(
     array: &dyn Array,
-    _cast_options: &CastOptions,
+    cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let array = array
-        .as_any()
-        .downcast_ref::<PrimitiveArray<IntervalYearMonthType>>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError(
-                "Internal Error: Cannot cast interval to IntervalArray of expected type"
-                    .to_string(),
-            )
-        })?;
+    let array = array.as_primitive::<IntervalYearMonthType>();
 
-    let iter = array
-        .iter()
-        .map(|v| v.and_then(|v| Some(IntervalMonthDayNanoType::make_value(v, 0, 0))));
-    Ok(Arc::new(unsafe {
-        PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(iter)
-    }))
+    if cast_options.safe {
+        Ok(Arc::new(array.unary_opt::<_, IntervalMonthDayNanoType>(
+            |v| {
+                let months = IntervalYearMonthType::to_months(v);
+                Some(IntervalMonthDayNanoType::make_value(months, 0, 0))
+            },
+        )))
+    } else {
+        Ok(Arc::new(
+            array.try_unary::<_, IntervalMonthDayNanoType, ArrowError>(|v| {
+                let months = IntervalYearMonthType::to_months(v);
+                Ok(IntervalMonthDayNanoType::make_value(months, 0, 0))
+            })?,
+        ))
+    }
 }
 
 /// Cast the array from interval day time to month day nano
 fn cast_interval_day_time_to_interval_month_day_nano(
     array: &dyn Array,
-    _cast_options: &CastOptions,
+    cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let array = array
-        .as_any()
-        .downcast_ref::<PrimitiveArray<IntervalDayTimeType>>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError(
-                "Internal Error: Cannot cast interval to IntervalArray of expected type"
-                    .to_string(),
-            )
-        })?;
+    let array = array.as_primitive::<IntervalDayTimeType>();
+    let mul = 10_i32.pow(6);
 
-    let iter = array.iter().map(|v| {
-        v.and_then(|v| {
-            let (days, ms) = IntervalDayTimeType::to_parts(v);
-            let nanos: i64 = (ms as i64) * 10_i64.pow(6);
-            Some(IntervalMonthDayNanoType::make_value(0, days, nanos))
-        })
-    });
-    Ok(Arc::new(unsafe {
-        PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(iter)
-    }))
+    if cast_options.safe {
+        Ok(Arc::new(array.unary_opt::<_, IntervalMonthDayNanoType>(
+            |v| {
+                let (days, ms) = IntervalDayTimeType::to_parts(v);
+                Some(IntervalMonthDayNanoType::make_value(
+                    0,
+                    days,
+                    (ms * mul).into(),
+                ))
+            },
+        )))
+    } else {
+        Ok(Arc::new(
+            array.try_unary::<_, IntervalMonthDayNanoType, ArrowError>(|v| {
+                let (days, ms) = IntervalDayTimeType::to_parts(v);
+                let nanos = ms.mul_checked(mul).map_err(|_| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast to IntervalDayTimeType. Overflowing on {:?}",
+                        v
+                    ))
+                })?;
+                Ok(IntervalMonthDayNanoType::make_value(0, days, nanos.into()))
+            })?,
+        ))
+    }
+}
+
+/// Cast the array from interval month day nano to year month
+fn cast_interval_month_day_nano_to_interval_year_month(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_primitive::<IntervalMonthDayNanoType>();
+
+    if cast_options.safe {
+        Ok(Arc::new(array.unary_opt::<_, IntervalYearMonthType>(|v| {
+            let (months, _, _) = IntervalMonthDayNanoType::to_parts(v);
+            Some(IntervalYearMonthType::make_value(0, months))
+        })))
+    } else {
+        Ok(Arc::new(
+            array.try_unary::<_, IntervalYearMonthType, ArrowError>(|v| {
+                let (months, _, _) = IntervalMonthDayNanoType::to_parts(v);
+                Ok(IntervalYearMonthType::make_value(0, months))
+            })?,
+        ))
+    }
+}
+
+/// Cast the array from interval month day nano to day time
+fn cast_interval_month_day_nano_to_interval_day_time(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_primitive::<IntervalMonthDayNanoType>();
+    let mul = 10_i64.pow(6);
+
+    if cast_options.safe {
+        Ok(Arc::new(array.unary_opt::<_, IntervalDayTimeType>(|v| {
+            let (_, days, nanos) = IntervalMonthDayNanoType::to_parts(v);
+            Some(IntervalDayTimeType::make_value(
+                days,
+                (nanos / mul).try_into().unwrap(),
+            ))
+        })))
+    } else {
+        Ok(Arc::new(
+            array.try_unary::<_, IntervalDayTimeType, ArrowError>(|v| {
+                let (_, days, nanos) = IntervalMonthDayNanoType::to_parts(v);
+                let ms = nanos.div_checked(mul).map_err(|_| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast to IntervalDayTimeType. Overflowing on {:?}",
+                        v
+                    ))
+                })?;
+                let res = ms.try_into().map_err(|_| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast to IntervalDayTimeType. Overflowing on {:?}",
+                        v
+                    ))
+                })?;
+                Ok(IntervalDayTimeType::make_value(days, res))
+            })?,
+        ))
+    }
 }
 
 /// Cast the array from interval to duration
@@ -2198,23 +2260,29 @@ pub fn cast_with_options(
         (Duration(TimeUnit::Nanosecond), Interval(IntervalUnit::MonthDayNano)) => {
             cast_duration_to_interval::<DurationNanosecondType>(array, cast_options)
         }
-        (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Second)) => {
+        (Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Second)) => {
             cast_interval_to_duration::<DurationSecondType>(array, cast_options)
         }
-        (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Millisecond)) => {
+        (Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Millisecond)) => {
             cast_interval_to_duration::<DurationMillisecondType>(array, cast_options)
         }
-        (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Microsecond)) => {
+        (Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Microsecond)) => {
             cast_interval_to_duration::<DurationMicrosecondType>(array, cast_options)
         }
-        (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Nanosecond)) => {
+        (Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Nanosecond)) => {
             cast_interval_to_duration::<DurationNanosecondType>(array, cast_options)
         }
-        (DataType::Interval(IntervalUnit::YearMonth), DataType::Interval(IntervalUnit::MonthDayNano)) => {
+        (Interval(IntervalUnit::YearMonth), Interval(IntervalUnit::MonthDayNano)) => {
             cast_interval_year_month_to_interval_month_day_nano(array, cast_options)
         }
-        (DataType::Interval(IntervalUnit::DayTime), DataType::Interval(IntervalUnit::MonthDayNano)) => {
+        (Interval(IntervalUnit::DayTime), Interval(IntervalUnit::MonthDayNano)) => {
             cast_interval_day_time_to_interval_month_day_nano(array, cast_options)
+        }
+        (Interval(IntervalUnit::MonthDayNano), Interval(IntervalUnit::YearMonth)) => {
+            cast_interval_month_day_nano_to_interval_year_month(array, cast_options)
+        }
+        (Interval(IntervalUnit::MonthDayNano), Interval(IntervalUnit::DayTime)) => {
+            cast_interval_month_day_nano_to_interval_day_time(array, cast_options)
         }
         (Interval(IntervalUnit::YearMonth), Int64) => {
             cast_numeric_arrays::<IntervalYearMonthType, Int64Type>(array, cast_options)
@@ -9269,7 +9337,7 @@ mod tests {
         let array = vec![1234567];
         let casted_array = cast_from_interval_year_month_to_interval_month_day_nano(
             array,
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(
@@ -9280,10 +9348,14 @@ mod tests {
 
         let array = vec![i32::MAX];
         let casted_array = cast_from_interval_year_month_to_interval_month_day_nano(
-            array.clone(),
-            &DEFAULT_CAST_OPTIONS,
+            array,
+            &CastOptions::default(),
         )
         .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
         assert!(casted_array.is_valid(0));
     }
 
@@ -9299,36 +9371,100 @@ mod tests {
             &DataType::Interval(IntervalUnit::MonthDayNano),
             cast_options,
         )?;
-        casted_array
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .ok_or_else(|| {
-                ArrowError::ComputeError(
-                    "Failed to downcast to IntervalMonthDayNanoArray".to_string(),
-                )
-            })
-            .cloned()
+        Ok(casted_array
+            .as_primitive::<IntervalMonthDayNanoType>()
+            .clone())
     }
 
     #[test]
     fn test_cast_from_interval_day_time_to_interval_month_day_nano() {
         // from interval day time to interval month day nano
-        let array = vec![1234567];
+        let array = vec![123];
         let casted_array = cast_from_interval_day_time_to_interval_month_day_nano(
             array,
-            &DEFAULT_CAST_OPTIONS,
+            &CastOptions::default(),
         )
         .unwrap();
         assert_eq!(
             casted_array.data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
-        assert_eq!(casted_array.value(0), 1234567000000);
+        assert_eq!(casted_array.value(0), 123000000);
+    }
 
-        let array = vec![IntervalDayTimeType::make_value(0, i32::MAX)];
-        let casted_array = cast_from_interval_day_time_to_interval_month_day_nano(
-            array.clone(),
-            &DEFAULT_CAST_OPTIONS,
+    /// helper function to test casting from interval month day nano to interval year month
+    fn cast_from_interval_month_day_nano_to_interval_year_month(
+        array: Vec<i128>,
+        cast_options: &CastOptions,
+    ) -> Result<PrimitiveArray<IntervalYearMonthType>, ArrowError> {
+        let array = PrimitiveArray::<IntervalMonthDayNanoType>::from(array);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Interval(IntervalUnit::YearMonth),
+            cast_options,
+        )?;
+        Ok(casted_array.as_primitive::<IntervalYearMonthType>().clone())
+    }
+
+    #[test]
+    fn test_cast_from_interval_month_day_nano_to_interval_year_month() {
+        // from interval month day nano to interval year month
+        let array = vec![123123123123123123123123123123123];
+        let casted_array = cast_from_interval_month_day_nano_to_interval_year_month(
+            array,
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::YearMonth)
+        );
+        assert_eq!(casted_array.value(0), 1554);
+
+        let array = vec![IntervalMonthDayNanoType::make_value(0, i32::MAX, 0)];
+        let casted_array = cast_from_interval_month_day_nano_to_interval_year_month(
+            array,
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert!(casted_array.is_valid(0));
+    }
+
+    /// helper function to test casting from interval month day nano to interval day time
+    fn cast_from_interval_month_day_nano_to_interval_day_time(
+        array: Vec<i128>,
+        cast_options: &CastOptions,
+    ) -> Result<PrimitiveArray<IntervalDayTimeType>, ArrowError> {
+        let array = PrimitiveArray::<IntervalMonthDayNanoType>::from(array);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Interval(IntervalUnit::DayTime),
+            cast_options,
+        )?;
+        Ok(casted_array.as_primitive::<IntervalDayTimeType>().clone())
+    }
+
+    #[test]
+    fn test_cast_from_interval_month_day_nano_to_interval_day_time() {
+        // from interval month day nano to interval day time
+        let array = vec![1234567890];
+        let casted_array = cast_from_interval_month_day_nano_to_interval_day_time(
+            array,
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::DayTime)
+        );
+        assert_eq!(casted_array.value(0), 1234);
+
+        let array = vec![IntervalMonthDayNanoType::make_value(0, i32::MAX, 0)];
+        let casted_array = cast_from_interval_month_day_nano_to_interval_day_time(
+            array,
+            &CastOptions::default(),
         )
         .unwrap();
         assert!(casted_array.is_valid(0));
