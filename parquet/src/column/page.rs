@@ -162,6 +162,75 @@ impl CompressedPage {
     pub fn data(&self) -> &[u8] {
         self.compressed_page.buffer().data()
     }
+
+    /// Returns the thrift page header
+    pub(crate) fn to_thrift_header(&self) -> PageHeader {
+        let uncompressed_size = self.uncompressed_size();
+        let compressed_size = self.compressed_size();
+        let num_values = self.num_values();
+        let encoding = self.encoding();
+        let page_type = self.page_type();
+
+        let mut page_header = PageHeader {
+            type_: page_type.into(),
+            uncompressed_page_size: uncompressed_size as i32,
+            compressed_page_size: compressed_size as i32,
+            // TODO: Add support for crc checksum
+            crc: None,
+            data_page_header: None,
+            index_page_header: None,
+            dictionary_page_header: None,
+            data_page_header_v2: None,
+        };
+
+        match self.compressed_page {
+            Page::DataPage {
+                def_level_encoding,
+                rep_level_encoding,
+                ref statistics,
+                ..
+            } => {
+                let data_page_header = crate::format::DataPageHeader {
+                    num_values: num_values as i32,
+                    encoding: encoding.into(),
+                    definition_level_encoding: def_level_encoding.into(),
+                    repetition_level_encoding: rep_level_encoding.into(),
+                    statistics: crate::file::statistics::to_thrift(statistics.as_ref()),
+                };
+                page_header.data_page_header = Some(data_page_header);
+            }
+            Page::DataPageV2 {
+                num_nulls,
+                num_rows,
+                def_levels_byte_len,
+                rep_levels_byte_len,
+                is_compressed,
+                ref statistics,
+                ..
+            } => {
+                let data_page_header_v2 = crate::format::DataPageHeaderV2 {
+                    num_values: num_values as i32,
+                    num_nulls: num_nulls as i32,
+                    num_rows: num_rows as i32,
+                    encoding: encoding.into(),
+                    definition_levels_byte_length: def_levels_byte_len as i32,
+                    repetition_levels_byte_length: rep_levels_byte_len as i32,
+                    is_compressed: Some(is_compressed),
+                    statistics: crate::file::statistics::to_thrift(statistics.as_ref()),
+                };
+                page_header.data_page_header_v2 = Some(data_page_header_v2);
+            }
+            Page::DictionaryPage { is_sorted, .. } => {
+                let dictionary_page_header = crate::format::DictionaryPageHeader {
+                    num_values: num_values as i32,
+                    encoding: encoding.into(),
+                    is_sorted: Some(is_sorted),
+                };
+                page_header.dictionary_page_header = Some(dictionary_page_header);
+            }
+        }
+        page_header
+    }
 }
 
 /// Contains page write metrics.

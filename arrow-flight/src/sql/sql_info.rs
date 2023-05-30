@@ -15,16 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Auxiliary module to handle [`crate::sql::CommandGetSqlInfo`] queries.
+//! [`SqlInfoList`] for building responses to [`CommandGetSqlInfo`] queries.
 //!
-//! [`crate::sql::CommandGetSqlInfo`] represents metadata requests againsts the Flight SQL server.
-//! Via this mechanism, the server can communicate supported capabilities to generic
-//! Flight SQL clients.
-//!
-//! Servers construct a [`SqlInfoList`] by adding infos via `with_sql_info`.
-//! The availabe configuration options are defined in the [Flight SQL protos][protos].
-//!
-//! [protos]: https://github.com/apache/arrow/blob/6d3d2fca2c9693231fa1e52c142ceef563fc23f9/format/FlightSql.proto#L71-L820
+//! [`CommandGetSqlInfo`]: crate::sql::CommandGetSqlInfo
 
 use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 
@@ -260,7 +253,37 @@ impl SqlInfoUnionBuilder {
     }
 }
 
-/// A list of SQL info names and valies
+/// A list of FlightSQL server capabilties.
+///
+/// [`CommandGetSqlInfo`] are metadata requests used by a Flight SQL
+/// server to communicate supported capabilities to Flight SQL
+/// clients.
+///
+/// Servers construct a [`SqlInfoList`] by adding infos via
+/// [`with_sql_info`] and build the response using [`encode`].
+///
+/// The available configuration options are defined in the [Flight SQL protos][protos].
+///
+/// # Example
+/// ```
+/// # use arrow_flight::sql::{SqlInfoList, SqlInfo, SqlSupportedTransaction};
+/// // Create the list of metadata describing the server
+/// let info_list = SqlInfoList::new()
+///     .with_sql_info(SqlInfo::FlightSqlServerName, "server name")
+///     // ... add other SqlInfo here ..
+///     .with_sql_info(
+///         SqlInfo::FlightSqlServerTransaction,
+///         SqlSupportedTransaction::Transaction as i32,
+///     );
+///
+/// // Create the batch to send back to the client
+/// let batch = info_list.encode().unwrap();
+/// ```
+///
+/// [protos]: https://github.com/apache/arrow/blob/6d3d2fca2c9693231fa1e52c142ceef563fc23f9/format/FlightSql.proto#L71-L820
+/// [`CommandGetSqlInfo`]: crate::sql::CommandGetSqlInfo
+/// [`with_sql_info`]: SqlInfoList::with_sql_info
+/// [`encode`]: SqlInfoList::encode
 #[derive(Debug, Clone, PartialEq)]
 pub struct SqlInfoList {
     /// Use BTreeMap to ensure the values are sorted by value as
@@ -310,7 +333,9 @@ impl SqlInfoList {
         }
     }
 
-    /// Encode the contents of this info list according to the FlightSQL spec
+    /// Encode the contents of this list according to the [FlightSQL spec]
+    ///
+    /// [FlightSQL spec]: (https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/FlightSql.proto#L32-L43
     pub fn encode(&self) -> Result<RecordBatch> {
         let mut name_builder = UInt32Builder::new();
         let mut value_builder = SqlInfoUnionBuilder::new();
@@ -345,7 +370,53 @@ static SQL_INFO_SCHEMA: Lazy<Schema> = Lazy::new(|| {
 #[cfg(test)]
 mod tests {
     use super::SqlInfoList;
-    use crate::sql::{SqlInfo, SqlSupportedTransaction};
+    use crate::sql::{SqlInfo, SqlNullOrdering, SqlSupportedTransaction};
+    use arrow_array::RecordBatch;
+    use arrow_cast::pretty::pretty_format_batches;
+
+    fn assert_batches_eq(batches: &[RecordBatch], expected_lines: &[&str]) {
+        let formatted = pretty_format_batches(batches).unwrap().to_string();
+        let actual_lines: Vec<_> = formatted.trim().lines().collect();
+        assert_eq!(
+            &actual_lines, expected_lines,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected_lines, actual_lines
+        );
+    }
+
+    #[test]
+    fn test_sql_infos() {
+        let batch = SqlInfoList::new()
+            // str
+            .with_sql_info(SqlInfo::SqlIdentifierQuoteChar, r#"""#)
+            // bool
+            .with_sql_info(SqlInfo::SqlDdlCatalog, false)
+            // i32
+            .with_sql_info(
+                SqlInfo::SqlNullOrdering,
+                SqlNullOrdering::SqlNullsSortedHigh as i32,
+            )
+            // i64
+            .with_sql_info(SqlInfo::SqlMaxBinaryLiteralLength, i32::MAX as i64)
+            // [str]
+            .with_sql_info(SqlInfo::SqlKeywords, &["SELECT", "DELETE"] as &[&str])
+            .encode()
+            .unwrap();
+
+        let expected = vec![
+            "+-----------+--------------------------------+",
+            "| info_name | value                          |",
+            "+-----------+--------------------------------+",
+            "| 500       | {bool_value=false}             |",
+            "| 504       | {string_value=\"}               |",
+            "| 507       | {int32_bitmask=0}              |",
+            "| 508       | {string_list=[SELECT, DELETE]} |",
+            "| 541       | {bigint_value=2147483647}      |",
+            "+-----------+--------------------------------+",
+        ];
+
+        assert_batches_eq(&[batch], &expected);
+    }
 
     #[test]
     fn test_filter_sql_infos() {

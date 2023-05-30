@@ -30,16 +30,13 @@ use crate::column::writer::{
     get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl,
 };
 use crate::column::{
-    page::{CompressedPage, Page, PageWriteSpec, PageWriter},
+    page::{CompressedPage, PageWriteSpec, PageWriter},
     writer::{get_column_writer, ColumnWriter},
 };
 use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::file::reader::ChunkReader;
-use crate::file::{
-    metadata::*, properties::WriterPropertiesPtr,
-    statistics::to_thrift as statistics_to_thrift, PARQUET_MAGIC,
-};
+use crate::file::{metadata::*, properties::WriterPropertiesPtr, PARQUET_MAGIC};
 use crate::schema::types::{
     self, ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr,
 };
@@ -370,6 +367,16 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.kv_metadatas.push(kv_metadata);
     }
 
+    /// Returns a reference to schema descriptor.
+    pub fn schema_descr(&self) -> &SchemaDescriptor {
+        &self.descr
+    }
+
+    /// Returns a reference to the writer properties
+    pub fn properties(&self) -> &WriterPropertiesPtr {
+        &self.props
+    }
+
     /// Writes the file footer and returns the underlying writer.
     pub fn into_inner(mut self) -> Result<W> {
         self.assert_previous_writer_closed()?;
@@ -653,17 +660,7 @@ impl<'a> SerializedColumnWriter<'a> {
 
     /// Close this [`SerializedColumnWriter`]
     pub fn close(mut self) -> Result<()> {
-        let r = match self.inner {
-            ColumnWriter::BoolColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int32ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int64ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int96ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::FloatColumnWriter(typed) => typed.close()?,
-            ColumnWriter::DoubleColumnWriter(typed) => typed.close()?,
-            ColumnWriter::ByteArrayColumnWriter(typed) => typed.close()?,
-            ColumnWriter::FixedLenByteArrayColumnWriter(typed) => typed.close()?,
-        };
-
+        let r = self.inner.close()?;
         if let Some(on_close) = self.on_close.take() {
             on_close(r)?
         }
@@ -701,83 +698,20 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 
 impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
-        let uncompressed_size = page.uncompressed_size();
-        let compressed_size = page.compressed_size();
-        let num_values = page.num_values();
-        let encoding = page.encoding();
         let page_type = page.page_type();
-
-        let mut page_header = parquet::PageHeader {
-            type_: page_type.into(),
-            uncompressed_page_size: uncompressed_size as i32,
-            compressed_page_size: compressed_size as i32,
-            // TODO: Add support for crc checksum
-            crc: None,
-            data_page_header: None,
-            index_page_header: None,
-            dictionary_page_header: None,
-            data_page_header_v2: None,
-        };
-
-        match *page.compressed_page() {
-            Page::DataPage {
-                def_level_encoding,
-                rep_level_encoding,
-                ref statistics,
-                ..
-            } => {
-                let data_page_header = parquet::DataPageHeader {
-                    num_values: num_values as i32,
-                    encoding: encoding.into(),
-                    definition_level_encoding: def_level_encoding.into(),
-                    repetition_level_encoding: rep_level_encoding.into(),
-                    statistics: statistics_to_thrift(statistics.as_ref()),
-                };
-                page_header.data_page_header = Some(data_page_header);
-            }
-            Page::DataPageV2 {
-                num_nulls,
-                num_rows,
-                def_levels_byte_len,
-                rep_levels_byte_len,
-                is_compressed,
-                ref statistics,
-                ..
-            } => {
-                let data_page_header_v2 = parquet::DataPageHeaderV2 {
-                    num_values: num_values as i32,
-                    num_nulls: num_nulls as i32,
-                    num_rows: num_rows as i32,
-                    encoding: encoding.into(),
-                    definition_levels_byte_length: def_levels_byte_len as i32,
-                    repetition_levels_byte_length: rep_levels_byte_len as i32,
-                    is_compressed: Some(is_compressed),
-                    statistics: statistics_to_thrift(statistics.as_ref()),
-                };
-                page_header.data_page_header_v2 = Some(data_page_header_v2);
-            }
-            Page::DictionaryPage { is_sorted, .. } => {
-                let dictionary_page_header = parquet::DictionaryPageHeader {
-                    num_values: num_values as i32,
-                    encoding: encoding.into(),
-                    is_sorted: Some(is_sorted),
-                };
-                page_header.dictionary_page_header = Some(dictionary_page_header);
-            }
-        }
-
         let start_pos = self.sink.bytes_written() as u64;
 
+        let page_header = page.to_thrift_header();
         let header_size = self.serialize_page_header(page_header)?;
         self.sink.write_all(page.data())?;
 
         let mut spec = PageWriteSpec::new();
         spec.page_type = page_type;
-        spec.uncompressed_size = uncompressed_size + header_size;
-        spec.compressed_size = compressed_size + header_size;
+        spec.uncompressed_size = page.uncompressed_size() + header_size;
+        spec.compressed_size = page.compressed_size() + header_size;
         spec.offset = start_pos;
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
-        spec.num_values = num_values;
+        spec.num_values = page.num_values();
 
         Ok(spec)
     }
@@ -804,7 +738,7 @@ mod tests {
     use std::fs::File;
 
     use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
-    use crate::column::page::PageReader;
+    use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
     use crate::data_type::{BoolType, Int32Type};
