@@ -401,7 +401,8 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_length(*length)
                 .build()
         }
-        DataType::Decimal128(precision, scale) => {
+        DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
             let (physical_type, length) = if *precision > 1 && *precision <= 9 {
@@ -417,19 +418,6 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             Type::primitive_type_builder(name, physical_type)
                 .with_repetition(repetition)
                 .with_length(length)
-                .with_logical_type(Some(LogicalType::Decimal {
-                    scale: *scale as i32,
-                    precision: *precision as i32,
-                }))
-                .with_precision(*precision as i32)
-                .with_scale(*scale as i32)
-                .build()
-        }
-        DataType::Decimal256(precision, scale) => {
-            // For the decimal256, use the fixed length byte array to store the data
-            Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                .with_repetition(repetition)
-                .with_length(decimal_length_from_precision(*precision) as i32)
                 .with_logical_type(Some(LogicalType::Decimal {
                     scale: *scale as i32,
                     precision: *precision as i32,
