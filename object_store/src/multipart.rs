@@ -183,7 +183,7 @@ where
                 break;
             }
 
-            let out_buffer = std::mem::take(&mut self.current_buffer);
+            let out_buffer = std::mem::replace(&mut self.current_buffer, Vec::with_capacity(self.part_size));
             let inner = Arc::clone(&self.inner);
             let part_idx = self.current_part_idx;
             self.tasks.push(Box::pin(async move {

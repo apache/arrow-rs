@@ -1249,7 +1249,7 @@ mod tests {
         assert_eq!(bytes_expected, bytes_written);
 
         // Can overwrite some storage
-        // Sizes chozen to ensure we write three parts
+        // Sizes chosen to ensure we write three parts
         let data = (0..7).map(|_| get_random_bytes(3_200_000)).collect_vec();
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
