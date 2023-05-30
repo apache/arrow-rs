@@ -24,12 +24,13 @@ use crate::column::page::PageIterator;
 use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+use arrow_array::Decimal256Array;
 use arrow_array::{
     builder::{BooleanBufferBuilder, TimestampNanosecondBufferBuilder},
     ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
     Int64Array, TimestampNanosecondArray, UInt32Array, UInt64Array,
 };
-use arrow_buffer::Buffer;
+use arrow_buffer::{i256, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, TimeUnit};
 use std::any::Any;
@@ -226,6 +227,34 @@ where
                         .iter()
                         .map(|v| v.map(|v| v as i128))
                         .collect::<Decimal128Array>(),
+                    _ => {
+                        return Err(arrow_err!(
+                            "Cannot convert {:?} to decimal",
+                            array.data_type()
+                        ));
+                    }
+                }
+                .with_precision_and_scale(*p, *s)?;
+
+                Arc::new(array) as ArrayRef
+            }
+            ArrowType::Decimal256(p, s) => {
+                let array = match array.data_type() {
+                    ArrowType::Int32 => array
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(|v| i256::from_i128(v as i128)))
+                        .collect::<Decimal256Array>(),
+
+                    ArrowType::Int64 => array
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(|v| i256::from_i128(v as i128)))
+                        .collect::<Decimal256Array>(),
                     _ => {
                         return Err(arrow_err!(
                             "Cannot convert {:?} to decimal",
