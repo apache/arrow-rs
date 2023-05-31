@@ -410,18 +410,24 @@ impl i256 {
     /// Return the least number of bits needed to represent the number
     #[inline]
     fn bits_required(&self) -> usize {
-        let arr = self.to_le_bytes();
-        let iter = arr.iter().rev().take(32 - 1);
+        let le_bytes = self.to_le_bytes();
+        let arr: [u128; 2] = [
+            u128::from_le_bytes(le_bytes[0..16].try_into().unwrap()),
+            u128::from_le_bytes(le_bytes[16..32].try_into().unwrap()),
+        ];
+
+        let iter = arr.iter().rev().take(2 - 1);
         if self.is_negative() {
-            let ctr = iter.take_while(|&&b| b == ::core::u8::MAX).count();
-            (8 * (32 - ctr)) + 1 - (!arr[32 - ctr - 1]).leading_zeros() as usize
+            let ctr = iter.take_while(|&&b| b == ::core::u128::MAX).count();
+            (128 * (2 - ctr)) + 1 - (!arr[2 - ctr - 1]).leading_zeros() as usize
         } else {
-            let ctr = iter.take_while(|&&b| b == ::core::u8::MIN).count();
-            (8 * (32 - ctr)) + 1 - arr[32 - ctr - 1].leading_zeros() as usize
+            let ctr = iter.take_while(|&&b| b == ::core::u128::MIN).count();
+            (128 * (2 - ctr)) + 1 - arr[2 - ctr - 1].leading_zeros() as usize
         }
     }
 
-    /// divmod like operation, returns (quotient, remainder)
+    /// Division operation, returns (quotient, remainder).
+    /// This basically implements [Long division]: https://en.wikipedia.org/wiki/Division_algorithm
     #[inline]
     fn div_rem(self, other: Self) -> Result<(Self, Self), I256Error> {
         if other == Self::ZERO {
@@ -441,16 +447,16 @@ impl i256 {
 
         let mut me = self.checked_abs().unwrap();
         let mut you = other.checked_abs().unwrap();
-        let mut ret = [0u8; 32];
+        let mut ret = [0u128; 2];
         if me < you {
-            return Ok((Self::from_le_bytes(ret), self));
+            return Ok((Self::from_parts(ret[0], ret[1] as i128), self));
         }
 
         let shift = me.bits_required() - you.bits_required();
         you = you.shl(shift as u8);
         for i in (0..=shift).rev() {
             if me >= you {
-                ret[i / 8] |= 1 << (i % 8);
+                ret[i / 128] |= 1 << (i % 128);
                 me = me.checked_sub(you).unwrap();
             }
             you = you.shr(1);
@@ -458,9 +464,9 @@ impl i256 {
 
         Ok((
             if self.is_negative() == other.is_negative() {
-                Self::from_le_bytes(ret)
+                Self::from_parts(ret[0], ret[1] as i128)
             } else {
-                -Self::from_le_bytes(ret)
+                -Self::from_parts(ret[0], ret[1] as i128)
             },
             if self.is_negative() { -me } else { me },
         ))
