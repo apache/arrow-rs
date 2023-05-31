@@ -341,6 +341,14 @@ where
                 }
             };
 
+            self.num_decoded_values += rep_levels_read as u32;
+            remaining_records -= records_read;
+
+            if self.num_buffered_values == self.num_decoded_values {
+                // Exhausted buffered page - no need to advance other decoders
+                continue;
+            }
+
             let (values_read, def_levels_read) = match self.def_level_decoder.as_mut() {
                 Some(decoder) => decoder
                     .skip_def_levels(rep_levels_read, self.descr.max_def_level())?,
@@ -363,9 +371,6 @@ where
                     values_read
                 ));
             }
-
-            self.num_decoded_values += rep_levels_read as u32;
-            remaining_records -= records_read;
         }
         Ok(num_records - remaining_records)
     }
