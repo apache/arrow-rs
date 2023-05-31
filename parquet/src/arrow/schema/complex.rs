@@ -34,7 +34,7 @@ fn get_repetition(t: &Type) -> Repetition {
     }
 }
 
-/// Representation of a parquet file, in terms of arrow schema elements
+/// Representation of a parquet schema element, in terms of arrow schema elements
 #[derive(Debug, Clone)]
 pub struct ParquetField {
     /// The level which represents an insertion into the current list

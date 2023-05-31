@@ -95,14 +95,20 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     Ok((schema, field_levels.levels))
 }
 
-/// Stores the parquet level information for a set of arrow [`Fields`]
+/// Schema information necessary to decode a parquet file as arrow [`Fields`]
+///
+/// In particular this stores the dremel-level information necessary to correctly
+/// interpret the encoded definition and repetition levels
+///
+/// Note: this is an opaque container intended to be used with lower-level APIs
+/// within this crate
 #[derive(Debug, Clone)]
 pub struct FieldLevels {
     pub(crate) fields: Fields,
     pub(crate) levels: Option<ParquetField>,
 }
 
-/// Convert a parquet [`SchemaDescriptor`] to its corresponding arrow representation
+/// Convert a parquet [`SchemaDescriptor`] to [`FieldLevels`]
 ///
 /// Columns not included within [`ProjectionMask`] will be ignored.
 ///
