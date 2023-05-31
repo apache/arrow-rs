@@ -438,7 +438,15 @@ mod tests {
     }
 
     macro_rules! test_primitive_array_reader_one_type {
-        ($arrow_parquet_type:ty, $physical_type:expr, $converted_type_str:expr, $result_arrow_type:ty, $result_arrow_cast_type:ty, $result_primitive_type:ty) => {{
+        (
+            $arrow_parquet_type:ty,
+            $physical_type:expr,
+            $converted_type_str:expr,
+            $result_arrow_type:ty,
+            $result_arrow_cast_type:ty,
+            $result_primitive_type:ty
+            $(, $timezone:expr)?
+        ) => {{
             let message_type = format!(
                 "
             message test_schema {{
@@ -493,7 +501,9 @@ mod tests {
                             result_data_type
                         )
                         .as_str(),
-                    );
+                    )
+                    $(.with_timezone($timezone))?
+                    ;
 
                 // create expected array as primitive, and cast to result type
                 let expected = PrimitiveArray::<$result_arrow_cast_type>::from(
@@ -516,7 +526,9 @@ mod tests {
                             result_data_type
                         )
                         .as_str(),
-                    );
+                    )
+                    $(.with_timezone($timezone))?
+                    ;
                 assert_eq!(expected, array);
             }
         }};
@@ -554,7 +566,8 @@ mod tests {
             "TIMESTAMP_MILLIS",
             arrow::datatypes::TimestampMillisecondType,
             arrow::datatypes::Int64Type,
-            i64
+            i64,
+            "UTC"
         );
         test_primitive_array_reader_one_type!(
             crate::data_type::Int64Type,
@@ -562,7 +575,8 @@ mod tests {
             "TIMESTAMP_MICROS",
             arrow::datatypes::TimestampMicrosecondType,
             arrow::datatypes::Int64Type,
-            i64
+            i64,
+            "UTC"
         );
     }
 

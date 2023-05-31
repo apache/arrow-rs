@@ -1278,12 +1278,12 @@ mod tests {
             Field::new("time_nano", DataType::Time64(TimeUnit::Nanosecond), true),
             Field::new(
                 "ts_milli",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
                 true,
             ),
             Field::new(
                 "ts_micro",
-                DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
                 false,
             ),
             Field::new(
