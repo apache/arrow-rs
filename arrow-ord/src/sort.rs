@@ -1061,7 +1061,7 @@ pub struct SortColumn {
 /// assert!(sorted_columns[0].is_null(0));
 /// ```
 ///
-/// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow/latest/arrow/row/)
+/// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow-row/latest/arrow_row/)
 /// may be significantly faster
 ///
 pub fn lexsort(
@@ -1078,7 +1078,7 @@ pub fn lexsort(
 /// Sort elements lexicographically from a list of `ArrayRef` into an unsigned integer
 /// (`UInt32Array`) of indices.
 ///
-/// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow/latest/arrow/row/)
+/// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow-row/latest/arrow_row/)
 /// may be significantly faster
 pub fn lexsort_to_indices(
     columns: &[SortColumn],

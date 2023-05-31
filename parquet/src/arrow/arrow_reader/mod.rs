@@ -549,7 +549,7 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::*;
     use arrow_array::{RecordBatch, RecordBatchReader};
-    use arrow_buffer::Buffer;
+    use arrow_buffer::{i256, Buffer};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema};
 
@@ -949,7 +949,9 @@ mod tests {
 
     #[test]
     fn test_decimal_nullable_struct() {
-        let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
+        let decimals = Decimal256Array::from_iter_values(
+            [1, 2, 3, 4, 5, 6, 7, 8].into_iter().map(i256::from_i128),
+        );
 
         let data =
             ArrayDataBuilder::new(ArrowDataType::Struct(Fields::from(vec![Field::new(

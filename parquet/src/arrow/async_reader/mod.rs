@@ -111,8 +111,6 @@ use crate::format::PageLocation;
 
 use crate::file::FOOTER_SIZE;
 
-use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
-
 mod metadata;
 pub use metadata::*;
 
@@ -669,8 +667,6 @@ impl<'a> RowGroups for InMemoryRowGroup<'a> {
                     )?);
 
                 Ok(Box::new(ColumnChunkIterator {
-                    schema: self.metadata.schema_descr_ptr(),
-                    column_schema: self.metadata.schema_descr_ptr().columns()[i].clone(),
                     reader: Some(Ok(page_reader)),
                 }))
             }
@@ -735,8 +731,6 @@ impl ChunkReader for ColumnChunkData {
 
 /// Implements [`PageIterator`] for a single column chunk, yielding a single [`PageReader`]
 struct ColumnChunkIterator {
-    schema: SchemaDescPtr,
-    column_schema: ColumnDescPtr,
     reader: Option<Result<Box<dyn PageReader>>>,
 }
 
@@ -748,15 +742,7 @@ impl Iterator for ColumnChunkIterator {
     }
 }
 
-impl PageIterator for ColumnChunkIterator {
-    fn schema(&mut self) -> Result<SchemaDescPtr> {
-        Ok(self.schema.clone())
-    }
-
-    fn column_schema(&mut self) -> Result<ColumnDescPtr> {
-        Ok(self.column_schema.clone())
-    }
-}
+impl PageIterator for ColumnChunkIterator {}
 
 #[cfg(test)]
 mod tests {

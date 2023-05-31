@@ -32,7 +32,9 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
+use itertools::Itertools;
 use percent_encoding::{utf8_percent_encode, PercentEncode};
+use quick_xml::events::{self as xml_events};
 use reqwest::{header::CONTENT_TYPE, Client as ReqwestClient, Method, Response};
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
@@ -64,6 +66,29 @@ pub(crate) enum Error {
     DeleteRequest {
         source: crate::client::retry::Error,
         path: String,
+    },
+
+    #[snafu(display("Error performing DeleteObjects request: {}", source))]
+    DeleteObjectsRequest { source: crate::client::retry::Error },
+
+    #[snafu(display(
+        "DeleteObjects request failed for key {}: {} (code: {})",
+        path,
+        message,
+        code
+    ))]
+    DeleteFailed {
+        path: String,
+        code: String,
+        message: String,
+    },
+
+    #[snafu(display("Error getting DeleteObjects response body: {}", source))]
+    DeleteObjectsResponse { source: reqwest::Error },
+
+    #[snafu(display("Got invalid DeleteObjects response: {}", source))]
+    InvalidDeleteObjectsResponse {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
     #[snafu(display("Error performing copy request {}: {}", path, source))]
@@ -127,6 +152,44 @@ struct MultipartPart {
     e_tag: String,
     #[serde(rename = "PartNumber")]
     part_number: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase", rename = "DeleteResult")]
+struct BatchDeleteResponse {
+    #[serde(rename = "$value")]
+    content: Vec<DeleteObjectResult>,
+}
+
+#[derive(Deserialize)]
+enum DeleteObjectResult {
+    Deleted(DeletedObject),
+    Error(DeleteError),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase", rename = "Deleted")]
+struct DeletedObject {
+    #[allow(dead_code)]
+    key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase", rename = "Error")]
+struct DeleteError {
+    key: String,
+    code: String,
+    message: String,
+}
+
+impl From<DeleteError> for Error {
+    fn from(err: DeleteError) -> Self {
+        Self::DeleteFailed {
+            path: err.key,
+            code: err.code,
+            message: err.message,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -241,6 +304,118 @@ impl S3Client {
             })?;
 
         Ok(())
+    }
+
+    /// Make an S3 Delete Objects request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html>
+    ///
+    /// Produces a vector of results, one for each path in the input vector. If
+    /// the delete was successful, the path is returned in the `Ok` variant. If
+    /// there was an error for a certain path, the error will be returned in the
+    /// vector. If there was an issue with making the overall request, an error
+    /// will be returned at the top level.
+    pub async fn bulk_delete_request(
+        &self,
+        paths: Vec<Path>,
+    ) -> Result<Vec<Result<Path>>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let credential = self.get_credential().await?;
+        let url = format!("{}?delete", self.config.bucket_endpoint);
+
+        let mut buffer = Vec::new();
+        let mut writer = quick_xml::Writer::new(&mut buffer);
+        writer
+            .write_event(xml_events::Event::Start(
+                xml_events::BytesStart::new("Delete").with_attributes([(
+                    "xmlns",
+                    "http://s3.amazonaws.com/doc/2006-03-01/",
+                )]),
+            ))
+            .unwrap();
+        for path in &paths {
+            // <Object><Key>{path}</Key></Object>
+            writer
+                .write_event(xml_events::Event::Start(xml_events::BytesStart::new(
+                    "Object",
+                )))
+                .unwrap();
+            writer
+                .write_event(xml_events::Event::Start(xml_events::BytesStart::new("Key")))
+                .unwrap();
+            writer
+                .write_event(xml_events::Event::Text(xml_events::BytesText::new(
+                    path.as_ref(),
+                )))
+                .map_err(|err| crate::Error::Generic {
+                    store: STORE,
+                    source: Box::new(err),
+                })?;
+            writer
+                .write_event(xml_events::Event::End(xml_events::BytesEnd::new("Key")))
+                .unwrap();
+            writer
+                .write_event(xml_events::Event::End(xml_events::BytesEnd::new("Object")))
+                .unwrap();
+        }
+        writer
+            .write_event(xml_events::Event::End(xml_events::BytesEnd::new("Delete")))
+            .unwrap();
+
+        let body = Bytes::from(buffer);
+
+        let mut builder = self.client.request(Method::POST, url);
+
+        // Compute checksum - S3 *requires* this for DeleteObjects requests, so we default to
+        // their algorithm if the user hasn't specified one.
+        let checksum = self.config().checksum.unwrap_or(Checksum::SHA256);
+        let digest = checksum.digest(&body);
+        builder = builder.header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
+        let payload_sha256 = if checksum == Checksum::SHA256 {
+            Some(digest)
+        } else {
+            None
+        };
+
+        let response = builder
+            .header(CONTENT_TYPE, "application/xml")
+            .body(body)
+            .with_aws_sigv4(
+                credential.as_ref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+                payload_sha256.as_deref(),
+            )
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(DeleteObjectsRequestSnafu {})?
+            .bytes()
+            .await
+            .context(DeleteObjectsResponseSnafu {})?;
+
+        let response: BatchDeleteResponse = quick_xml::de::from_reader(response.reader())
+            .map_err(|err| Error::InvalidDeleteObjectsResponse {
+                source: Box::new(err),
+            })?;
+
+        // Assume all were ok, then fill in errors. This guarantees output order
+        // matches input order.
+        let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
+        for content in response.content.into_iter() {
+            if let DeleteObjectResult::Error(error) = content {
+                let path = Path::parse(&error.key).map_err(|err| {
+                    Error::InvalidDeleteObjectsResponse {
+                        source: Box::new(err),
+                    }
+                })?;
+                let i = paths.iter().find_position(|&p| p == &path).unwrap().0;
+                results[i] = Err(Error::from(error).into());
+            }
+        }
+
+        Ok(results)
     }
 
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>

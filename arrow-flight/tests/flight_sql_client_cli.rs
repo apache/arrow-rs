@@ -36,9 +36,8 @@ use arrow_flight::{
     },
     utils::batches_to_flight_data,
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
+    HandshakeResponse, Ticket,
 };
-use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 use assert_cmd::Command;
 use futures::Stream;
@@ -167,42 +166,31 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let batch = Self::fake_result().unwrap();
 
-        let IpcMessage(schema_bytes) =
-            SchemaAsIpc::new(batch.schema().as_ref(), &IpcWriteOptions::default())
-                .try_into()
-                .unwrap();
+        let info = FlightInfo::new()
+            .try_with_schema(&batch.schema())
+            .expect("encoding schema")
+            .with_endpoint(
+                FlightEndpoint::new().with_ticket(Ticket::new(
+                    FetchResults {
+                        handle: String::from("part_1"),
+                    }
+                    .as_any()
+                    .encode_to_vec(),
+                )),
+            )
+            .with_endpoint(
+                FlightEndpoint::new().with_ticket(Ticket::new(
+                    FetchResults {
+                        handle: String::from("part_2"),
+                    }
+                    .as_any()
+                    .encode_to_vec(),
+                )),
+            )
+            .with_total_records(batch.num_rows() as i64)
+            .with_total_bytes(batch.get_array_memory_size() as i64)
+            .with_ordered(false);
 
-        let info = FlightInfo {
-            schema: schema_bytes,
-            flight_descriptor: None,
-            endpoint: vec![
-                FlightEndpoint {
-                    ticket: Some(Ticket {
-                        ticket: FetchResults {
-                            handle: String::from("part_1"),
-                        }
-                        .as_any()
-                        .encode_to_vec()
-                        .into(),
-                    }),
-                    location: vec![],
-                },
-                FlightEndpoint {
-                    ticket: Some(Ticket {
-                        ticket: FetchResults {
-                            handle: String::from("part_2"),
-                        }
-                        .as_any()
-                        .encode_to_vec()
-                        .into(),
-                    }),
-                    location: vec![],
-                },
-            ],
-            total_records: batch.num_rows() as i64,
-            total_bytes: batch.get_array_memory_size() as i64,
-            ordered: false,
-        };
         let resp = Response::new(info);
         Ok(resp)
     }
