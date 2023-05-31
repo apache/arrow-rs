@@ -1853,7 +1853,7 @@ pub fn cast_with_options(
                 if time_array.is_null(i) {
                     b.append_null();
                 } else {
-                    b.append_value((time_array.value(i) / from_size) as i32);
+                    b.append_value(num::integer::div_floor::<i64>(time_array.value(i), from_size) as i32);
                 }
             }
 
@@ -9171,5 +9171,42 @@ mod tests {
             },
         );
         assert!(casted_array.is_err());
+    }
+
+    #[test]
+    fn test_cast_below_unixtimestamp() {
+        let valid = StringArray::from(vec![
+            "1900-01-03 23:59:59",
+            "1969-12-31 00:00:01",
+            "1989-12-31 00:00:01",
+        ]);
+
+        let array = Arc::new(valid) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        )
+        .unwrap();
+
+        let ts_array = casted_array
+            .as_primitive::<TimestampNanosecondType>()
+            .values()
+            .iter()
+            .map(|ts| ts / 1_000_000)
+            .collect::<Vec<_>>();
+
+        let array =
+            TimestampMillisecondArray::from(ts_array).with_timezone("UTC".to_string());
+        let casted_array = cast(&array, &DataType::Date32).unwrap();
+        let date_array = casted_array.as_primitive::<Date32Type>();
+        let casted_array = cast(&date_array, &DataType::Utf8).unwrap();
+        let string_array = casted_array.as_string::<i32>();
+        assert_eq!("1900-01-03", string_array.value(0));
+        assert_eq!("1969-12-31", string_array.value(1));
+        assert_eq!("1989-12-31", string_array.value(2));
     }
 }
