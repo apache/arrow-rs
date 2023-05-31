@@ -543,13 +543,6 @@ impl Field {
     }
 }
 
-// TODO: improve display with crate https://crates.io/crates/derive_more ?
-impl std::fmt::Display for Field {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
