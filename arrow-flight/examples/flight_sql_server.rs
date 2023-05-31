@@ -429,22 +429,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
             })
             .collect::<HashSet<_>>();
 
-        let mut builder = GetSchemasBuilder::new(query.db_schema_filter_pattern);
-        if let Some(catalog) = query.catalog {
-            for (catalog_name, schema_name) in schemas {
-                if catalog == catalog_name {
-                    builder
-                        .append(catalog_name, schema_name)
-                        .map_err(Status::from)?;
-                }
-            }
-        } else {
-            for (catalog_name, schema_name) in schemas {
-                builder
-                    .append(catalog_name, schema_name)
-                    .map_err(Status::from)?;
-            }
-        };
+        let mut builder = query.into_builder();
+        for (catalog_name, schema_name) in schemas {
+            builder
+                .append(Some(catalog_name), schema_name)
+                .map_err(Status::from)?;
+        }
 
         let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
@@ -471,39 +461,19 @@ impl FlightSqlService for FlightSqlServiceImpl {
             })
             .collect::<HashSet<_>>();
 
-        let mut builder = GetTablesBuilder::new(
-            query.db_schema_filter_pattern,
-            query.table_name_filter_pattern,
-            query.include_schema,
-        );
         let dummy_schema = Schema::empty();
-        if let Some(catalog) = query.catalog {
-            for (catalog_name, schema_name, table_name) in tables {
-                if catalog == catalog_name {
-                    builder
-                        .append(
-                            catalog_name,
-                            schema_name,
-                            table_name,
-                            "TABLE",
-                            &dummy_schema,
-                        )
-                        .map_err(Status::from)?;
-                }
-            }
-        } else {
-            for (catalog_name, schema_name, table_name) in tables {
-                builder
-                    .append(
-                        catalog_name,
-                        schema_name,
-                        table_name,
-                        "TABLE",
-                        &dummy_schema,
-                    )
-                    .map_err(Status::from)?;
-            }
-        };
+        let mut builder = query.into_builder();
+        for (catalog_name, schema_name, table_name) in tables {
+            builder
+                .append(
+                    catalog_name,
+                    schema_name,
+                    table_name,
+                    "TABLE",
+                    &dummy_schema,
+                )
+                .map_err(Status::from)?;
+        }
 
         let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()

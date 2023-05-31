@@ -21,7 +21,9 @@
 
 use std::sync::Arc;
 
+use arrow_arith::boolean::and;
 use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch};
+use arrow_ord::comparison::eq_utf8_scalar;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
 use arrow_string::like::like_utf8_scalar;
@@ -29,6 +31,7 @@ use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
 use crate::error::*;
+use crate::sql::CommandGetDbSchemas;
 
 /// Return the schema of the RecordBatch that will be returned from [`CommandGetDbSchemas`]
 ///
@@ -50,12 +53,28 @@ static GET_DB_SCHEMAS_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
 /// * catalog_name: utf8,
 /// * db_schema_name: utf8,
 pub struct GetSchemasBuilder {
+    // Specifies the Catalog to search for the tables.
+    // - An empty string retrieves those without a catalog.
+    // - If omitted the catalog name is not used to narrow the search.
+    catalog_filter: Option<String>,
     // Optional filters to apply
     db_schema_filter_pattern: Option<String>,
     // array builder for catalog names
     catalog_name: StringBuilder,
     // array builder for schema names
     db_schema_name: StringBuilder,
+}
+
+impl CommandGetDbSchemas {
+    pub fn into_builder(self) -> GetSchemasBuilder {
+        self.into()
+    }
+}
+
+impl From<CommandGetDbSchemas> for GetSchemasBuilder {
+    fn from(value: CommandGetDbSchemas) -> Self {
+        Self::new(value.catalog, value.db_schema_filter_pattern)
+    }
 }
 
 impl GetSchemasBuilder {
@@ -67,6 +86,9 @@ impl GetSchemasBuilder {
     ///
     /// # Parameters
     ///
+    /// - `catalog`:  Specifies the Catalog to search for the tables.
+    ///   - An empty string retrieves those without a catalog.
+    ///   - If omitted the catalog name is not used to narrow the search.
     /// - `db_schema_filter_pattern`: Specifies a filter pattern for schemas to search for.
     ///   When no pattern is provided, the pattern will not be used to narrow the search.
     ///   In the pattern string, two special characters can be used to denote matching rules:
@@ -74,10 +96,14 @@ impl GetSchemasBuilder {
     ///     - "_" means to match any one character.
     ///
     /// [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
-    pub fn new(db_schema_filter_pattern: Option<impl Into<String>>) -> Self {
+    pub fn new(
+        catalog: Option<impl Into<String>>,
+        db_schema_filter_pattern: Option<impl Into<String>>,
+    ) -> Self {
         let catalog_name = StringBuilder::new();
         let db_schema_name = StringBuilder::new();
         Self {
+            catalog_filter: catalog.map(|v| v.into()),
             db_schema_filter_pattern: db_schema_filter_pattern.map(|v| v.into()),
             catalog_name,
             db_schema_name,
@@ -85,6 +111,8 @@ impl GetSchemasBuilder {
     }
 
     /// Append a row
+    ///
+    /// In case the catalog should be considered as empty, pass in an empty string '""'.
     pub fn append(
         &mut self,
         catalog_name: impl AsRef<str>,
@@ -98,6 +126,7 @@ impl GetSchemasBuilder {
     /// builds a `RecordBatch` with the correct schema for a `CommandGetDbSchemas` response
     pub fn build(self) -> Result<RecordBatch> {
         let Self {
+            catalog_filter,
             db_schema_filter_pattern,
             mut catalog_name,
             mut db_schema_name,
@@ -107,13 +136,29 @@ impl GetSchemasBuilder {
         let catalog_name = catalog_name.finish();
         let db_schema_name = db_schema_name.finish();
 
-        // the filter, if requested, getting a BooleanArray that represents the rows that passed the filter
-        let filter = db_schema_filter_pattern
-            .map(|db_schema_filter_pattern| {
-                // use like kernel to get wildcard matching
-                like_utf8_scalar(&db_schema_name, &db_schema_filter_pattern)
-            })
-            .transpose()?;
+        let mut filters = vec![];
+
+        if let Some(db_schema_filter_pattern) = db_schema_filter_pattern {
+            // use like kernel to get wildcard matching
+            filters.push(like_utf8_scalar(
+                &db_schema_name,
+                &db_schema_filter_pattern,
+            )?)
+        }
+
+        if let Some(catalog_filter_name) = catalog_filter {
+            filters.push(eq_utf8_scalar(&catalog_name, &catalog_filter_name)?);
+        }
+
+        // `AND` any filters together
+        let mut total_filter = None;
+        while let Some(filter) = filters.pop() {
+            let new_filter = match total_filter {
+                Some(total_filter) => and(&total_filter, &filter)?,
+                None => filter,
+            };
+            total_filter = Some(new_filter);
+        }
 
         let batch = RecordBatch::try_new(
             get_db_schemas_schema(),
@@ -124,7 +169,7 @@ impl GetSchemasBuilder {
         )?;
 
         // Apply the filters if needed
-        let filtered_batch = if let Some(filter) = filter {
+        let filtered_batch = if let Some(filter) = total_filter {
             filter_record_batch(&batch, &filter)?
         } else {
             batch
@@ -169,7 +214,7 @@ mod tests {
     fn test_schemas_are_filtered() {
         let ref_batch = get_ref_batch();
 
-        let mut builder = GetSchemasBuilder::new(None::<String>);
+        let mut builder = GetSchemasBuilder::new(None::<String>, None::<String>);
         builder.append("a_catalog", "a_schema").unwrap();
         builder.append("a_catalog", "b_schema").unwrap();
         builder.append("b_catalog", "a_schema").unwrap();
@@ -178,7 +223,7 @@ mod tests {
 
         assert_eq!(schema_batch, ref_batch);
 
-        let mut builder = GetSchemasBuilder::new(Some("a%"));
+        let mut builder = GetSchemasBuilder::new(None::<String>, Some("a%"));
         builder.append("a_catalog", "a_schema").unwrap();
         builder.append("a_catalog", "b_schema").unwrap();
         builder.append("b_catalog", "a_schema").unwrap();
@@ -204,7 +249,7 @@ mod tests {
     fn test_schemas_are_sorted() {
         let ref_batch = get_ref_batch();
 
-        let mut builder = GetSchemasBuilder::new(None::<String>);
+        let mut builder = GetSchemasBuilder::new(None::<String>, None::<String>);
         builder.append("a_catalog", "b_schema").unwrap();
         builder.append("b_catalog", "a_schema").unwrap();
         builder.append("a_catalog", "a_schema").unwrap();
@@ -212,5 +257,35 @@ mod tests {
         let schema_batch = builder.build().unwrap();
 
         assert_eq!(schema_batch, ref_batch)
+    }
+
+    #[test]
+    fn test_builder_from_query() {
+        let ref_batch = get_ref_batch();
+        let query = CommandGetDbSchemas {
+            catalog: Some("a_catalog".into()),
+            db_schema_filter_pattern: Some("b%".into()),
+        };
+
+        let mut builder = query.into_builder();
+        builder.append("a_catalog", "a_schema").unwrap();
+        builder.append("a_catalog", "b_schema").unwrap();
+        builder.append("b_catalog", "a_schema").unwrap();
+        builder.append("b_catalog", "b_schema").unwrap();
+        let schema_batch = builder.build().unwrap();
+
+        let indices = UInt32Array::from(vec![1]);
+        let ref_filtered = RecordBatch::try_new(
+            get_db_schemas_schema(),
+            ref_batch
+                .columns()
+                .iter()
+                .map(|c| take(c, &indices, None))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(schema_batch, ref_filtered);
     }
 }

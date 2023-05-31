@@ -21,9 +21,10 @@
 
 use std::sync::Arc;
 
-use arrow_arith::boolean::and;
+use arrow_arith::boolean::{and, or};
 use arrow_array::builder::{BinaryBuilder, StringBuilder};
 use arrow_array::{ArrayRef, RecordBatch};
+use arrow_ord::comparison::eq_utf8_scalar;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
 use arrow_string::like::like_utf8_scalar;
@@ -31,6 +32,7 @@ use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
 use crate::error::*;
+use crate::sql::CommandGetTables;
 use crate::{IpcMessage, IpcWriteOptions, SchemaAsIpc};
 
 /// Return the schema of the RecordBatch that will be returned from [`CommandGetTables`]
@@ -55,6 +57,8 @@ pub fn get_tables_schema(include_schema: bool) -> SchemaRef {
 /// * (optional) table_schema: bytes not null (schema of the table as described
 ///   in Schema.fbs::Schema it is serialized as an IPC message.)
 pub struct GetTablesBuilder {
+    catalog_filter: Option<String>,
+    table_types_filter: Vec<String>,
     // Optional filters to apply to schemas
     db_schema_filter_pattern: Option<String>,
     // Optional filters to apply to tables
@@ -71,6 +75,24 @@ pub struct GetTablesBuilder {
     table_schema: Option<BinaryBuilder>,
 }
 
+impl CommandGetTables {
+    pub fn into_builder(self) -> GetTablesBuilder {
+        self.into()
+    }
+}
+
+impl From<CommandGetTables> for GetTablesBuilder {
+    fn from(value: CommandGetTables) -> Self {
+        Self::new(
+            value.catalog,
+            value.db_schema_filter_pattern,
+            value.table_name_filter_pattern,
+            value.table_types,
+            value.include_schema,
+        )
+    }
+}
+
 impl GetTablesBuilder {
     /// Create a new instance of [`GetTablesBuilder`]
     ///
@@ -80,6 +102,9 @@ impl GetTablesBuilder {
     ///
     /// # Paramneters
     ///
+    /// - `catalog`:  Specifies the Catalog to search for the tables.
+    ///   - An empty string retrieves those without a catalog.
+    ///   - If omitted the catalog name is not used to narrow the search.
     /// - `db_schema_filter_pattern`: Specifies a filter pattern for schemas to search for.
     ///   When no pattern is provided, the pattern will not be used to narrow the search.
     ///   In the pattern string, two special characters can be used to denote matching rules:
@@ -90,12 +115,16 @@ impl GetTablesBuilder {
     ///   In the pattern string, two special characters can be used to denote matching rules:
     ///     - "%" means to match any substring with 0 or more characters.
     ///     - "_" means to match any one character.
+    /// - `table_types`:  Specifies a filter of table types which must match.
+    ///   An empy Vec matches all table types.
     /// - `include_schema`: Specifies if the Arrow schema should be returned for found tables.
     ///
     /// [`CommandGetTables`]: crate::sql::CommandGetTables
     pub fn new(
+        catalog: Option<impl Into<String>>,
         db_schema_filter_pattern: Option<impl Into<String>>,
         table_name_filter_pattern: Option<impl Into<String>>,
+        table_types: impl IntoIterator<Item = impl Into<String>>,
         include_schema: bool,
     ) -> Self {
         let catalog_name = StringBuilder::new();
@@ -110,6 +139,8 @@ impl GetTablesBuilder {
         };
 
         Self {
+            catalog_filter: catalog.map(|s| s.into()),
+            table_types_filter: table_types.into_iter().map(|tt| tt.into()).collect(),
             db_schema_filter_pattern: db_schema_filter_pattern.map(|s| s.into()),
             table_name_filter_pattern: table_name_filter_pattern.map(|t| t.into()),
             catalog_name,
@@ -148,6 +179,8 @@ impl GetTablesBuilder {
     /// builds a `RecordBatch` for `CommandGetTables`
     pub fn build(self) -> Result<RecordBatch> {
         let Self {
+            catalog_filter,
+            table_types_filter,
             db_schema_filter_pattern,
             table_name_filter_pattern,
 
@@ -168,6 +201,21 @@ impl GetTablesBuilder {
         // apply any filters, getting a BooleanArray that represents
         // the rows that passed the filter
         let mut filters = vec![];
+
+        if let Some(catalog_filter_name) = catalog_filter {
+            filters.push(eq_utf8_scalar(&catalog_name, &catalog_filter_name)?);
+        }
+
+        let tt_filter = table_types_filter
+            .into_iter()
+            .map(|tt| eq_utf8_scalar(&table_type, &tt))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            // We know the arrays are of same length as they are produced fromn the same root array
+            .reduce(|filter, arr| or(&filter, &arr).unwrap());
+        if let Some(filter) = tt_filter {
+            filters.push(filter);
+        }
 
         if let Some(db_schema_filter_pattern) = db_schema_filter_pattern {
             // use like kernel to get wildcard matching
@@ -296,11 +344,14 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn test_tables_are_filtered() {
-        let ref_batch = get_ref_batch();
+    fn get_ref_builder(
+        catalog: Option<&str>,
+        db_schema_filter_pattern: Option<&str>,
+        table_name_filter_pattern: Option<&str>,
+        table_types: Vec<&str>,
+        include_schema: bool,
+    ) -> GetTablesBuilder {
         let dummy_schema = Schema::empty();
-
         let tables = [
             ("a_catalog", "a_schema", "a_table", "TABLE"),
             ("a_catalog", "a_schema", "b_table", "TABLE"),
@@ -311,7 +362,13 @@ mod tests {
             ("b_catalog", "b_schema", "b_table", "TABLE"),
             ("b_catalog", "b_schema", "b_table", "VIEW"),
         ];
-        let mut builder = GetTablesBuilder::new(None::<String>, None::<String>, false);
+        let mut builder = GetTablesBuilder::new(
+            catalog,
+            db_schema_filter_pattern,
+            table_name_filter_pattern,
+            table_types,
+            include_schema,
+        );
         for (catalog_name, schema_name, table_name, table_type) in tables {
             builder
                 .append(
@@ -323,23 +380,19 @@ mod tests {
                 )
                 .unwrap();
         }
+        builder
+    }
+
+    #[test]
+    fn test_tables_are_filtered() {
+        let ref_batch = get_ref_batch();
+
+        let builder = get_ref_builder(None, None, None, Vec::new(), false);
         let table_batch = builder.build().unwrap();
         assert_eq!(table_batch, ref_batch);
 
-        let mut builder = GetTablesBuilder::new(Some("a%"), Some("a%"), false);
-        for (catalog_name, schema_name, table_name, table_type) in tables {
-            builder
-                .append(
-                    catalog_name,
-                    schema_name,
-                    table_name,
-                    table_type,
-                    &dummy_schema,
-                )
-                .unwrap();
-        }
+        let builder = get_ref_builder(None, Some("a%"), Some("a%"), Vec::new(), false);
         let table_batch = builder.build().unwrap();
-
         let indices = UInt32Array::from(vec![0, 4, 5]);
         let ref_filtered = RecordBatch::try_new(
             get_tables_schema(false),
@@ -351,7 +404,36 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
+        assert_eq!(table_batch, ref_filtered);
 
+        let builder = get_ref_builder(Some("a_catalog"), None, None, Vec::new(), false);
+        let table_batch = builder.build().unwrap();
+        let indices = UInt32Array::from(vec![0, 1, 2, 3]);
+        let ref_filtered = RecordBatch::try_new(
+            get_tables_schema(false),
+            ref_batch
+                .columns()
+                .iter()
+                .map(|c| take(c, &indices, None))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(table_batch, ref_filtered);
+
+        let builder = get_ref_builder(None, None, None, vec!["VIEW"], false);
+        let table_batch = builder.build().unwrap();
+        let indices = UInt32Array::from(vec![5, 7]);
+        let ref_filtered = RecordBatch::try_new(
+            get_tables_schema(false),
+            ref_batch
+                .columns()
+                .iter()
+                .map(|c| take(c, &indices, None))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(table_batch, ref_filtered);
     }
 
@@ -370,7 +452,13 @@ mod tests {
             ("a_catalog", "b_schema", "b_table", "TABLE"),
             ("a_catalog", "a_schema", "b_table", "TABLE"),
         ];
-        let mut builder = GetTablesBuilder::new(None::<String>, None::<String>, false);
+        let mut builder = GetTablesBuilder::new(
+            None::<String>,
+            None::<String>,
+            None::<String>,
+            None::<String>,
+            false,
+        );
         for (catalog_name, schema_name, table_name, table_type) in tables {
             builder
                 .append(

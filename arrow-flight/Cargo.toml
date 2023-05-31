@@ -34,6 +34,7 @@ arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
 arrow-data = { workspace = true, optional = true }
 arrow-ipc = { workspace = true }
+arrow-ord = { workspace = true, optional = true }
 arrow-row = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-schema = { workspace = true }
@@ -57,7 +58,7 @@ all-features = true
 
 [features]
 default = []
-flight-sql-experimental = ["arrow-arith", "arrow-data", "arrow-row", "arrow-select", "arrow-string", "once_cell"]
+flight-sql-experimental = ["arrow-arith", "arrow-data", "arrow-ord", "arrow-row", "arrow-select", "arrow-string", "once_cell"]
 tls = ["tonic/tls"]
 
 # Enable CLI tools
