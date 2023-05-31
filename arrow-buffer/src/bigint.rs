@@ -22,33 +22,30 @@ use std::num::ParseIntError;
 use std::ops::{BitAnd, BitOr, BitXor, Neg, Shl, Shr};
 use std::str::FromStr;
 
-/// [`i256`] operations return this error type.
+/// An opaque error similar to [`std::num::ParseIntError`]
 #[derive(Debug)]
-pub enum I256Error {
-    /// An opaque error similar to [`std::num::ParseIntError`]
-    ParseError,
+pub struct ParseI256Error {}
+
+impl From<ParseIntError> for ParseI256Error {
+    fn from(_: ParseIntError) -> Self {
+        Self {}
+    }
+}
+
+impl std::fmt::Display for ParseI256Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to parse as i256")
+    }
+}
+impl std::error::Error for ParseI256Error {}
+
+/// Error returned by i256::DivRem
+enum DivRemError {
     /// Division by zero
     DivideByZero,
     /// Division overflow
     DivideOverflow,
 }
-
-impl From<ParseIntError> for I256Error {
-    fn from(_: ParseIntError) -> Self {
-        I256Error::ParseError
-    }
-}
-
-impl std::fmt::Display for I256Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            I256Error::ParseError => write!(f, "Failed to parse as i256"),
-            I256Error::DivideByZero => write!(f, "Division by zero"),
-            I256Error::DivideOverflow => write!(f, "Division overflow"),
-        }
-    }
-}
-impl std::error::Error for I256Error {}
 
 /// A signed 256-bit integer
 #[allow(non_camel_case_types)]
@@ -71,7 +68,7 @@ impl std::fmt::Display for i256 {
 }
 
 impl FromStr for i256 {
-    type Err = I256Error;
+    type Err = ParseI256Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // i128 can store up to 38 decimal digits
@@ -93,7 +90,7 @@ impl FromStr for i256 {
 
         if !s.as_bytes()[0].is_ascii_digit() {
             // Ensures no duplicate sign
-            return Err(I256Error::ParseError);
+            return Err(ParseI256Error {});
         }
 
         parse_impl(s, negative)
@@ -101,7 +98,7 @@ impl FromStr for i256 {
 }
 
 /// Parse `s` with any sign and leading 0s removed
-fn parse_impl(s: &str, negative: bool) -> Result<i256, I256Error> {
+fn parse_impl(s: &str, negative: bool) -> Result<i256, ParseI256Error> {
     if s.len() <= 38 {
         let low = i128::from_str(s)?;
         return Ok(match negative {
@@ -113,7 +110,7 @@ fn parse_impl(s: &str, negative: bool) -> Result<i256, I256Error> {
     let split = s.len() - 38;
     if !s.as_bytes()[split].is_ascii_digit() {
         // Ensures not splitting codepoint and no sign
-        return Err(I256Error::ParseError);
+        return Err(ParseI256Error {});
     }
     let (hs, ls) = s.split_at(split);
 
@@ -128,7 +125,7 @@ fn parse_impl(s: &str, negative: bool) -> Result<i256, I256Error> {
 
     high.checked_mul(i256::from_i128(10_i128.pow(38)))
         .and_then(|high| high.checked_add(low))
-        .ok_or(I256Error::ParseError)
+        .ok_or(ParseI256Error {})
 }
 
 impl PartialOrd for i256 {
@@ -429,12 +426,12 @@ impl i256 {
     /// Division operation, returns (quotient, remainder).
     /// This basically implements [Long division]: `<https://en.wikipedia.org/wiki/Division_algorithm>`
     #[inline]
-    fn div_rem(self, other: Self) -> Result<(Self, Self), I256Error> {
+    fn div_rem(self, other: Self) -> Result<(Self, Self), DivRemError> {
         if other == Self::ZERO {
-            return Err(I256Error::DivideByZero);
+            return Err(DivRemError::DivideByZero);
         }
         if other == Self::MINUS_ONE && self == Self::MIN {
-            return Err(I256Error::DivideOverflow);
+            return Err(DivRemError::DivideOverflow);
         }
 
         if self == Self::MIN || other == Self::MIN {
@@ -477,7 +474,7 @@ impl i256 {
     pub fn wrapping_div(self, other: Self) -> Self {
         match self.div_rem(other) {
             Ok((v, _)) => v,
-            Err(I256Error::DivideByZero) => panic!("attempt to divide by zero"),
+            Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
             Err(_) => Self::MIN,
         }
     }
@@ -493,7 +490,7 @@ impl i256 {
     pub fn wrapping_rem(self, other: Self) -> Self {
         match self.div_rem(other) {
             Ok((_, v)) => v,
-            Err(I256Error::DivideByZero) => panic!("attempt to divide by zero"),
+            Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
             Err(_) => Self::ZERO,
         }
     }
