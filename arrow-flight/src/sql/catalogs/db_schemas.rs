@@ -80,10 +80,6 @@ impl From<CommandGetDbSchemas> for GetSchemasBuilder {
 impl GetSchemasBuilder {
     /// Create a new instance of [`GetSchemasBuilder`]
     ///
-    /// The builder handles filtering by schema patterns, the caller
-    /// is expected to only pass in tables that match the catalog
-    /// from the [`CommandGetDbSchemas`] request.
-    ///
     /// # Parameters
     ///
     /// - `catalog`:  Specifies the Catalog to search for the tables.
@@ -100,13 +96,11 @@ impl GetSchemasBuilder {
         catalog: Option<impl Into<String>>,
         db_schema_filter_pattern: Option<impl Into<String>>,
     ) -> Self {
-        let catalog_name = StringBuilder::new();
-        let db_schema_name = StringBuilder::new();
         Self {
             catalog_filter: catalog.map(|v| v.into()),
             db_schema_filter_pattern: db_schema_filter_pattern.map(|v| v.into()),
-            catalog_name,
-            db_schema_name,
+            catalog_name: StringBuilder::new(),
+            db_schema_name: StringBuilder::new(),
         }
     }
 

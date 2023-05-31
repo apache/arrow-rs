@@ -96,10 +96,6 @@ impl From<CommandGetTables> for GetTablesBuilder {
 impl GetTablesBuilder {
     /// Create a new instance of [`GetTablesBuilder`]
     ///
-    /// The builder handles filtering by schema and table patterns, the caller
-    /// is expected to only pass in tables that match the catalog and table_type
-    /// from the [`CommandGetTables`] request.
-    ///
     /// # Paramneters
     ///
     /// - `catalog`:  Specifies the Catalog to search for the tables.
@@ -127,26 +123,20 @@ impl GetTablesBuilder {
         table_types: impl IntoIterator<Item = impl Into<String>>,
         include_schema: bool,
     ) -> Self {
-        let catalog_name = StringBuilder::new();
-        let db_schema_name = StringBuilder::new();
-        let table_name = StringBuilder::new();
-        let table_type = StringBuilder::new();
-
         let table_schema = if include_schema {
             Some(BinaryBuilder::new())
         } else {
             None
         };
-
         Self {
             catalog_filter: catalog.map(|s| s.into()),
             table_types_filter: table_types.into_iter().map(|tt| tt.into()).collect(),
             db_schema_filter_pattern: db_schema_filter_pattern.map(|s| s.into()),
             table_name_filter_pattern: table_name_filter_pattern.map(|t| t.into()),
-            catalog_name,
-            db_schema_name,
-            table_name,
-            table_type,
+            catalog_name: StringBuilder::new(),
+            db_schema_name: StringBuilder::new(),
+            table_name: StringBuilder::new(),
+            table_type: StringBuilder::new(),
             table_schema,
         }
     }
