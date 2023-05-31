@@ -30,10 +30,8 @@ use tonic::{Request, Response, Status, Streaming};
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
-
 use arrow_flight::sql::catalogs::{
     get_catalogs_batch, get_catalogs_schema, get_db_schemas_schema, get_tables_schema,
-    GetSchemasBuilder, GetTablesBuilder,
 };
 use arrow_flight::sql::sql_info::SqlInfoList;
 use arrow_flight::sql::{
@@ -432,7 +430,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let mut builder = query.into_builder();
         for (catalog_name, schema_name) in schemas {
             builder
-                .append(Some(catalog_name), schema_name)
+                .append(catalog_name, schema_name)
                 .map_err(Status::from)?;
         }
 
