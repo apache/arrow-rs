@@ -427,7 +427,7 @@ impl i256 {
     }
 
     /// Division operation, returns (quotient, remainder).
-    /// This basically implements [Long division]: https://en.wikipedia.org/wiki/Division_algorithm
+    /// This basically implements [Long division]: `<https://en.wikipedia.org/wiki/Division_algorithm>`
     #[inline]
     fn div_rem(self, other: Self) -> Result<(Self, Self), I256Error> {
         if other == Self::ZERO {
