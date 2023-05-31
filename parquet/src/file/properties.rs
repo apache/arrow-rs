@@ -370,7 +370,7 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
-    #[deprecated(since = "41.0.0", note = "Use set_dictionary_page_size_limit")]
+    #[deprecated(since = "41.0.0", note = "Use set_data_page_size_limit")]
     pub fn set_data_pagesize_limit(mut self, value: usize) -> Self {
         self.data_page_size_limit = value;
         self
