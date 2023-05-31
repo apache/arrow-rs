@@ -433,7 +433,7 @@ impl i256 {
         if other == Self::ZERO {
             return Err(I256Error::DivideByZero);
         }
-        if other.is_negative() && self == Self::MIN && other == Self::ONE.wrapping_neg() {
+        if other == Self::MINUS_ONE && self == Self::MIN {
             return Err(I256Error::DivideOverflow);
         }
 
@@ -477,6 +477,7 @@ impl i256 {
     pub fn wrapping_div(self, other: Self) -> Self {
         match self.div_rem(other) {
             Ok((v, _)) => v,
+            Err(I256Error::DivideByZero) => panic!("attempt to divide by zero"),
             Err(_) => Self::MIN,
         }
     }
@@ -492,6 +493,7 @@ impl i256 {
     pub fn wrapping_rem(self, other: Self) -> Self {
         match self.div_rem(other) {
             Ok((_, v)) => v,
+            Err(I256Error::DivideByZero) => panic!("attempt to divide by zero"),
             Err(_) => Self::ZERO,
         }
     }
@@ -810,8 +812,7 @@ impl ToPrimitive for i256 {
 mod tests {
     use super::*;
     use num::{BigInt, FromPrimitive, Signed, ToPrimitive};
-    use rand::rngs::StdRng;
-    use rand::{thread_rng, Rng, SeedableRng};
+    use rand::{thread_rng, Rng};
     use std::ops::Neg;
 
     #[test]
@@ -920,6 +921,43 @@ mod tests {
                 Some(actual),
                 "{il} * {ir} = {actual} vs {bl} * {br} = {expected}"
             ),
+        }
+
+        // Division
+        if ir != i256::ZERO {
+            let actual = il.wrapping_div(ir);
+            let expected = bl.clone() / br.clone();
+            let checked = il.checked_div(ir);
+
+            if ir == i256::MINUS_ONE && il == i256::MIN {
+                // BigInt produces an integer over i256::MAX
+                assert_eq!(actual, i256::MIN);
+                assert!(checked.is_none());
+            } else {
+                assert_eq!(actual.to_string(), expected.to_string());
+                assert_eq!(checked.unwrap().to_string(), expected.to_string());
+            }
+        } else {
+            // `wrapping_div` panics on division by zero
+            assert!(il.checked_div(ir).is_none());
+        }
+
+        // Remainder
+        if ir != i256::ZERO {
+            let actual = il.wrapping_rem(ir);
+            let expected = bl.clone() % br.clone();
+            let checked = il.checked_rem(ir);
+
+            assert_eq!(actual.to_string(), expected.to_string());
+
+            if ir == i256::MINUS_ONE && il == i256::MIN {
+                assert!(checked.is_none());
+            } else {
+                assert_eq!(checked.unwrap().to_string(), expected.to_string());
+            }
+        } else {
+            // `wrapping_rem` panics on division by zero
+            assert!(il.checked_rem(ir).is_none());
         }
 
         // Exponentiation
@@ -1145,115 +1183,6 @@ mod tests {
         ];
         for (case, expected) in cases {
             assert_eq!(i256::from_string(case), expected)
-        }
-    }
-
-    /// Returns fixed seedable RNG
-    fn seedable_rng() -> StdRng {
-        StdRng::seed_from_u64(42)
-    }
-
-    fn create_i256_vec(size: usize) -> Vec<i256> {
-        let mut rng = seedable_rng();
-
-        (0..size)
-            .map(|_| i256::from_i128(rng.gen::<i128>()))
-            .collect()
-    }
-
-    #[test]
-    fn test_i256_checked_div() {
-        for number_a in create_i256_vec(10) {
-            for number_b in create_i256_vec(5) {
-                let l = BigInt::from_signed_bytes_le(&number_a.to_le_bytes());
-                let r = BigInt::from_signed_bytes_le(&number_b.to_le_bytes());
-                let (expected, expected_overflow) =
-                    i256::from_bigint_with_overflow(l / r);
-
-                let (result, overflow) = number_a
-                    .checked_div(number_b)
-                    .map(|a| (a, false))
-                    .unwrap_or((i256::ZERO, true));
-
-                if expected_overflow {
-                    assert!(overflow);
-                } else {
-                    assert_eq!(result, expected);
-                    assert_eq!(overflow, expected_overflow);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_i256_wrapping_div() {
-        for number_a in create_i256_vec(10) {
-            for number_b in create_i256_vec(5) {
-                let l = BigInt::from_signed_bytes_le(&number_a.to_le_bytes());
-                let r = BigInt::from_signed_bytes_le(&number_b.to_le_bytes());
-                let expected = i256::from_bigint_with_overflow(l / r).0;
-
-                let result = number_a.wrapping_div(number_b);
-                assert_eq!(result, expected);
-            }
-        }
-
-        let a = i256::MIN;
-        let b = vec![i256::MINUS_ONE, i256::MIN, i256::ONE, i256::from_i128(2)];
-        for b in b {
-            let l = BigInt::from_signed_bytes_le(&a.to_le_bytes());
-            let r = BigInt::from_signed_bytes_le(&b.to_le_bytes());
-            let expected = i256::from_bigint_with_overflow(l / r).0;
-            let result = a.wrapping_div(b);
-            assert_eq!(result, expected);
-        }
-    }
-
-    #[test]
-    fn test_i256_checked_rem() {
-        for number_a in create_i256_vec(10) {
-            for number_b in create_i256_vec(5) {
-                let l = BigInt::from_signed_bytes_le(&number_a.to_le_bytes());
-                let r = BigInt::from_signed_bytes_le(&number_b.to_le_bytes());
-                let (expected, expected_overflow) =
-                    i256::from_bigint_with_overflow(l % r);
-
-                let (result, overflow) = number_a
-                    .checked_rem(number_b)
-                    .map(|a| (a, false))
-                    .unwrap_or((i256::ZERO, true));
-
-                if expected_overflow {
-                    assert!(overflow);
-                } else {
-                    assert_eq!(result, expected);
-                    assert_eq!(overflow, expected_overflow);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_i256_wrapping_rem() {
-        for number_a in create_i256_vec(10) {
-            for number_b in create_i256_vec(5) {
-                let l = BigInt::from_signed_bytes_le(&number_a.to_le_bytes());
-                let r = BigInt::from_signed_bytes_le(&number_b.to_le_bytes());
-                let expected = i256::from_bigint_with_overflow(l % r).0;
-
-                let result = number_a.wrapping_rem(number_b);
-                assert_eq!(result, expected);
-            }
-        }
-
-        let a = i256::MIN;
-        let b = vec![i256::MINUS_ONE, i256::MIN, i256::ONE, i256::from_i128(2)];
-        for b in b {
-            let l = BigInt::from_signed_bytes_le(&a.to_le_bytes());
-            let r = BigInt::from_signed_bytes_le(&b.to_le_bytes());
-            let expected = i256::from_bigint_with_overflow(l % r).0;
-            let result = a.wrapping_rem(b);
-            assert_eq!(result, expected);
         }
     }
 }
