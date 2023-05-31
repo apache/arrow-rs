@@ -117,8 +117,8 @@ pub type WriterPropertiesPtr = Arc<WriterProperties>;
 /// use [`WriterPropertiesBuilder`] to assemble these properties.
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
-    data_pagesize_limit: usize,
-    dictionary_pagesize_limit: usize,
+    data_page_size_limit: usize,
+    dictionary_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
@@ -152,23 +152,42 @@ impl WriterProperties {
     /// Returns data page size limit.
     ///
     /// Note: this is a best effort limit based on the write batch size
+    #[deprecated(since = "41.0.0", note = "Use data_page_size_limit")]
     pub fn data_pagesize_limit(&self) -> usize {
-        self.data_pagesize_limit
+        self.data_page_size_limit
+    }
+
+    /// Returns data page size limit.
+    ///
+    /// Note: this is a best effort limit based on the write batch size
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_data_page_size_limit`]
+    pub fn data_page_size_limit(&self) -> usize {
+        self.data_page_size_limit
     }
 
     /// Returns dictionary page size limit.
     ///
     /// Note: this is a best effort limit based on the write batch size
+    #[deprecated(since = "41.0.0", note = "Use dictionary_page_size_limit")]
     pub fn dictionary_pagesize_limit(&self) -> usize {
-        self.dictionary_pagesize_limit
+        self.dictionary_page_size_limit
+    }
+
+    /// Returns dictionary page size limit.
+    ///
+    /// Note: this is a best effort limit based on the write batch size
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_dictionary_page_size_limit`]
+    pub fn dictionary_page_size_limit(&self) -> usize {
+        self.dictionary_page_size_limit
     }
 
     /// Returns the maximum page row count
     ///
-    /// This can be used to limit the number of rows within a page to
-    /// yield better page pruning
-    ///
     /// Note: this is a best effort limit based on the write batch size
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_data_page_row_count_limit`]
     pub fn data_page_row_count_limit(&self) -> usize {
         self.data_page_row_count_limit
     }
@@ -290,8 +309,8 @@ impl WriterProperties {
 
 /// Writer properties builder.
 pub struct WriterPropertiesBuilder {
-    data_pagesize_limit: usize,
-    dictionary_pagesize_limit: usize,
+    data_page_size_limit: usize,
+    dictionary_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
@@ -307,8 +326,8 @@ impl WriterPropertiesBuilder {
     /// Returns default state of the builder.
     fn with_defaults() -> Self {
         Self {
-            data_pagesize_limit: DEFAULT_PAGE_SIZE,
-            dictionary_pagesize_limit: DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT,
+            data_page_size_limit: DEFAULT_PAGE_SIZE,
+            dictionary_page_size_limit: DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT,
             data_page_row_count_limit: usize::MAX,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
             max_row_group_size: DEFAULT_MAX_ROW_GROUP_SIZE,
@@ -324,8 +343,8 @@ impl WriterPropertiesBuilder {
     /// Finalizes the configuration and returns immutable writer properties struct.
     pub fn build(self) -> WriterProperties {
         WriterProperties {
-            data_pagesize_limit: self.data_pagesize_limit,
-            dictionary_pagesize_limit: self.dictionary_pagesize_limit,
+            data_page_size_limit: self.data_page_size_limit,
+            dictionary_page_size_limit: self.dictionary_page_size_limit,
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
             max_row_group_size: self.max_row_group_size,
@@ -351,16 +370,32 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
+    #[deprecated(since = "41.0.0", note = "Use set_data_page_size_limit")]
     pub fn set_data_pagesize_limit(mut self, value: usize) -> Self {
-        self.data_pagesize_limit = value;
+        self.data_page_size_limit = value;
+        self
+    }
+
+    /// Sets best effort maximum size of a data page in bytes.
+    ///
+    /// The parquet writer will attempt to limit the sizes of each
+    /// `DataPage` to this many bytes. Reducing this value will result
+    /// in larger parquet files, but may improve the effectiveness of
+    /// page index based predicate pushdown during reading.
+    ///
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
+    pub fn set_data_page_size_limit(mut self, value: usize) -> Self {
+        self.data_page_size_limit = value;
         self
     }
 
     /// Sets best effort maximum number of rows in a data page.
     ///
-    ///
-    /// This can be used to limit the number of rows within a page to
-    /// yield better page pruning.
+    /// The parquet writer will attempt to limit the number of rows in
+    /// each `DataPage` to this value. Reducing this value will result
+    /// in larger parquet files, but may improve the effectiveness of
+    /// page index based predicate pushdown during reading.
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
@@ -373,8 +408,24 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
+    #[deprecated(since = "41.0.0", note = "Use set_dictionary_page_size_limit")]
     pub fn set_dictionary_pagesize_limit(mut self, value: usize) -> Self {
-        self.dictionary_pagesize_limit = value;
+        self.dictionary_page_size_limit = value;
+        self
+    }
+
+    /// Sets best effort maximum dictionary page size, in bytes.
+    ///
+    /// The parquet writer will attempt to limit the size of each
+    /// `DataPage` used to store dictionaries to this many
+    /// bytes. Reducing this value will result in larger parquet
+    /// files, but may improve the effectiveness of page index based
+    /// predicate pushdown during reading.
+    ///
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
+    pub fn set_dictionary_page_size_limit(mut self, value: usize) -> Self {
+        self.dictionary_page_size_limit = value;
         self
     }
 
@@ -850,9 +901,9 @@ mod tests {
     #[test]
     fn test_writer_properties_default_settings() {
         let props = WriterProperties::default();
-        assert_eq!(props.data_pagesize_limit(), DEFAULT_PAGE_SIZE);
+        assert_eq!(props.data_page_size_limit(), DEFAULT_PAGE_SIZE);
         assert_eq!(
-            props.dictionary_pagesize_limit(),
+            props.dictionary_page_size_limit(),
             DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT
         );
         assert_eq!(props.write_batch_size(), DEFAULT_WRITE_BATCH_SIZE);
@@ -939,8 +990,8 @@ mod tests {
         let props = WriterProperties::builder()
             // file settings
             .set_writer_version(WriterVersion::PARQUET_2_0)
-            .set_data_pagesize_limit(10)
-            .set_dictionary_pagesize_limit(20)
+            .set_data_page_size_limit(10)
+            .set_dictionary_page_size_limit(20)
             .set_write_batch_size(30)
             .set_max_row_group_size(40)
             .set_created_by("default".to_owned())
@@ -969,8 +1020,8 @@ mod tests {
             .build();
 
         assert_eq!(props.writer_version(), WriterVersion::PARQUET_2_0);
-        assert_eq!(props.data_pagesize_limit(), 10);
-        assert_eq!(props.dictionary_pagesize_limit(), 20);
+        assert_eq!(props.data_page_size_limit(), 10);
+        assert_eq!(props.dictionary_page_size_limit(), 20);
         assert_eq!(props.write_batch_size(), 30);
         assert_eq!(props.max_row_group_size(), 40);
         assert_eq!(props.created_by(), "default");

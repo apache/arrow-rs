@@ -1320,8 +1320,8 @@ mod tests {
 
         // Set everything very low so we fallback to PLAIN encoding after the first row
         let props = WriterProperties::builder()
-            .set_data_pagesize_limit(1)
-            .set_dictionary_pagesize_limit(1)
+            .set_data_page_size_limit(1)
+            .set_dictionary_page_size_limit(1)
             .set_write_batch_size(1)
             .build();
 
@@ -1494,7 +1494,7 @@ mod tests {
                             .set_writer_version(version)
                             .set_max_row_group_size(row_group_size)
                             .set_dictionary_enabled(dictionary_size != 0)
-                            .set_dictionary_pagesize_limit(dictionary_size.max(1))
+                            .set_dictionary_page_size_limit(dictionary_size.max(1))
                             .set_encoding(*encoding)
                             .set_bloom_filter_enabled(bloom_filter)
                             .build();
@@ -2043,7 +2043,7 @@ mod tests {
         let expected_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
 
         let row_group_sizes = [1024, SMALL_SIZE, SMALL_SIZE / 2, SMALL_SIZE / 2 + 1, 10];
-        let data_pagesize_limit: usize = 32;
+        let data_page_size_limit: usize = 32;
         let write_batch_size: usize = 16;
 
         for encoding in &encodings {
@@ -2053,7 +2053,7 @@ mod tests {
                     .set_max_row_group_size(row_group_size)
                     .set_dictionary_enabled(false)
                     .set_encoding(*encoding)
-                    .set_data_pagesize_limit(data_pagesize_limit)
+                    .set_data_page_size_limit(data_page_size_limit)
                     .set_write_batch_size(write_batch_size)
                     .build();
 

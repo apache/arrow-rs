@@ -175,7 +175,7 @@ fn test_primitive() {
     let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
     let props = WriterProperties::builder()
         .set_dictionary_enabled(false)
-        .set_data_pagesize_limit(1000)
+        .set_data_page_size_limit(1000)
         .set_write_batch_size(10)
         .build();
 
@@ -204,8 +204,8 @@ fn test_primitive() {
     // Test spill dictionary
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(1000)
-        .set_data_pagesize_limit(10000)
+        .set_dictionary_page_size_limit(1000)
+        .set_data_page_size_limit(10000)
         .set_write_batch_size(10)
         .build();
 
@@ -246,8 +246,8 @@ fn test_primitive() {
     // Test spill dictionary encoded pages
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(10000)
-        .set_data_pagesize_limit(500)
+        .set_dictionary_page_size_limit(10000)
+        .set_data_page_size_limit(500)
         .set_write_batch_size(10)
         .build();
 
@@ -350,7 +350,7 @@ fn test_string() {
     let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
     let props = WriterProperties::builder()
         .set_dictionary_enabled(false)
-        .set_data_pagesize_limit(1000)
+        .set_data_page_size_limit(1000)
         .set_write_batch_size(10)
         .build();
 
@@ -386,8 +386,8 @@ fn test_string() {
     // Test spill dictionary
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(1000)
-        .set_data_pagesize_limit(10000)
+        .set_dictionary_page_size_limit(1000)
+        .set_data_page_size_limit(10000)
         .set_write_batch_size(10)
         .build();
 
@@ -435,8 +435,8 @@ fn test_string() {
     // Test spill dictionary encoded pages
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(20000)
-        .set_data_pagesize_limit(500)
+        .set_dictionary_page_size_limit(20000)
+        .set_data_page_size_limit(500)
         .set_write_batch_size(10)
         .build();
 
