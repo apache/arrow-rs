@@ -40,7 +40,7 @@ pub use tables::{get_tables_schema, GetTablesBuilder};
 mod db_schemas;
 mod tables;
 
-/// Returns the RecordBatch for `CommandGetCatalogs` 
+/// Returns the RecordBatch for `CommandGetCatalogs`
 pub fn get_catalogs_batch(mut catalog_names: Vec<String>) -> Result<RecordBatch> {
     catalog_names.sort_unstable();
 
