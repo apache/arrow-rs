@@ -31,7 +31,7 @@ use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::sql::catalogs::{
-    get_catalogs_batch, get_catalogs_schema, get_db_schemas_schema, get_tables_schema,
+    get_catalogs_schema, get_db_schemas_schema, get_tables_schema,
 };
 use arrow_flight::sql::sql_info::SqlInfoList;
 use arrow_flight::sql::{
@@ -399,14 +399,18 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_get_catalogs(
         &self,
-        _query: CommandGetCatalogs,
+        query: CommandGetCatalogs,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let catalog_names = TABLES
             .iter()
             .map(|full_name| full_name.split('.').collect::<Vec<_>>()[0].to_string())
             .collect::<HashSet<_>>();
-        let batch = get_catalogs_batch(catalog_names.into_iter().collect());
+        let mut builder = query.into_builder();
+        for catalog_name in catalog_names {
+            builder.append(catalog_name);
+        }
+        let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
             .with_schema(Arc::new(get_catalogs_schema().clone()))
             .build(futures::stream::once(async { batch }))
@@ -429,9 +433,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let mut builder = query.into_builder();
         for (catalog_name, schema_name) in schemas {
-            builder
-                .append(catalog_name, schema_name)
-                .map_err(Status::from)?;
+            builder.append(catalog_name, schema_name);
         }
 
         let batch = builder.build();

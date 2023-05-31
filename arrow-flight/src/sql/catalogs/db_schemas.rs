@@ -117,10 +117,9 @@ impl GetSchemasBuilder {
         &mut self,
         catalog_name: impl AsRef<str>,
         schema_name: impl AsRef<str>,
-    ) -> Result<()> {
+    ) {
         self.catalog_name.append_value(catalog_name);
         self.db_schema_name.append_value(schema_name);
-        Ok(())
     }
 
     /// builds a `RecordBatch` with the correct schema for a `CommandGetDbSchemas` response
@@ -215,19 +214,19 @@ mod tests {
         let ref_batch = get_ref_batch();
 
         let mut builder = GetSchemasBuilder::new(None::<String>, None::<String>);
-        builder.append("a_catalog", "a_schema").unwrap();
-        builder.append("a_catalog", "b_schema").unwrap();
-        builder.append("b_catalog", "a_schema").unwrap();
-        builder.append("b_catalog", "b_schema").unwrap();
+        builder.append("a_catalog", "a_schema");
+        builder.append("a_catalog", "b_schema");
+        builder.append("b_catalog", "a_schema");
+        builder.append("b_catalog", "b_schema");
         let schema_batch = builder.build().unwrap();
 
         assert_eq!(schema_batch, ref_batch);
 
         let mut builder = GetSchemasBuilder::new(None::<String>, Some("a%"));
-        builder.append("a_catalog", "a_schema").unwrap();
-        builder.append("a_catalog", "b_schema").unwrap();
-        builder.append("b_catalog", "a_schema").unwrap();
-        builder.append("b_catalog", "b_schema").unwrap();
+        builder.append("a_catalog", "a_schema");
+        builder.append("a_catalog", "b_schema");
+        builder.append("b_catalog", "a_schema");
+        builder.append("b_catalog", "b_schema");
         let schema_batch = builder.build().unwrap();
 
         let indices = UInt32Array::from(vec![0, 2]);
@@ -250,10 +249,10 @@ mod tests {
         let ref_batch = get_ref_batch();
 
         let mut builder = GetSchemasBuilder::new(None::<String>, None::<String>);
-        builder.append("a_catalog", "b_schema").unwrap();
-        builder.append("b_catalog", "a_schema").unwrap();
-        builder.append("a_catalog", "a_schema").unwrap();
-        builder.append("b_catalog", "b_schema").unwrap();
+        builder.append("a_catalog", "b_schema");
+        builder.append("b_catalog", "a_schema");
+        builder.append("a_catalog", "a_schema");
+        builder.append("b_catalog", "b_schema");
         let schema_batch = builder.build().unwrap();
 
         assert_eq!(schema_batch, ref_batch)
@@ -268,10 +267,10 @@ mod tests {
         };
 
         let mut builder = query.into_builder();
-        builder.append("a_catalog", "a_schema").unwrap();
-        builder.append("a_catalog", "b_schema").unwrap();
-        builder.append("b_catalog", "a_schema").unwrap();
-        builder.append("b_catalog", "b_schema").unwrap();
+        builder.append("a_catalog", "a_schema");
+        builder.append("a_catalog", "b_schema");
+        builder.append("b_catalog", "a_schema");
+        builder.append("b_catalog", "b_schema");
         let schema_batch = builder.build().unwrap();
 
         let indices = UInt32Array::from(vec![1]);

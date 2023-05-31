@@ -33,12 +33,54 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use once_cell::sync::Lazy;
 
 use crate::error::Result;
+use crate::sql::CommandGetCatalogs;
 
 pub use db_schemas::{get_db_schemas_schema, GetSchemasBuilder};
 pub use tables::{get_tables_schema, GetTablesBuilder};
 
 mod db_schemas;
 mod tables;
+
+pub struct GetCatalogsBuilder {
+    catalogs: Vec<String>,
+}
+
+impl CommandGetCatalogs {
+    pub fn into_builder(self) -> GetCatalogsBuilder {
+        self.into()
+    }
+}
+
+impl From<CommandGetCatalogs> for GetCatalogsBuilder {
+    fn from(_: CommandGetCatalogs) -> Self {
+        Self::new()
+    }
+}
+
+impl Default for GetCatalogsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GetCatalogsBuilder {
+    /// Create a new instance of [`GetCatalogsBuilder`]
+    pub fn new() -> Self {
+        Self {
+            catalogs: Vec::new(),
+        }
+    }
+
+    /// Append a row
+    pub fn append(&mut self, catalog_name: impl Into<String>) {
+        self.catalogs.push(catalog_name.into());
+    }
+
+    /// builds a `RecordBatch` with the correct schema for a `CommandGetCatalogs` response
+    pub fn build(self) -> Result<RecordBatch> {
+        get_catalogs_batch(self.catalogs)
+    }
+}
 
 /// Returns the RecordBatch for `CommandGetCatalogs`
 pub fn get_catalogs_batch(mut catalog_names: Vec<String>) -> Result<RecordBatch> {
