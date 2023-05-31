@@ -265,9 +265,10 @@ impl PageWriteSpec {
 /// Contains metadata for a page
 #[derive(Clone)]
 pub struct PageMetadata {
-    /// The number of rows in this page
-    pub num_rows: usize,
-
+    /// The number of rows within the page if known
+    pub num_rows: Option<usize>,
+    /// The number of levels within the page if known
+    pub num_levels: Option<usize>,
     /// Returns true if the page is a dictionary page
     pub is_dict: bool,
 }
@@ -277,18 +278,27 @@ impl TryFrom<&PageHeader> for PageMetadata {
 
     fn try_from(value: &PageHeader) -> std::result::Result<Self, Self::Error> {
         match value.type_ {
-            crate::format::PageType::DATA_PAGE => Ok(PageMetadata {
-                num_rows: value.data_page_header.as_ref().unwrap().num_values as usize,
-                is_dict: false,
-            }),
+            crate::format::PageType::DATA_PAGE => {
+                let header = value.data_page_header.as_ref().unwrap();
+                Ok(PageMetadata {
+                    num_rows: None,
+                    num_levels: Some(header.num_values as _),
+                    is_dict: false,
+                })
+            }
             crate::format::PageType::DICTIONARY_PAGE => Ok(PageMetadata {
-                num_rows: usize::MIN,
+                num_rows: None,
+                num_levels: None,
                 is_dict: true,
             }),
-            crate::format::PageType::DATA_PAGE_V2 => Ok(PageMetadata {
-                num_rows: value.data_page_header_v2.as_ref().unwrap().num_rows as usize,
-                is_dict: false,
-            }),
+            crate::format::PageType::DATA_PAGE_V2 => {
+                let header = value.data_page_header_v2.as_ref().unwrap();
+                Ok(PageMetadata {
+                    num_rows: Some(header.num_rows as _),
+                    num_levels: Some(header.num_values as _),
+                    is_dict: false,
+                })
+            }
             other => Err(ParquetError::General(format!(
                 "page type {other:?} cannot be converted to PageMetadata"
             ))),

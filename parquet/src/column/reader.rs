@@ -312,11 +312,20 @@ where
 
                 // If page has less rows than the remaining records to
                 // be skipped, skip entire page
-                if metadata.num_rows <= remaining_records {
-                    self.page_reader.skip_next_page()?;
-                    remaining_records -= metadata.num_rows;
-                    continue;
-                };
+                let rows = metadata.num_rows.or_else(|| {
+                    // If no repetition levels, num_levels == num_rows
+                    self.rep_level_decoder
+                        .is_none()
+                        .then_some(metadata.num_levels)?
+                });
+
+                if let Some(rows) = rows {
+                    if rows <= remaining_records {
+                        self.page_reader.skip_next_page()?;
+                        remaining_records -= rows;
+                        continue;
+                    }
+                }
                 // because self.num_buffered_values == self.num_decoded_values means
                 // we need reads a new page and set up the decoders for levels
                 if !self.read_new_page()? {
@@ -533,12 +542,7 @@ where
         if self.num_buffered_values == 0
             || self.num_buffered_values == self.num_decoded_values
         {
-            // TODO: should we return false if read_new_page() = true and
-            // num_buffered_values = 0?
-            match self.page_reader.peek_next_page()? {
-                Some(next_page) => Ok(next_page.num_rows != 0),
-                None => Ok(false),
-            }
+            Ok(self.page_reader.peek_next_page()?.is_some())
         } else {
             Ok(true)
         }

@@ -2522,4 +2522,36 @@ mod tests {
 
         assert_eq!(&written.slice(0, 8), &read[0]);
     }
+
+    #[test]
+    fn test_list_skip() {
+        let mut list = ListBuilder::new(Int32Builder::new());
+        list.append_value([Some(1), Some(2)]);
+        list.append_value([Some(3)]);
+        list.append_value([Some(4)]);
+        let list = list.finish();
+        let batch = RecordBatch::try_from_iter([("l", Arc::new(list) as _)]).unwrap();
+
+        // First page contains 2 values but only 1 row
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(1)
+            .set_write_batch_size(2)
+            .build();
+
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer =
+            ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let selection = vec![RowSelector::skip(2), RowSelector::select(1)];
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer))
+            .unwrap()
+            .with_row_selection(selection.into())
+            .build()
+            .unwrap();
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(out.num_rows(), 1);
+        assert_eq!(out, batch.slice(2, 1));
+    }
 }
