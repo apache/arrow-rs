@@ -28,7 +28,6 @@ use crate::arrow::record_reader::GenericRecordReader;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::file::reader::{FilePageIterator, FileReader};
-use crate::schema::types::SchemaDescPtr;
 
 mod builder;
 mod byte_array;
@@ -100,22 +99,15 @@ pub trait ArrayReader: Send {
 }
 
 /// A collection of row groups
-pub trait RowGroupCollection {
-    /// Get schema of parquet file.
-    fn schema(&self) -> SchemaDescPtr;
-
+pub trait RowGroups {
     /// Get the number of rows in this collection
     fn num_rows(&self) -> usize;
 
-    /// Returns an iterator over the column chunks for particular column
+    /// Returns a [`PageIterator`] for the column chunks with the given leaf column index
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>>;
 }
 
-impl RowGroupCollection for Arc<dyn FileReader> {
-    fn schema(&self) -> SchemaDescPtr {
-        self.metadata().file_metadata().schema_descr_ptr()
-    }
-
+impl RowGroups for Arc<dyn FileReader> {
     fn num_rows(&self) -> usize {
         self.metadata().file_metadata().num_rows() as usize
     }
@@ -126,26 +118,22 @@ impl RowGroupCollection for Arc<dyn FileReader> {
     }
 }
 
-pub(crate) struct FileReaderRowGroupCollection {
+pub(crate) struct FileReaderRowGroups {
     /// The underling file reader
     reader: Arc<dyn FileReader>,
     /// Optional list of row group indices to scan
     row_groups: Option<Vec<usize>>,
 }
 
-impl FileReaderRowGroupCollection {
-    /// Creates a new [`RowGroupCollection`] from a `FileReader` and an optional
+impl FileReaderRowGroups {
+    /// Creates a new [`RowGroups`] from a `FileReader` and an optional
     /// list of row group indexes to scan
     pub fn new(reader: Arc<dyn FileReader>, row_groups: Option<Vec<usize>>) -> Self {
         Self { reader, row_groups }
     }
 }
 
-impl RowGroupCollection for FileReaderRowGroupCollection {
-    fn schema(&self) -> SchemaDescPtr {
-        self.reader.metadata().file_metadata().schema_descr_ptr()
-    }
-
+impl RowGroups for FileReaderRowGroups {
     fn num_rows(&self) -> usize {
         match &self.row_groups {
             None => self.reader.metadata().file_metadata().num_rows() as usize,
