@@ -299,7 +299,7 @@ pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
 
 impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
     /// Creates new row group reader from a file, row group metadata and custom config.
-    fn new(
+    pub fn new(
         chunk_reader: Arc<R>,
         metadata: &'a RowGroupMetaData,
         page_locations: Option<&'a [Vec<PageLocation>]>,
