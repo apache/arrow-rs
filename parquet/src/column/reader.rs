@@ -296,11 +296,11 @@ where
     ///
     /// Returns the number of records skipped
     pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
-        let mut remaining = num_records;
-        while remaining != 0 {
+        let mut remaining_records = num_records;
+        while remaining_records != 0 {
             if self.num_buffered_values == self.num_decoded_values {
                 let metadata = match self.page_reader.peek_next_page()? {
-                    None => return Ok(num_records - remaining),
+                    None => return Ok(num_records - remaining_records),
                     Some(metadata) => metadata,
                 };
 
@@ -312,29 +312,37 @@ where
 
                 // If page has less rows than the remaining records to
                 // be skipped, skip entire page
-                if metadata.num_rows <= remaining {
+                if metadata.num_rows <= remaining_records {
                     self.page_reader.skip_next_page()?;
-                    remaining -= metadata.num_rows;
+                    remaining_records -= metadata.num_rows;
                     continue;
                 };
                 // because self.num_buffered_values == self.num_decoded_values means
                 // we need reads a new page and set up the decoders for levels
                 if !self.read_new_page()? {
-                    return Ok(num_records - remaining);
+                    return Ok(num_records - remaining_records);
                 }
             }
 
             // start skip values in page level
-            let to_read = remaining
-                .min((self.num_buffered_values - self.num_decoded_values) as usize);
+
+            // The number of levels in the current data page
+            let buffered_levels =
+                (self.num_buffered_values - self.num_decoded_values) as usize;
 
             let (records_read, rep_levels_read) = match self.rep_level_decoder.as_mut() {
-                Some(decoder) => decoder.skip_rep_levels(to_read)?,
-                None => (to_read, to_read),
+                Some(decoder) => {
+                    decoder.skip_rep_levels(remaining_records, buffered_levels)?
+                }
+                None => {
+                    // No repetition levels, so each level corresponds to a row
+                    let levels = buffered_levels.min(remaining_records);
+                    (levels, levels)
+                }
             };
 
             self.num_decoded_values += rep_levels_read as u32;
-            remaining -= records_read;
+            remaining_records -= records_read;
 
             if self.num_buffered_values == self.num_decoded_values {
                 // Exhausted buffered page - no need to advance other decoders
@@ -364,7 +372,7 @@ where
                 ));
             }
         }
-        Ok(num_records - remaining)
+        Ok(num_records - remaining_records)
     }
 
     /// Read the next page as a dictionary page. If the next page is not a dictionary page,
