@@ -254,8 +254,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         },
         (Duration(_), Interval(MonthDayNano)) => true,
         (Interval(MonthDayNano), Duration(_)) => true,
-        (Interval(IntervalUnit::YearMonth), Interval(IntervalUnit::MonthDayNano)) => true,
-        (Interval(IntervalUnit::DayTime), Interval(IntervalUnit::MonthDayNano)) => true,
+        (Interval(YearMonth), Interval(MonthDayNano)) => true,
+        (Interval(DayTime), Interval(MonthDayNano)) => true,
         (_, _) => false,
     }
 }
@@ -2166,16 +2166,16 @@ pub fn cast_with_options(
         (Duration(TimeUnit::Nanosecond), Interval(IntervalUnit::MonthDayNano)) => {
             cast_duration_to_interval::<DurationNanosecondType>(array, cast_options)
         }
-        (Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Second)) => {
+        (Interval(IntervalUnit::MonthDayNano), Duration(TimeUnit::Second)) => {
             cast_interval_to_duration::<DurationSecondType>(array, cast_options)
         }
-        (Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Millisecond)) => {
+        (Interval(IntervalUnit::MonthDayNano), Duration(TimeUnit::Millisecond)) => {
             cast_interval_to_duration::<DurationMillisecondType>(array, cast_options)
         }
-        (Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Microsecond)) => {
+        (Interval(IntervalUnit::MonthDayNano), Duration(TimeUnit::Microsecond)) => {
             cast_interval_to_duration::<DurationMicrosecondType>(array, cast_options)
         }
-        (Interval(IntervalUnit::MonthDayNano), DataType::Duration(TimeUnit::Nanosecond)) => {
+        (Interval(IntervalUnit::MonthDayNano), Duration(TimeUnit::Nanosecond)) => {
             cast_interval_to_duration::<DurationNanosecondType>(array, cast_options)
         }
         (Interval(IntervalUnit::YearMonth), Interval(IntervalUnit::MonthDayNano)) => {
