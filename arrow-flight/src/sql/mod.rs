@@ -100,6 +100,7 @@ pub use gen::XdbcDatetimeSubcode;
 
 pub use sql_info::SqlInfoList;
 
+pub mod catalogs;
 pub mod client;
 pub mod server;
 pub mod sql_info;
