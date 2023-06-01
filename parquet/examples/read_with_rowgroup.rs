@@ -70,44 +70,21 @@ impl PageIterator for ColumnChunkIterator {}
 
 /// An in-memory column chunk
 #[derive(Clone)]
-pub enum ColumnChunkData {
-    /// Column chunk data representing only a subset of data pages
-    Sparse {
-        /// Length of the full column chunk
-        length: usize,
-        /// Set of data pages included in this sparse chunk. Each element is a tuple
-        /// of (page offset, page data)
-        data: Vec<(usize, Bytes)>,
-    },
-    /// Full column chunk and its offset
-    Dense { offset: usize, data: Bytes },
+pub struct ColumnChunkData {
+    offset: usize,
+    data: Bytes,
 }
 
 impl ColumnChunkData {
     fn get(&self, start: u64) -> Result<Bytes> {
-        match &self {
-            ColumnChunkData::Sparse { data, .. } => data
-                .binary_search_by_key(&start, |(offset, _)| *offset as u64)
-                .map(|idx| data[idx].1.clone())
-                .map_err(|_| {
-                    ParquetError::General(format!(
-                        "Invalid offset in sparse column chunk data: {start}"
-                    ))
-                }),
-            ColumnChunkData::Dense { offset, data } => {
-                let start = start as usize - *offset;
-                Ok(data.slice(start..))
-            }
-        }
+        let start = start as usize - self.offset;
+        Ok(self.data.slice(start..))
     }
 }
 
 impl Length for ColumnChunkData {
     fn len(&self) -> u64 {
-        match &self {
-            ColumnChunkData::Sparse { length, .. } => *length as u64,
-            ColumnChunkData::Dense { data, .. } => data.len() as u64,
-        }
+        self.data.len() as u64
     }
 }
 
@@ -198,7 +175,7 @@ impl InMemoryRowGroup {
                 let mut chunk = vec![0; len as usize];
                 reader.read_exact(&mut chunk)?;
 
-                vs[leaf_idx] = Some(Arc::new(ColumnChunkData::Dense {
+                vs[leaf_idx] = Some(Arc::new(ColumnChunkData {
                     offset: start as usize,
                     data: Bytes::from(chunk),
                 }));
