@@ -180,7 +180,6 @@ impl NullBufferBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Buffer;
 
     #[test]
     fn test_null_buffer_builder() {
