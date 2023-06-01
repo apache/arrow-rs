@@ -321,7 +321,7 @@ impl SqlInfoUnionBuilder {
     }
 }
 
-/// A list of FlightSQL server capabilties.
+/// A builder for [`CommandGetSqlInfo`] response.
 ///
 /// [`CommandGetSqlInfo`] are metadata requests used by a Flight SQL
 /// server to communicate supported capabilities to Flight SQL
