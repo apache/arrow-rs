@@ -337,18 +337,24 @@ pub fn gt_binary_scalar<OffsetSize: OffsetSizeTrait>(
 }
 
 /// Perform `left >= right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
-pub fn gt_eq_binary<OffsetSize: OffsetSizeTrait>(
-    left: &GenericBinaryArray<OffsetSize>,
-    right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_eq_bytes<T: ByteArrayType>(
+    left: &GenericByteArray<T>,
+    right: &GenericByteArray<T>,
+) -> Result<BooleanArray, ArrowError>
+where
+    <T as ByteArrayType>::Native: PartialOrd,
+{
     compare_op(left, right, |a, b| a >= b)
 }
 
 /// Perform `left >= right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
-pub fn gt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
-    left: &GenericBinaryArray<OffsetSize>,
-    right: &[u8],
-) -> Result<BooleanArray, ArrowError> {
+pub fn gt_eq_bytes_scalar<T: ByteArrayType>(
+    left: &GenericByteArray<T>,
+    right: &<T as ByteArrayType>::Native,
+) -> Result<BooleanArray, ArrowError>
+where
+    <T as ByteArrayType>::Native: PartialOrd,
+{
     compare_op_scalar(left, |a| a >= right)
 }
 
@@ -417,22 +423,6 @@ pub fn gt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     right: &str,
 ) -> Result<BooleanArray, ArrowError> {
     compare_op_scalar(left, |a| a > right)
-}
-
-/// Perform `left >= right` operation on [`StringArray`] / [`LargeStringArray`].
-pub fn gt_eq_utf8<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &GenericStringArray<OffsetSize>,
-) -> Result<BooleanArray, ArrowError> {
-    compare_op(left, right, |a, b| a >= b)
-}
-
-/// Perform `left >= right` operation on [`StringArray`] / [`LargeStringArray`] and a scalar.
-pub fn gt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    left: &GenericStringArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray, ArrowError> {
-    compare_op_scalar(left, |a| a >= right)
 }
 
 // Avoids creating a closure for each combination of `$RIGHT` and `$TY`
@@ -917,8 +907,8 @@ pub fn gt_eq_dyn_binary_scalar(
     right: &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
-        DataType::Binary => gt_eq_binary_scalar(left.as_binary::<i32>(), right),
-        DataType::LargeBinary => gt_eq_binary_scalar(left.as_binary::<i64>(), right),
+        DataType::Binary => gt_eq_bytes_scalar(left.as_binary::<i32>(), right),
+        DataType::LargeBinary => gt_eq_bytes_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
             "gt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
                 .to_string(),
@@ -991,17 +981,17 @@ pub fn gt_eq_dyn_utf8_scalar(
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
-                dyn_compare_utf8_scalar!(left, right, key_type, gt_eq_utf8_scalar)
+                dyn_compare_utf8_scalar!(left, right, key_type, gt_eq_bytes_scalar)
             }
             _ => Err(ArrowError::ComputeError(
                 "gt_eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
             )),
         },
         DataType::Utf8 => {
-            gt_eq_utf8_scalar(left.as_string::<i32>(), right)
+            gt_eq_bytes_scalar(left.as_string::<i32>(), right)
         }
         DataType::LargeUtf8 => {
-            gt_eq_utf8_scalar(left.as_string::<i64>(), right)
+            gt_eq_bytes_scalar(left.as_string::<i64>(), right)
         }
         _ => Err(ArrowError::ComputeError(
             "gt_eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
@@ -3656,14 +3646,14 @@ mod tests {
         test_binary_array_gt_eq,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf8]],
-        gt_eq_binary,
+        gt_eq_bytes,
         vec![false, false, true, true, true]
     );
     test_binary_scalar!(
         test_binary_array_gt_eq_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
-        gt_eq_binary_scalar,
+        gt_eq_bytes_scalar,
         vec![false, false, true, true, true]
     );
 
@@ -3879,14 +3869,14 @@ mod tests {
         test_utf8_array_gt_eq,
         vec!["arrow", "datafusion", "flight", "parquet"],
         vec!["flight", "flight", "flight", "flight"],
-        gt_eq_utf8,
+        gt_eq_bytes,
         vec![false, false, true, true]
     );
     test_utf8_scalar!(
         test_utf8_array_gt_eq_scalar,
         vec!["arrow", "datafusion", "flight", "parquet"],
         "flight",
-        gt_eq_utf8_scalar,
+        gt_eq_bytes_scalar,
         vec![false, false, true, true]
     );
 
