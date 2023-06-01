@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::*;
 use crate::{Array, ArrayRef, StructArray};
-use arrow_buffer::Buffer;
+use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
 use std::any::Any;
@@ -247,12 +246,12 @@ impl StructBuilder {
             child_data.push(arr.to_data());
         }
         let length = self.len();
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let nulls = self.null_buffer_builder.finish();
 
         let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
             .len(length)
             .child_data(child_data)
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
         StructArray::from(array_data)
@@ -268,15 +267,12 @@ impl StructBuilder {
             child_data.push(arr.to_data());
         }
         let length = self.len();
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
+        let nulls = self.null_buffer_builder.finish_cloned();
 
         let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
             .len(length)
             .child_data(child_data)
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
         StructArray::from(array_data)

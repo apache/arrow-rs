@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer};
-use arrow_data::bit_mask;
+use crate::{bit_mask, bit_util, BooleanBuffer, Buffer, MutableBuffer};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
@@ -220,6 +219,11 @@ impl BooleanBufferBuilder {
         let buf = std::mem::replace(&mut self.buffer, MutableBuffer::new(0));
         let len = std::mem::replace(&mut self.len, 0);
         BooleanBuffer::new(buf.into(), 0, len)
+    }
+
+    /// Builds the [BooleanBuffer] without resetting the builder.
+    pub fn finish_cloned(&self) -> BooleanBuffer {
+        BooleanBuffer::new(Buffer::from_slice_ref(self.as_slice()), 0, self.len)
     }
 }
 

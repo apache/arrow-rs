@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeListArray};
-use arrow_buffer::Buffer;
+use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, Field};
 use std::any::Any;
@@ -167,14 +166,14 @@ where
             len,
         );
 
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let nulls = self.null_buffer_builder.finish();
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Arc::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
         .add_child_data(values_data)
-        .null_bit_buffer(null_bit_buffer);
+        .nulls(nulls);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -195,17 +194,14 @@ where
             len,
         );
 
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
+        let nulls = self.null_buffer_builder.finish_cloned();
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Arc::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
         .add_child_data(values_data)
-        .null_bit_buffer(null_bit_buffer);
+        .nulls(nulls);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
