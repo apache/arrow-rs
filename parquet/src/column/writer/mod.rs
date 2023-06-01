@@ -308,6 +308,17 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         max: Option<&E::T>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
+        // Check if number of definition levels is the same as number of repetition levels.
+        if let (Some(def), Some(rep)) = (def_levels, rep_levels) {
+            if def.len() != rep.len() {
+                return Err(general_err!(
+                    "Inconsistent length of definition and repetition levels: {} != {}",
+                    def.len(),
+                    rep.len()
+                ));
+            }
+        }
+
         // We check for DataPage limits only after we have inserted the values. If a user
         // writes a large number of values, the DataPage size can be well above the limit.
         //
@@ -322,10 +333,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             Some(def_levels) => def_levels.len(),
             None => values.len(),
         };
-
-        // Find out number of batches to process.
-        let write_batch_size = self.props.write_batch_size();
-        let num_batches = num_levels / write_batch_size;
 
         // If only computing chunk-level statistics compute them here, page-level statistics
         // are computed in [`Self::write_mini_batch`] and used to update chunk statistics in
@@ -374,26 +381,27 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         let mut values_offset = 0;
         let mut levels_offset = 0;
-        for _ in 0..num_batches {
+        let base_batch_size = self.props.write_batch_size();
+        while levels_offset < num_levels {
+            let mut end_offset = num_levels.min(levels_offset + base_batch_size);
+
+            // Split at record boundary
+            if let Some(r) = rep_levels {
+                while end_offset < r.len() && r[end_offset] != 0 {
+                    end_offset += 1;
+                }
+            }
+
             values_offset += self.write_mini_batch(
                 values,
                 values_offset,
                 value_indices,
-                write_batch_size,
-                def_levels.map(|lv| &lv[levels_offset..levels_offset + write_batch_size]),
-                rep_levels.map(|lv| &lv[levels_offset..levels_offset + write_batch_size]),
+                end_offset - levels_offset,
+                def_levels.map(|lv| &lv[levels_offset..end_offset]),
+                rep_levels.map(|lv| &lv[levels_offset..end_offset]),
             )?;
-            levels_offset += write_batch_size;
+            levels_offset = end_offset;
         }
-
-        values_offset += self.write_mini_batch(
-            values,
-            values_offset,
-            value_indices,
-            num_levels - levels_offset,
-            def_levels.map(|lv| &lv[levels_offset..]),
-            rep_levels.map(|lv| &lv[levels_offset..]),
-        )?;
 
         // Return total number of values processed.
         Ok(values_offset)
@@ -522,18 +530,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) -> Result<usize> {
-        // Check if number of definition levels is the same as number of repetition
-        // levels.
-        if let (Some(def), Some(rep)) = (def_levels, rep_levels) {
-            if def.len() != rep.len() {
-                return Err(general_err!(
-                    "Inconsistent length of definition and repetition levels: {} != {}",
-                    def.len(),
-                    rep.len()
-                ));
-            }
-        }
-
         // Process definition levels and determine how many values to write.
         let values_to_write = if self.descr.max_def_level() > 0 {
             let levels = def_levels.ok_or_else(|| {
@@ -568,6 +564,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     self.descr.max_rep_level()
                 )
             })?;
+
+            if !levels.is_empty() && levels[0] != 0 {
+                return Err(general_err!(
+                    "Write must start at a record boundary, got non-zero repetition level of {}",
+                    levels[0]
+                ));
+            }
 
             // Count the occasions where we start a new row
             for &level in levels {
@@ -2255,6 +2258,7 @@ mod tests {
         let mut buf: Vec<i16> = Vec::new();
         let rep_levels = if max_rep_level > 0 {
             random_numbers_range(max_size, 0, max_rep_level + 1, &mut buf);
+            buf[0] = 0; // Must start on record boundary
             Some(&buf[..])
         } else {
             None
