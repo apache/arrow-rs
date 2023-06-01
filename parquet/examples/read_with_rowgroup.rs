@@ -25,7 +25,6 @@ use parquet::errors::{ParquetError, Result};
 use parquet::file::metadata::RowGroupMetaData;
 use parquet::file::reader::{ChunkReader, Length};
 use parquet::file::serialized_reader::SerializedPageReader;
-use std::io::{Read, Seek};
 use std::sync::Arc;
 use tokio::fs::File;
 
@@ -40,8 +39,8 @@ async fn main() -> Result<()> {
 
     for rg in metadata.row_groups() {
         let mut rowgroup = InMemoryRowGroup::create(rg.clone(), ProjectionMask::all());
-        let mut reader = std::fs::File::open(&path).unwrap();
-        rowgroup.fetch_data(&mut reader, None)?;
+        let mut reader = File::open(&path).await.unwrap();
+        rowgroup.async_fetch_data(&mut reader, None).await?;
         let reader = rowgroup.build_reader(1024, None)?;
 
         for batch in reader {
@@ -162,7 +161,7 @@ impl InMemoryRowGroup {
     }
 
     /// fetch data from a reader in sync mode
-    pub fn fetch_data<R: Read + Seek>(
+    pub async fn async_fetch_data<R: AsyncFileReader>(
         &mut self,
         reader: &mut R,
         _selection: Option<&RowSelection>,
@@ -171,27 +170,17 @@ impl InMemoryRowGroup {
         for (leaf_idx, meta) in self.metadata.columns().iter().enumerate() {
             if self.mask.leaf_included(leaf_idx) {
                 let (start, len) = meta.byte_range();
-                reader.seek(std::io::SeekFrom::Start(start))?;
-                let mut chunk = vec![0; len as usize];
-                reader.read_exact(&mut chunk)?;
+                let data = reader
+                    .get_bytes(start as usize..(start + len) as usize)
+                    .await?;
 
                 vs[leaf_idx] = Some(Arc::new(ColumnChunkData {
                     offset: start as usize,
-                    data: Bytes::from(chunk),
+                    data,
                 }));
             }
         }
         self.column_chunks = std::mem::take(&mut vs);
         Ok(())
-    }
-
-    /// fetch data from a reader in async mode
-    pub fn async_fetch_data<R: Read + Seek>(
-        &mut self,
-        _reader: &mut R,
-        _selection: Option<&RowSelection>,
-    ) -> Result<()> {
-        // todo: implement async fetch
-        todo!()
     }
 }
