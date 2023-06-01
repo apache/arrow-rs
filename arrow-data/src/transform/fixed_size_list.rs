@@ -26,38 +26,14 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend {
         _ => unreachable!(),
     };
 
-    if array.null_count() == 0 {
-        Box::new(
-            move |mutable: &mut _MutableArrayData,
-                  index: usize,
-                  start: usize,
-                  len: usize| {
-                mutable.child_data.iter_mut().for_each(|child| {
-                    child.extend(index, start * size, (start + len) * size)
-                })
-            },
-        )
-    } else {
-        Box::new(
-            move |mutable: &mut _MutableArrayData,
-                  index: usize,
-                  start: usize,
-                  len: usize| {
-                (start..start + len).for_each(|i| {
-                    if array.is_valid(i) {
-                        mutable.child_data.iter_mut().for_each(|child| {
-                            child.extend(index, i * size, (i + 1) * size)
-                        })
-                    } else {
-                        mutable
-                            .child_data
-                            .iter_mut()
-                            .for_each(|child| child.extend_nulls(size))
-                    }
-                })
-            },
-        )
-    }
+    Box::new(
+        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
+            mutable
+                .child_data
+                .iter_mut()
+                .for_each(|child| child.extend(index, start * size, (start + len) * size))
+        },
+    )
 }
 
 pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
