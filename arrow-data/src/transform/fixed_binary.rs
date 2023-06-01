@@ -26,32 +26,12 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend {
     };
 
     let values = &array.buffers()[0].as_slice()[array.offset() * size..];
-    if array.null_count() == 0 {
-        // fast case where we can copy regions without null issues
-        Box::new(
-            move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
-                let buffer = &mut mutable.buffer1;
-                buffer.extend_from_slice(&values[start * size..(start + len) * size]);
-            },
-        )
-    } else {
-        Box::new(
-            move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
-                // nulls present: append item by item, ignoring null entries
-                let values_buffer = &mut mutable.buffer1;
-
-                (start..start + len).for_each(|i| {
-                    if array.is_valid(i) {
-                        // append value
-                        let bytes = &values[i * size..(i + 1) * size];
-                        values_buffer.extend_from_slice(bytes);
-                    } else {
-                        values_buffer.extend_zeros(size);
-                    }
-                })
-            },
-        )
-    }
+    Box::new(
+        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
+            let buffer = &mut mutable.buffer1;
+            buffer.extend_from_slice(&values[start * size..(start + len) * size]);
+        },
+    )
 }
 
 pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
