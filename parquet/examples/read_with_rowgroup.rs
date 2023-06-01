@@ -39,8 +39,7 @@ async fn main() -> Result<()> {
 
     for rg in metadata.row_groups() {
         let mut rowgroup = InMemoryRowGroup::create(rg.clone(), ProjectionMask::all());
-        let mut reader = File::open(&path).await.unwrap();
-        rowgroup.async_fetch_data(&mut reader, None).await?;
+        rowgroup.async_fetch_data(&mut file, None).await?;
         let reader = rowgroup.build_reader(1024, None)?;
 
         for batch in reader {
