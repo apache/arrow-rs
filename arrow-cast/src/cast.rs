@@ -254,7 +254,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         },
         (Duration(_), Interval(MonthDayNano)) => true,
         (Interval(MonthDayNano), Duration(_)) => true,
-        (Interval(_), Interval(_)) => true,
+        (Interval(_), Interval(MonthDayNano)) => true,
         (_, _) => false,
     }
 }
