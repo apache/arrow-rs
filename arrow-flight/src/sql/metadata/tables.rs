@@ -86,7 +86,7 @@ impl From<CommandGetTables> for GetTablesBuilder {
 impl GetTablesBuilder {
     /// Create a new instance of [`GetTablesBuilder`]
     ///
-    /// # Paramneters
+    /// # Parameters
     ///
     /// - `catalog`:  Specifies the Catalog to search for the tables.
     ///   - An empty string retrieves those without a catalog.
