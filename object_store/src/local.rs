@@ -429,11 +429,11 @@ impl ObjectStore for LocalFileSystem {
                         path: location.to_string(),
                     },
                 }),
-                Ok(m) => match m.is_file() {
+                Ok(m) => match !m.is_dir() {
                     true => Ok(m),
                     false => Err(Error::NotFound {
                         path,
-                        source: io::Error::new(ErrorKind::NotFound, "is not file"),
+                        source: io::Error::new(ErrorKind::NotFound, "is directory"),
                     }),
                 },
             }?;
@@ -897,11 +897,11 @@ fn open_file(path: &PathBuf) -> Result<File> {
                 source: e,
             },
         }),
-        Ok((metadata, file)) => match metadata.is_file() {
+        Ok((metadata, file)) => match !metadata.is_dir() {
             true => Ok(file),
             false => Err(Error::NotFound {
                 path: path.clone(),
-                source: io::Error::new(ErrorKind::NotFound, "not a file"),
+                source: io::Error::new(ErrorKind::NotFound, "is directory"),
             }),
         },
     }?;
@@ -1491,21 +1491,26 @@ mod unix_test {
     use crate::{ObjectStore, Path};
     use nix::sys::stat;
     use nix::unistd;
-    use std::time::Duration;
+    use std::fs::OpenOptions;
     use tempfile::TempDir;
-    use tokio::time::timeout;
 
     #[tokio::test]
-    async fn test_head_fifo() {
+    async fn test_fifo() {
         let filename = "some_file";
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-        unistd::mkfifo(&root.path().join(filename), stat::Mode::S_IRWXU).unwrap();
+        let path = root.path().join(filename);
+        unistd::mkfifo(&path, stat::Mode::S_IRWXU).unwrap();
+
         let location = Path::from(filename);
-        if (timeout(Duration::from_millis(10), integration.head(&location)).await)
-            .is_err()
-        {
-            panic!("Did not receive value within 10 ms");
-        }
+        integration.head(&location).await.unwrap();
+
+        // Need to open read and write side in parallel
+        let spawned = tokio::task::spawn_blocking(|| {
+            OpenOptions::new().write(true).open(path).unwrap();
+        });
+
+        integration.get(&location).await.unwrap();
+        spawned.await.unwrap();
     }
 }
