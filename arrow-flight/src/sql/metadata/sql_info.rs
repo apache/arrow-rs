@@ -33,8 +33,8 @@ use arrow_data::ArrayData;
 use arrow_schema::{DataType, Field, Fields, Schema, UnionFields, UnionMode};
 use once_cell::sync::Lazy;
 
-use super::SqlInfo;
 use crate::error::Result;
+use crate::sql::SqlInfo;
 
 /// Represents a dynamic value
 #[derive(Debug, Clone, PartialEq)]
@@ -321,7 +321,7 @@ impl SqlInfoUnionBuilder {
     }
 }
 
-/// A list of FlightSQL server capabilties.
+/// A builder for [`CommandGetSqlInfo`] response.
 ///
 /// [`CommandGetSqlInfo`] are metadata requests used by a Flight SQL
 /// server to communicate supported capabilities to Flight SQL
@@ -334,7 +334,7 @@ impl SqlInfoUnionBuilder {
 ///
 /// # Example
 /// ```
-/// # use arrow_flight::sql::{SqlInfoList, SqlInfo, SqlSupportedTransaction};
+/// # use arrow_flight::sql::{metadata::SqlInfoList, SqlInfo, SqlSupportedTransaction};
 /// // Create the list of metadata describing the server
 /// let info_list = SqlInfoList::new()
 ///     .with_sql_info(SqlInfo::FlightSqlServerName, "server name")
