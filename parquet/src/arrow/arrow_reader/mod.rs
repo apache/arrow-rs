@@ -543,13 +543,15 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
+    use num::PrimInt;
     use rand::{thread_rng, Rng, RngCore};
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
+    use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType};
     use arrow_array::*;
     use arrow_array::{RecordBatch, RecordBatchReader};
-    use arrow_buffer::{i256, Buffer};
+    use arrow_buffer::{i256, ArrowNativeType, Buffer};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema};
 
@@ -2553,5 +2555,59 @@ mod tests {
         let out = reader.next().unwrap().unwrap();
         assert_eq!(out.num_rows(), 1);
         assert_eq!(out, batch.slice(2, 1));
+    }
+
+    fn test_decimal_roundtrip<T: DecimalType>() {
+        // Precision <= 9 -> INT32
+        // Precision <= 18 -> INT64
+        // Precision > 18 -> FIXED_LEN_BYTE_ARRAY
+
+        let d = |values: Vec<usize>, p: u8| {
+            let iter = values.into_iter().map(T::Native::usize_as);
+            PrimitiveArray::<T>::from_iter_values(iter)
+                .with_precision_and_scale(p, 2)
+                .unwrap()
+        };
+
+        let d1 = d(vec![1, 2, 3, 4, 5], 9);
+        let d2 = d(vec![1, 2, 3, 4, 10.pow(10) - 1], 10);
+        let d3 = d(vec![1, 2, 3, 4, 10.pow(18) - 1], 18);
+        let d4 = d(vec![1, 2, 3, 4, 10.pow(19) - 1], 19);
+
+        let batch = RecordBatch::try_from_iter([
+            ("d1", Arc::new(d1) as ArrayRef),
+            ("d2", Arc::new(d2) as ArrayRef),
+            ("d3", Arc::new(d3) as ArrayRef),
+            ("d4", Arc::new(d4) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer)).unwrap();
+        let t1 = builder.parquet_schema().columns()[0].physical_type();
+        assert_eq!(t1, PhysicalType::INT32);
+        let t2 = builder.parquet_schema().columns()[1].physical_type();
+        assert_eq!(t2, PhysicalType::INT64);
+        let t3 = builder.parquet_schema().columns()[2].physical_type();
+        assert_eq!(t3, PhysicalType::INT64);
+        let t4 = builder.parquet_schema().columns()[3].physical_type();
+        assert_eq!(t4, PhysicalType::FIXED_LEN_BYTE_ARRAY);
+
+        let mut reader = builder.build().unwrap();
+        assert_eq!(batch.schema(), reader.schema());
+
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(batch, out);
+    }
+
+    #[test]
+    fn test_decimal() {
+        test_decimal_roundtrip::<Decimal128Type>();
+        test_decimal_roundtrip::<Decimal256Type>();
     }
 }

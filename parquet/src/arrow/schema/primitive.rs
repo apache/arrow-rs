@@ -20,7 +20,7 @@ use crate::basic::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{BasicTypeInfo, Type};
-use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use arrow_schema::{DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION};
 
 /// Converts [`Type`] to [`DataType`] with an optional `arrow_type_hint`
 /// provided by the arrow schema
@@ -62,6 +62,9 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         // Determine interval time unit (#1666)
         (DataType::Interval(_), DataType::Interval(_)) => hint,
 
+        // Promote to Decimal256
+        (DataType::Decimal128(_, _), DataType::Decimal256(_, _)) => hint,
+
         // Potentially preserve dictionary encoding
         (_, DataType::Dictionary(_, value)) => {
             // Apply hint to inner type
@@ -100,6 +103,14 @@ fn from_parquet(parquet_type: &Type) -> Result<DataType> {
             }
         },
         Type::GroupType { .. } => unreachable!(),
+    }
+}
+
+fn decimal_type(scale: i32, precision: i32) -> Result<DataType> {
+    if precision <= DECIMAL128_MAX_PRECISION as _ {
+        decimal_128_type(scale, precision)
+    } else {
+        decimal_256_type(scale, precision)
     }
 }
 
@@ -255,8 +266,8 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<D
                 precision: p,
             }),
             _,
-        ) => decimal_128_type(s, p),
-        (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
+        ) => decimal_type(s, p),
+        (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {}",
             logical,
