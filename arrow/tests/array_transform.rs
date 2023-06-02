@@ -922,6 +922,29 @@ fn test_fixed_size_binary_append() {
     assert_eq!(result, expected);
 }
 
+#[test]
+fn test_extend_nulls() {
+    let int = Int32Array::from(vec![1, 2, 3, 4]).into_data();
+    let mut mutable = MutableArrayData::new(vec![&int], true, 4);
+    mutable.extend(0, 2, 3);
+    mutable.extend_nulls(2);
+
+    let data = mutable.freeze();
+    data.validate_full().unwrap();
+    let out = Int32Array::from(data);
+
+    assert_eq!(out.null_count(), 2);
+    assert_eq!(out.iter().collect::<Vec<_>>(), vec![Some(3), None, None]);
+}
+
+#[test]
+#[should_panic(expected = "MutableArrayData not nullable")]
+fn test_extend_nulls_panic() {
+    let int = Int32Array::from(vec![1, 2, 3, 4]).into_data();
+    let mut mutable = MutableArrayData::new(vec![&int], false, 4);
+    mutable.extend_nulls(2);
+}
+
 /*
 // this is an old test used on a meanwhile removed dead code
 // that is still useful when `MutableArrayData` supports fixed-size lists.
