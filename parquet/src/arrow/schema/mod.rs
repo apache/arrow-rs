@@ -607,6 +607,9 @@ mod tests {
                     REQUIRED INT64 decimal2 (DECIMAL(12,2));
                     REQUIRED FIXED_LEN_BYTE_ARRAY (16) decimal3 (DECIMAL(30,2));
                     REQUIRED BYTE_ARRAY decimal4 (DECIMAL(33,2));
+                    REQUIRED BYTE_ARRAY decimal5 (DECIMAL(38,2));
+                    REQUIRED FIXED_LEN_BYTE_ARRAY (17) decimal6 (DECIMAL(39,2));
+                    REQUIRED BYTE_ARRAY decimal7 (DECIMAL(39,2));
         }
         ";
 
@@ -619,8 +622,11 @@ mod tests {
         let arrow_fields = Fields::from(vec![
             Field::new("decimal1", DataType::Decimal128(4, 2), false),
             Field::new("decimal2", DataType::Decimal128(12, 2), false),
-            Field::new("decimal3", DataType::Decimal256(30, 2), false),
+            Field::new("decimal3", DataType::Decimal128(30, 2), false),
             Field::new("decimal4", DataType::Decimal128(33, 2), false),
+            Field::new("decimal5", DataType::Decimal128(38, 2), false),
+            Field::new("decimal6", DataType::Decimal256(39, 2), false),
+            Field::new("decimal7", DataType::Decimal256(39, 2), false),
         ]);
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
     }
@@ -1389,6 +1395,8 @@ mod tests {
             REQUIRED INT32 decimal_int32 (DECIMAL(8,2));
             REQUIRED INT64 decimal_int64 (DECIMAL(16,2));
             REQUIRED FIXED_LEN_BYTE_ARRAY (13) decimal_fix_length (DECIMAL(30,2));
+            REQUIRED FIXED_LEN_BYTE_ARRAY (16) decimal128 (DECIMAL(38,2));
+            REQUIRED FIXED_LEN_BYTE_ARRAY (17) decimal256 (DECIMAL(39,2));
         }
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
@@ -1473,7 +1481,9 @@ mod tests {
             ),
             Field::new("decimal_int32", DataType::Decimal128(8, 2), false),
             Field::new("decimal_int64", DataType::Decimal128(16, 2), false),
-            Field::new("decimal_fix_length", DataType::Decimal256(30, 2), false),
+            Field::new("decimal_fix_length", DataType::Decimal128(30, 2), false),
+            Field::new("decimal128", DataType::Decimal128(38, 2), false),
+            Field::new("decimal256", DataType::Decimal256(39, 2), false),
         ];
         let arrow_schema = Schema::new(arrow_fields);
         let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema).unwrap();
