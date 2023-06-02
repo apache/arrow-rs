@@ -18,41 +18,15 @@
 use super::{Extend, _MutableArrayData};
 use crate::ArrayData;
 
-pub(super) fn build_extend(array: &ArrayData) -> Extend {
-    if array.null_count() == 0 {
-        Box::new(
-            move |mutable: &mut _MutableArrayData,
-                  index: usize,
-                  start: usize,
-                  len: usize| {
-                mutable
-                    .child_data
-                    .iter_mut()
-                    .for_each(|child| child.extend(index, start, start + len))
-            },
-        )
-    } else {
-        Box::new(
-            move |mutable: &mut _MutableArrayData,
-                  index: usize,
-                  start: usize,
-                  len: usize| {
-                (start..start + len).for_each(|i| {
-                    if array.is_valid(i) {
-                        mutable
-                            .child_data
-                            .iter_mut()
-                            .for_each(|child| child.extend(index, i, i + 1))
-                    } else {
-                        mutable
-                            .child_data
-                            .iter_mut()
-                            .for_each(|child| child.extend_nulls(1))
-                    }
-                })
-            },
-        )
-    }
+pub(super) fn build_extend(_: &ArrayData) -> Extend {
+    Box::new(
+        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
+            mutable
+                .child_data
+                .iter_mut()
+                .for_each(|child| child.extend(index, start, start + len))
+        },
+    )
 }
 
 pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {

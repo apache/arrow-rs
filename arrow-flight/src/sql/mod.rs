@@ -75,6 +75,8 @@ pub use gen::CommandStatementQuery;
 pub use gen::CommandStatementSubstraitPlan;
 pub use gen::CommandStatementUpdate;
 pub use gen::DoPutUpdateResult;
+pub use gen::Nullable;
+pub use gen::Searchable;
 pub use gen::SqlInfo;
 pub use gen::SqlNullOrdering;
 pub use gen::SqlOuterJoinsSupportLevel;
@@ -93,9 +95,12 @@ pub use gen::SqlTransactionIsolationLevel;
 pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
+pub use gen::XdbcDataType;
+pub use gen::XdbcDatetimeSubcode;
 
 pub use sql_info::SqlInfoList;
 
+pub mod catalogs;
 pub mod client;
 pub mod server;
 pub mod sql_info;

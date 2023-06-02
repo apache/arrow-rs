@@ -27,13 +27,18 @@ repository = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
+arrow-arith = { workspace = true, optional = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 # Cast is needed to work around https://github.com/apache/arrow-rs/issues/3389
 arrow-cast = { workspace = true }
-arrow-data = { workspace = true }
+arrow-data = { workspace = true, optional = true }
 arrow-ipc = { workspace = true }
+arrow-ord = { workspace = true, optional = true }
+arrow-row = { workspace = true, optional = true }
+arrow-select = { workspace = true, optional = true }
 arrow-schema = { workspace = true }
+arrow-string = { workspace = true, optional = true }
 base64 = { version = "0.21", default-features = false, features = ["std"] }
 bytes = { version = "1", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
@@ -53,7 +58,7 @@ all-features = true
 
 [features]
 default = []
-flight-sql-experimental = ["once_cell"]
+flight-sql-experimental = ["arrow-arith", "arrow-data", "arrow-ord", "arrow-row", "arrow-select", "arrow-string", "once_cell"]
 tls = ["tonic/tls"]
 
 # Enable CLI tools

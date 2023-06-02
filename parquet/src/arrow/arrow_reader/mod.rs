@@ -26,12 +26,9 @@ use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 
-use crate::arrow::array_reader::{
-    build_array_reader, ArrayReader, FileReaderRowGroupCollection, RowGroupCollection,
-};
-use crate::arrow::schema::parquet_to_array_schema_and_fields;
-use crate::arrow::schema::ParquetField;
-use crate::arrow::ProjectionMask;
+use crate::arrow::array_reader::{build_array_reader, ArrayReader, FileReaderRowGroups};
+use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
+use crate::arrow::{FieldLevels, ProjectionMask};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::{ChunkReader, SerializedFileReader};
@@ -41,6 +38,7 @@ use crate::schema::types::SchemaDescriptor;
 mod filter;
 mod selection;
 
+pub use crate::arrow::array_reader::RowGroups;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 
@@ -87,7 +85,7 @@ impl<T> ArrowReaderBuilder<T> {
             false => metadata.file_metadata().key_value_metadata(),
         };
 
-        let (schema, fields) = parquet_to_array_schema_and_fields(
+        let (schema, fields) = parquet_to_arrow_schema_and_fields(
             metadata.file_metadata().schema_descr(),
             ProjectionMask::all(),
             kv_metadata,
@@ -269,8 +267,7 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
     ///
     /// Note: this will eagerly evaluate any `RowFilter` before returning
     pub fn build(self) -> Result<ParquetRecordBatchReader> {
-        let reader =
-            FileReaderRowGroupCollection::new(Arc::new(self.input.0), self.row_groups);
+        let reader = FileReaderRowGroups::new(Arc::new(self.input.0), self.row_groups);
 
         let mut filter = self.filter;
         let mut selection = self.selection;
@@ -418,6 +415,30 @@ impl ParquetRecordBatchReader {
         ParquetRecordBatchReaderBuilder::try_new(reader)?
             .with_batch_size(batch_size)
             .build()
+    }
+
+    /// Create a new [`ParquetRecordBatchReader`] from the provided [`RowGroups`]
+    ///
+    /// Note: this is a low-level interface see [`ParquetRecordBatchReader::try_new`] for a
+    /// higher-level interface for reading parquet data from a file
+    pub fn try_new_with_row_groups(
+        levels: &FieldLevels,
+        row_groups: &dyn RowGroups,
+        batch_size: usize,
+        selection: Option<RowSelection>,
+    ) -> Result<Self> {
+        let array_reader = build_array_reader(
+            levels.levels.as_ref(),
+            &ProjectionMask::all(),
+            row_groups,
+        )?;
+
+        Ok(Self {
+            batch_size,
+            array_reader,
+            schema: Arc::new(Schema::new(levels.fields.clone())),
+            selection: selection.map(|s| s.trim().into()),
+        })
     }
 
     /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
@@ -1240,7 +1261,7 @@ mod tests {
 
         fn writer_props(&self) -> WriterProperties {
             let builder = WriterProperties::builder()
-                .set_data_pagesize_limit(self.max_data_page_size)
+                .set_data_page_size_limit(self.max_data_page_size)
                 .set_write_batch_size(self.write_batch_size)
                 .set_writer_version(self.writer_version)
                 .set_statistics_enabled(self.enabled_statistics);
@@ -1248,7 +1269,7 @@ mod tests {
             let builder = match self.encoding {
                 Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => builder
                     .set_dictionary_enabled(true)
-                    .set_dictionary_pagesize_limit(self.max_dict_page_size),
+                    .set_dictionary_page_size_limit(self.max_dict_page_size),
                 _ => builder
                     .set_dictionary_enabled(false)
                     .set_encoding(self.encoding),
@@ -2500,5 +2521,37 @@ mod tests {
             .unwrap();
 
         assert_eq!(&written.slice(0, 8), &read[0]);
+    }
+
+    #[test]
+    fn test_list_skip() {
+        let mut list = ListBuilder::new(Int32Builder::new());
+        list.append_value([Some(1), Some(2)]);
+        list.append_value([Some(3)]);
+        list.append_value([Some(4)]);
+        let list = list.finish();
+        let batch = RecordBatch::try_from_iter([("l", Arc::new(list) as _)]).unwrap();
+
+        // First page contains 2 values but only 1 row
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(1)
+            .set_write_batch_size(2)
+            .build();
+
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer =
+            ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let selection = vec![RowSelector::skip(2), RowSelector::select(1)];
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer))
+            .unwrap()
+            .with_row_selection(selection.into())
+            .build()
+            .unwrap();
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(out.num_rows(), 1);
+        assert_eq!(out, batch.slice(2, 1));
     }
 }

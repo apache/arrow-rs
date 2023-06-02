@@ -17,7 +17,22 @@
 
 use arrow_buffer::i256;
 use criterion::*;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::str::FromStr;
+
+/// Returns fixed seedable RNG
+fn seedable_rng() -> StdRng {
+    StdRng::seed_from_u64(42)
+}
+
+fn create_i256_vec(size: usize) -> Vec<i256> {
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| i256::from_i128(rng.gen::<i128>()))
+        .collect()
+}
 
 fn criterion_benchmark(c: &mut Criterion) {
     let numbers = vec![
@@ -38,6 +53,28 @@ fn criterion_benchmark(c: &mut Criterion) {
             b.iter(|| i256::from_str(&t).unwrap());
         });
     }
+
+    c.bench_function("i256_div", |b| {
+        b.iter(|| {
+            for number_a in create_i256_vec(10) {
+                for number_b in create_i256_vec(5) {
+                    number_a.checked_div(number_b);
+                    number_a.wrapping_div(number_b);
+                }
+            }
+        });
+    });
+
+    c.bench_function("i256_rem", |b| {
+        b.iter(|| {
+            for number_a in create_i256_vec(10) {
+                for number_b in create_i256_vec(5) {
+                    number_a.checked_rem(number_b);
+                    number_a.wrapping_rem(number_b);
+                }
+            }
+        });
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);
