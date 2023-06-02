@@ -438,18 +438,15 @@ mod tests {
         assert!(existing_path.prefix_match(&prefix).is_none());
 
         // Prefix matches but there aren't any parts after it
-        let existing_path = Path::from("apple/bear/cow/dog");
+        let existing = Path::from("apple/bear/cow/dog");
 
-        let prefix = existing_path.clone();
-        assert_eq!(existing_path.prefix_match(&prefix).unwrap().count(), 0);
-
+        assert_eq!(existing.prefix_match(&existing).unwrap().count(), 0);
         assert_eq!(Path::default().parts().count(), 0);
     }
 
     #[test]
     fn prefix_matches() {
         let haystack = Path::from_iter(["foo/bar", "baz%2Ftest", "something"]);
-        let needle = haystack.clone();
         // self starts with self
         assert!(
             haystack.prefix_matches(&haystack),
@@ -457,7 +454,7 @@ mod tests {
         );
 
         // a longer prefix doesn't match
-        let needle = needle.child("longer now");
+        let needle = haystack.child("longer now");
         assert!(
             !haystack.prefix_matches(&needle),
             "{haystack:?} shouldn't have started with {needle:?}"
