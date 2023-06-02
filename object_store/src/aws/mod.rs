@@ -46,7 +46,9 @@ use url::Url;
 
 pub use crate::aws::checksum::Checksum;
 use crate::aws::client::{S3Client, S3Config};
-use crate::aws::credential::{InstanceCredentialProvider, WebIdentityProvider};
+use crate::aws::credential::{
+    InstanceCredentialProvider, TaskCredentialProvider, WebIdentityProvider,
+};
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::{
@@ -86,9 +88,6 @@ pub use credential::{AwsAuthorizer, AwsCredential};
 
 /// Default metadata endpoint
 static DEFAULT_METADATA_ENDPOINT: &str = "http://169.254.169.254";
-
-/// ECS metadata endpoint
-static ECS_METADATA_ENDPOINT: &str = "http://169.254.170.2";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -399,6 +398,8 @@ pub struct AmazonS3Builder {
     checksum_algorithm: Option<ConfigValue<Checksum>>,
     /// Metadata endpoint, see <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html>
     metadata_endpoint: Option<String>,
+    /// Container credentials URL, see <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+    container_credentials_relative_uri: Option<String>,
     /// Client options
     client_options: ClientOptions,
     /// Credentials
@@ -529,6 +530,11 @@ pub enum AmazonS3ConfigKey {
     /// - `metadata_endpoint`
     MetadataEndpoint,
 
+    /// Set the container credentials relative URI
+    ///
+    /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+    ContainerCredentialsRelativeUri,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -548,6 +554,9 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::MetadataEndpoint => "aws_metadata_endpoint",
             Self::UnsignedPayload => "aws_unsigned_payload",
             Self::Checksum => "aws_checksum_algorithm",
+            Self::ContainerCredentialsRelativeUri => {
+                "aws_container_credentials_relative_uri"
+            }
             Self::Client(opt) => opt.as_ref(),
         }
     }
@@ -578,6 +587,9 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
             "aws_checksum_algorithm" | "checksum_algorithm" => Ok(Self::Checksum),
+            "aws_container_credentials_relative_uri" => {
+                Ok(Self::ContainerCredentialsRelativeUri)
+            }
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.parse() {
@@ -623,15 +635,6 @@ impl AmazonS3Builder {
                     }
                 }
             }
-        }
-
-        // This env var is set in ECS
-        // https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html
-        if let Ok(metadata_relative_uri) =
-            std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
-        {
-            builder.metadata_endpoint =
-                Some(format!("{ECS_METADATA_ENDPOINT}{metadata_relative_uri}"));
         }
 
         builder
@@ -690,6 +693,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::UnsignedPayload => self.unsigned_payload.parse(value),
             AmazonS3ConfigKey::Checksum => {
                 self.checksum_algorithm = Some(ConfigValue::Deferred(value.into()))
+            }
+            AmazonS3ConfigKey::ContainerCredentialsRelativeUri => {
+                self.container_credentials_relative_uri = Some(value.into())
             }
             AmazonS3ConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
@@ -758,6 +764,9 @@ impl AmazonS3Builder {
                 self.checksum_algorithm.as_ref().map(ToString::to_string)
             }
             AmazonS3ConfigKey::Client(key) => self.client_options.get_config_value(key),
+            AmazonS3ConfigKey::ContainerCredentialsRelativeUri => {
+                self.container_credentials_relative_uri.clone()
+            }
         }
     }
 
@@ -999,6 +1008,15 @@ impl AmazonS3Builder {
                 client,
                 self.retry_config.clone(),
             )) as _
+        } else if let Some(uri) = self.container_credentials_relative_uri {
+            info!("Using Task credential provider");
+            Arc::new(TaskCredentialProvider {
+                url: format!("http://169.254.170.2{uri}"),
+                retry: self.retry_config.clone(),
+                // The instance metadata endpoint is access over HTTP
+                client: self.client_options.clone().with_allow_http(true).client()?,
+                cache: Default::default(),
+            }) as _
         } else {
             info!("Using Instance credential provider");
 
@@ -1199,9 +1217,10 @@ mod tests {
 
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
-        let metadata_uri =
-            format!("{ECS_METADATA_ENDPOINT}{container_creds_relative_uri}");
-        assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
+        assert_eq!(
+            builder.container_credentials_relative_uri.unwrap(),
+            container_creds_relative_uri
+        );
         assert_eq!(
             builder.checksum_algorithm.unwrap().get().unwrap(),
             Checksum::SHA256

@@ -20,7 +20,7 @@ use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::TokenProvider;
 use crate::util::hmac_sha256;
-use crate::{Result, RetryConfig};
+use crate::{CredentialProvider, Result, RetryConfig};
 use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
@@ -536,6 +536,49 @@ async fn web_identity(
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
 
+    Ok(TemporaryToken {
+        token: Arc::new(creds.into()),
+        expiry: Some(Instant::now() + ttl),
+    })
+}
+
+/// Credentials sourced from a task IAM role
+///
+/// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+#[derive(Debug)]
+pub struct TaskCredentialProvider {
+    pub url: String,
+    pub retry: RetryConfig,
+    pub client: Client,
+    pub cache: TokenCache<Arc<AwsCredential>>,
+}
+
+#[async_trait]
+impl CredentialProvider for TaskCredentialProvider {
+    type Credential = AwsCredential;
+
+    async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
+        self.cache
+            .get_or_insert_with(|| task_credential(&self.client, &self.retry, &self.url))
+            .await
+            .map_err(|source| crate::Error::Generic {
+                store: STORE,
+                source,
+            })
+    }
+}
+
+/// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+async fn task_credential(
+    client: &Client,
+    retry: &RetryConfig,
+    url: &str,
+) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
+    let creds: InstanceCredentials =
+        client.get(url).send_retry(retry).await?.json().await?;
+
+    let now = Utc::now();
+    let ttl = (creds.expiration - now).to_std().unwrap_or_default();
     Ok(TemporaryToken {
         token: Arc::new(creds.into()),
         expiry: Some(Instant::now() + ttl),
