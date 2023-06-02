@@ -285,14 +285,14 @@ fn from_fixed_len_byte_array(
     // TODO: This should check the type length for the decimal and interval types
     match (info.logical_type(), info.converted_type()) {
         (Some(LogicalType::Decimal { scale, precision }), _) => {
-            if type_length < 16 {
+            if type_length <= 16 {
                 decimal_128_type(scale, precision)
             } else {
                 decimal_256_type(scale, precision)
             }
         }
         (None, ConvertedType::DECIMAL) => {
-            if type_length < 16 {
+            if type_length <= 16 {
                 decimal_128_type(scale, precision)
             } else {
                 decimal_256_type(scale, precision)
