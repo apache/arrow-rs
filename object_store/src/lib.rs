@@ -362,12 +362,16 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
             range: Some(range.clone()),
             ..Default::default()
         };
+        // Temporary until GetResult::File supports range (#4352)
         match self.get_opts(location, options).await? {
             GetResult::Stream(s) => collect_bytes(s, None).await,
+            #[cfg(not(target_arch = "wasm32"))]
             GetResult::File(mut file, path) => {
                 maybe_spawn_blocking(move || local::read_range(&mut file, &path, range))
                     .await
             }
+            #[cfg(target_arch = "wasm32")]
+            _ => unimplemented!("File IO not implemented on wasm32."),
         }
     }
 
