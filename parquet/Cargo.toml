@@ -111,6 +111,11 @@ name = "async_read_parquet"
 required-features = ["arrow", "async"]
 path = "./examples/async_read_parquet.rs"
 
+[[example]]
+name = "read_with_rowgroup"
+required-features = ["arrow", "async"]
+path = "./examples/read_with_rowgroup.rs"
+
 [[test]]
 name = "arrow_writer_layout"
 required-features = ["arrow"]

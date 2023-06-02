@@ -2700,7 +2700,7 @@ where
 }
 
 /// Checks if a [`GenericListArray`] contains a value in the [`PrimitiveArray`]
-pub fn contains<T, OffsetSize>(
+pub fn in_list<T, OffsetSize>(
     left: &PrimitiveArray<T>,
     right: &GenericListArray<OffsetSize>,
 ) -> Result<BooleanArray, ArrowError>
@@ -2742,7 +2742,7 @@ where
 }
 
 /// Checks if a [`GenericListArray`] contains a value in the [`GenericStringArray`]
-pub fn contains_utf8<OffsetSize>(
+pub fn in_list_utf8<OffsetSize>(
     left: &GenericStringArray<OffsetSize>,
     right: &ListArray,
 ) -> Result<BooleanArray, ArrowError>
@@ -3425,7 +3425,7 @@ mod tests {
         let list_array = LargeListArray::from(list_data);
 
         let nulls = Int32Array::from(vec![None, None, None, None]);
-        let nulls_result = contains(&nulls, &list_array).unwrap();
+        let nulls_result = in_list(&nulls, &list_array).unwrap();
         assert_eq!(
             nulls_result
                 .as_any()
@@ -3435,7 +3435,7 @@ mod tests {
         );
 
         let values = Int32Array::from(vec![Some(0), Some(0), Some(0), Some(0)]);
-        let values_result = contains(&values, &list_array).unwrap();
+        let values_result = in_list(&values, &list_array).unwrap();
         assert_eq!(
             values_result
                 .as_any()
@@ -3695,7 +3695,7 @@ mod tests {
 
         let v: Vec<Option<&str>> = vec![None, None, None, None];
         let nulls = StringArray::from(v);
-        let nulls_result = contains_utf8(&nulls, &list_array).unwrap();
+        let nulls_result = in_list_utf8(&nulls, &list_array).unwrap();
         assert_eq!(
             nulls_result
                 .as_any()
@@ -3710,7 +3710,7 @@ mod tests {
             Some("Lorem"),
             Some("Lorem"),
         ]);
-        let values_result = contains_utf8(&values, &list_array).unwrap();
+        let values_result = in_list_utf8(&values, &list_array).unwrap();
         assert_eq!(
             values_result
                 .as_any()

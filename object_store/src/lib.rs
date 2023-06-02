@@ -898,6 +898,8 @@ mod test_util {
 mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
+    use bytes::{BufMut, BytesMut};
+    use itertools::Itertools;
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
@@ -1308,8 +1310,18 @@ mod tests {
         }
     }
 
+    fn get_random_bytes(len: usize) -> Bytes {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let mut bytes = BytesMut::with_capacity(len);
+        for _ in 0..len {
+            bytes.put_u8(rng.gen());
+        }
+        bytes.freeze()
+    }
+
     fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
-        std::iter::repeat(Bytes::from_iter(std::iter::repeat(b'x').take(chunk_length)))
+        std::iter::repeat(get_random_bytes(chunk_length))
             .take(num_chunks)
             .collect()
     }
@@ -1344,8 +1356,8 @@ mod tests {
         assert_eq!(bytes_expected, bytes_written);
 
         // Can overwrite some storage
-        // Sizes carefully chosen to exactly hit min limit of 5 MiB
-        let data = get_vec_of_bytes(242_880, 22);
+        // Sizes chosen to ensure we write three parts
+        let data = (0..7).map(|_| get_random_bytes(3_200_000)).collect_vec();
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {

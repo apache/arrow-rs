@@ -60,8 +60,11 @@ where
     max_concurrency: usize,
     /// Buffer that will be sent in next upload.
     current_buffer: Vec<u8>,
-    /// Minimum size of a part in bytes
-    min_part_size: usize,
+    /// Size of each part.
+    ///
+    /// While S3 and Minio support variable part sizes, R2 requires they all be
+    /// exactly the same size.
+    part_size: usize,
     /// Index of current part
     current_part_idx: usize,
     /// The completion task
@@ -85,10 +88,19 @@ where
             // Minimum size of 5 MiB
             // https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
             // https://cloud.google.com/storage/quotas#requests
-            min_part_size: 5_242_880,
+            part_size: 10 * 1024 * 1024,
             current_part_idx: 0,
             completion_task: None,
         }
+    }
+
+    // Add data to the current buffer, returning the number of bytes added
+    fn add_to_buffer(mut self: Pin<&mut Self>, buf: &[u8], offset: usize) -> usize {
+        let remaining_capacity = self.part_size - self.current_buffer.len();
+        let to_copy = std::cmp::min(remaining_capacity, buf.len() - offset);
+        self.current_buffer
+            .extend_from_slice(&buf[offset..offset + to_copy]);
+        to_copy
     }
 
     pub fn poll_tasks(
@@ -158,15 +170,21 @@ where
         // Poll current tasks
         self.as_mut().poll_tasks(cx)?;
 
-        // If adding buf to pending buffer would trigger send, check
-        // whether we have capacity for another task.
-        let enough_to_send =
-            (buf.len() + self.current_buffer.len()) >= self.min_part_size;
-        if enough_to_send && self.tasks.len() < self.max_concurrency {
-            // If we do, copy into the buffer and submit the task, and return ready.
-            self.current_buffer.extend_from_slice(buf);
+        let mut offset = 0;
 
-            let out_buffer = std::mem::take(&mut self.current_buffer);
+        loop {
+            // Fill up current buffer
+            offset += self.as_mut().add_to_buffer(buf, offset);
+
+            // If we don't have a full buffer or we have too many tasks, break
+            if self.current_buffer.len() < self.part_size
+                || self.tasks.len() >= self.max_concurrency
+            {
+                break;
+            }
+
+            let new_buffer = Vec::with_capacity(self.part_size);
+            let out_buffer = std::mem::replace(&mut self.current_buffer, new_buffer);
             let inner = Arc::clone(&self.inner);
             let part_idx = self.current_part_idx;
             self.tasks.push(Box::pin(async move {
@@ -177,14 +195,14 @@ where
 
             // We need to poll immediately after adding to setup waker
             self.as_mut().poll_tasks(cx)?;
+        }
 
-            Poll::Ready(Ok(buf.len()))
-        } else if !enough_to_send {
-            self.current_buffer.extend_from_slice(buf);
-            Poll::Ready(Ok(buf.len()))
-        } else {
-            // Waker registered by call to poll_tasks at beginning
+        // If offset is zero, then we didn't write anything because we didn't
+        // have capacity for more tasks and our buffer is full.
+        if offset == 0 && !buf.is_empty() {
             Poll::Pending
+        } else {
+            Poll::Ready(Ok(offset))
         }
     }
 

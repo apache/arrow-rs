@@ -27,7 +27,7 @@
 //! 2. Helpers for encoding and decoding FlightSQL messages: [`Any`] and [`Command`]
 //! 3. A [`FlightSqlServiceClient`] for interacting with FlightSQL servers.
 //! 4. A [`FlightSqlService`] to help building FlightSQL servers from [`FlightService`].
-//! 5. Structures to build responses for FlightSQL metadata APIs: [`SqlInfoList`]
+//! 5. Helpers to build responses for FlightSQL metadata APIs: [`metadata`]
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 //! [Apache Arrow]: https://arrow.apache.org
@@ -37,6 +37,7 @@
 //! [`do_get`]: crate::flight_service_server::FlightService::do_get
 //! [`FlightSqlServiceClient`]: client::FlightSqlServiceClient
 //! [`FlightSqlService`]: server::FlightSqlService
+//! [`metadata`]: crate::sql::metadata
 use arrow_schema::ArrowError;
 use bytes::Bytes;
 use paste::paste;
@@ -75,6 +76,8 @@ pub use gen::CommandStatementQuery;
 pub use gen::CommandStatementSubstraitPlan;
 pub use gen::CommandStatementUpdate;
 pub use gen::DoPutUpdateResult;
+pub use gen::Nullable;
+pub use gen::Searchable;
 pub use gen::SqlInfo;
 pub use gen::SqlNullOrdering;
 pub use gen::SqlOuterJoinsSupportLevel;
@@ -93,12 +96,12 @@ pub use gen::SqlTransactionIsolationLevel;
 pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
-
-pub use sql_info::SqlInfoList;
+pub use gen::XdbcDataType;
+pub use gen::XdbcDatetimeSubcode;
 
 pub mod client;
+pub mod metadata;
 pub mod server;
-pub mod sql_info;
 
 /// ProstMessageExt are useful utility methods for prost::Message types
 pub trait ProstMessageExt: prost::Message + Default {

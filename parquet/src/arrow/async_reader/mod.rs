@@ -94,12 +94,11 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 
-use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
+use crate::arrow::array_reader::{build_array_reader, RowGroups};
 use crate::arrow::arrow_reader::{
     apply_range, evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderOptions,
     ParquetRecordBatchReader, RowFilter, RowSelection,
 };
-use crate::arrow::schema::ParquetField;
 use crate::arrow::ProjectionMask;
 
 use crate::column::page::{PageIterator, PageReader};
@@ -112,14 +111,13 @@ use crate::format::PageLocation;
 
 use crate::file::FOOTER_SIZE;
 
-use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
-
 mod metadata;
 pub use metadata::*;
 
 #[cfg(feature = "object_store")]
 mod store;
 
+use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -648,11 +646,7 @@ impl<'a> InMemoryRowGroup<'a> {
     }
 }
 
-impl<'a> RowGroupCollection for InMemoryRowGroup<'a> {
-    fn schema(&self) -> SchemaDescPtr {
-        self.metadata.schema_descr_ptr()
-    }
-
+impl<'a> RowGroups for InMemoryRowGroup<'a> {
     fn num_rows(&self) -> usize {
         self.row_count
     }
@@ -673,8 +667,6 @@ impl<'a> RowGroupCollection for InMemoryRowGroup<'a> {
                     )?);
 
                 Ok(Box::new(ColumnChunkIterator {
-                    schema: self.metadata.schema_descr_ptr(),
-                    column_schema: self.metadata.schema_descr_ptr().columns()[i].clone(),
                     reader: Some(Ok(page_reader)),
                 }))
             }
@@ -739,8 +731,6 @@ impl ChunkReader for ColumnChunkData {
 
 /// Implements [`PageIterator`] for a single column chunk, yielding a single [`PageReader`]
 struct ColumnChunkIterator {
-    schema: SchemaDescPtr,
-    column_schema: ColumnDescPtr,
     reader: Option<Result<Box<dyn PageReader>>>,
 }
 
@@ -752,15 +742,7 @@ impl Iterator for ColumnChunkIterator {
     }
 }
 
-impl PageIterator for ColumnChunkIterator {
-    fn schema(&mut self) -> Result<SchemaDescPtr> {
-        Ok(self.schema.clone())
-    }
-
-    fn column_schema(&mut self) -> Result<ColumnDescPtr> {
-        Ok(self.column_schema.clone())
-    }
-}
+impl PageIterator for ColumnChunkIterator {}
 
 #[cfg(test)]
 mod tests {
@@ -768,7 +750,7 @@ mod tests {
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowSelector,
     };
-    use crate::arrow::schema::parquet_to_array_schema_and_fields;
+    use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::ArrowWriter;
     use crate::file::footer::parse_metadata;
     use crate::file::page_index::index_reader;
@@ -1413,7 +1395,7 @@ mod tests {
         };
 
         let requests = async_reader.requests.clone();
-        let (_, fields) = parquet_to_array_schema_and_fields(
+        let (_, fields) = parquet_to_arrow_schema_and_fields(
             metadata.file_metadata().schema_descr(),
             ProjectionMask::all(),
             None,

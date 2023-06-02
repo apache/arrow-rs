@@ -123,7 +123,8 @@ pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::SchemaDescriptor;
 
 pub use self::schema::{
-    arrow_to_parquet_schema, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
+    arrow_to_parquet_schema, parquet_to_arrow_field_levels, parquet_to_arrow_schema,
+    parquet_to_arrow_schema_by_columns, FieldLevels,
 };
 
 /// Schema metadata key used to store serialized Arrow IPC schema

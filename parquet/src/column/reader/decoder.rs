@@ -82,11 +82,15 @@ pub trait ColumnLevelDecoder {
 }
 
 pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
-    /// Skips over repetition level corresponding to `num_records` records, where a record
-    /// is delimited by a repetition level of 0
+    /// Skips over up to `num_levels` repetition levels corresponding to `num_records` records,
+    /// where a record is delimited by a repetition level of 0
     ///
     /// Returns the number of records skipped, and the number of levels skipped
-    fn skip_rep_levels(&mut self, num_records: usize) -> Result<(usize, usize)>;
+    fn skip_rep_levels(
+        &mut self,
+        num_records: usize,
+        num_levels: usize,
+    ) -> Result<(usize, usize)>;
 }
 
 pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
@@ -395,22 +399,30 @@ impl DefinitionLevelDecoder for ColumnLevelDecoderImpl {
 }
 
 impl RepetitionLevelDecoder for ColumnLevelDecoderImpl {
-    fn skip_rep_levels(&mut self, num_records: usize) -> Result<(usize, usize)> {
+    fn skip_rep_levels(
+        &mut self,
+        num_records: usize,
+        num_levels: usize,
+    ) -> Result<(usize, usize)> {
         let mut level_skip = 0;
         let mut record_skip = 0;
 
-        loop {
+        while level_skip < num_levels {
+            let remaining_levels = num_levels - level_skip;
+
             if self.buffer.is_empty() {
-                // Read SKIP_BUFFER_SIZE as we don't know how many to read
-                self.read_to_buffer(SKIP_BUFFER_SIZE)?;
+                // Only read number of needed values
+                self.read_to_buffer(remaining_levels.min(SKIP_BUFFER_SIZE))?;
                 if self.buffer.is_empty() {
                     // Reached end of page
                     break;
                 }
             }
 
+            let max_skip = self.buffer.len().min(remaining_levels);
+
             let mut to_skip = 0;
-            while to_skip < self.buffer.len() && record_skip != num_records {
+            while to_skip < max_skip && record_skip != num_records {
                 if self.buffer[to_skip] == 0 {
                     record_skip += 1;
                 }
@@ -418,12 +430,12 @@ impl RepetitionLevelDecoder for ColumnLevelDecoderImpl {
             }
 
             // Find end of record
-            while to_skip < self.buffer.len() && self.buffer[to_skip] != 0 {
+            while to_skip < max_skip && self.buffer[to_skip] != 0 {
                 to_skip += 1;
             }
 
             level_skip += to_skip;
-            if to_skip >= self.buffer.len() {
+            if to_skip == self.buffer.len() {
                 // Need to to read more values
                 self.buffer.clear();
                 continue;
@@ -473,17 +485,39 @@ mod tests {
     }
 
     #[test]
-    fn test_skip() {
-        let mut rng = thread_rng();
-        let total_len = 10000;
-        let encoded: Vec<i16> = (0..total_len).map(|_| rng.gen_range(0..5)).collect();
-        let mut encoder = RleEncoder::new(3, 1024);
-        for v in &encoded {
-            encoder.put(*v as _)
-        }
+    fn test_skip_padding() {
+        let mut encoder = RleEncoder::new(1, 1024);
+        encoder.put(0);
+        (0..3).for_each(|_| encoder.put(1));
         let data = ByteBufferPtr::new(encoder.consume());
 
+        let mut decoder = ColumnLevelDecoderImpl::new(1);
+        decoder.set_data(Encoding::RLE, data.clone());
+        let (records, levels) = decoder.skip_rep_levels(100, 4).unwrap();
+        assert_eq!(records, 1);
+        assert_eq!(levels, 4);
+
+        // The length of the final bit packed run is ambiguous, so without the correct
+        // levels limit, it will decode zero padding
+        let mut decoder = ColumnLevelDecoderImpl::new(1);
+        decoder.set_data(Encoding::RLE, data);
+        let (records, levels) = decoder.skip_rep_levels(100, 6).unwrap();
+        assert_eq!(records, 3);
+        assert_eq!(levels, 6);
+    }
+
+    #[test]
+    fn test_skip() {
         for _ in 0..10 {
+            let mut rng = thread_rng();
+            let total_len = 10000_usize;
+            let encoded: Vec<i16> = (0..total_len).map(|_| rng.gen_range(0..5)).collect();
+            let mut encoder = RleEncoder::new(3, 1024);
+            for v in &encoded {
+                encoder.put(*v as _)
+            }
+            let data = ByteBufferPtr::new(encoder.consume());
+
             test_skip_levels(&encoded, data.clone(), |decoder, read, to_read| {
                 let (values_skipped, levels_skipped) =
                     decoder.skip_def_levels(to_read, 5).unwrap();
@@ -497,8 +531,11 @@ mod tests {
             });
 
             test_skip_levels(&encoded, data.clone(), |decoder, read, to_read| {
+                let remaining_levels = total_len - *read;
                 let (records_skipped, levels_skipped) =
-                    decoder.skip_rep_levels(to_read).unwrap();
+                    decoder.skip_rep_levels(to_read, remaining_levels).unwrap();
+
+                assert!(levels_skipped <= remaining_levels);
 
                 // If not run out of values
                 if levels_skipped + *read != encoded.len() {

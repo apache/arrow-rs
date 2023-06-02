@@ -27,10 +27,7 @@ use std::vec::IntoIter;
 use thrift::protocol::{TCompactOutputProtocol, TSerializable};
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{
-    Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type,
-    UInt64Type,
-};
+use arrow_array::types::*;
 use arrow_array::{Array, FixedSizeListArray, RecordBatch, RecordBatchWriter};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, IntervalUnit, SchemaRef};
 
@@ -551,6 +548,13 @@ fn write_leaf(
                         .unary::<_, Int32Type>(|v| v as i32);
                     write_primitive(typed, array.values(), levels)
                 }
+                ArrowDataType::Decimal256(_, _) => {
+                    // use the int32 to represent the decimal with low precision
+                    let array = column
+                        .as_primitive::<Decimal256Type>()
+                        .unary::<_, Int32Type>(|v| v.as_i128() as i32);
+                    write_primitive(typed, array.values(), levels)
+                }
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
                     let array = array.as_primitive::<Int32Type>();
@@ -584,6 +588,13 @@ fn write_leaf(
                     let array = column
                         .as_primitive::<Decimal128Type>()
                         .unary::<_, Int64Type>(|v| v as i64);
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Decimal256(_, _) => {
+                    // use the int64 to represent the decimal with low precision
+                    let array = column
+                        .as_primitive::<Decimal256Type>()
+                        .unary::<_, Int64Type>(|v| v.as_i128() as i64);
                     write_primitive(typed, array.values(), levels)
                 }
                 _ => {
@@ -641,7 +652,14 @@ fn write_leaf(
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     let array = column.as_primitive::<Decimal128Type>();
-                    get_decimal_array_slice(array, indices)
+                    get_decimal_128_array_slice(array, indices)
+                }
+                ArrowDataType::Decimal256(_, _) => {
+                    let array = column
+                        .as_any()
+                        .downcast_ref::<arrow_array::Decimal256Array>()
+                        .unwrap();
+                    get_decimal_256_array_slice(array, indices)
                 }
                 _ => {
                     return Err(ParquetError::NYI(
@@ -715,7 +733,7 @@ fn get_interval_dt_array_slice(
     values
 }
 
-fn get_decimal_array_slice(
+fn get_decimal_128_array_slice(
     array: &arrow_array::Decimal128Array,
     indices: &[usize],
 ) -> Vec<FixedLenByteArray> {
@@ -724,6 +742,20 @@ fn get_decimal_array_slice(
     for i in indices {
         let as_be_bytes = array.value(*i).to_be_bytes();
         let resized_value = as_be_bytes[(16 - size)..].to_vec();
+        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+    }
+    values
+}
+
+fn get_decimal_256_array_slice(
+    array: &arrow_array::Decimal256Array,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    let size = decimal_length_from_precision(array.precision());
+    for i in indices {
+        let as_be_bytes = array.value(*i).to_be_bytes();
+        let resized_value = as_be_bytes[(32 - size)..].to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
     }
     values
@@ -1288,8 +1320,8 @@ mod tests {
 
         // Set everything very low so we fallback to PLAIN encoding after the first row
         let props = WriterProperties::builder()
-            .set_data_pagesize_limit(1)
-            .set_dictionary_pagesize_limit(1)
+            .set_data_page_size_limit(1)
+            .set_dictionary_page_size_limit(1)
             .set_write_batch_size(1)
             .build();
 
@@ -1462,7 +1494,7 @@ mod tests {
                             .set_writer_version(version)
                             .set_max_row_group_size(row_group_size)
                             .set_dictionary_enabled(dictionary_size != 0)
-                            .set_dictionary_pagesize_limit(dictionary_size.max(1))
+                            .set_dictionary_page_size_limit(dictionary_size.max(1))
                             .set_encoding(*encoding)
                             .set_bloom_filter_enabled(bloom_filter)
                             .build();
@@ -2011,7 +2043,7 @@ mod tests {
         let expected_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
 
         let row_group_sizes = [1024, SMALL_SIZE, SMALL_SIZE / 2, SMALL_SIZE / 2 + 1, 10];
-        let data_pagesize_limit: usize = 32;
+        let data_page_size_limit: usize = 32;
         let write_batch_size: usize = 16;
 
         for encoding in &encodings {
@@ -2021,7 +2053,7 @@ mod tests {
                     .set_max_row_group_size(row_group_size)
                     .set_dictionary_enabled(false)
                     .set_encoding(*encoding)
-                    .set_data_pagesize_limit(data_pagesize_limit)
+                    .set_data_page_size_limit(data_page_size_limit)
                     .set_write_batch_size(write_batch_size)
                     .build();
 
