@@ -71,9 +71,14 @@ fn validate_class(expected: &str, value: &PyAny) -> PyResult<()> {
     let pyarrow = PyModule::import(value.py(), "pyarrow")?;
     let class = pyarrow.getattr(expected)?;
     if !value.is_instance(class)? {
+        let expected_module = class.getattr("__module__")?.extract::<&str>()?;
+        let expected_name = class.getattr("__name__")?.extract::<&str>()?;
+        let found_class = value.get_type();
+        let found_module = found_class.getattr("__module__")?.extract::<&str>()?;
+        let found_name = found_class.getattr("__name__")?.extract::<&str>()?;
         return Err(PyTypeError::new_err(format!(
-            "Expected instance of {}, got {:?}",
-            expected, value
+            "Expected instance of {}.{}, got {}.{}",
+            expected_module, expected_name, found_module, found_name
         )));
     }
     Ok(())
