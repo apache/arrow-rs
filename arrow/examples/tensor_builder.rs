@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///! Tensor builder example
-extern crate arrow;
+//! Tensor builder example
 
 use arrow::array::*; //{Int32BufferBuilder, Float32BufferBuilder};
 use arrow::buffer::Buffer;
