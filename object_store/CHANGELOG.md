@@ -27,12 +27,17 @@
 
 - Support multipart upload in R2 [\#4304](https://github.com/apache/arrow-rs/issues/4304) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 
+**Fixed bugs:**
+
+- Default ObjectStore::get\_range Doesn't Apply Range to GetResult::File [\#4350](https://github.com/apache/arrow-rs/issues/4350) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+
 **Closed issues:**
 
 - \[object\_store - AmazonS3Builder\] incorrect metadata\_endpoint set in `from_env` in an ECS environment [\#4283](https://github.com/apache/arrow-rs/issues/4283) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 
 **Merged pull requests:**
 
+- Fix ObjectStore::get\_range for GetResult::File \(\#4350\) [\#4351](https://github.com/apache/arrow-rs/pull/4351) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
 - Don't exclude FIFO files from LocalFileSystem [\#4345](https://github.com/apache/arrow-rs/pull/4345) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
 - Fix support for ECS IAM credentials [\#4310](https://github.com/apache/arrow-rs/pull/4310) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
 - feat: use exactly equal parts in multipart upload [\#4305](https://github.com/apache/arrow-rs/pull/4305) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([wjones127](https://github.com/wjones127))
