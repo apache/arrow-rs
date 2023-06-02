@@ -831,33 +831,6 @@ impl IntervalAmount {
 
         Self { integer, frac }
     }
-
-    fn mul_checked(&self, val: i64) -> Result<IntervalAmount, ArrowError> {
-        let integer = self.integer.checked_mul(val).ok_or_else(|| {
-            ArrowError::ParseError(format!(
-                "Overflow happened while scaling interval amount by {val}"
-            ))
-        })?;
-
-        let frac = self.frac.checked_mul(val.abs()).ok_or_else(|| {
-            ArrowError::ParseError(format!(
-                "Overflow happened while scaling interval amount by {val}"
-            ))
-        })?;
-
-        Ok(Self::new(integer, frac))
-    }
-}
-
-impl Mul<i64> for IntervalAmount {
-    type Output = Self;
-
-    fn mul(self, rhs: i64) -> Self::Output {
-        let integer = self.integer * rhs;
-        let frac = self.frac * rhs.abs();
-
-        Self::new(integer, frac)
-    }
 }
 
 // impl FromStr for IntervalAmount {
@@ -958,19 +931,53 @@ impl Interval {
     ) -> Result<Interval, ArrowError> {
         let result = match unit {
             IntervalUnit::Century => {
-                let months = amount.mul_checked(100)?.mul_checked(12)?;
+                let months_int = amount.integer.mul_checked(100)?.mul_checked(12)?;
+                let month_frac = amount.frac * 12 / 10_i64.pow(INTERVAL_PRECISION - 2);
+                let months =
+                    months_int
+                        .add_checked(month_frac)?
+                        .try_into()
+                        .map_err(|_| {
+                            ArrowError::ParseError(format!(
+                        "Unable to represent {} centuries as months in a signed 32-bit integer",
+                        &amount.integer
+                    ))
+                        })?;
 
-                self.add(months, IntervalUnit::Month)?
+                Self::new(self.months.add_checked(months)?, self.days, self.nanos)
             }
             IntervalUnit::Decade => {
-                let months = amount.mul_checked(10)?.mul_checked(12)?;
+                let months_int = amount.integer.mul_checked(10)?.mul_checked(12)?;
 
-                self.add(months, IntervalUnit::Month)?
+                let month_frac = amount.frac * 12 / 10_i64.pow(INTERVAL_PRECISION - 1);
+                let months =
+                    months_int
+                        .add_checked(month_frac)?
+                        .try_into()
+                        .map_err(|_| {
+                            ArrowError::ParseError(format!(
+                        "Unable to represent {} decades as months in a signed 32-bit integer",
+                        &amount.integer
+                    ))
+                        })?;
+
+                Self::new(self.months.add_checked(months)?, self.days, self.nanos)
             }
             IntervalUnit::Year => {
-                let months = amount.mul_checked(12)?;
+                let months_int = amount.integer.mul_checked(12)?;
+                let month_frac = amount.frac * 12 / 10_i64.pow(INTERVAL_PRECISION);
+                let months =
+                    months_int
+                        .add_checked(month_frac)?
+                        .try_into()
+                        .map_err(|_| {
+                            ArrowError::ParseError(format!(
+                        "Unable to represent {} years as months in a signed 32-bit integer",
+                        &amount.integer
+                    ))
+                        })?;
 
-                self.add(months, IntervalUnit::Month)?
+                Self::new(self.months.add_checked(months)?, self.days, self.nanos)
             }
             IntervalUnit::Month => {
                 let months = amount.integer.try_into().map_err(|_| {
@@ -980,26 +987,36 @@ impl Interval {
                     ))
                 })?;
 
-                let result = Interval::new(
-                    self.months.add_checked(months)?,
-                    self.days,
-                    self.nanos,
-                );
+                let days = amount.frac * 3 / 10_i64.pow(INTERVAL_PRECISION - 1);
+                let days = days.try_into().map_err(|_| {
+                    ArrowError::ParseError(format!(
+                        "Unable to represent {} months as days in a signed 32-bit integer",
+                        &amount.frac / 10_i64.pow(INTERVAL_PRECISION)
+                    ))
+                })?;
 
-                // if there is a fractional part, cascade to day addition
-                if amount.frac > 0 {
-                    result.add(
-                        IntervalAmount::new(0, amount.frac) * 30,
-                        IntervalUnit::Day,
-                    )?
-                } else {
-                    result
-                }
+                Self::new(
+                    self.months.add_checked(months)?,
+                    self.days.add_checked(days)?,
+                    self.nanos,
+                )
             }
             IntervalUnit::Week => {
-                let days = amount.mul_checked(7)?;
+                let days = amount.integer.mul_checked(7)?.try_into().map_err(|_| {
+                    ArrowError::ParseError(format!(
+                        "Unable to represent {} weeks as days in a signed 32-bit integer",
+                        &amount.integer
+                    ))
+                })?;
 
-                self.add(days, IntervalUnit::Day)?
+                let nanos =
+                    amount.frac * 7 * 24 * 6 * 6 / 10_i64.pow(INTERVAL_PRECISION - 11);
+
+                Self::new(
+                    self.months,
+                    self.days.add_checked(days)?,
+                    self.nanos.add_checked(nanos)?,
+                )
             }
             IntervalUnit::Day => {
                 let days = amount.integer.try_into().map_err(|_| {
@@ -1009,18 +1026,14 @@ impl Interval {
                     ))
                 })?;
 
-                let result =
-                    Interval::new(self.months, self.days.add_checked(days)?, self.nanos);
+                let nanos =
+                    amount.frac * 24 * 6 * 6 / 10_i64.pow(INTERVAL_PRECISION - 11);
 
-                // if there is a fractional part, cascade to next terminal branch
-                if amount.frac > 0 {
-                    result.add(
-                        IntervalAmount::new(0, amount.frac) * 24,
-                        IntervalUnit::Hour,
-                    )?
-                } else {
-                    result
-                }
+                Self::new(
+                    self.months,
+                    self.days.add_checked(days)?,
+                    self.nanos.add_checked(nanos)?,
+                )
             }
             IntervalUnit::Hour => {
                 let nanos_int = amount.integer.mul_checked(NANOS_PER_HOUR)?;
@@ -2671,40 +2684,6 @@ mod tests {
     }
 
     #[test]
-    fn test_interval_amount_mul() {
-        // both positive
-        let lhs = IntervalAmount::new(2, (2 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()); // 2.2
-        let rhs = 2;
-
-        let result = lhs * rhs;
-        let expected =
-            IntervalAmount::new(4, (4 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()); // 4.4
-
-        assert_eq!(result, expected);
-
-        // both negative
-        let lhs =
-            IntervalAmount::new(-2, (2 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()); // -2.2
-        let rhs = -2;
-
-        let result = lhs * rhs;
-        let expected =
-            IntervalAmount::new(4, (4 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()); // 4.4
-
-        assert_eq!(result, expected);
-
-        // positive <1
-        let lhs = IntervalAmount::new(0, (6 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()); // 0.6
-        let rhs = 30;
-
-        let result = lhs * rhs;
-
-        let expected = IntervalAmount::new(18, 0);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
     fn test_interval_amount_compaction() {
         // positive
         let result =
@@ -2749,9 +2728,9 @@ mod tests {
 
         assert_eq!(result, expected);
 
-        // add 30.3 years
+        // add 30.3 years (Postgres logic does not compute days/nanos when interval is larger than a month)
         let start = Interval::new(1, 2, 3);
-        let expected = Interval::new(364, 20, 3);
+        let expected = Interval::new(364, 2, 3);
 
         let result = start
             .add(
