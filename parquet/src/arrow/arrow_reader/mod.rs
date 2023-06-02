@@ -543,15 +543,15 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
+    use num::PrimInt;
     use rand::{thread_rng, Rng, RngCore};
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
-    use arrow_array::cast::AsArray;
     use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType};
     use arrow_array::*;
     use arrow_array::{RecordBatch, RecordBatchReader};
-    use arrow_buffer::{i256, Buffer};
+    use arrow_buffer::{i256, ArrowNativeType, Buffer};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema};
 
@@ -2557,18 +2557,22 @@ mod tests {
         assert_eq!(out, batch.slice(2, 1));
     }
 
-    fn test_decimal_roundtrip<T: DecimalType>(values: &[T::Native]) {
+    fn test_decimal_roundtrip<T: DecimalType>() {
         // Precision <= 9 -> INT32
         // Precision <= 18 -> INT64
         // Precision > 18 -> FIXED_LEN_BYTE_ARRAY
 
-        let d1 = PrimitiveArray::<T>::from_iter_values(values.iter().copied())
-            .with_precision_and_scale(9, 2)
-            .unwrap();
+        let d = |values: Vec<usize>, p: u8| {
+            let iter = values.into_iter().map(T::Native::usize_as);
+            PrimitiveArray::<T>::from_iter_values(iter)
+                .with_precision_and_scale(p, 2)
+                .unwrap()
+        };
 
-        let d2 = d1.clone().with_precision_and_scale(10, 8).unwrap();
-        let d3 = d1.clone().with_precision_and_scale(18, 8).unwrap();
-        let d4 = d1.clone().with_precision_and_scale(19, 8).unwrap();
+        let d1 = d(vec![1, 2, 3, 4, 5], 9);
+        let d2 = d(vec![1, 2, 3, 4, 10.pow(10) - 1], 10);
+        let d3 = d(vec![1, 2, 3, 4, 10.pow(18) - 1], 18);
+        let d4 = d(vec![1, 2, 3, 4, 10.pow(19) - 1], 19);
 
         let batch = RecordBatch::try_from_iter([
             ("d1", Arc::new(d1) as ArrayRef),
@@ -2598,34 +2602,12 @@ mod tests {
         assert_eq!(batch.schema(), reader.schema());
 
         let out = reader.next().unwrap().unwrap();
-        assert_eq!(batch.schema(), out.schema());
-
-        let c1 = out.columns()[0].as_primitive::<T>();
-        assert_eq!(c1.values(), &values);
-        assert_eq!(c1.precision(), 9);
-        assert_eq!(c1.scale(), 2);
-
-        let c2 = out.columns()[1].as_primitive::<T>();
-        assert_eq!(c2.values(), &values);
-        assert_eq!(c2.precision(), 10);
-        assert_eq!(c2.scale(), 8);
-
-        let c3 = out.columns()[2].as_primitive::<T>();
-        assert_eq!(c3.values(), &values);
-        assert_eq!(c3.precision(), 18);
-        assert_eq!(c3.scale(), 8);
-
-        let c4 = out.columns()[3].as_primitive::<T>();
-        assert_eq!(c4.values(), &values);
-        assert_eq!(c4.precision(), 19);
-        assert_eq!(c4.scale(), 8);
+        assert_eq!(batch, out);
     }
 
     #[test]
     fn test_decimal() {
-        let values = [1, 2, 3, 4, 5];
-        test_decimal_roundtrip::<Decimal128Type>(&values);
-        let values: Vec<_> = values.iter().map(|x| i256::from_i128(*x)).collect();
-        test_decimal_roundtrip::<Decimal256Type>(&values);
+        test_decimal_roundtrip::<Decimal128Type>();
+        test_decimal_roundtrip::<Decimal256Type>();
     }
 }
