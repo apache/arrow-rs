@@ -81,9 +81,13 @@ impl GetCatalogsBuilder {
     /// Returns the schema that will result from [`CommandGetCatalogs`]
     ///
     /// [`CommandGetCatalogs`]: crate::sql::CommandGetCatalogs
-    pub fn schema() -> &'static Schema {
-        &GET_CATALOG_SCHEMA
+    pub fn schema(&self) -> SchemaRef {
+        get_catalogs_schema()
     }
+}
+
+fn get_catalogs_schema() -> SchemaRef {
+    Arc::clone(&GET_CATALOG_SCHEMA)
 }
 
 /// The schema for GetCatalogs

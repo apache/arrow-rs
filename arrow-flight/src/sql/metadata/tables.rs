@@ -158,6 +158,7 @@ impl GetTablesBuilder {
 
     /// builds a `RecordBatch` for `CommandGetTables`
     pub fn build(self) -> Result<RecordBatch> {
+        let schema = self.schema();
         let Self {
             catalog_filter,
             table_types_filter,
@@ -210,10 +211,9 @@ impl GetTablesBuilder {
             filters.push(like_utf8_scalar(&table_name, &table_name_filter_pattern)?)
         }
 
-        let include_schema = table_schema.is_some();
         let batch = if let Some(table_schema) = table_schema {
             RecordBatch::try_new(
-                Self::schema(include_schema),
+                schema,
                 vec![
                     Arc::new(catalog_name) as ArrayRef,
                     Arc::new(db_schema_name) as ArrayRef,
@@ -224,7 +224,8 @@ impl GetTablesBuilder {
             )
         } else {
             RecordBatch::try_new(
-                Self::schema(include_schema),
+                // schema is different if table_schema is none
+                schema,
                 vec![
                     Arc::new(catalog_name) as ArrayRef,
                     Arc::new(db_schema_name) as ArrayRef,
@@ -261,7 +262,7 @@ impl GetTablesBuilder {
             .map(|c| take(c, &indices, None))
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        Ok(RecordBatch::try_new(Self::schema(include_schema), columns)?)
+        Ok(RecordBatch::try_new(filtered_batch.schema(), columns)?)
     }
 
     /// Return the schema of the RecordBatch that will be returned from [`CommandGetTables`]
@@ -269,12 +270,21 @@ impl GetTablesBuilder {
     /// Note the schema differs based on the values of `include_schema
     ///
     /// [`CommandGetTables`]: crate::sql::CommandGetTables
-    pub fn schema(include_schema: bool) -> SchemaRef {
-        if include_schema {
-            Arc::clone(&GET_TABLES_SCHEMA_WITH_TABLE_SCHEMA)
-        } else {
-            Arc::clone(&GET_TABLES_SCHEMA_WITHOUT_TABLE_SCHEMA)
-        }
+    pub fn schema(&self) -> SchemaRef {
+        get_tables_schema(self.include_schema())
+    }
+
+    /// Should the "schema" column be included
+    pub fn include_schema(&self) -> bool {
+        self.table_schema.is_some()
+    }
+}
+
+fn get_tables_schema(include_schema: bool) -> SchemaRef {
+    if include_schema {
+        Arc::clone(&GET_TABLES_SCHEMA_WITH_TABLE_SCHEMA)
+    } else {
+        Arc::clone(&GET_TABLES_SCHEMA_WITHOUT_TABLE_SCHEMA)
     }
 }
 
@@ -306,7 +316,7 @@ mod tests {
 
     fn get_ref_batch() -> RecordBatch {
         RecordBatch::try_new(
-            GetTablesBuilder::schema(false),
+            get_tables_schema(false),
             vec![
                 Arc::new(StringArray::from(vec![
                     "a_catalog",
@@ -385,7 +395,7 @@ mod tests {
         let table_batch = builder.build().unwrap();
         let indices = UInt32Array::from(vec![0, 4, 5]);
         let ref_filtered = RecordBatch::try_new(
-            GetTablesBuilder::schema(false),
+            get_tables_schema(false),
             ref_batch
                 .columns()
                 .iter()
@@ -400,7 +410,7 @@ mod tests {
         let table_batch = builder.build().unwrap();
         let indices = UInt32Array::from(vec![0, 1, 2, 3]);
         let ref_filtered = RecordBatch::try_new(
-            GetTablesBuilder::schema(false),
+            get_tables_schema(false),
             ref_batch
                 .columns()
                 .iter()
@@ -415,7 +425,7 @@ mod tests {
         let table_batch = builder.build().unwrap();
         let indices = UInt32Array::from(vec![5, 7]);
         let ref_filtered = RecordBatch::try_new(
-            GetTablesBuilder::schema(false),
+            get_tables_schema(false),
             ref_batch
                 .columns()
                 .iter()

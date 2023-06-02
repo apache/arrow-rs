@@ -30,10 +30,7 @@ use tonic::{Request, Response, Status, Streaming};
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
-use arrow_flight::sql::catalogs::{
-    get_catalogs_schema, get_db_schemas_schema, get_tables_schema,
-};
-use arrow_flight::sql::sql_info::SqlInfoList;
+use arrow_flight::sql::metadata::SqlInfoList;
 use arrow_flight::sql::{
     server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
     ActionBeginTransactionRequest, ActionBeginTransactionResult,
@@ -252,7 +249,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
-            .try_with_schema(get_catalogs_schema())
+            .try_with_schema(&query.into_builder().schema())
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);
@@ -272,7 +269,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
-            .try_with_schema(get_db_schemas_schema().as_ref())
+            .try_with_schema(&query.into_builder().schema())
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);
@@ -292,7 +289,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
-            .try_with_schema(get_tables_schema(query.include_schema).as_ref())
+            .try_with_schema(&query.into_builder().schema())
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);
@@ -410,9 +407,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
         for catalog_name in catalog_names {
             builder.append(catalog_name);
         }
+        let schema = builder.schema();
         let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
-            .with_schema(Arc::new(get_catalogs_schema().clone()))
+            .with_schema(schema)
             .build(futures::stream::once(async { batch }))
             .map_err(Status::from);
         Ok(Response::new(Box::pin(stream)))
@@ -436,9 +434,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
             builder.append(catalog_name, schema_name);
         }
 
+        let schema = builder.schema();
         let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
-            .with_schema(get_db_schemas_schema())
+            .with_schema(schema)
             .build(futures::stream::once(async { batch }))
             .map_err(Status::from);
         Ok(Response::new(Box::pin(stream)))
@@ -475,9 +474,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
                 .map_err(Status::from)?;
         }
 
+        let schema = builder.schema();
         let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
-            .with_schema(get_db_schemas_schema())
+            .with_schema(schema)
             .build(futures::stream::once(async { batch }))
             .map_err(Status::from);
         Ok(Response::new(Box::pin(stream)))

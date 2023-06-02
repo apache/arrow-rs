@@ -106,6 +106,7 @@ impl GetDbSchemasBuilder {
 
     /// builds a `RecordBatch` with the correct schema for a `CommandGetDbSchemas` response
     pub fn build(self) -> Result<RecordBatch> {
+        let schema = self.schema();
         let Self {
             catalog_filter,
             db_schema_filter_pattern,
@@ -142,7 +143,7 @@ impl GetDbSchemasBuilder {
         }
 
         let batch = RecordBatch::try_new(
-            Self::schema(),
+            schema,
             vec![
                 Arc::new(catalog_name) as ArrayRef,
                 Arc::new(db_schema_name) as ArrayRef,
@@ -164,13 +165,18 @@ impl GetDbSchemasBuilder {
             .map(|c| take(c, &indices, None))
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        Ok(RecordBatch::try_new(Self::schema(), columns)?)
+        Ok(RecordBatch::try_new(filtered_batch.schema(), columns)?)
     }
 
-    /// Return the schema of the RecordBatch that will be returned from [`CommandGetDbSchemas`]
-    pub fn schema() -> SchemaRef {
-        Arc::clone(&GET_DB_SCHEMAS_SCHEMA)
+    /// Return the schema of the RecordBatch that will be returned
+    /// from [`CommandGetDbSchemas`]
+    pub fn schema(&self) -> SchemaRef {
+        get_db_schemas_schema()
     }
+}
+
+fn get_db_schemas_schema() -> SchemaRef {
+    Arc::clone(&GET_DB_SCHEMAS_SCHEMA)
 }
 
 /// The schema for GetDbSchemas
@@ -188,7 +194,7 @@ mod tests {
 
     fn get_ref_batch() -> RecordBatch {
         RecordBatch::try_new(
-            GetDbSchemasBuilder::schema(),
+            get_db_schemas_schema(),
             vec![
                 Arc::new(StringArray::from(vec![
                     "a_catalog",
@@ -226,7 +232,7 @@ mod tests {
 
         let indices = UInt32Array::from(vec![0, 2]);
         let ref_filtered = RecordBatch::try_new(
-            GetDbSchemasBuilder::schema(),
+            get_db_schemas_schema(),
             ref_batch
                 .columns()
                 .iter()
@@ -270,7 +276,7 @@ mod tests {
 
         let indices = UInt32Array::from(vec![1]);
         let ref_filtered = RecordBatch::try_new(
-            GetDbSchemasBuilder::schema(),
+            get_db_schemas_schema(),
             ref_batch
                 .columns()
                 .iter()
