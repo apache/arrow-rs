@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///! Many builders are available to easily create different types of arrow arrays
-extern crate arrow;
+//! Many builders are available to easily create different types of arrow arrays
 
 use std::sync::Arc;
 

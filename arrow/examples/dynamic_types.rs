@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///! This example demonstrates dealing with mixed types dynamically at runtime
+//! This example demonstrates dealing with mixed types dynamically at runtime
 use std::sync::Arc;
 
 extern crate arrow;

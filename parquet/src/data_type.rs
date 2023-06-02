@@ -483,7 +483,7 @@ macro_rules! gen_as_bytes {
                 unsafe {
                     std::slice::from_raw_parts(
                         self_.as_ptr() as *const u8,
-                        std::mem::size_of::<$source_ty>() * self_.len(),
+                        std::mem::size_of_val(self_),
                     )
                 }
             }
@@ -493,7 +493,7 @@ macro_rules! gen_as_bytes {
             unsafe fn slice_as_bytes_mut(self_: &mut [Self]) -> &mut [u8] {
                 std::slice::from_raw_parts_mut(
                     self_.as_mut_ptr() as *mut u8,
-                    std::mem::size_of::<$source_ty>() * self_.len(),
+                    std::mem::size_of_val(self_),
                 )
             }
         }
@@ -735,7 +735,7 @@ pub(crate) mod private {
                     let raw = unsafe {
                         std::slice::from_raw_parts(
                             values.as_ptr() as *const u8,
-                            std::mem::size_of::<$ty>() * values.len(),
+                            std::mem::size_of_val(values),
                         )
                     };
                     writer.write_all(raw)?;
