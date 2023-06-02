@@ -715,7 +715,7 @@ pub fn parse_decimal<T: DecimalType>(
 pub fn parse_interval_year_month(
     value: &str,
 ) -> Result<<IntervalYearMonthType as ArrowPrimitiveType>::Native, ArrowError> {
-    let config = IntervalParseConfig::new(IntervalType::Year);
+    let config = IntervalParseConfig::new(IntervalUnit::Year);
     let (result_months, result_days, result_nanos) = parse_interval(value, &config)?;
     if result_days != 0 || result_nanos != 0 {
         return Err(ArrowError::CastError(format!(
@@ -728,7 +728,7 @@ pub fn parse_interval_year_month(
 pub fn parse_interval_day_time(
     value: &str,
 ) -> Result<<IntervalDayTimeType as ArrowPrimitiveType>::Native, ArrowError> {
-    let config = IntervalParseConfig::new(IntervalType::Day);
+    let config = IntervalParseConfig::new(IntervalUnit::Day);
     let (result_months, mut result_days, result_nanos) = parse_interval(value, &config)?;
     if result_nanos % 1_000_000 != 0 {
         return Err(ArrowError::CastError(format!(
@@ -745,7 +745,7 @@ pub fn parse_interval_day_time(
 pub fn parse_interval_month_day_nano(
     value: &str,
 ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError> {
-    let config = IntervalParseConfig::new(IntervalType::Month);
+    let config = IntervalParseConfig::new(IntervalUnit::Month);
     let (result_months, result_days, result_nanos) = parse_interval(value, &config)?;
     Ok(IntervalMonthDayNanoType::make_value(
         result_months,
@@ -757,17 +757,14 @@ pub fn parse_interval_month_day_nano(
 const SECONDS_PER_HOUR: i64 = 3_600;
 const NANOS_PER_MILLIS: i64 = 1_000_000;
 const NANOS_PER_SECOND: i64 = 1_000 * NANOS_PER_MILLIS;
-#[cfg(test)]
 const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
-#[cfg(test)]
 const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
-#[cfg(test)]
 const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
 #[rustfmt::skip]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(u16)]
-enum IntervalType {
+enum IntervalUnit {
     Century     = 0b_0000_0000_0001,
     Decade      = 0b_0000_0000_0010,
     Year        = 0b_0000_0000_0100,
@@ -782,7 +779,7 @@ enum IntervalType {
     Nanosecond  = 0b_1000_0000_0000,
 }
 
-impl FromStr for IntervalType {
+impl FromStr for IntervalUnit {
     type Err = ArrowError;
 
     fn from_str(s: &str) -> Result<Self, ArrowError> {
@@ -807,6 +804,272 @@ impl FromStr for IntervalType {
 }
 
 pub type MonthDayNano = (i32, i32, i64);
+
+/// Chosen based on the number of decimal digits in 1 week in nanoseconds
+const INTERVAL_PRECISION: u32 = 15;
+
+#[derive(Debug, PartialEq)]
+struct IntervalAmount {
+    /// The whole interval component
+    integer: i64,
+    /// The non-integer component multiplied by 10^INTERVAL_PRECISION
+    frac: i64,
+}
+
+impl IntervalAmount {
+    fn new(integer: i64, frac: i64) -> Self {
+        let mut integer = integer;
+        let mut frac = frac;
+
+        // ensure fractional part is actually a fraction
+        let frac_int = frac.div_euclid(10_i64.pow(INTERVAL_PRECISION));
+        let frac_rem = frac.rem_euclid(10_i64.pow(INTERVAL_PRECISION));
+        if frac_int > 0 {
+            integer += if integer >= 0 { frac_int } else { -frac_int };
+            frac = frac_rem;
+        }
+
+        Self { integer, frac }
+    }
+
+    fn mul_checked(&self, val: i64) -> Result<IntervalAmount, ArrowError> {
+        let integer = self.integer.checked_mul(val).ok_or_else(|| {
+            ArrowError::ParseError(format!(
+                "Overflow happened while scaling interval amount by {val}"
+            ))
+        })?;
+
+        let frac = self.frac.checked_mul(val.abs()).ok_or_else(|| {
+            ArrowError::ParseError(format!(
+                "Overflow happened while scaling interval amount by {val}"
+            ))
+        })?;
+
+        Ok(Self::new(integer, frac))
+    }
+}
+
+impl Mul<i64> for IntervalAmount {
+    type Output = Self;
+
+    fn mul(self, rhs: i64) -> Self::Output {
+        let integer = self.integer * rhs;
+        let frac = self.frac * rhs.abs();
+
+        Self::new(integer, frac)
+    }
+}
+
+// impl FromStr for IntervalAmount {
+//     type Err = ArrowError;
+
+//     fn from_str(s: &str) -> Result<Self, Self::Err> {
+//         Ok(match s.split_once('.') {
+//             Some((integer, frac)) => {
+//                 if frac.len() > INTERVAL_PRECISION {
+//                     return Err(..);
+//                 }
+//                 // TODO: Handle sign
+//                 let frac_s: i64 = frac.parse()?;
+//                 let frac = frac_s * 10.pow(INTERVAL_PRECISION - frac.len());
+//                 Self {
+//                     integer: integer.parse()?,
+//                     frac,
+//                 }
+//             }
+//             None => Self {
+//                 integer: s.parse()?,
+//                 frac: 0,
+//             },
+//         })
+//     }
+// }
+
+#[derive(Debug, Default, PartialEq)]
+struct Interval {
+    months: i32,
+    days: i32,
+    nanos: i64,
+}
+
+impl Interval {
+    /// Create a new interval from the given month/day/nano components.
+    /// Since interval arithmetic spills fractional months to days and fractional days to nanos,
+    /// it is possible that a large amount of days and nanos can accrue over repeated arithemetic operations.
+    /// The logic in this constructor provides a counter-balance for this behavior by compacting the interval, i.e. producing a representation with the smallest number of nanos & days possible.
+    fn new(months: i32, days: i32, nanos: i64) -> Self {
+        let mut months = months;
+        let mut days = days;
+        let mut nanos = nanos;
+
+        let nano_days = if nanos.is_positive() {
+            nanos.div_euclid(NANOS_PER_DAY)
+        } else {
+            -nanos.abs().div_euclid(NANOS_PER_DAY)
+        };
+
+        days += nano_days as i32;
+        nanos -= nano_days * NANOS_PER_DAY;
+
+        let day_months = if days.is_positive() {
+            days.div_euclid(30)
+        } else {
+            -days.abs().div_euclid(30)
+        };
+
+        months += day_months;
+        days -= day_months * 30;
+
+        Self {
+            months,
+            days,
+            nanos,
+        }
+    }
+
+    fn to_year_months(self) -> i32 {
+        self.months
+    }
+
+    fn to_day_time(self) -> Result<(i32, i32), ArrowError> {
+        let days = self.months.mul_checked(30)?.add_checked(self.days)?;
+        let millis = (self.nanos / 1_000_000).try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "Unable to represent {} nanos as milliseconds in a signed 32-bit integer",
+                self.nanos
+            ))
+        })?;
+
+        Ok((days, millis))
+    }
+
+    fn to_month_day_nanos(self) -> (i32, i32, i64) {
+        (self.months, self.days, self.nanos)
+    }
+
+    /// Interval addition following Postgres behavior. Fractional units will be spilled into smaller units.
+    /// e.g. INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
+    /// e.g. INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
+    /// [Postgres reference](https://www.postgresql.org/docs/15/datatype-datetime.html#DATATYPE-INTERVAL-INPUT:~:text=Field%20values%20can,fractional%20on%20output.)
+    fn add(
+        &self,
+        amount: IntervalAmount,
+        unit: IntervalUnit,
+    ) -> Result<Interval, ArrowError> {
+        let result = match unit {
+            IntervalUnit::Century => {
+                let months = amount.mul_checked(100)?.mul_checked(12)?;
+
+                self.add(months, IntervalUnit::Month)?
+            }
+            IntervalUnit::Decade => {
+                let months = amount.mul_checked(10)?.mul_checked(12)?;
+
+                self.add(months, IntervalUnit::Month)?
+            }
+            IntervalUnit::Year => {
+                let months = amount.mul_checked(12)?;
+
+                self.add(months, IntervalUnit::Month)?
+            }
+            IntervalUnit::Month => {
+                let months = amount.integer.try_into().map_err(|_| {
+                    ArrowError::ParseError(format!(
+                        "Unable to represent {} months in a signed 32-bit integer",
+                        &amount.integer
+                    ))
+                })?;
+
+                let result = Interval::new(
+                    self.months.add_checked(months)?,
+                    self.days,
+                    self.nanos,
+                );
+
+                // if there is a fractional part, cascade to day addition
+                if amount.frac > 0 {
+                    result.add(
+                        IntervalAmount::new(0, amount.frac) * 30,
+                        IntervalUnit::Day,
+                    )?
+                } else {
+                    result
+                }
+            }
+            IntervalUnit::Week => {
+                let days = amount.mul_checked(7)?;
+
+                self.add(days, IntervalUnit::Day)?
+            }
+            IntervalUnit::Day => {
+                let days = amount.integer.try_into().map_err(|_| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Unable to represent {} days in a signed 32-bit integer",
+                        amount.integer
+                    ))
+                })?;
+
+                let result =
+                    Interval::new(self.months, self.days.add_checked(days)?, self.nanos);
+
+                // if there is a fractional part, cascade to next terminal branch
+                if amount.frac > 0 {
+                    result.add(
+                        IntervalAmount::new(0, amount.frac) * 24,
+                        IntervalUnit::Hour,
+                    )?
+                } else {
+                    result
+                }
+            }
+            IntervalUnit::Hour => {
+                let nanos_int = amount.integer.mul_checked(NANOS_PER_HOUR)?;
+                let nanos_frac =
+                    amount.frac * 6 * 6 / 10_i64.pow(INTERVAL_PRECISION - 11);
+                let nanos = nanos_int.add_checked(nanos_frac)?;
+
+                Interval::new(self.months, self.days, self.nanos.add_checked(nanos)?)
+            }
+            IntervalUnit::Minute => {
+                let nanos_int = amount.integer.mul_checked(NANOS_PER_MINUTE)?;
+                let nanos_frac = amount.frac * 6 / 10_i64.pow(INTERVAL_PRECISION - 10);
+                let nanos = nanos_int.add_checked(nanos_frac)?;
+
+                Interval::new(self.months, self.days, self.nanos.add_checked(nanos)?)
+            }
+            IntervalUnit::Second => {
+                let nanos_int = amount.integer.mul_checked(NANOS_PER_SECOND)?;
+                let nanos_frac = amount.frac / 10_i64.pow(INTERVAL_PRECISION - 9);
+                let nanos = nanos_int.add_checked(nanos_frac)?;
+
+                Interval::new(self.months, self.days, self.nanos.add_checked(nanos)?)
+            }
+            IntervalUnit::Millisecond => {
+                let nanos_int = amount.integer.mul_checked(NANOS_PER_MILLIS)?;
+                let nanos_frac = amount.frac / 10_i64.pow(INTERVAL_PRECISION - 6);
+                let nanos = nanos_int.add_checked(nanos_frac)?;
+
+                Interval::new(self.months, self.days, self.nanos.add_checked(nanos)?)
+            }
+            IntervalUnit::Microsecond => {
+                let nanos_int = amount.integer.mul_checked(1_000)?;
+                let nanos_frac = amount.frac / 10_i64.pow(INTERVAL_PRECISION - 3);
+                let nanos = nanos_int.add_checked(nanos_frac)?;
+
+                Interval::new(self.months, self.days, self.nanos.add_checked(nanos)?)
+            }
+            IntervalUnit::Nanosecond => {
+                let nanos_int = amount.integer;
+                let nanos_frac = amount.frac / 10_i64.pow(INTERVAL_PRECISION);
+                let nanos = nanos_int.add_checked(nanos_frac)?;
+
+                Interval::new(self.months, self.days, self.nanos.add_checked(nanos)?)
+            }
+        };
+
+        Ok(result)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct FixedPointNumber {
@@ -1104,7 +1367,7 @@ impl Display for FixedPointNumber {
     }
 }
 
-type IntervalComponent = (FixedPointNumber, IntervalType);
+type IntervalComponent = (FixedPointNumber, IntervalUnit);
 
 #[derive(Default)]
 struct FixedMonthDayNano(FixedPointNumber, FixedPointNumber, FixedPointNumber);
@@ -1118,10 +1381,6 @@ impl FixedMonthDayNano {
         Self(months, days, nanos)
     }
 
-    /// Spill fractional units spilled to smaller units.
-    /// [reference Postgresql doc](https://www.postgresql.org/docs/15/datatype-datetime.html#DATATYPE-INTERVAL-INPUT:~:text=Field%20values%20can,fractional%20on%20output.)
-    /// INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
-    /// INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
     fn align(&self) -> Self {
         let Self(months, days, nanos) = self;
         let months = *months;
@@ -1146,7 +1405,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
 
         let result =
             match unit {
-                IntervalType::Century => {
+                IntervalUnit::Century => {
                     let scale = 1200;
                     let months = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
@@ -1156,7 +1415,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
 
                     FixedMonthDayNano::new(months, 0.into(), 0.into())
                 }
-                IntervalType::Decade => {
+                IntervalUnit::Decade => {
                     let scale = 120;
                     let months = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
@@ -1166,7 +1425,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
 
                     FixedMonthDayNano::new(months, 0.into(), 0.into())
                 }
-                IntervalType::Year => {
+                IntervalUnit::Year => {
                     let scale = 12;
                     let months = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
@@ -1176,8 +1435,8 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
 
                     FixedMonthDayNano::new(months, 0.into(), 0.into())
                 }
-                IntervalType::Month => FixedMonthDayNano::new(amount, 0.into(), 0.into()),
-                IntervalType::Week => {
+                IntervalUnit::Month => FixedMonthDayNano::new(amount, 0.into(), 0.into()),
+                IntervalUnit::Week => {
                     let scale = 7;
                     let days = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
@@ -1187,8 +1446,8 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
 
                     FixedMonthDayNano::new(0.into(), days, 0.into())
                 }
-                IntervalType::Day => FixedMonthDayNano::new(0.into(), amount, 0.into()),
-                IntervalType::Hour => {
+                IntervalUnit::Day => FixedMonthDayNano::new(0.into(), amount, 0.into()),
+                IntervalUnit::Hour => {
                     let scale = SECONDS_PER_HOUR * NANOS_PER_SECOND;
                     let nanos = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
@@ -1198,7 +1457,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
 
                     FixedMonthDayNano::new(0.into(), 0.into(), nanos)
                 }
-                IntervalType::Minute => {
+                IntervalUnit::Minute => {
                     let scale = 60 * NANOS_PER_SECOND;
                     let nanos = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
@@ -1208,7 +1467,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
 
                     FixedMonthDayNano::new(0.into(), 0.into(), nanos)
                 }
-                IntervalType::Second => {
+                IntervalUnit::Second => {
                     let scale = NANOS_PER_SECOND;
                     let nanos = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
@@ -1218,7 +1477,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
 
                     FixedMonthDayNano::new(0.into(), 0.into(), nanos)
                 }
-                IntervalType::Millisecond => {
+                IntervalUnit::Millisecond => {
                     let scale = 1_000_000;
                     let nanos = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
@@ -1228,7 +1487,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
 
                     FixedMonthDayNano::new(0.into(), 0.into(), nanos)
                 }
-                IntervalType::Microsecond => {
+                IntervalUnit::Microsecond => {
                     let scale = 1_000;
                     let nanos = amount.checked_mul(&scale.into()).ok_or(
                         ArrowError::ParseError(format!(
@@ -1238,7 +1497,7 @@ impl TryFrom<IntervalComponent> for FixedMonthDayNano {
 
                     FixedMonthDayNano::new(0.into(), 0.into(), nanos)
                 }
-                IntervalType::Nanosecond => {
+                IntervalUnit::Nanosecond => {
                     FixedMonthDayNano::new(0.into(), 0.into(), amount)
                 }
             };
@@ -1297,11 +1556,11 @@ impl CheckedAdd for FixedMonthDayNano {
 struct IntervalParseConfig {
     /// The default unit to use if none is specified
     /// e.g. `INTERVAL 1` represents `INTERVAL 1 SECOND` when default_unit = IntervalType::Second
-    default_unit: IntervalType,
+    default_unit: IntervalUnit,
 }
 
 impl IntervalParseConfig {
-    fn new(default_unit: IntervalType) -> Self {
+    fn new(default_unit: IntervalUnit) -> Self {
         Self { default_unit }
     }
 }
@@ -1331,7 +1590,7 @@ fn parse_interval_components(
     // parse units
     let (units, invalid_units): (Vec<_>, Vec<_>) = raw_units
         .clone()
-        .map(IntervalType::from_str)
+        .map(IntervalUnit::from_str)
         .partition(Result::is_ok);
 
     // invalid units?
@@ -2000,7 +2259,7 @@ mod tests {
 
     #[test]
     fn test_parse_interval() {
-        let config = IntervalParseConfig::new(IntervalType::Month);
+        let config = IntervalParseConfig::new(IntervalUnit::Month);
 
         assert_eq!(
             (1i32, 0i32, 0i64),
@@ -2125,7 +2384,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_interval_type() {
-        let config = IntervalParseConfig::new(IntervalType::Month);
+        let config = IntervalParseConfig::new(IntervalUnit::Month);
 
         let err = parse_interval("1 month 1 second 1 second", &config)
             .expect_err("parsing interval should have failed");
@@ -2382,10 +2641,163 @@ mod tests {
 
     #[test]
     fn test_interval_precision() {
-        let config = IntervalParseConfig::new(IntervalType::Month);
+        let config = IntervalParseConfig::new(IntervalUnit::Month);
 
         let result = parse_interval("100000.1 days", &config).unwrap();
         let expected = (0_i32, 100_000_i32, (NANOS_PER_DAY / 10) as i64);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_interval_compaction() {
+        // positive
+        let result = Interval::new(1, 35, 3 * NANOS_PER_DAY + 400);
+        let expected = Interval::new(2, 8, 400);
+
+        assert_eq!(result, expected);
+
+        // negative
+        let result = Interval::new(-1, -35, -(3 * NANOS_PER_DAY + 400));
+        let expected = Interval::new(-2, -8, -400);
+
+        assert_eq!(result, expected);
+
+        // mixed
+        let result = Interval::new(-1, 35, -(3 * NANOS_PER_DAY + 400));
+        let expected = Interval::new(0, 2, -400);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_interval_amount_mul() {
+        // both positive
+        let lhs = IntervalAmount::new(2, (2 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()); // 2.2
+        let rhs = 2;
+
+        let result = lhs * rhs;
+        let expected =
+            IntervalAmount::new(4, (4 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()); // 4.4
+
+        assert_eq!(result, expected);
+
+        // both negative
+        let lhs =
+            IntervalAmount::new(-2, (2 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()); // -2.2
+        let rhs = -2;
+
+        let result = lhs * rhs;
+        let expected =
+            IntervalAmount::new(4, (4 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()); // 4.4
+
+        assert_eq!(result, expected);
+
+        // positive <1
+        let lhs = IntervalAmount::new(0, (6 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()); // 0.6
+        let rhs = 30;
+
+        let result = lhs * rhs;
+
+        let expected = IntervalAmount::new(18, 0);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_interval_amount_compaction() {
+        // positive
+        let result =
+            IntervalAmount::new(1, (12 * 10_i64.pow(INTERVAL_PRECISION - 1)).into());
+        let expected = IntervalAmount::new(2, 2 * 10_i64.pow(INTERVAL_PRECISION - 1));
+
+        assert_eq!(result, expected);
+
+        // negative
+        let result =
+            IntervalAmount::new(-1, (12 * 10_i64.pow(INTERVAL_PRECISION - 1)).into());
+        let expected = IntervalAmount::new(-2, 2 * 10_i64.pow(INTERVAL_PRECISION - 1));
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_interval_addition() {
+        // add 4.1 centuries
+        let start = Interval::new(1, 2, 3);
+        let expected = Interval::new(4921, 2, 3);
+
+        let result = start
+            .add(
+                IntervalAmount::new(4, (1 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalUnit::Century,
+            )
+            .unwrap();
+
+        assert_eq!(result, expected);
+
+        // add 10.25 decades
+        let start = Interval::new(1, 2, 3);
+        let expected = Interval::new(1231, 2, 3);
+
+        let result = start
+            .add(
+                IntervalAmount::new(10, (25 * 10_i64.pow(INTERVAL_PRECISION - 2)).into()),
+                IntervalUnit::Decade,
+            )
+            .unwrap();
+
+        assert_eq!(result, expected);
+
+        // add 30.3 years
+        let start = Interval::new(1, 2, 3);
+        let expected = Interval::new(364, 20, 3);
+
+        let result = start
+            .add(
+                IntervalAmount::new(30, (3 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalUnit::Year,
+            )
+            .unwrap();
+
+        assert_eq!(result, expected);
+
+        // add 1.5 months
+        let start = Interval::new(1, 2, 3);
+        let expected = Interval::new(2, 17, 3);
+
+        let result = start
+            .add(
+                IntervalAmount::new(1, (5 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalUnit::Month,
+            )
+            .unwrap();
+
+        assert_eq!(result, expected);
+
+        // add 2.2 days
+        let start = Interval::new(12, 15, 3);
+        let expected = Interval::new(12, 17, 3 + 17_280 * NANOS_PER_SECOND);
+
+        let result = start
+            .add(
+                IntervalAmount::new(2, (2 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalUnit::Day,
+            )
+            .unwrap();
+
+        assert_eq!(result, expected);
+
+        // add 12.5 hours
+        let start = Interval::new(1, 2, 3);
+        let expected = Interval::new(1, 2, 3 + 45_000 * NANOS_PER_SECOND);
+
+        let result = start
+            .add(
+                IntervalAmount::new(12, (5 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalUnit::Hour,
+            )
+            .unwrap();
 
         assert_eq!(result, expected);
     }
