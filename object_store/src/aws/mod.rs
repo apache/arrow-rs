@@ -1127,23 +1127,21 @@ mod tests {
                     )
                     .with_allow_http(true);
 
-                let config =
-                    if let Some(endpoint) = env::var("OBJECT_STORE_AWS_ENDPOINT").ok() {
-                        config.with_endpoint(endpoint)
-                    } else {
-                        config
-                    };
+                let config = if let Ok(endpoint) = env::var("OBJECT_STORE_AWS_ENDPOINT") {
+                    config.with_endpoint(endpoint)
+                } else {
+                    config
+                };
 
-                let config = if let Some(token) =
-                    env::var("OBJECT_STORE_AWS_SESSION_TOKEN").ok()
+                let config = if let Ok(token) = env::var("OBJECT_STORE_AWS_SESSION_TOKEN")
                 {
                     config.with_token(token)
                 } else {
                     config
                 };
 
-                let config = if let Some(virtual_hosted_style_request) =
-                    env::var("OBJECT_STORE_VIRTUAL_HOSTED_STYLE_REQUEST").ok()
+                let config = if let Ok(virtual_hosted_style_request) =
+                    env::var("OBJECT_STORE_VIRTUAL_HOSTED_STYLE_REQUEST")
                 {
                     config.with_virtual_hosted_style_request(
                         virtual_hosted_style_request.trim().parse().unwrap(),
