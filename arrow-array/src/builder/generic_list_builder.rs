@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::Buffer;
+use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::Field;
 use std::any::Any;
@@ -243,7 +243,7 @@ where
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(values_data)
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(null_bit_buffer);
 
         let array_data = unsafe { array_data_builder.build_unchecked() };
 
@@ -257,10 +257,7 @@ where
         let values_data = values_arr.to_data();
 
         let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
+        let nulls = self.null_buffer_builder.finish_cloned();
         let field = Arc::new(Field::new(
             "item",
             values_data.data_type().clone(),
@@ -271,7 +268,7 @@ where
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(values_data)
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { array_data_builder.build_unchecked() };
 

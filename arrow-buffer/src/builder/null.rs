@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::BooleanBufferBuilder;
-use arrow_buffer::{Buffer, MutableBuffer};
+use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 
 /// Builder for creating the null bit buffer.
 /// This builder only materializes the buffer when we append `false`.
@@ -24,7 +23,7 @@ use arrow_buffer::{Buffer, MutableBuffer};
 /// `None` when calling [`finish`](#method.finish).
 /// This optimization is **very** important for the performance.
 #[derive(Debug)]
-pub(super) struct NullBufferBuilder {
+pub struct NullBufferBuilder {
     bitmap_builder: Option<BooleanBufferBuilder>,
     /// Store the length of the buffer before materializing.
     len: usize,
@@ -128,10 +127,15 @@ impl NullBufferBuilder {
 
     /// Builds the null buffer and resets the builder.
     /// Returns `None` if the builder only contains `true`s.
-    pub fn finish(&mut self) -> Option<Buffer> {
-        let buf = self.bitmap_builder.take().map(Into::into);
+    pub fn finish(&mut self) -> Option<NullBuffer> {
         self.len = 0;
-        buf
+        Some(NullBuffer::new(self.bitmap_builder.take()?.finish()))
+    }
+
+    /// Builds the [NullBuffer] without resetting the builder.
+    pub fn finish_cloned(&self) -> Option<NullBuffer> {
+        let buffer = self.bitmap_builder.as_ref()?.finish_cloned();
+        Some(NullBuffer::new(buffer))
     }
 
     /// Returns the inner bitmap builder as slice
@@ -187,7 +191,7 @@ mod tests {
         assert_eq!(6, builder.len());
 
         let buf = builder.finish().unwrap();
-        assert_eq!(Buffer::from(&[0b110010_u8]), buf);
+        assert_eq!(&[0b110010_u8], buf.validity());
     }
 
     #[test]
@@ -199,7 +203,7 @@ mod tests {
         assert_eq!(6, builder.len());
 
         let buf = builder.finish().unwrap();
-        assert_eq!(Buffer::from(&[0b0_u8]), buf);
+        assert_eq!(&[0b0_u8], buf.validity());
     }
 
     #[test]
@@ -228,6 +232,6 @@ mod tests {
         builder.append_slice(&[true, true, false, true]);
 
         let buf = builder.finish().unwrap();
-        assert_eq!(Buffer::from(&[0b1011_u8]), buf);
+        assert_eq!(&[0b1011_u8], buf.validity());
     }
 }

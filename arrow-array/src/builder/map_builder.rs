@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::{Array, ArrayRef, MapArray, StructArray};
 use arrow_buffer::Buffer;
+use arrow_buffer::{NullBuffer, NullBufferBuilder};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
@@ -160,12 +160,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         let keys_arr = self.key_builder.finish_cloned();
         let values_arr = self.value_builder.finish_cloned();
         let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
-
-        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
+        let nulls = self.null_buffer_builder.finish_cloned();
+        self.finish_helper(keys_arr, values_arr, offset_buffer, nulls, len)
     }
 
     fn finish_helper(
@@ -173,7 +169,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         keys_arr: Arc<dyn Array>,
         values_arr: Arc<dyn Array>,
         offset_buffer: Buffer,
-        null_bit_buffer: Option<Buffer>,
+        nulls: Option<NullBuffer>,
         len: usize,
     ) -> MapArray {
         assert!(
@@ -205,7 +201,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(struct_array.into_data())
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
