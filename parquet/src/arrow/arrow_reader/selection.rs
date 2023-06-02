@@ -173,9 +173,14 @@ impl RowSelection {
         }
     }
 
-    /// Given an offset index, return the offset ranges for all data pages selected by `self`
-    #[cfg(any(test, feature = "async"))]
-    pub(crate) fn scan_ranges(
+    /// Given an offset index, return the byte ranges for all data pages selected by `self`
+    ///
+    /// This is useful for determining what byte ranges to fetch from underlying storage
+    ///
+    /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
+    /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
+    /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
+    pub fn scan_ranges(
         &self,
         page_locations: &[crate::format::PageLocation],
     ) -> Vec<Range<usize>> {

@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
+use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
@@ -123,7 +123,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .len(self.len())
             .add_buffer(self.offsets_builder.finish())
             .add_buffer(self.value_builder.finish())
-            .null_bit_buffer(self.null_buffer_builder.finish());
+            .nulls(self.null_buffer_builder.finish());
 
         self.offsets_builder.append(self.next_offset());
         let array_data = unsafe { array_builder.build_unchecked() };
@@ -139,11 +139,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .len(self.len())
             .add_buffer(offset_buffer)
             .add_buffer(value_buffer)
-            .null_bit_buffer(
-                self.null_buffer_builder
-                    .as_slice()
-                    .map(Buffer::from_slice_ref),
-            );
+            .nulls(self.null_buffer_builder.finish_cloned());
 
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)

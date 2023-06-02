@@ -170,15 +170,22 @@ impl<P: Iterator<Item = Page> + Send> PageReader for InMemoryPageReader<P> {
         if let Some(x) = self.page_iter.peek() {
             match x {
                 Page::DataPage { num_values, .. } => Ok(Some(PageMetadata {
-                    num_rows: *num_values as usize,
+                    num_rows: None,
+                    num_levels: Some(*num_values as _),
                     is_dict: false,
                 })),
-                Page::DataPageV2 { num_rows, .. } => Ok(Some(PageMetadata {
-                    num_rows: *num_rows as usize,
+                Page::DataPageV2 {
+                    num_rows,
+                    num_values,
+                    ..
+                } => Ok(Some(PageMetadata {
+                    num_rows: Some(*num_rows as _),
+                    num_levels: Some(*num_values as _),
                     is_dict: false,
                 })),
                 Page::DictionaryPage { .. } => Ok(Some(PageMetadata {
-                    num_rows: 0,
+                    num_rows: None,
+                    num_levels: None,
                     is_dict: true,
                 })),
             }

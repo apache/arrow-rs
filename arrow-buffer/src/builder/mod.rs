@@ -15,23 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{Extend, _MutableArrayData};
-use crate::ArrayData;
+//! Buffer builders
 
-pub(super) fn build_extend(_: &ArrayData) -> Extend {
-    Box::new(
-        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
-            mutable
-                .child_data
-                .iter_mut()
-                .for_each(|child| child.extend(index, start, start + len))
-        },
-    )
-}
-
-pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
-    mutable
-        .child_data
-        .iter_mut()
-        .for_each(|child| child.extend_nulls(len))
-}
+mod boolean;
+pub use boolean::*;
+mod null;
+pub use null::*;

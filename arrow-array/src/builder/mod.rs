@@ -148,8 +148,7 @@
 //! }
 //! ```
 
-mod boolean_buffer_builder;
-pub use boolean_buffer_builder::*;
+pub use arrow_buffer::BooleanBufferBuilder;
 
 mod boolean_builder;
 pub use boolean_builder::*;
@@ -165,7 +164,6 @@ mod generic_list_builder;
 pub use generic_list_builder::*;
 mod map_builder;
 pub use map_builder::*;
-mod null_buffer_builder;
 mod primitive_builder;
 pub use primitive_builder::*;
 mod primitive_dictionary_builder;

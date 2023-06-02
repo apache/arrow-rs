@@ -299,7 +299,7 @@ pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
 
 impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
     /// Creates new row group reader from a file, row group metadata and custom config.
-    fn new(
+    pub fn new(
         chunk_reader: Arc<R>,
         metadata: &'a RowGroupMetaData,
         page_locations: Option<&'a [Vec<PageLocation>]>,
@@ -722,7 +722,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
             } => {
                 if dictionary_page.is_some() {
                     Ok(Some(PageMetadata {
-                        num_rows: 0,
+                        num_rows: None,
+                        num_levels: None,
                         is_dict: true,
                     }))
                 } else if let Some(page) = page_locations.front() {
@@ -732,7 +733,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         .unwrap_or(*total_rows);
 
                     Ok(Some(PageMetadata {
-                        num_rows: next_rows - page.first_row_index as usize,
+                        num_rows: Some(next_rows - page.first_row_index as usize),
+                        num_levels: None,
                         is_dict: false,
                     }))
                 } else {
@@ -1644,11 +1646,11 @@ mod tests {
             // have checked with `parquet-tools column-index   -c string_col  ./alltypes_tiny_pages.parquet`
             // page meta has two scenarios(21, 20) of num_rows expect last page has 11 rows.
             if i != 351 {
-                assert!((meta.num_rows == 21) || (meta.num_rows == 20));
+                assert!((meta.num_rows == Some(21)) || (meta.num_rows == Some(20)));
             } else {
                 // last page first row index is 7290, total row count is 7300
                 // because first row start with zero, last page row count should be 10.
-                assert_eq!(meta.num_rows, 10);
+                assert_eq!(meta.num_rows, Some(10));
             }
             assert!(!meta.is_dict);
             vec.push(meta);
@@ -1686,11 +1688,11 @@ mod tests {
             // have checked with `parquet-tools column-index   -c string_col  ./alltypes_tiny_pages.parquet`
             // page meta has two scenarios(21, 20) of num_rows expect last page has 11 rows.
             if i != 351 {
-                assert!((meta.num_rows == 21) || (meta.num_rows == 20));
+                assert!((meta.num_levels == Some(21)) || (meta.num_levels == Some(20)));
             } else {
                 // last page first row index is 7290, total row count is 7300
                 // because first row start with zero, last page row count should be 10.
-                assert_eq!(meta.num_rows, 10);
+                assert_eq!(meta.num_levels, Some(10));
             }
             assert!(!meta.is_dict);
             vec.push(meta);

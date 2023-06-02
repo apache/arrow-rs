@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BooleanBufferBuilder};
 use crate::{ArrayRef, BooleanArray};
 use arrow_buffer::Buffer;
+use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -150,7 +150,7 @@ impl BooleanBuilder {
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
             .add_buffer(self.values_builder.finish().into_inner())
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(null_bit_buffer);
 
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
@@ -159,15 +159,12 @@ impl BooleanBuilder {
     /// Builds the [BooleanArray] without resetting the builder.
     pub fn finish_cloned(&self) -> BooleanArray {
         let len = self.len();
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
+        let nulls = self.null_buffer_builder.finish_cloned();
         let value_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
             .add_buffer(value_buffer)
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)

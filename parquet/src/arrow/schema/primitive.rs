@@ -229,12 +229,14 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
         (None, ConvertedType::INT_64) => Ok(DataType::Int64),
         (None, ConvertedType::UINT_64) => Ok(DataType::UInt64),
         (None, ConvertedType::TIME_MICROS) => Ok(DataType::Time64(TimeUnit::Microsecond)),
-        (None, ConvertedType::TIMESTAMP_MILLIS) => {
-            Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
-        }
-        (None, ConvertedType::TIMESTAMP_MICROS) => {
-            Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
-        }
+        (None, ConvertedType::TIMESTAMP_MILLIS) => Ok(DataType::Timestamp(
+            TimeUnit::Millisecond,
+            Some("UTC".into()),
+        )),
+        (None, ConvertedType::TIMESTAMP_MICROS) => Ok(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some("UTC".into()),
+        )),
         (Some(LogicalType::Decimal { scale, precision }), _) => {
             decimal_128_type(scale, precision)
         }
