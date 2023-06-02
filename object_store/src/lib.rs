@@ -359,10 +359,20 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// in the given byte range
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let options = GetOptions {
-            range: Some(range),
+            range: Some(range.clone()),
             ..Default::default()
         };
-        self.get_opts(location, options).await?.bytes().await
+        // Temporary until GetResult::File supports range (#4352)
+        match self.get_opts(location, options).await? {
+            GetResult::Stream(s) => collect_bytes(s, None).await,
+            #[cfg(not(target_arch = "wasm32"))]
+            GetResult::File(mut file, path) => {
+                maybe_spawn_blocking(move || local::read_range(&mut file, &path, range))
+                    .await
+            }
+            #[cfg(target_arch = "wasm32")]
+            _ => unimplemented!("File IO not implemented on wasm32."),
+        }
     }
 
     /// Return the bytes that are stored at the specified location
