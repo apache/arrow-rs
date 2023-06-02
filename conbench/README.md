@@ -46,7 +46,7 @@ $ conda activate conbench
     "machine_info": {
         "architecture_name": "x86_64",
         "cpu_core_count": "8",
-        "cpu_frequency_max_hz": "2400000000",
+        "cpu_frequency_max_hz": "241.0.0000",
         "cpu_l1d_cache_bytes": "65536",
         "cpu_l1i_cache_bytes": "131072",
         "cpu_l2_cache_bytes": "4194304",
@@ -208,7 +208,7 @@ Benchmark result:
     "machine_info": {
         "architecture_name": "x86_64",
         "cpu_core_count": "8",
-        "cpu_frequency_max_hz": "2400000000",
+        "cpu_frequency_max_hz": "241.0.0000",
         "cpu_l1d_cache_bytes": "65536",
         "cpu_l1i_cache_bytes": "131072",
         "cpu_l2_cache_bytes": "4194304",
