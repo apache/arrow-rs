@@ -44,6 +44,7 @@
 //!
 
 pub mod comparison;
+pub mod min_max;
 pub mod ord;
 pub mod partition;
 pub mod sort;
