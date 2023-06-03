@@ -25,11 +25,13 @@
 //! use arrow_cast::cast;
 //! use arrow_schema::DataType;
 //! use std::sync::Arc;
+//! use arrow_array::types::Float64Type;
+//! use arrow_array::cast::AsArray;
 //!
 //! let a = Int32Array::from(vec![5, 6, 7]);
 //! let array = Arc::new(a) as ArrayRef;
 //! let b = cast(&array, &DataType::Float64).unwrap();
-//! let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
+//! let c = b.as_primitive::<Float64Type>();
 //! assert_eq!(5.0, c.value(0));
 //! assert_eq!(6.0, c.value(1));
 //! assert_eq!(7.0, c.value(2));
@@ -4979,7 +4981,7 @@ mod tests {
     fn test_cast_i32_to_f64() {
         let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
         let b = cast(&array, &DataType::Float64).unwrap();
-        let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
+        let c = b.as_primitive::<Float64Type>();
         assert_eq!(5.0, c.value(0));
         assert_eq!(6.0, c.value(1));
         assert_eq!(7.0, c.value(2));
@@ -4991,7 +4993,7 @@ mod tests {
     fn test_cast_i32_to_u8() {
         let array = Int32Array::from(vec![-5, 6, -7, 8, 100000000]);
         let b = cast(&array, &DataType::UInt8).unwrap();
-        let c = b.as_any().downcast_ref::<UInt8Array>().unwrap();
+        let c = b.as_primitive::<UInt8Type>();
         assert!(!c.is_valid(0));
         assert_eq!(6, c.value(1));
         assert!(!c.is_valid(2));
@@ -5021,7 +5023,7 @@ mod tests {
         let array = array.slice(2, 3);
         let b = cast(&array, &DataType::UInt8).unwrap();
         assert_eq!(3, b.len());
-        let c = b.as_any().downcast_ref::<UInt8Array>().unwrap();
+        let c = b.as_primitive::<UInt8Type>();
         assert!(!c.is_valid(0));
         assert_eq!(8, c.value(1));
         // overflows return None
@@ -5032,7 +5034,7 @@ mod tests {
     fn test_cast_i32_to_i32() {
         let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
         let b = cast(&array, &DataType::Int32).unwrap();
-        let c = b.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = b.as_primitive::<Int32Type>();
         assert_eq!(5, c.value(0));
         assert_eq!(6, c.value(1));
         assert_eq!(7, c.value(2));
@@ -5121,7 +5123,7 @@ mod tests {
     fn test_cast_utf8_to_i32() {
         let array = StringArray::from(vec!["5", "6", "seven", "8", "9.1"]);
         let b = cast(&array, &DataType::Int32).unwrap();
-        let c = b.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = b.as_primitive::<Int32Type>();
         assert_eq!(5, c.value(0));
         assert_eq!(6, c.value(1));
         assert!(!c.is_valid(2));
@@ -5187,7 +5189,7 @@ mod tests {
     fn test_cast_bool_to_i32() {
         let array = BooleanArray::from(vec![Some(true), Some(false), None]);
         let b = cast(&array, &DataType::Int32).unwrap();
-        let c = b.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = b.as_primitive::<Int32Type>();
         assert_eq!(1, c.value(0));
         assert_eq!(0, c.value(1));
         assert!(!c.is_valid(2));
@@ -5197,7 +5199,7 @@ mod tests {
     fn test_cast_bool_to_f64() {
         let array = BooleanArray::from(vec![Some(true), Some(false), None]);
         let b = cast(&array, &DataType::Float64).unwrap();
-        let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
+        let c = b.as_primitive::<Float64Type>();
         assert_eq!(1.0, c.value(0));
         assert_eq!(0.0, c.value(1));
         assert!(!c.is_valid(2));
@@ -5303,7 +5305,7 @@ mod tests {
         let a = Date32Array::from(vec![10000, 17890]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date64).unwrap();
-        let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+        let c = b.as_primitive::<Date64Type>();
         assert_eq!(864000000000, c.value(0));
         assert_eq!(1545696000000, c.value(1));
     }
@@ -5313,7 +5315,7 @@ mod tests {
         let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date32).unwrap();
-        let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+        let c = b.as_primitive::<Date32Type>();
         assert_eq!(10000, c.value(0));
         assert_eq!(17890, c.value(1));
         assert!(c.is_null(2));
@@ -5343,8 +5345,7 @@ mod tests {
 
                 match time_unit {
                     TimeUnit::Second => {
-                        let c =
-                            b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+                        let c = b.as_primitive::<TimestampSecondType>();
                         assert_eq!(1599566400, c.value(0));
                         assert!(c.is_null(1));
                         assert!(c.is_null(2));
@@ -5414,7 +5415,7 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Date32;
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+            let c = b.as_primitive::<Date32Type>();
             assert_eq!(17890, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
@@ -5447,7 +5448,7 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Time32(TimeUnit::Second);
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+            let c = b.as_primitive::<Time32SecondType>();
             assert_eq!(29315, c.value(0));
             assert_eq!(29340, c.value(1));
             assert!(c.is_null(2));
@@ -5482,7 +5483,7 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Time32(TimeUnit::Millisecond);
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+            let c = b.as_primitive::<Time32MillisecondType>();
             assert_eq!(29315091, c.value(0));
             assert_eq!(29340091, c.value(1));
             assert!(c.is_null(2));
@@ -5513,7 +5514,7 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Time64(TimeUnit::Microsecond);
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+            let c = b.as_primitive::<Time64MicrosecondType>();
             assert_eq!(29315091323, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
@@ -5542,7 +5543,7 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Time64(TimeUnit::Nanosecond);
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+            let c = b.as_primitive::<Time64NanosecondType>();
             assert_eq!(29315091323414, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
@@ -5571,7 +5572,7 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Date64;
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+            let c = b.as_primitive::<Date64Type>();
             assert_eq!(1599566400000, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
@@ -5863,7 +5864,7 @@ mod tests {
     fn test_cast_date32_to_int32() {
         let array = Date32Array::from(vec![10000, 17890]);
         let b = cast(&array, &DataType::Int32).unwrap();
-        let c = b.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = b.as_primitive::<Int32Type>();
         assert_eq!(10000, c.value(0));
         assert_eq!(17890, c.value(1));
     }
@@ -5872,7 +5873,7 @@ mod tests {
     fn test_cast_int32_to_date32() {
         let array = Int32Array::from(vec![10000, 17890]);
         let b = cast(&array, &DataType::Date32).unwrap();
-        let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+        let c = b.as_primitive::<Date32Type>();
         assert_eq!(10000, c.value(0));
         assert_eq!(17890, c.value(1));
     }
@@ -5886,7 +5887,7 @@ mod tests {
         ])
         .with_timezone("UTC".to_string());
         let b = cast(&array, &DataType::Date32).unwrap();
-        let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+        let c = b.as_primitive::<Date32Type>();
         assert_eq!(10000, c.value(0));
         assert_eq!(17890, c.value(1));
         assert!(c.is_null(2));
@@ -5900,7 +5901,7 @@ mod tests {
             None,
         ]);
         let b = cast(&array, &DataType::Date64).unwrap();
-        let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+        let c = b.as_primitive::<Date64Type>();
         assert_eq!(864000000005, c.value(0));
         assert_eq!(1545696000001, c.value(1));
         assert!(c.is_null(2));
@@ -5908,7 +5909,7 @@ mod tests {
         let array =
             TimestampSecondArray::from(vec![Some(864000000005), Some(1545696000001)]);
         let b = cast(&array, &DataType::Date64).unwrap();
-        let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+        let c = b.as_primitive::<Date64Type>();
         assert_eq!(864000000005000, c.value(0));
         assert_eq!(1545696000001000, c.value(1));
 
@@ -5932,12 +5933,12 @@ mod tests {
         let array = TimestampSecondArray::from(vec![Some(86405), Some(1), None])
             .with_timezone("+01:00".to_string());
         let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
         assert_eq!(3605000000, c.value(0));
         assert_eq!(3601000000, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
         assert_eq!(3605000000000, c.value(0));
         assert_eq!(3601000000000, c.value(1));
         assert!(c.is_null(2));
@@ -5947,12 +5948,12 @@ mod tests {
             .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
         assert_eq!(3605000000, c.value(0));
         assert_eq!(3601000000, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
         assert_eq!(3605000000000, c.value(0));
         assert_eq!(3601000000000, c.value(1));
         assert!(c.is_null(2));
@@ -5963,12 +5964,12 @@ mod tests {
                 .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
         assert_eq!(3605000000, c.value(0));
         assert_eq!(3601000000, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
         assert_eq!(3605000000000, c.value(0));
         assert_eq!(3601000000000, c.value(1));
         assert!(c.is_null(2));
@@ -5982,12 +5983,12 @@ mod tests {
         .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
         assert_eq!(3605000000, c.value(0));
         assert_eq!(3601000000, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
         assert_eq!(3605000000000, c.value(0));
         assert_eq!(3601000000000, c.value(1));
         assert!(c.is_null(2));
@@ -6011,12 +6012,12 @@ mod tests {
             .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        let c = b.as_primitive::<Time32SecondType>();
         assert_eq!(3605, c.value(0));
         assert_eq!(3601, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        let c = b.as_primitive::<Time32MillisecondType>();
         assert_eq!(3605000, c.value(0));
         assert_eq!(3601000, c.value(1));
         assert!(c.is_null(2));
@@ -6026,12 +6027,12 @@ mod tests {
             .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        let c = b.as_primitive::<Time32SecondType>();
         assert_eq!(3605, c.value(0));
         assert_eq!(3601, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        let c = b.as_primitive::<Time32MillisecondType>();
         assert_eq!(3605000, c.value(0));
         assert_eq!(3601000, c.value(1));
         assert!(c.is_null(2));
@@ -6042,12 +6043,12 @@ mod tests {
                 .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        let c = b.as_primitive::<Time32SecondType>();
         assert_eq!(3605, c.value(0));
         assert_eq!(3601, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        let c = b.as_primitive::<Time32MillisecondType>();
         assert_eq!(3605000, c.value(0));
         assert_eq!(3601000, c.value(1));
         assert!(c.is_null(2));
@@ -6061,12 +6062,12 @@ mod tests {
         .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        let c = b.as_primitive::<Time32SecondType>();
         assert_eq!(3605, c.value(0));
         assert_eq!(3601, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        let c = b.as_primitive::<Time32MillisecondType>();
         assert_eq!(3605000, c.value(0));
         assert_eq!(3601000, c.value(1));
         assert!(c.is_null(2));
@@ -6163,7 +6164,7 @@ mod tests {
         let array =
             Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
-        let c = b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
         assert_eq!(864000000, c.value(0));
         assert_eq!(1545696000, c.value(1));
         assert!(c.is_null(2));
@@ -6220,7 +6221,7 @@ mod tests {
         ])
         .with_timezone("UTC".to_string());
         let b = cast(&array, &DataType::Int64).unwrap();
-        let c = b.as_any().downcast_ref::<Int64Array>().unwrap();
+        let c = b.as_primitive::<Int64Type>();
         assert_eq!(&DataType::Int64, c.data_type());
         assert_eq!(864000000005, c.value(0));
         assert_eq!(1545696000001, c.value(1));
@@ -6385,7 +6386,7 @@ mod tests {
             None,
         ]);
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
-        let c = b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
         assert_eq!(864000003, c.value(0));
         assert_eq!(1545696002, c.value(1));
         assert!(c.is_null(2));
@@ -6405,7 +6406,7 @@ mod tests {
         for arr in duration_arrays {
             assert!(can_cast_types(arr.data_type(), &DataType::Int64));
             let result = cast(&arr, &DataType::Int64).unwrap();
-            let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+            let result = result.as_primitive::<Int64Type>();
             assert_eq!(base.as_slice(), result.values());
         }
     }
@@ -6424,7 +6425,7 @@ mod tests {
         for arr in interval_arrays {
             assert!(can_cast_types(arr.data_type(), &DataType::Int64));
             let result = cast(&arr, &DataType::Int64).unwrap();
-            let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+            let result = result.as_primitive::<Int64Type>();
             assert_eq!(base.as_slice(), result.values());
         }
     }
@@ -7803,7 +7804,7 @@ mod tests {
         ]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date32).unwrap();
-        let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+        let c = b.as_primitive::<Date32Type>();
 
         // test valid inputs
         let date_value = since(
@@ -7840,7 +7841,7 @@ mod tests {
         ]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date64).unwrap();
-        let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+        let c = b.as_primitive::<Date64Type>();
 
         // test valid inputs
         assert!(c.is_valid(0)); // "2000-01-01T12:00:00"
@@ -8627,7 +8628,7 @@ mod tests {
         let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
-        let c = b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
         assert_eq!(1609459200, c.value(0));
         assert_eq!(1640995200, c.value(1));
         assert!(c.is_null(2));
