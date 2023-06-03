@@ -78,6 +78,8 @@ impl From<CommandGetXdbcTypeInfo> for Option<i32> {
 ///
 /// Servers constuct a [`XdbcTypeInfoList`] via the [`XdbcTypeInfoListBuilder`],
 /// and build responses using the [`encode`] method.
+///
+/// [`encode`]: XdbcTypeInfoList::encode
 pub struct XdbcTypeInfoList {
     batch: RecordBatch,
 }
