@@ -25,6 +25,8 @@
 //! use arrow_cast::cast;
 //! use arrow_schema::DataType;
 //! use std::sync::Arc;
+//! use arrow_array::types::Float64Type;
+//! use arrow_array::cast::AsArray;
 //!
 //! let a = Int32Array::from(vec![5, 6, 7]);
 //! let array = Arc::new(a) as ArrayRef;
