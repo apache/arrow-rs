@@ -30,11 +30,13 @@ mod catalogs;
 mod db_schemas;
 mod sql_info;
 mod tables;
+mod xdbc_info;
 
 pub use catalogs::GetCatalogsBuilder;
 pub use db_schemas::GetDbSchemasBuilder;
 pub use sql_info::SqlInfoList;
 pub use tables::GetTablesBuilder;
+pub use xdbc_info::{XdbcTypeInfo, XdbcTypeInfoList, XdbcTypeInfoListBuilder};
 
 use arrow_array::ArrayRef;
 use arrow_array::UInt32Array;

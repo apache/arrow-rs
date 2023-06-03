@@ -1,0 +1,261 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::sync::Arc;
+
+use arrow_array::builder::{BooleanBuilder, Int32Builder, ListBuilder, StringBuilder};
+use arrow_array::cast::downcast_array;
+use arrow_array::{Int32Array, RecordBatch};
+use arrow_ord::comparison::eq_scalar;
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_select::filter::filter_record_batch;
+use arrow_select::take::take;
+use once_cell::sync::Lazy;
+
+use super::lexsort_to_indices;
+use crate::encode::{FlightDataEncoder, FlightDataEncoderBuilder};
+use crate::error::*;
+use crate::sql::{Nullable, Searchable, XdbcDataType, XdbcDatetimeSubcode};
+
+/// [Arrow FlightSQL Specification]: https://github.com/apache/arrow/blob/9588da967c756b2923e213ccc067378ba6c90a86/format/FlightSql.proto#L948-L973
+///
+/// Note: Some of the data types are not supported by DataFusion yet:
+/// <https://arrow.apache.org/datafusion/user-guide/sql/data_types.html#unsupported-sql-types>
+#[derive(Debug, Clone, Default)]
+pub struct XdbcTypeInfo {
+    pub type_name: String,
+    pub data_type: XdbcDataType,
+    // column_size: int32 (The maximum size supported by that column.
+    //              In case of exact numeric types, this represents the maximum precision.
+    //              In case of string types, this represents the character length.
+    //              In case of datetime data types, this represents the length in characters of the string representation.
+    //              NULL is returned for data types where column size is not applicable.)
+    pub column_size: Option<i32>,
+    pub literal_prefix: Option<String>,
+    pub literal_suffix: Option<String>,
+    pub create_params: Option<Vec<String>>,
+    pub nullable: Nullable,
+    pub case_sensitive: bool,
+    pub searchable: Searchable,
+    pub unsigned_attribute: Option<bool>,
+    pub fixed_prec_scale: bool,
+    pub auto_increment: Option<bool>,
+    pub local_type_name: Option<String>,
+    pub minimum_scale: Option<i32>,
+    pub maximum_scale: Option<i32>,
+    pub sql_data_type: XdbcDataType,
+    pub datetime_subcode: Option<XdbcDatetimeSubcode>,
+    pub num_prec_radix: Option<i32>,
+    pub interval_precision: Option<i32>,
+}
+
+pub struct XdbcTypeInfoList {
+    batch: RecordBatch,
+}
+
+impl XdbcTypeInfoList {
+    pub fn record_batch(&self, data_type: Option<i32>) -> Result<RecordBatch> {
+        if let Some(dt) = data_type {
+            let arr: Int32Array = downcast_array(self.batch.column(1).as_ref());
+            let filter = eq_scalar(&arr, dt)?;
+            Ok(filter_record_batch(&self.batch, &filter)?)
+        } else {
+            Ok(self.batch.clone())
+        }
+    }
+
+    pub fn encode(&self, data_type: Option<i32>) -> FlightDataEncoder {
+        let batch = self.record_batch(data_type);
+        FlightDataEncoderBuilder::new()
+            .with_schema(self.schema())
+            .build(futures::stream::once(async { batch }))
+    }
+
+    pub fn schema(&self) -> SchemaRef {
+        self.batch.schema()
+    }
+}
+
+pub struct XdbcTypeInfoListBuilder {
+    infos: Vec<XdbcTypeInfo>,
+}
+
+impl Default for XdbcTypeInfoListBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl XdbcTypeInfoListBuilder {
+    pub fn new() -> Self {
+        Self { infos: Vec::new() }
+    }
+
+    pub fn append(&mut self, info: XdbcTypeInfo) {
+        self.infos.push(info);
+    }
+
+    pub fn build(self) -> Result<XdbcTypeInfoList> {
+        let mut type_name_builder = StringBuilder::new();
+        let mut data_type_builder = Int32Builder::new();
+        let mut column_size_builder = Int32Builder::new();
+        let mut literal_prefix_builder = StringBuilder::new();
+        let mut literal_suffix_builder = StringBuilder::new();
+        let mut create_params_builder = ListBuilder::new(StringBuilder::new());
+        let mut nullable_builder = Int32Builder::new();
+        let mut case_sensitive_builder = BooleanBuilder::new();
+        let mut searchable_builder = Int32Builder::new();
+        let mut unsigned_attribute_builder = BooleanBuilder::new();
+        let mut fixed_prec_scale_builder = BooleanBuilder::new();
+        let mut auto_increment_builder = BooleanBuilder::new();
+        let mut local_type_name_builder = StringBuilder::new();
+        let mut minimum_scale_builder = Int32Builder::new();
+        let mut maximum_scale_builder = Int32Builder::new();
+        let mut sql_data_type_builder = Int32Builder::new();
+        let mut datetime_subcode_builder = Int32Builder::new();
+        let mut num_prec_radix_builder = Int32Builder::new();
+        let mut interval_precision_builder = Int32Builder::new();
+
+        self.infos.into_iter().for_each(|info| {
+            type_name_builder.append_value(info.type_name);
+            data_type_builder.append_value(info.data_type as i32);
+            column_size_builder.append_option(info.column_size);
+            literal_prefix_builder.append_option(info.literal_prefix);
+            literal_suffix_builder.append_option(info.literal_suffix);
+            if let Some(params) = info.create_params {
+                if !params.is_empty() {
+                    for param in params {
+                        create_params_builder.values().append_value(param);
+                    }
+                    create_params_builder.append(true);
+                } else {
+                    create_params_builder.append_null();
+                }
+            } else {
+                create_params_builder.append_null();
+            }
+            nullable_builder.append_value(info.nullable as i32);
+            case_sensitive_builder.append_value(info.case_sensitive);
+            searchable_builder.append_value(info.searchable as i32);
+            unsigned_attribute_builder.append_option(info.unsigned_attribute);
+            fixed_prec_scale_builder.append_value(info.fixed_prec_scale);
+            auto_increment_builder.append_option(info.auto_increment);
+            local_type_name_builder.append_option(info.local_type_name);
+            minimum_scale_builder.append_option(info.minimum_scale);
+            maximum_scale_builder.append_option(info.maximum_scale);
+            sql_data_type_builder.append_value(info.sql_data_type as i32);
+            datetime_subcode_builder
+                .append_option(info.datetime_subcode.map(|code| code as i32));
+            num_prec_radix_builder.append_option(info.num_prec_radix);
+            interval_precision_builder.append_option(info.interval_precision);
+        });
+
+        let type_name = Arc::new(type_name_builder.finish());
+        let data_type = Arc::new(data_type_builder.finish());
+        let column_size = Arc::new(column_size_builder.finish());
+        let literal_prefix = Arc::new(literal_prefix_builder.finish());
+        let literal_suffix = Arc::new(literal_suffix_builder.finish());
+        let create_params = Arc::new(create_params_builder.finish());
+        let nullable = Arc::new(nullable_builder.finish());
+        let case_sensitive = Arc::new(case_sensitive_builder.finish());
+        let searchable = Arc::new(searchable_builder.finish());
+        let unsigned_attribute = Arc::new(unsigned_attribute_builder.finish());
+        let fixed_prec_scale = Arc::new(fixed_prec_scale_builder.finish());
+        let auto_increment = Arc::new(auto_increment_builder.finish());
+        let local_type_name = Arc::new(local_type_name_builder.finish());
+        let minimum_scale = Arc::new(minimum_scale_builder.finish());
+        let maximum_scale = Arc::new(maximum_scale_builder.finish());
+        let sql_data_type = Arc::new(sql_data_type_builder.finish());
+        let datetime_subcode = Arc::new(datetime_subcode_builder.finish());
+        let num_prec_radix = Arc::new(num_prec_radix_builder.finish());
+        let interval_precision = Arc::new(interval_precision_builder.finish());
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&GET_XDBC_INFO_SCHEMA),
+            vec![
+                type_name,
+                data_type,
+                column_size,
+                literal_prefix,
+                literal_suffix,
+                create_params,
+                nullable,
+                case_sensitive,
+                searchable,
+                unsigned_attribute,
+                fixed_prec_scale,
+                auto_increment,
+                local_type_name,
+                minimum_scale,
+                maximum_scale,
+                sql_data_type,
+                datetime_subcode,
+                num_prec_radix,
+                interval_precision,
+            ],
+        )?;
+
+        // Order batch by data_type and then by type_name
+        let sort_cols = batch.project(&[1, 0])?;
+        let indices = lexsort_to_indices(sort_cols.columns());
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|c| take(c, &indices, None))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(XdbcTypeInfoList {
+            batch: RecordBatch::try_new(batch.schema(), columns)?,
+        })
+    }
+
+    /// Return the [`Schema`] for a GetSchema RPC call with [`CommandGetXdbcTypeInfo`]
+    ///
+    /// [`CommandGetXdbcTypeInfo`]: crate::sql::CommandGetXdbcTypeInfo
+    pub fn schema(&self) -> SchemaRef {
+        Arc::clone(&GET_XDBC_INFO_SCHEMA)
+    }
+}
+
+/// The schema for GetXdbcTypeInfo
+static GET_XDBC_INFO_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
+    Arc::new(Schema::new(vec![
+        Field::new("type_name", DataType::Utf8, false),
+        Field::new("data_type", DataType::Int32, false),
+        Field::new("column_size", DataType::Int32, true),
+        Field::new("literal_prefix", DataType::Utf8, true),
+        Field::new("literal_suffix", DataType::Utf8, true),
+        Field::new(
+            "create_params",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))),
+            true,
+        ),
+        Field::new("nullable", DataType::Int32, false),
+        Field::new("case_sensitive", DataType::Boolean, false),
+        Field::new("searchable", DataType::Int32, false),
+        Field::new("unsigned_attribute", DataType::Boolean, true),
+        Field::new("fixed_prec_scale", DataType::Boolean, false),
+        Field::new("auto_increment", DataType::Boolean, true),
+        Field::new("local_type_name", DataType::Utf8, true),
+        Field::new("minimum_scale", DataType::Int32, true),
+        Field::new("maximum_scale", DataType::Int32, true),
+        Field::new("sql_data_type", DataType::Int32, false),
+        Field::new("datetime_subcode", DataType::Int32, true),
+        Field::new("num_prec_radix", DataType::Int32, true),
+        Field::new("interval_precision", DataType::Int32, true),
+    ]))
+});
