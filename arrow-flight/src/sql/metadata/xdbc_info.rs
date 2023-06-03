@@ -125,7 +125,7 @@ impl Default for XdbcTypeInfoListBuilder {
 /// # Example
 /// ```
 /// use arrow_flight::sql::{Nullable, Searchable, XdbcDataType};
-/// use arrow_flight::sql::metadata::{XdbcDataType, XdbcTypeInfo, XdbcTypeInfoListBuilder};
+/// use arrow_flight::sql::metadata::{XdbcTypeInfo, XdbcTypeInfoListBuilder};
 /// // Create the list of metadata describing the server. Since this would not change at
 /// // runtime, using once_cell::Lazy or similar patterns to constuct the list is a common approach.
 /// let mut builder = XdbcTypeInfoListBuilder::new();
