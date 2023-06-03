@@ -174,6 +174,7 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
         DataType::UInt16 => primitive_array_to_json::<UInt16Type>(array),
         DataType::UInt32 => primitive_array_to_json::<UInt32Type>(array),
         DataType::UInt64 => primitive_array_to_json::<UInt64Type>(array),
+        DataType::Float16 => primitive_array_to_json::<Float16Type>(array),
         DataType::Float32 => primitive_array_to_json::<Float32Type>(array),
         DataType::Float64 => primitive_array_to_json::<Float64Type>(array),
         DataType::List(_) => as_list_array(array)
@@ -263,6 +264,9 @@ fn set_column_for_json_rows(
         }
         DataType::UInt64 => {
             set_column_by_primitive_type::<UInt64Type>(rows, array, col_name);
+        }
+        DataType::Float16 => {
+            set_column_by_primitive_type::<Float16Type>(rows, array, col_name);
         }
         DataType::Float32 => {
             set_column_by_primitive_type::<Float32Type>(rows, array, col_name);
