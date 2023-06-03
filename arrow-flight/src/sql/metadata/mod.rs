@@ -55,3 +55,18 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
     sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
     UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::RecordBatch;
+    use arrow_cast::pretty::pretty_format_batches;
+    pub fn assert_batches_eq(batches: &[RecordBatch], expected_lines: &[&str]) {
+        let formatted = pretty_format_batches(batches).unwrap().to_string();
+        let actual_lines: Vec<_> = formatted.trim().lines().collect();
+        assert_eq!(
+            &actual_lines, expected_lines,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected_lines, actual_lines
+        );
+    }
+}

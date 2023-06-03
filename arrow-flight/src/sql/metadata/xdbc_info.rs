@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow_array::builder::{BooleanBuilder, Int32Builder, ListBuilder, StringBuilder};
 use arrow_array::cast::downcast_array;
-use arrow_array::{Int32Array, RecordBatch};
+use arrow_array::{ArrayRef, Int32Array, ListArray, RecordBatch};
 use arrow_ord::comparison::eq_scalar;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
@@ -29,7 +29,9 @@ use once_cell::sync::Lazy;
 use super::lexsort_to_indices;
 use crate::encode::{FlightDataEncoder, FlightDataEncoderBuilder};
 use crate::error::*;
-use crate::sql::{Nullable, Searchable, XdbcDataType, XdbcDatetimeSubcode};
+use crate::sql::{
+    CommandGetXdbcTypeInfo, Nullable, Searchable, XdbcDataType, XdbcDatetimeSubcode,
+};
 
 /// [Arrow FlightSQL Specification]: https://github.com/apache/arrow/blob/9588da967c756b2923e213ccc067378ba6c90a86/format/FlightSql.proto#L948-L973
 ///
@@ -63,13 +65,19 @@ pub struct XdbcTypeInfo {
     pub interval_precision: Option<i32>,
 }
 
+impl From<CommandGetXdbcTypeInfo> for Option<i32> {
+    fn from(value: CommandGetXdbcTypeInfo) -> Self {
+        value.data_type
+    }
+}
+
 pub struct XdbcTypeInfoList {
     batch: RecordBatch,
 }
 
 impl XdbcTypeInfoList {
-    pub fn record_batch(&self, data_type: Option<i32>) -> Result<RecordBatch> {
-        if let Some(dt) = data_type {
+    pub fn record_batch(&self, data_type: impl Into<Option<i32>>) -> Result<RecordBatch> {
+        if let Some(dt) = data_type.into() {
             let arr: Int32Array = downcast_array(self.batch.column(1).as_ref());
             let filter = eq_scalar(&arr, dt)?;
             Ok(filter_record_batch(&self.batch, &filter)?)
@@ -78,7 +86,7 @@ impl XdbcTypeInfoList {
         }
     }
 
-    pub fn encode(&self, data_type: Option<i32>) -> FlightDataEncoder {
+    pub fn encode(&self, data_type: impl Into<Option<i32>>) -> FlightDataEncoder {
         let batch = self.record_batch(data_type);
         FlightDataEncoderBuilder::new()
             .with_schema(self.schema())
@@ -169,7 +177,11 @@ impl XdbcTypeInfoListBuilder {
         let column_size = Arc::new(column_size_builder.finish());
         let literal_prefix = Arc::new(literal_prefix_builder.finish());
         let literal_suffix = Arc::new(literal_suffix_builder.finish());
-        let create_params = Arc::new(create_params_builder.finish());
+        let (field, offsets, values, nulls) = create_params_builder.finish().into_parts();
+        // Re-defined the field to be non-nullable
+        let new_field = Arc::new(field.as_ref().clone().with_nullable(false));
+        let create_params =
+            Arc::new(ListArray::new(new_field, offsets, values, nulls)) as ArrayRef;
         let nullable = Arc::new(nullable_builder.finish());
         let case_sensitive = Arc::new(case_sensitive_builder.finish());
         let searchable = Arc::new(searchable_builder.finish());
@@ -259,3 +271,91 @@ static GET_XDBC_INFO_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
         Field::new("interval_precision", DataType::Int32, true),
     ]))
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql::metadata::tests::assert_batches_eq;
+
+    #[test]
+    fn test_create_batch() {
+        let mut builder = XdbcTypeInfoListBuilder::new();
+        builder.append(XdbcTypeInfo {
+            type_name: "VARCHAR".into(),
+            data_type: XdbcDataType::XdbcVarchar,
+            column_size: Some(i32::MAX),
+            literal_prefix: Some("'".into()),
+            literal_suffix: Some("'".into()),
+            create_params: Some(vec!["length".into()]),
+            nullable: Nullable::NullabilityNullable,
+            case_sensitive: true,
+            searchable: Searchable::Full,
+            unsigned_attribute: None,
+            fixed_prec_scale: false,
+            auto_increment: None,
+            local_type_name: Some("VARCHAR".into()),
+            minimum_scale: None,
+            maximum_scale: None,
+            sql_data_type: XdbcDataType::XdbcVarchar,
+            datetime_subcode: None,
+            num_prec_radix: None,
+            interval_precision: None,
+        });
+        builder.append(XdbcTypeInfo {
+            type_name: "INTEGER".into(),
+            data_type: XdbcDataType::XdbcInteger,
+            column_size: Some(32),
+            literal_prefix: None,
+            literal_suffix: None,
+            create_params: None,
+            nullable: Nullable::NullabilityNullable,
+            case_sensitive: false,
+            searchable: Searchable::Full,
+            unsigned_attribute: Some(false),
+            fixed_prec_scale: false,
+            auto_increment: Some(false),
+            local_type_name: Some("INTEGER".into()),
+            minimum_scale: None,
+            maximum_scale: None,
+            sql_data_type: XdbcDataType::XdbcInteger,
+            datetime_subcode: None,
+            num_prec_radix: Some(2),
+            interval_precision: None,
+        });
+        builder.append(XdbcTypeInfo {
+            type_name: "INTERVAL".into(),
+            data_type: XdbcDataType::XdbcInterval,
+            column_size: Some(i32::MAX),
+            literal_prefix: Some("'".into()),
+            literal_suffix: Some("'".into()),
+            create_params: None,
+            nullable: Nullable::NullabilityNullable,
+            case_sensitive: false,
+            searchable: Searchable::Full,
+            unsigned_attribute: None,
+            fixed_prec_scale: false,
+            auto_increment: None,
+            local_type_name: Some("INTERVAL".into()),
+            minimum_scale: None,
+            maximum_scale: None,
+            sql_data_type: XdbcDataType::XdbcInterval,
+            datetime_subcode: Some(XdbcDatetimeSubcode::XdbcSubcodeUnknown),
+            num_prec_radix: None,
+            interval_precision: None,
+        });
+        let infos = builder.build().unwrap();
+        let batch = infos.record_batch(None).unwrap();
+
+        let expected = vec![
+            "+-----------+-----------+-------------+----------------+----------------+---------------+----------+----------------+------------+--------------------+------------------+----------------+-----------------+---------------+---------------+---------------+------------------+----------------+--------------------+",
+            "| type_name | data_type | column_size | literal_prefix | literal_suffix | create_params | nullable | case_sensitive | searchable | unsigned_attribute | fixed_prec_scale | auto_increment | local_type_name | minimum_scale | maximum_scale | sql_data_type | datetime_subcode | num_prec_radix | interval_precision |",
+            "+-----------+-----------+-------------+----------------+----------------+---------------+----------+----------------+------------+--------------------+------------------+----------------+-----------------+---------------+---------------+---------------+------------------+----------------+--------------------+",
+            "| INTEGER   | 4         | 32          |                |                |               | 1        | false          | 3          | false              | false            | false          | INTEGER         |               |               | 4             |                  | 2              |                    |",
+            "| INTERVAL  | 10        | 2147483647  | '              | '              |               | 1        | false          | 3          |                    | false            |                | INTERVAL        |               |               | 10            | 0                |                |                    |",
+            "| VARCHAR   | 12        | 2147483647  | '              | '              | [length]      | 1        | true           | 3          |                    | false            |                | VARCHAR         |               |               | 12            |                  |                |                    |",
+            "+-----------+-----------+-------------+----------------+----------------+---------------+----------+----------------+------------+--------------------+------------------+----------------+-----------------+---------------+---------------+---------------+------------------+----------------+--------------------+",
+        ];
+
+        assert_batches_eq(&[batch], &expected);
+    }
+}

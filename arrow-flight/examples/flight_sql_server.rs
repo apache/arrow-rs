@@ -583,9 +583,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandGetXdbcTypeInfo,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        let stream = INSTANCE_XDBC_INFO
-            .encode(query.data_type)
-            .map_err(Status::from);
+        let stream = INSTANCE_XDBC_INFO.encode(query).map_err(Status::from);
         Ok(Response::new(Box::pin(stream)))
     }
 
