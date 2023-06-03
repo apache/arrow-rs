@@ -15,6 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Helpers for [`CommandGetXdbcTypeInfo`] metadata requests.
+//!
+//! - [`XdbcTypeInfo`] - a typed struct that holds the xdbc info corresponding to expected schema.
+//! - [`XdbcTypeInfoListBuilder`] - a builder for collecting type infos
+//!   and building a conformant `RecordBatch`.
+//! - [`XdbcTypeInfoList`] - a helper type wrapping a `RecordBatch`
+//!   used for handling [`CommandGetXdbcTypeInfo`] requests.
+//!
 use std::sync::Arc;
 
 use arrow_array::builder::{BooleanBuilder, Int32Builder, ListBuilder, StringBuilder};
@@ -33,19 +41,11 @@ use crate::sql::{
     CommandGetXdbcTypeInfo, Nullable, Searchable, XdbcDataType, XdbcDatetimeSubcode,
 };
 
-/// [Arrow FlightSQL Specification]: https://github.com/apache/arrow/blob/9588da967c756b2923e213ccc067378ba6c90a86/format/FlightSql.proto#L948-L973
-///
-/// Note: Some of the data types are not supported by DataFusion yet:
-/// <https://arrow.apache.org/datafusion/user-guide/sql/data_types.html#unsupported-sql-types>
+/// Data structure representing type information for xdbc types.
 #[derive(Debug, Clone, Default)]
 pub struct XdbcTypeInfo {
     pub type_name: String,
     pub data_type: XdbcDataType,
-    // column_size: int32 (The maximum size supported by that column.
-    //              In case of exact numeric types, this represents the maximum precision.
-    //              In case of string types, this represents the character length.
-    //              In case of datetime data types, this represents the length in characters of the string representation.
-    //              NULL is returned for data types where column size is not applicable.)
     pub column_size: Option<i32>,
     pub literal_prefix: Option<String>,
     pub literal_suffix: Option<String>,
@@ -71,11 +71,20 @@ impl From<CommandGetXdbcTypeInfo> for Option<i32> {
     }
 }
 
+/// Helper to create [`CommandGetXdbcTypeInfo`] responses.
+///
+/// [`CommandGetXdbcTypeInfo`] are metadata requests used by a Flight SQL
+/// server to communicate supported capabilities to Flight SQL clients.
+///
+/// Servers constuct a [`XdbcTypeInfoList`] via the [`XdbcTypeInfoListBuilder`],
+/// and build responses using the [`encode`] method.
 pub struct XdbcTypeInfoList {
     batch: RecordBatch,
 }
 
 impl XdbcTypeInfoList {
+    /// Return the raw (not encoded) RecordBatch that will be returned
+    /// from [`CommandGetXdbcTypeInfo`]
     pub fn record_batch(&self, data_type: impl Into<Option<i32>>) -> Result<RecordBatch> {
         if let Some(dt) = data_type.into() {
             let arr: Int32Array = downcast_array(self.batch.column(1).as_ref());
@@ -86,6 +95,7 @@ impl XdbcTypeInfoList {
         }
     }
 
+    /// Get a [`FlightDataEncoder`] which encodes the data approriate for [`CommandGetXdbcTypeInfo`] responses.
     pub fn encode(&self, data_type: impl Into<Option<i32>>) -> FlightDataEncoder {
         let batch = self.record_batch(data_type);
         FlightDataEncoderBuilder::new()
@@ -93,6 +103,8 @@ impl XdbcTypeInfoList {
             .build(futures::stream::once(async { batch }))
     }
 
+    /// Return the schema of the RecordBatch that will be returned
+    /// from [`CommandGetXdbcTypeInfo`]
     pub fn schema(&self) -> SchemaRef {
         self.batch.schema()
     }
@@ -108,15 +120,55 @@ impl Default for XdbcTypeInfoListBuilder {
     }
 }
 
+/// A builder for [`XdbcTypeInfoList`] which is used to create [`CommandGetXdbcTypeInfo`].responses.
+///
+/// # Example
+/// ```
+/// use arrow_flight::sql::metadata::{XdbcTypeInfo, XdbcTypeInfoListBuilder};
+/// // Create the list of metadata describing the server. Since this would not change at
+/// // runtime, using once_cell::Lazy or similar patterns to constuct the list is a common approach.
+/// let mut builder = XdbcTypeInfoListBuilder::new();
+/// builder.append(XdbcTypeInfo {
+///     type_name: "INTEGER".into(),
+///     data_type: XdbcDataType::XdbcInteger,
+///     column_size: Some(32),
+///     literal_prefix: None,
+///     literal_suffix: None,
+///     create_params: None,
+///     nullable: Nullable::NullabilityNullable,
+///     case_sensitive: false,
+///     searchable: Searchable::Full,
+///     unsigned_attribute: Some(false),
+///     fixed_prec_scale: false,
+///     auto_increment: Some(false),
+///     local_type_name: Some("INTEGER".into()),
+///     minimum_scale: None,
+///     maximum_scale: None,
+///     sql_data_type: XdbcDataType::XdbcInteger,
+///     datetime_subcode: None,
+///     num_prec_radix: Some(2),
+///     interval_precision: None,
+/// });
+/// let info_list = builder.build().unwrap();
+///
+/// // to get the response stream, call the encode method.
+/// let stream = info_list.encode(None);
+///
+/// // to access the underlying record batch
+/// let batch = info_list.record_batch(None);
+/// ```
 impl XdbcTypeInfoListBuilder {
+    /// Create a new instance of [`XdbcTypeInfoListBuilder`].
     pub fn new() -> Self {
         Self { infos: Vec::new() }
     }
 
+    /// Append a new row
     pub fn append(&mut self, info: XdbcTypeInfo) {
         self.infos.push(info);
     }
 
+    /// Create helper structure for handling xdbc metadata requests.
     pub fn build(self) -> Result<XdbcTypeInfoList> {
         let mut type_name_builder = StringBuilder::new();
         let mut data_type_builder = Int32Builder::new();
@@ -236,8 +288,6 @@ impl XdbcTypeInfoListBuilder {
     }
 
     /// Return the [`Schema`] for a GetSchema RPC call with [`CommandGetXdbcTypeInfo`]
-    ///
-    /// [`CommandGetXdbcTypeInfo`]: crate::sql::CommandGetXdbcTypeInfo
     pub fn schema(&self) -> SchemaRef {
         Arc::clone(&GET_XDBC_INFO_SCHEMA)
     }
