@@ -391,7 +391,7 @@ mod tests {
     use crate::GenericByteArray;
     use crate::Int16RunArray;
 
-    fn test_bytes_run_buider<T>(values: Vec<&T::Native>)
+    fn test_bytes_run_builder<T>(values: Vec<&T::Native>)
     where
         T: ByteArrayType,
         <T as ByteArrayType>::Native: PartialEq,
@@ -428,21 +428,21 @@ mod tests {
     }
 
     #[test]
-    fn test_string_run_buider() {
-        test_bytes_run_buider::<Utf8Type>(vec!["abc", "def", "ghi"]);
+    fn test_string_run_builder() {
+        test_bytes_run_builder::<Utf8Type>(vec!["abc", "def", "ghi"]);
     }
 
     #[test]
-    fn test_string_run_buider_with_empty_strings() {
-        test_bytes_run_buider::<Utf8Type>(vec!["abc", "", "ghi"]);
+    fn test_string_run_builder_with_empty_strings() {
+        test_bytes_run_builder::<Utf8Type>(vec!["abc", "", "ghi"]);
     }
 
     #[test]
-    fn test_binary_run_buider() {
-        test_bytes_run_buider::<BinaryType>(vec![b"abc", b"def", b"ghi"]);
+    fn test_binary_run_builder() {
+        test_bytes_run_builder::<BinaryType>(vec![b"abc", b"def", b"ghi"]);
     }
 
-    fn test_bytes_run_buider_finish_cloned<T>(values: Vec<&T::Native>)
+    fn test_bytes_run_builder_finish_cloned<T>(values: Vec<&T::Native>)
     where
         T: ByteArrayType,
         <T as ByteArrayType>::Native: PartialEq,
@@ -498,13 +498,13 @@ mod tests {
     }
 
     #[test]
-    fn test_string_run_buider_finish_cloned() {
-        test_bytes_run_buider_finish_cloned::<Utf8Type>(vec!["abc", "def", "ghi"]);
+    fn test_string_run_builder_finish_cloned() {
+        test_bytes_run_builder_finish_cloned::<Utf8Type>(vec!["abc", "def", "ghi"]);
     }
 
     #[test]
-    fn test_binary_run_buider_finish_cloned() {
-        test_bytes_run_buider_finish_cloned::<BinaryType>(vec![b"abc", b"def", b"ghi"]);
+    fn test_binary_run_builder_finish_cloned() {
+        test_bytes_run_builder_finish_cloned::<BinaryType>(vec![b"abc", b"def", b"ghi"]);
     }
 
     #[test]
