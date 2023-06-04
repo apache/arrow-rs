@@ -439,10 +439,7 @@ pub trait Parser: ArrowPrimitiveType {
 
 impl Parser for Float16Type {
     fn parse(string: &str) -> Option<f16> {
-        match lexical_core::parse(string.as_bytes()).ok() {
-            Some(value) => Some(f16::from_f32(value)),
-            None => None,
-        }
+        lexical_core::parse(string.as_bytes()).ok().map(f16::from_f32)
     }
 }
 
