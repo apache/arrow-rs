@@ -1494,7 +1494,7 @@ mod tests {
     }
 
     #[test]
-    fn test_array_to_json_array_null() {
+    fn test_array_to_json_array_for_fixed_size_list_array() {
         let expected_json = vec![
             json!([0, 1, 2]),
             json!(null),
