@@ -1456,6 +1456,7 @@ mod tests {
             Field::new("e", DataType::Utf8, true),
             Field::new("f", DataType::Utf8, true),
             Field::new("g", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new("h", DataType::Float16, true),
         ]));
 
         let mut reader = ReaderBuilder::new(schema.clone())

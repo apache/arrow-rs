@@ -591,6 +591,7 @@ fn make_decoder(
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
         DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
+        DataType::Float16 => primitive_decoder!(Float16Type, data_type),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
         DataType::Float64 => primitive_decoder!(Float64Type, data_type),
         DataType::Timestamp(TimeUnit::Second, None) => {
@@ -1422,7 +1423,7 @@ mod tests {
         let mut reader = read_file("test/data/basic.json", None);
         let batch = reader.next().unwrap().unwrap();
 
-        assert_eq!(7, batch.num_columns());
+        assert_eq!(8, batch.num_columns());
         assert_eq!(12, batch.num_rows());
 
         let schema = reader.schema();
@@ -1941,7 +1942,7 @@ mod tests {
         let mut sum_a = 0;
         for batch in reader {
             let batch = batch.unwrap();
-            assert_eq!(7, batch.num_columns());
+            assert_eq!(8, batch.num_columns());
             sum_num_rows += batch.num_rows();
             num_batches += 1;
             let batch_schema = batch.schema();
