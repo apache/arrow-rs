@@ -677,6 +677,7 @@ array_downcast_fn!(as_struct_array, StructArray);
 array_downcast_fn!(as_union_array, UnionArray);
 array_downcast_fn!(as_map_array, MapArray);
 array_downcast_fn!(as_decimal_array, Decimal128Array);
+array_downcast_fn!(as_decimal256_array, Decimal256Array);
 
 /// Downcasts a `dyn Array` to a concrete type
 ///
@@ -886,6 +887,22 @@ mod tests {
         assert!(!as_decimal_array(&array).is_empty());
         let result_decimal = as_decimal_array(&array);
         assert_eq!(result_decimal, &array);
+    }
+
+    #[test]
+    fn test_as_decimal256_array_ref() {
+        let array: Decimal256Array = vec![
+            Some(i256::from_i128(123)),
+            None,
+            Some(i256::from_i128(1111)),
+        ]
+        .into_iter()
+        .collect::<Decimal256Array>()
+        .with_precision_and_scale(10, 2)
+        .unwrap();
+        assert!(!as_decimal256_array(&array).is_empty());
+        let result_decimal256 = as_decimal256_array(&array);
+        assert_eq!(result_decimal256, &array);
     }
 
     #[test]
