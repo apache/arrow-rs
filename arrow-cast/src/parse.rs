@@ -21,10 +21,7 @@ use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
-use num::{CheckedAdd, CheckedMul};
-use std::cmp::Ordering;
-use std::fmt::{Display, Formatter};
-use std::ops::{Add, Mul, Sub};
+
 use std::str::FromStr;
 
 /// Parse nanoseconds from the first `N` values in digits, subtracting the offset `O`
@@ -716,45 +713,39 @@ pub fn parse_interval_year_month(
     value: &str,
 ) -> Result<<IntervalYearMonthType as ArrowPrimitiveType>::Native, ArrowError> {
     let config = IntervalParseConfig::new(IntervalUnit::Year);
-    let (result_months, result_days, result_nanos) = parse_interval(value, &config)?;
-    if result_days != 0 || result_nanos != 0 {
-        return Err(ArrowError::CastError(format!(
+    let interval = Interval::parse(value, &config)?;
+
+    let months = interval.to_year_months().map_err(|_| ArrowError::CastError(format!(
             "Cannot cast {value} to IntervalYearMonth. Only year and month fields are allowed."
-        )));
-    }
-    Ok(IntervalYearMonthType::make_value(0, result_months))
+        )))?;
+
+    Ok(IntervalYearMonthType::make_value(0, months))
 }
 
 pub fn parse_interval_day_time(
     value: &str,
 ) -> Result<<IntervalDayTimeType as ArrowPrimitiveType>::Native, ArrowError> {
     let config = IntervalParseConfig::new(IntervalUnit::Day);
-    let (result_months, mut result_days, result_nanos) = parse_interval(value, &config)?;
-    if result_nanos % 1_000_000 != 0 {
-        return Err(ArrowError::CastError(format!(
-            "Cannot cast {value} to IntervalDayTime because the nanos part isn't multiple of milliseconds"
-        )));
-    }
-    result_days += result_months * 30;
-    Ok(IntervalDayTimeType::make_value(
-        result_days,
-        (result_nanos / 1_000_000) as i32,
-    ))
+    let interval = Interval::parse(value, &config)?;
+
+    let (days, millis) = interval.to_day_time().map_err(|_| ArrowError::CastError(format!(
+        "Cannot cast {value} to IntervalDayTime because the nanos part isn't multiple of milliseconds"
+    )))?;
+
+    Ok(IntervalDayTimeType::make_value(days, millis))
 }
 
 pub fn parse_interval_month_day_nano(
     value: &str,
 ) -> Result<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native, ArrowError> {
     let config = IntervalParseConfig::new(IntervalUnit::Month);
-    let (result_months, result_days, result_nanos) = parse_interval(value, &config)?;
-    Ok(IntervalMonthDayNanoType::make_value(
-        result_months,
-        result_days,
-        result_nanos,
-    ))
+    let interval = Interval::parse(value, &config)?;
+
+    let (months, days, nanos) = interval.to_month_day_nanos();
+
+    Ok(IntervalMonthDayNanoType::make_value(months, days, nanos))
 }
 
-const SECONDS_PER_HOUR: i64 = 3_600;
 const NANOS_PER_MILLIS: i64 = 1_000_000;
 const NANOS_PER_SECOND: i64 = 1_000 * NANOS_PER_MILLIS;
 const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
@@ -808,55 +799,100 @@ pub type MonthDayNano = (i32, i32, i64);
 /// Chosen based on the number of decimal digits in 1 week in nanoseconds
 const INTERVAL_PRECISION: u32 = 15;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct IntervalAmount {
-    /// The whole interval component
+    /// The integer component of the interval amount
     integer: i64,
-    /// The non-integer component multiplied by 10^INTERVAL_PRECISION
+    /// The fractional component multiplied by 10^INTERVAL_PRECISION
     frac: i64,
 }
 
+#[cfg(test)]
 impl IntervalAmount {
     fn new(integer: i64, frac: i64) -> Self {
-        let mut integer = integer;
-        let mut frac = frac;
-
-        // ensure fractional part is actually a fraction
-        let frac_int = frac.div_euclid(10_i64.pow(INTERVAL_PRECISION));
-        let frac_rem = frac.rem_euclid(10_i64.pow(INTERVAL_PRECISION));
-        if frac_int > 0 {
-            integer += if integer >= 0 { frac_int } else { -frac_int };
-            frac = frac_rem;
-        }
-
         Self { integer, frac }
     }
 }
 
-// impl FromStr for IntervalAmount {
-//     type Err = ArrowError;
+impl FromStr for IntervalAmount {
+    type Err = ArrowError;
 
-//     fn from_str(s: &str) -> Result<Self, Self::Err> {
-//         Ok(match s.split_once('.') {
-//             Some((integer, frac)) => {
-//                 if frac.len() > INTERVAL_PRECISION {
-//                     return Err(..);
-//                 }
-//                 // TODO: Handle sign
-//                 let frac_s: i64 = frac.parse()?;
-//                 let frac = frac_s * 10.pow(INTERVAL_PRECISION - frac.len());
-//                 Self {
-//                     integer: integer.parse()?,
-//                     frac,
-//                 }
-//             }
-//             None => Self {
-//                 integer: s.parse()?,
-//                 frac: 0,
-//             },
-//         })
-//     }
-// }
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.split_once('.') {
+            Some((integer, frac))
+                if frac.len() <= INTERVAL_PRECISION as usize
+                    && !integer.is_empty()
+                    && !frac.is_empty() =>
+            {
+                let integer = integer.parse::<i64>().map_err(|_| {
+                    ArrowError::ParseError(format!(
+                        "Failed to parse {s} as interval amount"
+                    ))
+                })?;
+
+                let frac_s = frac.parse::<i64>().map_err(|_| {
+                    ArrowError::ParseError(format!(
+                        "Failed to parse {s} as interval amount"
+                    ))
+                })?;
+
+                // scale fractional part by interval precision
+                let frac = frac_s * 10_i64.pow(INTERVAL_PRECISION - frac.len() as u32);
+
+                // propogate the sign of the integer part to the fractional part
+                let frac = if integer < 0 { -frac } else { frac };
+
+                let result = Self { integer, frac };
+
+                Ok(result)
+            }
+            Some((integer, frac)) if !integer.is_empty() && frac.is_empty() => {
+                let integer = integer.parse::<i64>().map_err(|_| {
+                    ArrowError::ParseError(format!(
+                        "Failed to parse {s} as interval amount"
+                    ))
+                })?;
+
+                let result = Self { integer, frac: 0 };
+
+                Ok(result)
+            }
+            Some((integer, frac))
+                if frac.len() <= INTERVAL_PRECISION as usize
+                    && integer.is_empty()
+                    && !frac.is_empty() =>
+            {
+                let frac_s = frac.parse::<i64>().map_err(|_| {
+                    ArrowError::ParseError(format!(
+                        "Failed to parse {s} as interval amount"
+                    ))
+                })?;
+
+                // scale fractional part by interval precision
+                let frac = frac_s * 10_i64.pow(INTERVAL_PRECISION - frac.len() as u32);
+
+                let result = Self { integer: 0, frac };
+
+                Ok(result)
+            }
+            Some((_, frac)) if frac.len() > INTERVAL_PRECISION as usize => {
+                Err(ArrowError::ParseError(format!(
+                    "{s} exceeds the precision available for interval amount"
+                )))
+            }
+            Some(_) | None => {
+                let integer = s.parse::<i64>().map_err(|_| {
+                    ArrowError::ParseError(format!(
+                        "Failed to parse {s} as interval amount"
+                    ))
+                })?;
+
+                let result = Self { integer, frac: 0 };
+                Ok(result)
+            }
+        }
+    }
+}
 
 #[derive(Debug, Default, PartialEq)]
 struct Interval {
@@ -900,11 +936,17 @@ impl Interval {
         }
     }
 
-    fn to_year_months(self) -> i32 {
-        self.months
+    fn to_year_months(&self) -> Result<i32, ArrowError> {
+        match (self.months, self.days, self.nanos) {
+            (months, days, nanos) if days == 0 && nanos == 0 => Ok(months),
+            _ => Err(ArrowError::InvalidArgumentError(format!(
+                "Unable to represent interval with days and nanos as year-months: {:?}",
+                self
+            ))),
+        }
     }
 
-    fn to_day_time(self) -> Result<(i32, i32), ArrowError> {
+    fn to_day_time(&self) -> Result<(i32, i32), ArrowError> {
         let days = self.months.mul_checked(30)?.add_checked(self.days)?;
         let millis = (self.nanos / 1_000_000).try_into().map_err(|_| {
             ArrowError::InvalidArgumentError(format!(
@@ -916,11 +958,28 @@ impl Interval {
         Ok((days, millis))
     }
 
-    fn to_month_day_nanos(self) -> (i32, i32, i64) {
+    fn to_month_day_nanos(&self) -> (i32, i32, i64) {
         (self.months, self.days, self.nanos)
     }
 
+    /// parse string value to a triple of aligned months, days, nanos using the supplied configuration.
+    fn parse(value: &str, config: &IntervalParseConfig) -> Result<Self, ArrowError> {
+        let components = parse_interval_components(value, config)?;
+
+        let result = components.into_iter().fold(
+            Ok(Self::default()),
+            |result, (amount, unit)| match result {
+                Ok(result) => result.add(amount, unit),
+                Err(e) => Err(e),
+            },
+        )?;
+
+        Ok(result)
+    }
+
     /// Interval addition following Postgres behavior. Fractional units will be spilled into smaller units.
+    /// When the interval unit is larger than months, the result is rounded to total months and not spilled to days/nanos.
+    /// Fractional parts of weeks and days are represented using days and nanoseconds.
     /// e.g. INTERVAL '0.5 MONTH' = 15 days, INTERVAL '1.5 MONTH' = 1 month 15 days
     /// e.g. INTERVAL '0.5 DAY' = 12 hours, INTERVAL '1.5 DAY' = 1 day 12 hours
     /// [Postgres reference](https://www.postgresql.org/docs/15/datatype-datetime.html#DATATYPE-INTERVAL-INPUT:~:text=Field%20values%20can,fractional%20on%20output.)
@@ -928,7 +987,7 @@ impl Interval {
         &self,
         amount: IntervalAmount,
         unit: IntervalUnit,
-    ) -> Result<Interval, ArrowError> {
+    ) -> Result<Self, ArrowError> {
         let result = match unit {
             IntervalUnit::Century => {
                 let months_int = amount.integer.mul_checked(100)?.mul_checked(12)?;
@@ -991,7 +1050,7 @@ impl Interval {
                 let days = days.try_into().map_err(|_| {
                     ArrowError::ParseError(format!(
                         "Unable to represent {} months as days in a signed 32-bit integer",
-                        &amount.frac / 10_i64.pow(INTERVAL_PRECISION)
+                        amount.frac / 10_i64.pow(INTERVAL_PRECISION)
                     ))
                 })?;
 
@@ -1046,6 +1105,7 @@ impl Interval {
             IntervalUnit::Minute => {
                 let nanos_int = amount.integer.mul_checked(NANOS_PER_MINUTE)?;
                 let nanos_frac = amount.frac * 6 / 10_i64.pow(INTERVAL_PRECISION - 10);
+
                 let nanos = nanos_int.add_checked(nanos_frac)?;
 
                 Interval::new(self.months, self.days, self.nanos.add_checked(nanos)?)
@@ -1084,488 +1144,6 @@ impl Interval {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct FixedPointNumber {
-    fixed: i64,
-    log_scale: i32,
-}
-
-impl FixedPointNumber {
-    fn new(fixed: i64, log_scale: i32) -> Self {
-        // while the fixed part is divisible by ten, divide by 10 and subtract from the log scale
-        let mut fixed = fixed;
-        let mut log_scale = log_scale;
-
-        // compact non-zero integers divisible by 10
-        while fixed != 0 && fixed % 10 == 0 {
-            fixed /= 10;
-            log_scale += 1;
-        }
-
-        Self { fixed, log_scale }
-    }
-
-    fn is_integer(&self) -> bool {
-        // assumes self is compacted
-        self.log_scale >= 0
-    }
-
-    /// Aligns the higher-scale fixed point number to match the scale of the lower-scale fixed number.
-    /// This prepares both numbers for addition and subtraction, which both use FixedPointNumber::new to compact the result.
-    fn align(
-        lhs: &FixedPointNumber,
-        rhs: &FixedPointNumber,
-    ) -> (FixedPointNumber, FixedPointNumber) {
-        match lhs.log_scale.cmp(&rhs.log_scale) {
-            Ordering::Less => {
-                let fixed =
-                    rhs.fixed * 10_i64.pow((rhs.log_scale - lhs.log_scale) as u32);
-                let log_scale = lhs.log_scale;
-
-                let rhs = FixedPointNumber { fixed, log_scale };
-
-                (*lhs, rhs)
-            }
-            Ordering::Greater => {
-                let fixed =
-                    lhs.fixed * 10_i64.pow((lhs.log_scale - rhs.log_scale) as u32);
-                let log_scale = rhs.log_scale;
-
-                let lhs = FixedPointNumber { fixed, log_scale };
-
-                (lhs, *rhs)
-            }
-            Ordering::Equal => (*lhs, *rhs),
-        }
-    }
-
-    pub fn trunc(&self) -> FixedPointNumber {
-        // assumes self is compacted
-        if self.is_integer() {
-            return *self;
-        }
-
-        let inv_scale = 10i64.pow(self.log_scale.unsigned_abs());
-
-        // if the fixed part is less than the inverse scale, the integer part is zero
-        if self.fixed.abs() < inv_scale {
-            return Self::default();
-        }
-
-        let fixed = if self.fixed.is_negative() {
-            -self.fixed.abs().div_euclid(inv_scale)
-        } else {
-            self.fixed.div_euclid(inv_scale)
-        };
-
-        Self::new(fixed, 0)
-    }
-
-    pub fn fract(&self) -> FixedPointNumber {
-        if self.is_integer() {
-            return FixedPointNumber::default();
-        }
-
-        let inv_scale = 10i64.pow(self.log_scale.unsigned_abs());
-
-        let fixed = if self.fixed.is_negative() {
-            -self.fixed.abs().rem_euclid(inv_scale)
-        } else {
-            self.fixed.rem_euclid(inv_scale)
-        };
-
-        Self::new(fixed, self.log_scale)
-    }
-}
-
-impl FromStr for FixedPointNumber {
-    type Err = ArrowError;
-
-    fn from_str(s: &str) -> Result<Self, ArrowError> {
-        let mut parts = s.trim().split('.');
-
-        let integer = parts.next();
-        let fractional = parts.next();
-
-        let combined = match (integer, fractional) {
-            (Some(integer), None) => Ok(integer.trim().to_string()),
-            (Some(integer), Some(fractional)) => {
-                Ok(format!("{}{}", integer.trim(), fractional.trim()))
-            }
-            (None, _) => Err(ArrowError::ParseError(format!(
-                "Failed to parse number: \"{s}\""
-            ))),
-        }?;
-
-        let fixed = i64::from_str(&combined).map_err(|_| {
-            ArrowError::ParseError(format!("Failed to parse number: \"{s}\""))
-        })?;
-
-        let log_scale = match fractional {
-            Some(fractional) => -(fractional.len() as i32),
-            None => 0i32,
-        };
-
-        Ok(Self::new(fixed, log_scale))
-    }
-}
-
-impl Add<FixedPointNumber> for FixedPointNumber {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        let (lhs, rhs) = FixedPointNumber::align(&self, &rhs);
-
-        let fixed = lhs.fixed + rhs.fixed;
-        let log_scale = lhs.log_scale;
-
-        Self::new(fixed, log_scale)
-    }
-}
-
-impl Add<i64> for FixedPointNumber {
-    type Output = Self;
-
-    fn add(self, rhs: i64) -> Self::Output {
-        let rhs = FixedPointNumber::from(rhs);
-
-        self + rhs
-    }
-}
-
-impl Add<f64> for FixedPointNumber {
-    type Output = Self;
-
-    fn add(self, rhs: f64) -> Self::Output {
-        let rhs = FixedPointNumber::from(rhs);
-
-        self + rhs
-    }
-}
-
-impl CheckedAdd for FixedPointNumber {
-    fn checked_add(&self, rhs: &Self) -> Option<Self> {
-        let (lhs, rhs) = FixedPointNumber::align(self, rhs);
-
-        let fixed = lhs.fixed.checked_add(rhs.fixed)?;
-        let log_scale = lhs.log_scale;
-
-        Some(Self::new(fixed, log_scale))
-    }
-}
-
-impl Sub<FixedPointNumber> for FixedPointNumber {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        let (lhs, rhs) = FixedPointNumber::align(&self, &rhs);
-
-        let fixed = lhs.fixed - rhs.fixed;
-        let log_scale = lhs.log_scale;
-
-        Self::new(fixed, log_scale)
-    }
-}
-
-impl Sub<i64> for FixedPointNumber {
-    type Output = Self;
-
-    fn sub(self, rhs: i64) -> Self::Output {
-        let rhs = FixedPointNumber::from(rhs);
-
-        self - rhs
-    }
-}
-
-impl Mul<FixedPointNumber> for FixedPointNumber {
-    type Output = Self;
-
-    fn mul(self, rhs: Self) -> Self::Output {
-        let fixed = self.fixed * rhs.fixed;
-        let log_scale = self.log_scale + rhs.log_scale;
-
-        Self::new(fixed, log_scale)
-    }
-}
-
-impl Mul<i64> for FixedPointNumber {
-    type Output = Self;
-
-    fn mul(self, rhs: i64) -> Self::Output {
-        let rhs = FixedPointNumber::from(rhs);
-
-        self * rhs
-    }
-}
-
-impl Mul<f64> for FixedPointNumber {
-    type Output = Self;
-
-    fn mul(self, rhs: f64) -> Self::Output {
-        let rhs = FixedPointNumber::from(rhs);
-
-        self * rhs
-    }
-}
-
-impl CheckedMul for FixedPointNumber {
-    fn checked_mul(&self, rhs: &Self) -> Option<Self> {
-        let fixed = self.fixed.checked_mul(rhs.fixed);
-        let log_scale = self.log_scale.checked_add(rhs.log_scale);
-
-        match (fixed, log_scale) {
-            (Some(fixed), Some(log_scale)) => Some(Self::new(fixed, log_scale)),
-            _ => None,
-        }
-    }
-}
-
-impl From<i64> for FixedPointNumber {
-    fn from(value: i64) -> Self {
-        Self::new(value, 0)
-    }
-}
-
-impl From<f64> for FixedPointNumber {
-    fn from(value: f64) -> Self {
-        let mut fixed = value;
-        let mut log_scale = 0;
-
-        while fixed != fixed.round() {
-            fixed *= 10_f64;
-            log_scale -= 1;
-        }
-
-        Self::new(fixed as i64, log_scale)
-    }
-}
-
-impl From<FixedPointNumber> for f64 {
-    fn from(val: FixedPointNumber) -> Self {
-        if val.is_integer() {
-            let scale = 10_i64.pow(val.log_scale as u32);
-            (val.fixed * scale) as f64
-        } else {
-            let scale = 10_f64.powi(val.log_scale);
-            val.fixed as f64 * scale
-        }
-    }
-}
-
-impl From<FixedPointNumber> for i64 {
-    fn from(val: FixedPointNumber) -> Self {
-        if val.is_integer() {
-            let scale = 10_i64.pow(val.log_scale as u32);
-            val.fixed * scale
-        } else {
-            let scale = 10_f64.powi(val.log_scale);
-            (val.fixed as f64 * scale).round() as i64
-        }
-    }
-}
-
-impl From<FixedPointNumber> for i32 {
-    fn from(val: FixedPointNumber) -> Self {
-        i64::from(val) as i32
-    }
-}
-
-impl Display for FixedPointNumber {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.is_integer() {
-            write!(f, "{}", i64::from(*self))
-        } else {
-            write!(f, "{}", f64::from(*self))
-        }
-    }
-}
-
-type IntervalComponent = (FixedPointNumber, IntervalUnit);
-
-#[derive(Default)]
-struct FixedMonthDayNano(FixedPointNumber, FixedPointNumber, FixedPointNumber);
-
-impl FixedMonthDayNano {
-    fn new(
-        months: FixedPointNumber,
-        days: FixedPointNumber,
-        nanos: FixedPointNumber,
-    ) -> Self {
-        Self(months, days, nanos)
-    }
-
-    fn align(&self) -> Self {
-        let Self(months, days, nanos) = self;
-        let months = *months;
-        let days = *days;
-        let nanos = *nanos;
-
-        // Convert fractional part of months to days (not supported by Arrow types, but anyway)
-        let days = days + months.fract() * 30;
-
-        // Convert fractional part of days to nanos
-        let nanos = nanos + days.fract() * 24 * SECONDS_PER_HOUR * NANOS_PER_SECOND;
-
-        FixedMonthDayNano(months.trunc(), days.trunc(), nanos)
-    }
-}
-
-impl TryFrom<IntervalComponent> for FixedMonthDayNano {
-    type Error = ArrowError;
-
-    fn try_from(interval: IntervalComponent) -> Result<Self, Self::Error> {
-        let (amount, unit) = interval;
-
-        let result =
-            match unit {
-                IntervalUnit::Century => {
-                    let scale = 1200;
-                    let months = amount.checked_mul(&scale.into()).ok_or(
-                        ArrowError::ParseError(format!(
-                            "Overflow converting {amount} centuries to months"
-                        )),
-                    )?;
-
-                    FixedMonthDayNano::new(months, 0.into(), 0.into())
-                }
-                IntervalUnit::Decade => {
-                    let scale = 120;
-                    let months = amount.checked_mul(&scale.into()).ok_or(
-                        ArrowError::ParseError(format!(
-                            "Overflow converting {amount} decades to months"
-                        )),
-                    )?;
-
-                    FixedMonthDayNano::new(months, 0.into(), 0.into())
-                }
-                IntervalUnit::Year => {
-                    let scale = 12;
-                    let months = amount.checked_mul(&scale.into()).ok_or(
-                        ArrowError::ParseError(format!(
-                            "Overflow converting {amount} years to months"
-                        )),
-                    )?;
-
-                    FixedMonthDayNano::new(months, 0.into(), 0.into())
-                }
-                IntervalUnit::Month => FixedMonthDayNano::new(amount, 0.into(), 0.into()),
-                IntervalUnit::Week => {
-                    let scale = 7;
-                    let days = amount.checked_mul(&scale.into()).ok_or(
-                        ArrowError::ParseError(format!(
-                            "Overflow converting {amount} weeks to days"
-                        )),
-                    )?;
-
-                    FixedMonthDayNano::new(0.into(), days, 0.into())
-                }
-                IntervalUnit::Day => FixedMonthDayNano::new(0.into(), amount, 0.into()),
-                IntervalUnit::Hour => {
-                    let scale = SECONDS_PER_HOUR * NANOS_PER_SECOND;
-                    let nanos = amount.checked_mul(&scale.into()).ok_or(
-                        ArrowError::ParseError(format!(
-                            "Overflow converting {amount} hours to nanoseconds"
-                        )),
-                    )?;
-
-                    FixedMonthDayNano::new(0.into(), 0.into(), nanos)
-                }
-                IntervalUnit::Minute => {
-                    let scale = 60 * NANOS_PER_SECOND;
-                    let nanos = amount.checked_mul(&scale.into()).ok_or(
-                        ArrowError::ParseError(format!(
-                            "Overflow converting {amount} minutes to nanoseconds"
-                        )),
-                    )?;
-
-                    FixedMonthDayNano::new(0.into(), 0.into(), nanos)
-                }
-                IntervalUnit::Second => {
-                    let scale = NANOS_PER_SECOND;
-                    let nanos = amount.checked_mul(&scale.into()).ok_or(
-                        ArrowError::ParseError(format!(
-                            "Overflow converting {amount} seconds to nanoseconds"
-                        )),
-                    )?;
-
-                    FixedMonthDayNano::new(0.into(), 0.into(), nanos)
-                }
-                IntervalUnit::Millisecond => {
-                    let scale = 1_000_000;
-                    let nanos = amount.checked_mul(&scale.into()).ok_or(
-                        ArrowError::ParseError(format!(
-                            "Overflow converting {amount} milliseconds to nanoseconds"
-                        )),
-                    )?;
-
-                    FixedMonthDayNano::new(0.into(), 0.into(), nanos)
-                }
-                IntervalUnit::Microsecond => {
-                    let scale = 1_000;
-                    let nanos = amount.checked_mul(&scale.into()).ok_or(
-                        ArrowError::ParseError(format!(
-                            "Overflow converting {amount} microseconds to nanoseconds"
-                        )),
-                    )?;
-
-                    FixedMonthDayNano::new(0.into(), 0.into(), nanos)
-                }
-                IntervalUnit::Nanosecond => {
-                    FixedMonthDayNano::new(0.into(), 0.into(), amount)
-                }
-            };
-
-        Ok(result.align())
-    }
-}
-
-impl TryInto<MonthDayNano> for FixedMonthDayNano {
-    type Error = ArrowError;
-
-    fn try_into(self) -> Result<MonthDayNano, Self::Error> {
-        let FixedMonthDayNano(months, days, nanos) = self;
-
-        let months = months.try_into().or(Err(ArrowError::ParseError(format!(
-            "Parsed interval field value out of range: {months} months {days} days {nanos} nanos"
-        ))))?;
-        let days = days.try_into().or(Err(ArrowError::ParseError(format!(
-            "Parsed interval field value out of range: {months} months {days} days {nanos} nanos"
-        ))))?;
-        let nanos = nanos.try_into().or(Err(ArrowError::ParseError(format!(
-            "Parsed interval field value out of range: {months} months {days} days {nanos} nanos"
-        ))))?;
-
-        Ok((months, days, nanos))
-    }
-}
-
-impl Add<FixedMonthDayNano> for FixedMonthDayNano {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        let months = self.0 + rhs.0;
-        let days = self.1 + rhs.1;
-        let nanos = self.2 + rhs.2;
-
-        FixedMonthDayNano::new(months, days, nanos)
-    }
-}
-
-impl CheckedAdd for FixedMonthDayNano {
-    fn checked_add(&self, rhs: &Self) -> Option<Self::Output> {
-        let months = self.0.checked_add(&rhs.0);
-        let days = self.1.checked_add(&rhs.1);
-        let nanos = self.2.checked_add(&rhs.2);
-
-        match (months, days, nanos) {
-            (Some(months), Some(days), Some(nanos)) => {
-                Some(FixedMonthDayNano::new(months, days, nanos))
-            }
-            _ => None,
-        }
-    }
-}
-
 struct IntervalParseConfig {
     /// The default unit to use if none is specified
     /// e.g. `INTERVAL 1` represents `INTERVAL 1 SECOND` when default_unit = IntervalType::Second
@@ -1582,7 +1160,7 @@ impl IntervalParseConfig {
 fn parse_interval_components(
     value: &str,
     config: &IntervalParseConfig,
-) -> Result<Vec<IntervalComponent>, ArrowError> {
+) -> Result<Vec<(IntervalAmount, IntervalUnit)>, ArrowError> {
     let parts = value.split_whitespace();
 
     let raw_amounts = parts.clone().step_by(2);
@@ -1590,7 +1168,7 @@ fn parse_interval_components(
 
     // parse amounts
     let (amounts, invalid_amounts) = raw_amounts
-        .map(FixedPointNumber::from_str)
+        .map(IntervalAmount::from_str)
         .partition::<Vec<_>, _>(Result::is_ok);
 
     // invalid amounts?
@@ -1617,16 +1195,6 @@ fn parse_interval_components(
     let amounts = amounts.into_iter().map(Result::unwrap).collect::<Vec<_>>();
     let units = units.into_iter().map(Result::unwrap).collect::<Vec<_>>();
 
-    // out-of-bounds amounts?
-    for amount in amounts.iter() {
-        let amount: f64 = (*amount).into();
-        if amount > (i64::MAX as f64) {
-            return Err(ArrowError::ParseError(format!(
-                "Interval field value out of range: {value:?}"
-            )));
-        }
-    }
-
     // if only an amount is specified, use the default unit
     if amounts.len() == 1 && units.is_empty() {
         return Ok(vec![(amounts[0], config.default_unit)]);
@@ -1647,32 +1215,6 @@ fn parse_interval_components(
     let result = amounts.iter().copied().zip(units.iter().copied());
 
     Ok(result.collect::<Vec<_>>())
-}
-
-/// parse string value to a triple of aligned months, days, nanos using the supplied configuration.
-fn parse_interval(
-    value: &str,
-    config: &IntervalParseConfig,
-) -> Result<MonthDayNano, ArrowError> {
-    let result =
-        parse_interval_components(value, config)?
-            .into_iter()
-            .map(FixedMonthDayNano::try_from)
-            .collect::<Result<Vec<_>, _>>()?
-            .iter()
-            .fold(
-                Ok(FixedMonthDayNano::default()),
-                |result, interval| match result {
-                    Ok(result) => {
-                        result.checked_add(interval).ok_or(ArrowError::ParseError(
-                            format!("Interval field value out of range: {value:?}"),
-                        ))
-                    }
-                    Err(e) => Err(e),
-                },
-            )?;
-
-    result.try_into()
 }
 
 #[cfg(test)]
@@ -2275,123 +1817,123 @@ mod tests {
         let config = IntervalParseConfig::new(IntervalUnit::Month);
 
         assert_eq!(
-            (1i32, 0i32, 0i64),
-            parse_interval("1 month", &config).unwrap(),
+            Interval::new(1i32, 0i32, 0i64),
+            Interval::parse("1 month", &config).unwrap(),
         );
 
         assert_eq!(
-            (2i32, 0i32, 0i64),
-            parse_interval("2 month", &config).unwrap(),
+            Interval::new(2i32, 0i32, 0i64),
+            Interval::parse("2 month", &config).unwrap(),
         );
 
         assert_eq!(
-            (-1i32, -18i32, -(NANOS_PER_DAY / 5) as i64),
-            parse_interval("-1.5 months -3.2 days", &config).unwrap(),
+            Interval::new(-1i32, -18i32, -(NANOS_PER_DAY / 5) as i64),
+            Interval::parse("-1.5 months -3.2 days", &config).unwrap(),
         );
 
         assert_eq!(
-            (2i32, 10i32, 9 * NANOS_PER_HOUR),
-            parse_interval("2.1 months 7.25 days 3 hours", &config).unwrap(),
+            Interval::new(2i32, 10i32, 9 * NANOS_PER_HOUR),
+            Interval::parse("2.1 months 7.25 days 3 hours", &config).unwrap(),
         );
 
         assert_eq!(
-            parse_interval("1 centurys 1 month", &config)
+            Interval::parse("1 centurys 1 month", &config)
                 .unwrap_err()
                 .to_string(),
             r#"Parser error: Invalid input syntax for type interval: "1 centurys 1 month""#
         );
 
         assert_eq!(
-            (37i32, 0i32, 0i64),
-            parse_interval("3 year 1 month", &config).unwrap(),
+            Interval::new(37i32, 0i32, 0i64),
+            Interval::parse("3 year 1 month", &config).unwrap(),
         );
 
         assert_eq!(
-            (35i32, 0i32, 0i64),
-            parse_interval("3 year -1 month", &config).unwrap(),
+            Interval::new(35i32, 0i32, 0i64),
+            Interval::parse("3 year -1 month", &config).unwrap(),
         );
 
         assert_eq!(
-            (-37i32, 0i32, 0i64),
-            parse_interval("-3 year -1 month", &config).unwrap(),
+            Interval::new(-37i32, 0i32, 0i64),
+            Interval::parse("-3 year -1 month", &config).unwrap(),
         );
 
         assert_eq!(
-            (-35i32, 0i32, 0i64),
-            parse_interval("-3 year 1 month", &config).unwrap(),
+            Interval::new(-35i32, 0i32, 0i64),
+            Interval::parse("-3 year 1 month", &config).unwrap(),
         );
 
         assert_eq!(
-            (0i32, 5i32, 0i64),
-            parse_interval("5 days", &config).unwrap(),
+            Interval::new(0i32, 5i32, 0i64),
+            Interval::parse("5 days", &config).unwrap(),
         );
 
         assert_eq!(
-            (0i32, 7i32, 3 * NANOS_PER_HOUR),
-            parse_interval("7 days 3 hours", &config).unwrap(),
+            Interval::new(0i32, 7i32, 3 * NANOS_PER_HOUR),
+            Interval::parse("7 days 3 hours", &config).unwrap(),
         );
 
         assert_eq!(
-            (0i32, 7i32, 5 * NANOS_PER_MINUTE),
-            parse_interval("7 days 5 minutes", &config).unwrap(),
+            Interval::new(0i32, 7i32, 5 * NANOS_PER_MINUTE),
+            Interval::parse("7 days 5 minutes", &config).unwrap(),
         );
 
         assert_eq!(
-            (0i32, 7i32, -5 * NANOS_PER_MINUTE),
-            parse_interval("7 days -5 minutes", &config).unwrap(),
+            Interval::new(0i32, 7i32, -5 * NANOS_PER_MINUTE),
+            Interval::parse("7 days -5 minutes", &config).unwrap(),
         );
 
         assert_eq!(
-            (0i32, -7i32, 5 * NANOS_PER_HOUR),
-            parse_interval("-7 days 5 hours", &config).unwrap(),
+            Interval::new(0i32, -7i32, 5 * NANOS_PER_HOUR),
+            Interval::parse("-7 days 5 hours", &config).unwrap(),
         );
 
         assert_eq!(
-            (
+            Interval::new(
                 0i32,
                 -7i32,
                 -5 * NANOS_PER_HOUR - 5 * NANOS_PER_MINUTE - 5 * NANOS_PER_SECOND
             ),
-            parse_interval("-7 days -5 hours -5 minutes -5 seconds", &config).unwrap(),
+            Interval::parse("-7 days -5 hours -5 minutes -5 seconds", &config).unwrap(),
         );
 
         assert_eq!(
-            (12i32, 0i32, 25 * NANOS_PER_MILLIS),
-            parse_interval("1 year 25 millisecond", &config).unwrap(),
+            Interval::new(12i32, 0i32, 25 * NANOS_PER_MILLIS),
+            Interval::parse("1 year 25 millisecond", &config).unwrap(),
         );
 
         assert_eq!(
-            (
+            Interval::new(
                 12i32,
                 1i32,
                 (NANOS_PER_SECOND as f64 * 0.000000001_f64) as i64
             ),
-            parse_interval("1 year 1 day 0.000000001 seconds", &config).unwrap(),
+            Interval::parse("1 year 1 day 0.000000001 seconds", &config).unwrap(),
         );
 
         assert_eq!(
-            (12i32, 1i32, (NANOS_PER_MILLIS / 10) as i64),
-            parse_interval("1 year 1 day 0.1 milliseconds", &config).unwrap(),
+            Interval::new(12i32, 1i32, (NANOS_PER_MILLIS / 10) as i64),
+            Interval::parse("1 year 1 day 0.1 milliseconds", &config).unwrap(),
         );
 
         assert_eq!(
-            (12i32, 1i32, 1000i64),
-            parse_interval("1 year 1 day 1 microsecond", &config).unwrap(),
+            Interval::new(12i32, 1i32, 1000i64),
+            Interval::parse("1 year 1 day 1 microsecond", &config).unwrap(),
         );
 
         assert_eq!(
-            (12i32, 1i32, 1i64),
-            parse_interval("1 year 1 day 1 nanoseconds", &config).unwrap(),
+            Interval::new(12i32, 1i32, 1i64),
+            Interval::parse("1 year 1 day 1 nanoseconds", &config).unwrap(),
         );
 
         assert_eq!(
-            (1i32, 0i32, -NANOS_PER_SECOND),
-            parse_interval("1 month -1 second", &config).unwrap(),
+            Interval::new(1i32, 0i32, -NANOS_PER_SECOND),
+            Interval::parse("1 month -1 second", &config).unwrap(),
         );
 
         assert_eq!(
-            (-13i32, -8i32, (-NANOS_PER_HOUR - NANOS_PER_MINUTE - NANOS_PER_SECOND - (1.11_f64 * NANOS_PER_MILLIS as f64) as i64) as i64),
-            parse_interval("-1 year -1 month -1 week -1 day -1 hour -1 minute -1 second -1.11 millisecond", &config).unwrap(),
+            Interval::new(-13i32, -8i32, (-NANOS_PER_HOUR - NANOS_PER_MINUTE - NANOS_PER_SECOND - (1.11_f64 * NANOS_PER_MILLIS as f64) as i64) as i64),
+            Interval::parse("-1 year -1 month -1 week -1 day -1 hour -1 minute -1 second -1.11 millisecond", &config).unwrap(),
         );
     }
 
@@ -2399,7 +1941,7 @@ mod tests {
     fn test_duplicate_interval_type() {
         let config = IntervalParseConfig::new(IntervalUnit::Month);
 
-        let err = parse_interval("1 month 1 second 1 second", &config)
+        let err = Interval::parse("1 month 1 second 1 second", &config)
             .expect_err("parsing interval should have failed");
         assert_eq!(
             r#"ParseError("Invalid input syntax for type interval: \"1 month 1 second 1 second\". Repeated type 'second'")"#,
@@ -2407,7 +1949,7 @@ mod tests {
         );
 
         // test with singular and plural forms
-        let err = parse_interval("1 century 2 centuries", &config)
+        let err = Interval::parse("1 century 2 centuries", &config)
             .expect_err("parsing interval should have failed");
         assert_eq!(
             r#"ParseError("Invalid input syntax for type interval: \"1 century 2 centuries\". Repeated type 'centuries'")"#,
@@ -2416,248 +1958,42 @@ mod tests {
     }
 
     #[test]
-    fn test_fixed_point_parsing() {
-        // basic parsing
-        let result = FixedPointNumber::from_str("123.123").unwrap();
-        let expected = FixedPointNumber {
-            fixed: 123_123,
-            log_scale: -3,
-        };
+    fn test_interval_amount_parsing() {
+        // integer
+        let result = IntervalAmount::from_str("123").unwrap();
+        let expected = IntervalAmount::new(123, 0);
 
         assert_eq!(result, expected);
-        assert_eq!(f64::from(result), 123.123);
 
         // optional zero in integer part
-        let x = FixedPointNumber::from_str(".3").unwrap();
-        let y = FixedPointNumber::from_str("0.3").unwrap();
-        let expected = FixedPointNumber::new(3, -1);
+        let x = IntervalAmount::from_str(".3").unwrap();
+        let y = IntervalAmount::from_str("0.3").unwrap();
+        let expected = IntervalAmount::new(0, 3 * 10_i64.pow(INTERVAL_PRECISION - 1));
 
         assert_eq!(x, expected);
         assert_eq!(y, expected);
 
         // optional zero in fractional part
-        let x = FixedPointNumber::from_str("3.").unwrap();
-        let y = FixedPointNumber::from_str("3.0").unwrap();
-        let expected = FixedPointNumber::new(3, 0);
+        let x = IntervalAmount::from_str("3.").unwrap();
+        let y = IntervalAmount::from_str("3.0").unwrap();
+        let expected = IntervalAmount::new(3, 0);
 
         assert_eq!(x, expected);
         assert_eq!(y, expected);
 
         // negative numbers
-        let result = FixedPointNumber::from_str("-3.5").unwrap();
-        let expected = FixedPointNumber {
-            fixed: -35,
-            log_scale: -1,
-        };
+        let result = IntervalAmount::from_str("-3.5").unwrap();
+        let expected = IntervalAmount::new(-3, -5 * 10_i64.pow(INTERVAL_PRECISION - 1));
 
         assert_eq!(result, expected);
-        assert_eq!(f64::from(result), -3.5);
-    }
-
-    #[test]
-    fn test_fixed_point_conversion() {
-        // test converting from double
-        let result = FixedPointNumber::from(123.123);
-        let expected = FixedPointNumber {
-            fixed: 123_123,
-            log_scale: -3,
-        };
-
-        assert_eq!(result, expected);
-        assert_eq!(f64::from(result), 123.123);
-
-        // test converting from negative double
-        let result = FixedPointNumber::from(-123.123);
-        let expected = FixedPointNumber {
-            fixed: -123_123,
-            log_scale: -3,
-        };
-
-        assert_eq!(result, expected);
-        assert_eq!(f64::from(result), -123.123);
-
-        // test converting from i64
-        let result = FixedPointNumber::from(123);
-        let expected = FixedPointNumber {
-            fixed: 123,
-            log_scale: 0,
-        };
-
-        assert_eq!(result, expected);
-        assert_eq!(i64::from(result), 123);
-
-        // test converting from negative integer
-        let result = FixedPointNumber::from(-123);
-        let expected = FixedPointNumber {
-            fixed: -123,
-            log_scale: 0,
-        };
-
-        assert_eq!(result, expected);
-        assert_eq!(i64::from(result), -123);
-
-        // test compacting large integer
-        let result = FixedPointNumber::from(123_000_000_000_000_000);
-        let expected = FixedPointNumber {
-            fixed: 123,
-            log_scale: 15,
-        };
-
-        assert_eq!(result, expected);
-        assert_eq!(i64::from(result), 123_000_000_000_000_000);
-
-        // test compacting large negative integer
-        let result = FixedPointNumber::from(-123_000_000_000_000_000);
-        let expected = FixedPointNumber {
-            fixed: -123,
-            log_scale: 15,
-        };
-
-        assert_eq!(result, expected);
-        assert_eq!(i64::from(result), -123_000_000_000_000_000);
-    }
-
-    #[test]
-    fn test_fixed_point_align() {
-        // align two integers with different scales
-        let lhs = FixedPointNumber::from(-10);
-        let rhs = FixedPointNumber::from(10_000);
-
-        let lhs_expected = FixedPointNumber {
-            fixed: -1,
-            log_scale: 1,
-        };
-        let rhs_expected = FixedPointNumber {
-            fixed: 1,
-            log_scale: 4,
-        };
-
-        assert_eq!(lhs, lhs_expected);
-        assert_eq!(rhs, rhs_expected);
-
-        let (lhs_result, rhs_result) = FixedPointNumber::align(&lhs, &rhs);
-        let lhs_expected = FixedPointNumber {
-            fixed: -1,
-            log_scale: 1,
-        };
-        let rhs_expected = FixedPointNumber {
-            fixed: 1000,
-            log_scale: 1,
-        };
-
-        assert_eq!(lhs_result, lhs_expected);
-        assert_eq!(rhs_result, rhs_expected);
-
-        // align two doubles with different scales and different signs
-        let lhs = FixedPointNumber::from(-0.0001);
-        let rhs = FixedPointNumber::from(123.123);
-
-        let lhs_expected = FixedPointNumber {
-            fixed: -1,
-            log_scale: -4,
-        };
-        let rhs_expected = FixedPointNumber {
-            fixed: 123_123,
-            log_scale: -3,
-        };
-
-        assert_eq!(lhs, lhs_expected);
-        assert_eq!(rhs, rhs_expected);
-
-        let (lhs_result, rhs_result) = FixedPointNumber::align(&lhs, &rhs);
-        let lhs_expected = FixedPointNumber {
-            fixed: -1,
-            log_scale: -4,
-        };
-        let rhs_expected = FixedPointNumber {
-            fixed: 123_1230,
-            log_scale: -4,
-        };
-
-        assert_eq!(lhs_result, lhs_expected);
-        assert_eq!(rhs_result, rhs_expected);
-    }
-
-    #[test]
-    fn test_fixed_point_arith() {
-        // test adding integers with same scale
-        let lhs = FixedPointNumber::from(0.3);
-        let rhs = FixedPointNumber::from(0.7);
-        let result = lhs + rhs;
-        let expected = FixedPointNumber {
-            fixed: 1,
-            log_scale: 0,
-        };
-
-        assert_eq!(result, expected);
-        assert_eq!(f64::from(result), 1.0);
-
-        // test multiplying compacted integers
-        let lhs = FixedPointNumber::from(123_000);
-        let rhs = FixedPointNumber::from(123_000_000);
-        let result = lhs * rhs;
-        let expected = FixedPointNumber {
-            fixed: 15129,
-            log_scale: 9,
-        };
-
-        assert_eq!(result, expected);
-
-        // test multiplying doubles with same scale
-        let lhs = FixedPointNumber::from(1.3);
-        let rhs = FixedPointNumber::from(1.7);
-        let result = lhs * rhs;
-        let expected = FixedPointNumber {
-            fixed: 221,
-            log_scale: -2,
-        };
-
-        assert_eq!(result, expected);
-
-        // trunc & fract
-        let x = FixedPointNumber::from(123.45);
-        let (trunc, fract) = (x.trunc(), x.fract());
-        let y = trunc + fract;
-
-        assert_eq!(trunc, FixedPointNumber::from(123));
-        assert_eq!(fract, FixedPointNumber::from(0.45));
-        assert_eq!(x, y);
-
-        // trunc & fract w/ small double
-        let x = FixedPointNumber::new(123, -6);
-        let (trunc, fract) = (x.trunc(), x.fract());
-
-        assert_eq!(trunc, FixedPointNumber::from(0));
-        assert_eq!(fract, x);
-
-        // trunc & fract w/ large integer
-        let x = FixedPointNumber::from(123_456_789_000);
-        let (trunc, fract) = (x.trunc(), x.fract());
-
-        assert_eq!(trunc, x);
-        assert_eq!(fract, FixedPointNumber::from(0));
-
-        // trunc & fract w/ negative double
-        let x = FixedPointNumber::from(-1.5);
-        let (trunc, fract) = (x.trunc(), x.fract());
-
-        assert_eq!(trunc, FixedPointNumber::from(-1));
-        assert_eq!(fract, FixedPointNumber::new(-5, -1));
-
-        // trunc & fract w/ negative double
-        let x = FixedPointNumber::from(-18.2);
-        let (trunc, fract) = (x.trunc(), x.fract());
-
-        assert_eq!(trunc, FixedPointNumber::from(-18));
-        assert_eq!(fract, FixedPointNumber::new(-2, -1));
     }
 
     #[test]
     fn test_interval_precision() {
         let config = IntervalParseConfig::new(IntervalUnit::Month);
 
-        let result = parse_interval("100000.1 days", &config).unwrap();
-        let expected = (0_i32, 100_000_i32, (NANOS_PER_DAY / 10) as i64);
+        let result = Interval::parse("100000.1 days", &config).unwrap();
+        let expected = Interval::new(0_i32, 100_000_i32, (NANOS_PER_DAY / 10) as i64);
 
         assert_eq!(result, expected);
     }
@@ -2679,23 +2015,6 @@ mod tests {
         // mixed
         let result = Interval::new(-1, 35, -(3 * NANOS_PER_DAY + 400));
         let expected = Interval::new(0, 2, -400);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_interval_amount_compaction() {
-        // positive
-        let result =
-            IntervalAmount::new(1, (12 * 10_i64.pow(INTERVAL_PRECISION - 1)).into());
-        let expected = IntervalAmount::new(2, 2 * 10_i64.pow(INTERVAL_PRECISION - 1));
-
-        assert_eq!(result, expected);
-
-        // negative
-        let result =
-            IntervalAmount::new(-1, (12 * 10_i64.pow(INTERVAL_PRECISION - 1)).into());
-        let expected = IntervalAmount::new(-2, 2 * 10_i64.pow(INTERVAL_PRECISION - 1));
 
         assert_eq!(result, expected);
     }
@@ -2728,7 +2047,7 @@ mod tests {
 
         assert_eq!(result, expected);
 
-        // add 30.3 years (Postgres logic does not compute days/nanos when interval is larger than a month)
+        // add 30.3 years (reminder: Postgres logic does not spill to days/nanos when interval is larger than a month)
         let start = Interval::new(1, 2, 3);
         let expected = Interval::new(364, 2, 3);
 
@@ -2754,6 +2073,16 @@ mod tests {
 
         assert_eq!(result, expected);
 
+        // add -2 weeks
+        let start = Interval::new(1, 25, 3);
+        let expected = Interval::new(1, 11, 3);
+
+        let result = start
+            .add(IntervalAmount::new(-2, 0), IntervalUnit::Week)
+            .unwrap();
+
+        assert_eq!(result, expected);
+
         // add 2.2 days
         let start = Interval::new(12, 15, 3);
         let expected = Interval::new(12, 17, 3 + 17_280 * NANOS_PER_SECOND);
@@ -2775,6 +2104,19 @@ mod tests {
             .add(
                 IntervalAmount::new(12, (5 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
                 IntervalUnit::Hour,
+            )
+            .unwrap();
+
+        assert_eq!(result, expected);
+
+        // add -1.5 minutes
+        let start = Interval::new(0, 0, -3);
+        let expected = Interval::new(0, 0, -90_000_000_000 - 3);
+
+        let result = start
+            .add(
+                IntervalAmount::new(-1, (-5 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalUnit::Minute,
             )
             .unwrap();
 
