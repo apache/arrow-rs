@@ -190,15 +190,13 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
                 None => Ok(Value::Null),
             })
             .collect(),
-        DataType::FixedSizeList(_, _) => {
-            ListArray::from(as_fixed_size_list_array(array).to_owned())
-                .iter()
-                .map(|maybe_value| match maybe_value {
-                    Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
-                    None => Ok(Value::Null),
-                })
-                .collect()
-        }
+        DataType::FixedSizeList(_, _) => as_fixed_size_list_array(array)
+            .iter()
+            .map(|maybe_value| match maybe_value {
+                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                None => Ok(Value::Null),
+            })
+            .collect(),
         DataType::Struct(_) => {
             let jsonmaps = struct_array_to_jsonmap_array(array.as_struct())?;
             Ok(jsonmaps.into_iter().map(Value::Object).collect())
@@ -615,10 +613,12 @@ mod tests {
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
 
-    use crate::reader::*;
+    use serde_json::json;
+
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
-    use serde_json::json;
+
+    use crate::reader::*;
 
     use super::*;
 
