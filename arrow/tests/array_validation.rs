@@ -948,8 +948,7 @@ fn test_try_new_sliced_struct() {
 
     let struct_array = builder.finish();
     let struct_array_slice = struct_array.slice(1, 3);
-    let cloned = struct_array_slice.clone();
-    assert_eq!(&struct_array_slice, &cloned);
+    assert_eq!(struct_array_slice, struct_array_slice);
 }
 
 #[test]

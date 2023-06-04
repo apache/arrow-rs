@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`GetSchemasBuilder`] for building responses to [`CommandGetDbSchemas`] queries.
+//! [`GetDbSchemasBuilder`] for building responses to [`CommandGetDbSchemas`] queries.
 //!
 //! [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
 
@@ -33,26 +33,13 @@ use super::lexsort_to_indices;
 use crate::error::*;
 use crate::sql::CommandGetDbSchemas;
 
-/// Return the schema of the RecordBatch that will be returned from [`CommandGetDbSchemas`]
+/// A builder for a [`CommandGetDbSchemas`] response.
 ///
-/// [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
-pub fn get_db_schemas_schema() -> SchemaRef {
-    Arc::clone(&GET_DB_SCHEMAS_SCHEMA)
-}
-
-/// The schema for GetDbSchemas
-static GET_DB_SCHEMAS_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
-    Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, false),
-        Field::new("db_schema_name", DataType::Utf8, false),
-    ]))
-});
-
 /// Builds rows like this:
 ///
 /// * catalog_name: utf8,
 /// * db_schema_name: utf8,
-pub struct GetSchemasBuilder {
+pub struct GetDbSchemasBuilder {
     // Specifies the Catalog to search for the tables.
     // - An empty string retrieves those without a catalog.
     // - If omitted the catalog name is not used to narrow the search.
@@ -66,19 +53,20 @@ pub struct GetSchemasBuilder {
 }
 
 impl CommandGetDbSchemas {
-    pub fn into_builder(self) -> GetSchemasBuilder {
+    /// Create a builder suitable for constructing a response
+    pub fn into_builder(self) -> GetDbSchemasBuilder {
         self.into()
     }
 }
 
-impl From<CommandGetDbSchemas> for GetSchemasBuilder {
+impl From<CommandGetDbSchemas> for GetDbSchemasBuilder {
     fn from(value: CommandGetDbSchemas) -> Self {
         Self::new(value.catalog, value.db_schema_filter_pattern)
     }
 }
 
-impl GetSchemasBuilder {
-    /// Create a new instance of [`GetSchemasBuilder`]
+impl GetDbSchemasBuilder {
+    /// Create a new instance of [`GetDbSchemasBuilder`]
     ///
     /// # Parameters
     ///
@@ -118,6 +106,7 @@ impl GetSchemasBuilder {
 
     /// builds a `RecordBatch` with the correct schema for a `CommandGetDbSchemas` response
     pub fn build(self) -> Result<RecordBatch> {
+        let schema = self.schema();
         let Self {
             catalog_filter,
             db_schema_filter_pattern,
@@ -154,7 +143,7 @@ impl GetSchemasBuilder {
         }
 
         let batch = RecordBatch::try_new(
-            get_db_schemas_schema(),
+            schema,
             vec![
                 Arc::new(catalog_name) as ArrayRef,
                 Arc::new(db_schema_name) as ArrayRef,
@@ -176,9 +165,27 @@ impl GetSchemasBuilder {
             .map(|c| take(c, &indices, None))
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        Ok(RecordBatch::try_new(get_db_schemas_schema(), columns)?)
+        Ok(RecordBatch::try_new(filtered_batch.schema(), columns)?)
+    }
+
+    /// Return the schema of the RecordBatch that will be returned
+    /// from [`CommandGetDbSchemas`]
+    pub fn schema(&self) -> SchemaRef {
+        get_db_schemas_schema()
     }
 }
+
+fn get_db_schemas_schema() -> SchemaRef {
+    Arc::clone(&GET_DB_SCHEMAS_SCHEMA)
+}
+
+/// The schema for GetDbSchemas
+static GET_DB_SCHEMAS_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
+    Arc::new(Schema::new(vec![
+        Field::new("catalog_name", DataType::Utf8, false),
+        Field::new("db_schema_name", DataType::Utf8, false),
+    ]))
+});
 
 #[cfg(test)]
 mod tests {
@@ -207,7 +214,7 @@ mod tests {
     fn test_schemas_are_filtered() {
         let ref_batch = get_ref_batch();
 
-        let mut builder = GetSchemasBuilder::new(None::<String>, None::<String>);
+        let mut builder = GetDbSchemasBuilder::new(None::<String>, None::<String>);
         builder.append("a_catalog", "a_schema");
         builder.append("a_catalog", "b_schema");
         builder.append("b_catalog", "a_schema");
@@ -216,7 +223,7 @@ mod tests {
 
         assert_eq!(schema_batch, ref_batch);
 
-        let mut builder = GetSchemasBuilder::new(None::<String>, Some("a%"));
+        let mut builder = GetDbSchemasBuilder::new(None::<String>, Some("a%"));
         builder.append("a_catalog", "a_schema");
         builder.append("a_catalog", "b_schema");
         builder.append("b_catalog", "a_schema");
@@ -242,7 +249,7 @@ mod tests {
     fn test_schemas_are_sorted() {
         let ref_batch = get_ref_batch();
 
-        let mut builder = GetSchemasBuilder::new(None::<String>, None::<String>);
+        let mut builder = GetDbSchemasBuilder::new(None::<String>, None::<String>);
         builder.append("a_catalog", "b_schema");
         builder.append("b_catalog", "a_schema");
         builder.append("a_catalog", "a_schema");

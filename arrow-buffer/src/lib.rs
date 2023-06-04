@@ -21,6 +21,9 @@ pub mod alloc;
 pub mod buffer;
 pub use buffer::*;
 
+pub mod builder;
+pub use builder::*;
+
 mod bigint;
 mod bytes;
 mod native;

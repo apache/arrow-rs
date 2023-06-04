@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::types::*;
 use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
@@ -278,11 +278,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Builds the [`PrimitiveArray`] and reset this builder.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let nulls = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(self.values_builder.finish())
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
@@ -291,15 +291,12 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Builds the [`PrimitiveArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
+        let nulls = self.null_buffer_builder.finish_cloned();
         let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(values_buffer)
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
