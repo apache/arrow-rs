@@ -5650,7 +5650,7 @@ mod tests {
             vec![
                 Some("1 years 1 mons 0 days 0 hours 0 mins 0.00 secs"),
                 Some("2 years 7 mons 0 days 0 hours 0 mins 0.00 secs"),
-                None,
+                Some("0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"),
                 None,
                 None,
                 None,
@@ -5702,7 +5702,7 @@ mod tests {
             vec![
                 Some("0 years 13 mons 1 days 0 hours 0 mins 0.000000000 secs"),
                 None,
-                Some("0 years 31 mons 35 days 0 hours 0 mins 0.001400000 secs"),
+                Some("0 years 32 mons 5 days 0 hours 0 mins 0.001400000 secs"),
                 Some("0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs"),
                 Some("0 years 0 mons 0 days 0 hours 0 mins 8.000000000 secs"),
                 None,
@@ -5770,7 +5770,7 @@ mod tests {
             ))],
             IntervalUnit::DayTime,
             format!(
-                "Parser error: Overflow converting {} centuries to months",
+                "Compute error: Overflow happened on: {} * 100",
                 i64::MAX - 2
             )
         );
@@ -5782,10 +5782,7 @@ mod tests {
                 i64::MAX - 2
             ))],
             IntervalUnit::MonthDayNano,
-            format!(
-                "Parser error: Overflow converting {} years to months",
-                i64::MAX - 2
-            )
+            format!("Compute error: Overflow happened on: {} * 12", i64::MAX - 2)
         );
     }
 

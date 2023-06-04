@@ -910,7 +910,7 @@ impl Interval {
         let mut days = days;
         let mut nanos = nanos;
 
-        let nano_days = if nanos.is_positive() {
+        let nano_days = if nanos >= 0 {
             nanos.div_euclid(NANOS_PER_DAY)
         } else {
             -nanos.abs().div_euclid(NANOS_PER_DAY)
@@ -919,7 +919,7 @@ impl Interval {
         days += nano_days as i32;
         nanos -= nano_days * NANOS_PER_DAY;
 
-        let day_months = if days.is_positive() {
+        let day_months = if days >= 0 {
             days.div_euclid(30)
         } else {
             -days.abs().div_euclid(30)
@@ -947,14 +947,22 @@ impl Interval {
 
     fn to_day_time(&self) -> Result<(i32, i32), ArrowError> {
         let days = self.months.mul_checked(30)?.add_checked(self.days)?;
-        let millis = (self.nanos / 1_000_000).try_into().map_err(|_| {
-            ArrowError::InvalidArgumentError(format!(
-                "Unable to represent {} nanos as milliseconds in a signed 32-bit integer",
-                self.nanos
-            ))
-        })?;
 
-        Ok((days, millis))
+        match self.nanos {
+            nanos if nanos % NANOS_PER_MILLIS == 0 => {
+                let millis = (self.nanos / 1_000_000).try_into().map_err(|_| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Unable to represent {} nanos as milliseconds in a signed 32-bit integer",
+                        self.nanos
+                    ))
+                })?;
+
+                Ok((days, millis))
+            }
+            nanos => Err(ArrowError::InvalidArgumentError(format!(
+                "Unable to represent {nanos} as milliseconds"
+            ))),
+        }
     }
 
     fn to_month_day_nanos(&self) -> (i32, i32, i64) {
