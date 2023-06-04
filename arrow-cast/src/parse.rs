@@ -1834,7 +1834,7 @@ mod tests {
         );
 
         assert_eq!(
-            Interval::new(-1i32, -18i32, -(NANOS_PER_DAY / 5) as i64),
+            Interval::new(-1i32, -18i32, -(NANOS_PER_DAY / 5)),
             Interval::parse("-1.5 months -3.2 days", &config).unwrap(),
         );
 
@@ -1919,7 +1919,7 @@ mod tests {
         );
 
         assert_eq!(
-            Interval::new(12i32, 1i32, (NANOS_PER_MILLIS / 10) as i64),
+            Interval::new(12i32, 1i32, NANOS_PER_MILLIS / 10),
             Interval::parse("1 year 1 day 0.1 milliseconds", &config).unwrap(),
         );
 
@@ -1939,7 +1939,7 @@ mod tests {
         );
 
         assert_eq!(
-            Interval::new(-13i32, -8i32, (-NANOS_PER_HOUR - NANOS_PER_MINUTE - NANOS_PER_SECOND - (1.11_f64 * NANOS_PER_MILLIS as f64) as i64) as i64),
+            Interval::new(-13i32, -8i32, -NANOS_PER_HOUR - NANOS_PER_MINUTE - NANOS_PER_SECOND - (1.11_f64 * NANOS_PER_MILLIS as f64) as i64),
             Interval::parse("-1 year -1 month -1 week -1 day -1 hour -1 minute -1 second -1.11 millisecond", &config).unwrap(),
         );
     }
@@ -2000,7 +2000,7 @@ mod tests {
         let config = IntervalParseConfig::new(IntervalUnit::Month);
 
         let result = Interval::parse("100000.1 days", &config).unwrap();
-        let expected = Interval::new(0_i32, 100_000_i32, (NANOS_PER_DAY / 10) as i64);
+        let expected = Interval::new(0_i32, 100_000_i32, NANOS_PER_DAY / 10);
 
         assert_eq!(result, expected);
     }
@@ -2034,7 +2034,7 @@ mod tests {
 
         let result = start
             .add(
-                IntervalAmount::new(4, (1 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalAmount::new(4, 10_i64.pow(INTERVAL_PRECISION - 1)),
                 IntervalUnit::Century,
             )
             .unwrap();
@@ -2047,7 +2047,7 @@ mod tests {
 
         let result = start
             .add(
-                IntervalAmount::new(10, (25 * 10_i64.pow(INTERVAL_PRECISION - 2)).into()),
+                IntervalAmount::new(10, 25 * 10_i64.pow(INTERVAL_PRECISION - 2)),
                 IntervalUnit::Decade,
             )
             .unwrap();
@@ -2060,7 +2060,7 @@ mod tests {
 
         let result = start
             .add(
-                IntervalAmount::new(30, (3 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalAmount::new(30, 3 * 10_i64.pow(INTERVAL_PRECISION - 1)),
                 IntervalUnit::Year,
             )
             .unwrap();
@@ -2073,7 +2073,7 @@ mod tests {
 
         let result = start
             .add(
-                IntervalAmount::new(1, (5 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalAmount::new(1, 5 * 10_i64.pow(INTERVAL_PRECISION - 1)),
                 IntervalUnit::Month,
             )
             .unwrap();
@@ -2096,7 +2096,7 @@ mod tests {
 
         let result = start
             .add(
-                IntervalAmount::new(2, (2 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalAmount::new(2, 2 * 10_i64.pow(INTERVAL_PRECISION - 1)),
                 IntervalUnit::Day,
             )
             .unwrap();
@@ -2109,7 +2109,7 @@ mod tests {
 
         let result = start
             .add(
-                IntervalAmount::new(12, (5 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalAmount::new(12, 5 * 10_i64.pow(INTERVAL_PRECISION - 1)),
                 IntervalUnit::Hour,
             )
             .unwrap();
@@ -2122,7 +2122,7 @@ mod tests {
 
         let result = start
             .add(
-                IntervalAmount::new(-1, (-5 * 10_i64.pow(INTERVAL_PRECISION - 1)).into()),
+                IntervalAmount::new(-1, -5 * 10_i64.pow(INTERVAL_PRECISION - 1)),
                 IntervalUnit::Minute,
             )
             .unwrap();
