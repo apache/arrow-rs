@@ -753,7 +753,7 @@ const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
 const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
 #[rustfmt::skip]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 #[repr(u16)]
 enum IntervalUnit {
     Century     = 0b_0000_0000_0001,
@@ -839,7 +839,7 @@ impl FromStr for IntervalAmount {
                 // scale fractional part by interval precision
                 let frac = frac_s * 10_i64.pow(INTERVAL_PRECISION - frac.len() as u32);
 
-                // propogate the sign of the integer part to the fractional part
+                // propagate the sign of the integer part to the fractional part
                 let frac = if integer < 0 { -frac } else { frac };
 
                 let result = Self { integer, frac };
@@ -903,8 +903,7 @@ struct Interval {
 
 impl Interval {
     /// Create a new interval from the given month/day/nano components.
-    /// Since interval arithmetic spills fractional months to days and fractional days to nanos,
-    /// it is possible that a large amount of days and nanos can accrue over repeated arithemetic operations.
+    /// Since interval arithmetic spills fractional months to days and fractional days to nanos, it is possible that a large amount of days and nanos can accrue over repeated arithemetic operations.
     /// The logic in this constructor provides a counter-balance for this behavior by compacting the interval, i.e. producing a representation with the smallest number of nanos & days possible.
     fn new(months: i32, days: i32, nanos: i64) -> Self {
         let mut months = months;
@@ -962,7 +961,7 @@ impl Interval {
         (self.months, self.days, self.nanos)
     }
 
-    /// parse string value to a triple of aligned months, days, nanos using the supplied configuration.
+    /// Parse string value in traditional Postgres format (e.g. 1 year 2 months 3 days 4 hours 5 minutes 6 seconds)
     fn parse(value: &str, config: &IntervalParseConfig) -> Result<Self, ArrowError> {
         let components = parse_interval_components(value, config)?;
 
