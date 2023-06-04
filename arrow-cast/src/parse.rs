@@ -21,6 +21,7 @@ use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
+use half::f16;
 use std::str::FromStr;
 
 /// Parse nanoseconds from the first `N` values in digits, subtracting the offset `O`
@@ -433,6 +434,14 @@ pub trait Parser: ArrowPrimitiveType {
 
     fn parse_formatted(string: &str, _format: &str) -> Option<Self::Native> {
         Self::parse(string)
+    }
+}
+
+impl Parser for Float16Type {
+    fn parse(string: &str) -> Option<f16> {
+        lexical_core::parse(string.as_bytes())
+            .ok()
+            .map(f16::from_f32)
     }
 }
 
