@@ -293,7 +293,7 @@ pub struct GetXdbcTypeInfoBuilder<'a> {
 
 impl CommandGetXdbcTypeInfo {
     /// Create a builder suitable for constructing a response
-    pub fn into_builder<'a>(self, infos: &'a XdbcTypeInfoData) -> GetXdbcTypeInfoBuilder {
+    pub fn into_builder(self, infos: &XdbcTypeInfoData) -> GetXdbcTypeInfoBuilder {
         GetXdbcTypeInfoBuilder {
             data_type: self.data_type,
             infos,
