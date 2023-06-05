@@ -403,7 +403,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
-            .try_with_schema(INSTANCE_XBDC_DATA.schema().as_ref())
+            .try_with_schema(query.into_builder(&INSTANCE_XBDC_DATA).schema().as_ref())
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);
@@ -585,9 +585,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         // create a builder with pre-defined Xdbc data:
         let builder = query.into_builder(&INSTANCE_XBDC_DATA);
+        let schema = builder.schema();
         let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
-            .with_schema(INSTANCE_XBDC_DATA.schema())
+            .with_schema(schema)
             .build(futures::stream::once(async { batch }))
             .map_err(Status::from);
         Ok(Response::new(Box::pin(stream)))

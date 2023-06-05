@@ -64,12 +64,6 @@ pub struct XdbcTypeInfo {
     pub interval_precision: Option<i32>,
 }
 
-impl From<CommandGetXdbcTypeInfo> for Option<i32> {
-    fn from(value: CommandGetXdbcTypeInfo) -> Self {
-        value.data_type
-    }
-}
-
 /// Helper to create [`CommandGetXdbcTypeInfo`] responses.
 ///
 /// [`CommandGetXdbcTypeInfo`] are metadata requests used by a Flight SQL
