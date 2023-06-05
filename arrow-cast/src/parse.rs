@@ -758,6 +758,7 @@ const NANOS_PER_MILLIS: i64 = 1_000_000;
 const NANOS_PER_SECOND: i64 = 1_000 * NANOS_PER_MILLIS;
 const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
 const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
+#[cfg(test)]
 const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
 #[rustfmt::skip]
@@ -830,7 +831,8 @@ impl FromStr for IntervalAmount {
             Some((integer, frac))
                 if frac.len() <= INTERVAL_PRECISION as usize
                     && !integer.is_empty()
-                    && !frac.is_empty() =>
+                    && !frac.is_empty()
+                    && !frac.starts_with('-') =>
             {
                 let integer = integer.parse::<i64>().map_err(|_| {
                     ArrowError::ParseError(format!(
@@ -838,14 +840,15 @@ impl FromStr for IntervalAmount {
                     ))
                 })?;
 
-                let frac_s = frac.parse::<i64>().map_err(|_| {
+                let frac_unscaled = frac.parse::<i64>().map_err(|_| {
                     ArrowError::ParseError(format!(
                         "Failed to parse {s} as interval amount"
                     ))
                 })?;
 
                 // scale fractional part by interval precision
-                let frac = frac_s * 10_i64.pow(INTERVAL_PRECISION - frac.len() as u32);
+                let frac =
+                    frac_unscaled * 10_i64.pow(INTERVAL_PRECISION - frac.len() as u32);
 
                 // propagate the sign of the integer part to the fractional part
                 let frac = if integer < 0 { -frac } else { frac };
@@ -854,35 +857,9 @@ impl FromStr for IntervalAmount {
 
                 Ok(result)
             }
-            Some((integer, frac)) if !integer.is_empty() && frac.is_empty() => {
-                let integer = integer.parse::<i64>().map_err(|_| {
-                    ArrowError::ParseError(format!(
-                        "Failed to parse {s} as interval amount"
-                    ))
-                })?;
-
-                let result = Self { integer, frac: 0 };
-
-                Ok(result)
-            }
-            Some((integer, frac))
-                if frac.len() <= INTERVAL_PRECISION as usize
-                    && integer.is_empty()
-                    && !frac.is_empty() =>
-            {
-                let frac_s = frac.parse::<i64>().map_err(|_| {
-                    ArrowError::ParseError(format!(
-                        "Failed to parse {s} as interval amount"
-                    ))
-                })?;
-
-                // scale fractional part by interval precision
-                let frac = frac_s * 10_i64.pow(INTERVAL_PRECISION - frac.len() as u32);
-
-                let result = Self { integer: 0, frac };
-
-                Ok(result)
-            }
+            Some((_, frac)) if frac.starts_with('-') => Err(ArrowError::ParseError(
+                format!("Failed to parse {s} as interval amount"),
+            )),
             Some((_, frac)) if frac.len() > INTERVAL_PRECISION as usize => {
                 Err(ArrowError::ParseError(format!(
                     "{s} exceeds the precision available for interval amount"
@@ -910,32 +887,7 @@ struct Interval {
 }
 
 impl Interval {
-    /// Create a new interval from the given month/day/nano components.
-    /// Since interval arithmetic spills fractional months to days and fractional days to nanos, it is possible that a large amount of days and nanos can accrue over repeated arithemetic operations.
-    /// The logic in this constructor provides a counter-balance for this behavior by compacting the interval, i.e. producing a representation with the smallest number of nanos & days possible.
     fn new(months: i32, days: i32, nanos: i64) -> Self {
-        let mut months = months;
-        let mut days = days;
-        let mut nanos = nanos;
-
-        let nano_days = if nanos >= 0 {
-            nanos.div_euclid(NANOS_PER_DAY)
-        } else {
-            -nanos.abs().div_euclid(NANOS_PER_DAY)
-        };
-
-        days += nano_days as i32;
-        nanos -= nano_days * NANOS_PER_DAY;
-
-        let day_months = if days >= 0 {
-            days.div_euclid(30)
-        } else {
-            -days.abs().div_euclid(30)
-        };
-
-        months += day_months;
-        days -= day_months * 30;
-
         Self {
             months,
             days,
@@ -1980,27 +1932,29 @@ mod tests {
 
         assert_eq!(result, expected);
 
-        // optional zero in integer part
-        let x = IntervalAmount::from_str(".3").unwrap();
-        let y = IntervalAmount::from_str("0.3").unwrap();
+        // positive w/ fractional
+        let result = IntervalAmount::from_str("0.3").unwrap();
         let expected = IntervalAmount::new(0, 3 * 10_i64.pow(INTERVAL_PRECISION - 1));
 
-        assert_eq!(x, expected);
-        assert_eq!(y, expected);
+        assert_eq!(result, expected);
 
-        // optional zero in fractional part
-        let x = IntervalAmount::from_str("3.").unwrap();
-        let y = IntervalAmount::from_str("3.0").unwrap();
-        let expected = IntervalAmount::new(3, 0);
-
-        assert_eq!(x, expected);
-        assert_eq!(y, expected);
-
-        // negative numbers
+        // negative w/ fractional
         let result = IntervalAmount::from_str("-3.5").unwrap();
         let expected = IntervalAmount::new(-3, -5 * 10_i64.pow(INTERVAL_PRECISION - 1));
 
         assert_eq!(result, expected);
+
+        // invalid: missing integer
+        let result = IntervalAmount::from_str(".5");
+        assert!(result.is_err());
+
+        // invalid: missing fractional
+        let result = IntervalAmount::from_str("3.");
+        assert!(result.is_err());
+
+        // invalid: sign in fractional
+        let result = IntervalAmount::from_str("3.-5");
+        assert!(result.is_err());
     }
 
     #[test]
@@ -2009,27 +1963,6 @@ mod tests {
 
         let result = Interval::parse("100000.1 days", &config).unwrap();
         let expected = Interval::new(0_i32, 100_000_i32, NANOS_PER_DAY / 10);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_interval_compaction() {
-        // positive
-        let result = Interval::new(1, 35, 3 * NANOS_PER_DAY + 400);
-        let expected = Interval::new(2, 8, 400);
-
-        assert_eq!(result, expected);
-
-        // negative
-        let result = Interval::new(-1, -35, -(3 * NANOS_PER_DAY + 400));
-        let expected = Interval::new(-2, -8, -400);
-
-        assert_eq!(result, expected);
-
-        // mixed
-        let result = Interval::new(-1, 35, -(3 * NANOS_PER_DAY + 400));
-        let expected = Interval::new(0, 2, -400);
 
         assert_eq!(result, expected);
     }
