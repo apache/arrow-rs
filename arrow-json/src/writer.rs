@@ -191,6 +191,13 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
                 None => Ok(Value::Null),
             })
             .collect(),
+        DataType::FixedSizeList(_, _) => as_fixed_size_list_array(array)
+            .iter()
+            .map(|maybe_value| match maybe_value {
+                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                None => Ok(Value::Null),
+            })
+            .collect(),
         DataType::Struct(_) => {
             let jsonmaps = struct_array_to_jsonmap_array(array.as_struct())?;
             Ok(jsonmaps.into_iter().map(Value::Object).collect())
@@ -610,10 +617,12 @@ mod tests {
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
 
-    use crate::reader::*;
+    use serde_json::json;
+
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
-    use serde_json::json;
+
+    use crate::reader::*;
 
     use super::*;
 
@@ -1487,5 +1496,28 @@ mod tests {
             }
             assert_eq!(serde_json::from_str::<Value>(r).unwrap(), expected_json,);
         }
+    }
+
+    #[test]
+    fn test_array_to_json_array_for_fixed_size_list_array() {
+        let expected_json = vec![
+            json!([0, 1, 2]),
+            json!(null),
+            json!([3, null, 5]),
+            json!([6, 7, 45]),
+        ];
+
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(6), Some(7), Some(45)]),
+        ];
+
+        let list_array =
+            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(data, 3);
+        let list_array = Arc::new(list_array) as ArrayRef;
+
+        assert_eq!(array_to_json_array(&list_array).unwrap(), expected_json);
     }
 }
