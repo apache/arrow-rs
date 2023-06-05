@@ -202,6 +202,13 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
             let jsonmaps = struct_array_to_jsonmap_array(array.as_struct())?;
             Ok(jsonmaps.into_iter().map(Value::Object).collect())
         }
+        DataType::Map(_, _) => as_map_array(array)
+            .iter()
+            .map(|maybe_value| match maybe_value {
+                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                None => Ok(Value::Null),
+            })
+            .collect(),
         t => Err(ArrowError::JsonError(format!(
             "data type {t:?} not supported"
         ))),
@@ -618,6 +625,7 @@ mod tests {
     use std::sync::Arc;
 
     use serde_json::json;
+    use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
 
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
@@ -1519,5 +1527,53 @@ mod tests {
         let list_array = Arc::new(list_array) as ArrayRef;
 
         assert_eq!(array_to_json_array(&list_array).unwrap(), expected_json);
+    }
+
+    #[test]
+    fn test_array_to_json_array_for_map_array() {
+        let expected_json = serde_json::from_value::<Vec<Value>>(json!([
+            [
+                {
+                    "keys": "joe",
+                    "values": 1
+                }
+            ],
+            [
+                {
+                    "keys": "blogs",
+                    "values": 2
+                },
+                {
+                    "keys": "foo",
+                    "values": 4
+                }
+            ],
+            [],
+            null
+        ]))
+            .unwrap();
+
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::with_capacity(4);
+
+        let mut builder = MapBuilder::new(None, string_builder, int_builder);
+
+        builder.keys().append_value("joe");
+        builder.values().append_value(1);
+        builder.append(true).unwrap();
+
+        builder.keys().append_value("blogs");
+        builder.values().append_value(2);
+        builder.keys().append_value("foo");
+        builder.values().append_value(4);
+        builder.append(true).unwrap();
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+
+        let array = builder.finish();
+
+        let map_array = Arc::new(array) as ArrayRef;
+
+        assert_eq!(array_to_json_array(&map_array).unwrap(), expected_json);
     }
 }
