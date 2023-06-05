@@ -145,7 +145,7 @@ impl Default for XdbcTypeInfoDataBuilder {
 /// let batch = info_list.record_batch(None);
 /// ```
 impl XdbcTypeInfoDataBuilder {
-    /// Create a new instance of [`XdbcTypeInfoListBuilder`].
+    /// Create a new instance of [`XdbcTypeInfoDataBuilder`].
     pub fn new() -> Self {
         Self { infos: Vec::new() }
     }
