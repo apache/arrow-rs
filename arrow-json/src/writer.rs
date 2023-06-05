@@ -94,6 +94,7 @@
 //! ```
 
 use std::iter;
+use std::sync::Arc;
 use std::{fmt::Debug, io::Write};
 
 use serde_json::map::Map as JsonMap;
@@ -205,7 +206,9 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
         DataType::Map(_, _) => as_map_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                Some(v) => Ok(Value::Array(array_to_json_array(
+                    &(Arc::new(v) as ArrayRef),
+                )?)),
                 None => Ok(Value::Null),
             })
             .collect(),
@@ -624,8 +627,8 @@ mod tests {
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
 
-    use serde_json::json;
     use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
+    use serde_json::json;
 
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
@@ -1551,7 +1554,7 @@ mod tests {
             [],
             null
         ]))
-            .unwrap();
+        .unwrap();
 
         let string_builder = StringBuilder::new();
         let int_builder = Int32Builder::with_capacity(4);

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::array::{get_offsets, print_long_array};
+use crate::iterator::MapArrayIter;
 use crate::{
     make_array, Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray,
 };
@@ -24,7 +25,6 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
-use crate::iterator::MapArrayIter;
 
 /// An array of key-value maps
 ///
@@ -293,14 +293,14 @@ impl Array for MapArray {
 }
 
 impl<'a> ArrayAccessor for &'a MapArray {
-    type Item = ArrayRef;
+    type Item = StructArray;
 
     fn value(&self, index: usize) -> Self::Item {
-        Arc::new(MapArray::value(self, index)) as ArrayRef
+        MapArray::value(self, index)
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        Arc::new(MapArray::value(self, index)) as ArrayRef
+        MapArray::value(self, index)
     }
 }
 
