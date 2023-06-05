@@ -18,10 +18,11 @@
 //! Helpers for [`CommandGetXdbcTypeInfo`] metadata requests.
 //!
 //! - [`XdbcTypeInfo`] - a typed struct that holds the xdbc info corresponding to expected schema.
-//! - [`XdbcTypeInfoListBuilder`] - a builder for collecting type infos
+//! - [`XdbcTypeInfoDataBuilder`] - a builder for collecting type infos
 //!   and building a conformant `RecordBatch`.
-//! - [`XdbcTypeInfoList`] - a helper type wrapping a `RecordBatch`
-//!   used for handling [`CommandGetXdbcTypeInfo`] requests.
+//! - [`XdbcTypeInfoData`] - a helper type wrapping a `RecordBatch`
+//!   used for storing xdbc server metadata.
+//! - [`GetXdbcTypeInfoBuilder`] - a builder for consructing [`CommandGetXdbcTypeInfo`] responses.
 //!
 use std::sync::Arc;
 
@@ -105,15 +106,15 @@ impl Default for XdbcTypeInfoDataBuilder {
     }
 }
 
-/// A builder for [`XdbcTypeInfoList`] which is used to create [`CommandGetXdbcTypeInfo`] responses.
+/// A builder for [`XdbcTypeInfoData`] which is used to create [`CommandGetXdbcTypeInfo`] responses.
 ///
 /// # Example
 /// ```
 /// use arrow_flight::sql::{Nullable, Searchable, XdbcDataType};
-/// use arrow_flight::sql::metadata::{XdbcTypeInfo, XdbcTypeInfoListBuilder};
+/// use arrow_flight::sql::metadata::{XdbcTypeInfo, XdbcTypeInfoDataBuilder};
 /// // Create the list of metadata describing the server. Since this would not change at
 /// // runtime, using once_cell::Lazy or similar patterns to constuct the list is a common approach.
-/// let mut builder = XdbcTypeInfoListBuilder::new();
+/// let mut builder = XdbcTypeInfoDataBuilder::new();
 /// builder.append(XdbcTypeInfo {
 ///     type_name: "INTEGER".into(),
 ///     data_type: XdbcDataType::XdbcInteger,
