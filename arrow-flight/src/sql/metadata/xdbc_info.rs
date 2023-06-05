@@ -35,7 +35,6 @@ use arrow_select::take::take;
 use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
-use crate::encode::{FlightDataEncoder, FlightDataEncoderBuilder};
 use crate::error::*;
 use crate::sql::{
     CommandGetXdbcTypeInfo, Nullable, Searchable, XdbcDataType, XdbcDatetimeSubcode,
@@ -76,15 +75,13 @@ impl From<CommandGetXdbcTypeInfo> for Option<i32> {
 /// [`CommandGetXdbcTypeInfo`] are metadata requests used by a Flight SQL
 /// server to communicate supported capabilities to Flight SQL clients.
 ///
-/// Servers constuct a [`XdbcTypeInfoList`] via the [`XdbcTypeInfoListBuilder`],
-/// and build responses using the [`encode`] method.
-///
-/// [`encode`]: XdbcTypeInfoList::encode
-pub struct XdbcTypeInfoList {
+/// Servers constuct - usually static - [`XdbcTypeInfoData`] via the [XdbcTypeInfoDataBuilder`],
+/// and build responses by passing the [`GetXdbcTypeInfoBuilder`].
+pub struct XdbcTypeInfoData {
     batch: RecordBatch,
 }
 
-impl XdbcTypeInfoList {
+impl XdbcTypeInfoData {
     /// Return the raw (not encoded) RecordBatch that will be returned
     /// from [`CommandGetXdbcTypeInfo`]
     pub fn record_batch(&self, data_type: impl Into<Option<i32>>) -> Result<RecordBatch> {
@@ -97,14 +94,6 @@ impl XdbcTypeInfoList {
         }
     }
 
-    /// Get a [`FlightDataEncoder`] which encodes the data approriate for [`CommandGetXdbcTypeInfo`] responses.
-    pub fn encode(&self, data_type: impl Into<Option<i32>>) -> FlightDataEncoder {
-        let batch = self.record_batch(data_type);
-        FlightDataEncoderBuilder::new()
-            .with_schema(self.schema())
-            .build(futures::stream::once(async { batch }))
-    }
-
     /// Return the schema of the RecordBatch that will be returned
     /// from [`CommandGetXdbcTypeInfo`]
     pub fn schema(&self) -> SchemaRef {
@@ -112,11 +101,11 @@ impl XdbcTypeInfoList {
     }
 }
 
-pub struct XdbcTypeInfoListBuilder {
+pub struct XdbcTypeInfoDataBuilder {
     infos: Vec<XdbcTypeInfo>,
 }
 
-impl Default for XdbcTypeInfoListBuilder {
+impl Default for XdbcTypeInfoDataBuilder {
     fn default() -> Self {
         Self::new()
     }
@@ -160,7 +149,7 @@ impl Default for XdbcTypeInfoListBuilder {
 /// // to access the underlying record batch
 /// let batch = info_list.record_batch(None);
 /// ```
-impl XdbcTypeInfoListBuilder {
+impl XdbcTypeInfoDataBuilder {
     /// Create a new instance of [`XdbcTypeInfoListBuilder`].
     pub fn new() -> Self {
         Self { infos: Vec::new() }
@@ -172,7 +161,7 @@ impl XdbcTypeInfoListBuilder {
     }
 
     /// Create helper structure for handling xdbc metadata requests.
-    pub fn build(self) -> Result<XdbcTypeInfoList> {
+    pub fn build(self) -> Result<XdbcTypeInfoData> {
         let mut type_name_builder = StringBuilder::new();
         let mut data_type_builder = Int32Builder::new();
         let mut column_size_builder = Int32Builder::new();
@@ -285,7 +274,7 @@ impl XdbcTypeInfoListBuilder {
             .map(|c| take(c, &indices, None))
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        Ok(XdbcTypeInfoList {
+        Ok(XdbcTypeInfoData {
             batch: RecordBatch::try_new(batch.schema(), columns)?,
         })
     }
@@ -293,6 +282,35 @@ impl XdbcTypeInfoListBuilder {
     /// Return the [`Schema`] for a GetSchema RPC call with [`CommandGetXdbcTypeInfo`]
     pub fn schema(&self) -> SchemaRef {
         Arc::clone(&GET_XDBC_INFO_SCHEMA)
+    }
+}
+
+/// A builder for a [`CommandGetXdbcTypeInfo`] response.
+pub struct GetXdbcTypeInfoBuilder<'a> {
+    data_type: Option<i32>,
+    infos: &'a XdbcTypeInfoData,
+}
+
+impl CommandGetXdbcTypeInfo {
+    /// Create a builder suitable for constructing a response
+    pub fn into_builder<'a>(self, infos: &'a XdbcTypeInfoData) -> GetXdbcTypeInfoBuilder {
+        GetXdbcTypeInfoBuilder {
+            data_type: self.data_type,
+            infos,
+        }
+    }
+}
+
+impl GetXdbcTypeInfoBuilder<'_> {
+    /// Builds a `RecordBatch` with the correct schema for a [`CommandGetXdbcTypeInfo`] response
+    pub fn build(self) -> Result<RecordBatch> {
+        self.infos.record_batch(self.data_type)
+    }
+
+    /// Return the schema of the RecordBatch that will be returned
+    /// from [`CommandGetXdbcTypeInfo`]
+    pub fn schema(&self) -> SchemaRef {
+        self.infos.schema()
     }
 }
 
@@ -332,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_create_batch() {
-        let mut builder = XdbcTypeInfoListBuilder::new();
+        let mut builder = XdbcTypeInfoDataBuilder::new();
         builder.append(XdbcTypeInfo {
             type_name: "VARCHAR".into(),
             data_type: XdbcDataType::XdbcVarchar,

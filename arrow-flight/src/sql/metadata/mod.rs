@@ -36,7 +36,7 @@ pub use catalogs::GetCatalogsBuilder;
 pub use db_schemas::GetDbSchemasBuilder;
 pub use sql_info::SqlInfoList;
 pub use tables::GetTablesBuilder;
-pub use xdbc_info::{XdbcTypeInfo, XdbcTypeInfoList, XdbcTypeInfoListBuilder};
+pub use xdbc_info::{XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder};
 
 use arrow_array::ArrayRef;
 use arrow_array::UInt32Array;

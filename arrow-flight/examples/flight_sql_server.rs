@@ -31,7 +31,7 @@ use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::sql::metadata::{
-    SqlInfoList, XdbcTypeInfo, XdbcTypeInfoList, XdbcTypeInfoListBuilder,
+    SqlInfoList, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
 };
 use arrow_flight::sql::{
     server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
@@ -75,8 +75,8 @@ static INSTANCE_SQL_INFO: Lazy<SqlInfoList> = Lazy::new(|| {
         .with_sql_info(SqlInfo::FlightSqlServerArrowVersion, "1.3")
 });
 
-static INSTANCE_XDBC_INFO: Lazy<XdbcTypeInfoList> = Lazy::new(|| {
-    let mut builder = XdbcTypeInfoListBuilder::new();
+static INSTANCE_XBDC_DATA: Lazy<XdbcTypeInfoData> = Lazy::new(|| {
+    let mut builder = XdbcTypeInfoDataBuilder::new();
     builder.append(XdbcTypeInfo {
         type_name: "INTEGER".into(),
         data_type: XdbcDataType::XdbcInteger,
@@ -583,7 +583,13 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandGetXdbcTypeInfo,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        let stream = INSTANCE_XDBC_INFO.encode(query).map_err(Status::from);
+        // create a builder with pre-defined Xdbc data:
+        let mut builder = query.into_builder(&INSTANCE_XBDC_DATA);
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(INSTANCE_XBDC_DATA.schema())
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
         Ok(Response::new(Box::pin(stream)))
     }
 
