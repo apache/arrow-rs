@@ -138,9 +138,6 @@ impl Default for XdbcTypeInfoDataBuilder {
 /// });
 /// let info_list = builder.build().unwrap();
 ///
-/// // to get the response stream, call the encode method.
-/// let stream = info_list.encode(None);
-///
 /// // to access the underlying record batch
 /// let batch = info_list.record_batch(None);
 /// ```
