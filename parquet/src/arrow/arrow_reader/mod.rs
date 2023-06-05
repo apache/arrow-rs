@@ -2131,15 +2131,15 @@ mod tests {
 
     #[test]
     fn test_row_group_exact_multiple() {
-        use crate::arrow::record_reader::MIN_BATCH_SIZE;
+        const BATCH_SIZE: usize = 1024;
         test_row_group_batch(8, 8);
         test_row_group_batch(10, 8);
         test_row_group_batch(8, 10);
-        test_row_group_batch(MIN_BATCH_SIZE, MIN_BATCH_SIZE);
-        test_row_group_batch(MIN_BATCH_SIZE + 1, MIN_BATCH_SIZE);
-        test_row_group_batch(MIN_BATCH_SIZE, MIN_BATCH_SIZE + 1);
-        test_row_group_batch(MIN_BATCH_SIZE, MIN_BATCH_SIZE - 1);
-        test_row_group_batch(MIN_BATCH_SIZE - 1, MIN_BATCH_SIZE);
+        test_row_group_batch(BATCH_SIZE, BATCH_SIZE);
+        test_row_group_batch(BATCH_SIZE + 1, BATCH_SIZE);
+        test_row_group_batch(BATCH_SIZE, BATCH_SIZE + 1);
+        test_row_group_batch(BATCH_SIZE, BATCH_SIZE - 1);
+        test_row_group_batch(BATCH_SIZE - 1, BATCH_SIZE);
     }
 
     /// Given a RecordBatch containing all the column data, return the expected batches given
@@ -2609,5 +2609,52 @@ mod tests {
     fn test_decimal() {
         test_decimal_roundtrip::<Decimal128Type>();
         test_decimal_roundtrip::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_list_selection() {
+        let schema = Arc::new(Schema::new(vec![Field::new_list(
+            "list",
+            Field::new("item", ArrowDataType::Utf8, true),
+            false,
+        )]));
+        let mut buf = Vec::with_capacity(1024);
+
+        let mut writer = ArrowWriter::try_new(
+            &mut buf,
+            schema.clone(),
+            Some(WriterProperties::builder().build()),
+        )
+        .unwrap();
+
+        for _ in 0..2 {
+            let mut list_a_builder = ListBuilder::new(StringBuilder::new());
+            for i in 0..1024 {
+                list_a_builder.values().append_value(format!("{i}"));
+                list_a_builder.append(true);
+            }
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(list_a_builder.finish())],
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+        }
+        let _metadata = writer.close().unwrap();
+
+        let buf = Bytes::from(buf);
+        let reader = ParquetRecordBatchReaderBuilder::try_new(buf)
+            .unwrap()
+            .with_row_selection(RowSelection::from(vec![
+                RowSelector::skip(100),
+                RowSelector::select(924),
+                RowSelector::skip(100),
+                RowSelector::select(924),
+            ]))
+            .build()
+            .unwrap();
+
+        let total_rows: usize = reader.map(|r| r.unwrap().num_rows()).sum();
+        assert_eq!(total_rows, 924 * 2);
     }
 }

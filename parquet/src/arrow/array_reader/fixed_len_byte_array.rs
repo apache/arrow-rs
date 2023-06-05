@@ -247,8 +247,8 @@ impl BufferQueue for FixedLenByteArrayBuffer {
     type Output = Buffer;
     type Slice = Self;
 
-    fn split_off(&mut self, len: usize) -> Self::Output {
-        self.buffer.split_off(len * self.byte_length)
+    fn consume(&mut self) -> Self::Output {
+        self.buffer.consume()
     }
 
     fn spare_capacity_mut(&mut self, _batch_size: usize) -> &mut Self::Slice {
