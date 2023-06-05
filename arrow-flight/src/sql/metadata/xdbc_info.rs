@@ -111,7 +111,7 @@ impl Default for XdbcTypeInfoDataBuilder {
     }
 }
 
-/// A builder for [`XdbcTypeInfoList`] which is used to create [`CommandGetXdbcTypeInfo`].responses.
+/// A builder for [`XdbcTypeInfoList`] which is used to create [`CommandGetXdbcTypeInfo`] responses.
 ///
 /// # Example
 /// ```
