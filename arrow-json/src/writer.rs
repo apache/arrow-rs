@@ -620,7 +620,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{File, read_to_string};
+    use std::fs::{read_to_string, File};
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
 
