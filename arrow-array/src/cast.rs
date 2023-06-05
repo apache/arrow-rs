@@ -594,6 +594,15 @@ pub fn as_list_array(arr: &dyn Array) -> &ListArray {
 }
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
+/// [`FixedSizeListArray`], panic'ing on failure.
+#[inline]
+pub fn as_fixed_size_list_array(arr: &dyn Array) -> &FixedSizeListArray {
+    arr.as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("Unable to downcast to fixed size list array")
+}
+
+/// Force downcast of an [`Array`], such as an [`ArrayRef`] to
 /// [`LargeListArray`], panic'ing on failure.
 #[inline]
 pub fn as_large_list_array(arr: &dyn Array) -> &LargeListArray {
