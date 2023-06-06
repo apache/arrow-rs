@@ -137,7 +137,7 @@ fn struct_array_to_jsonmap_array(
     Ok(inner_objs)
 }
 
-/// Converts an arrow [`ArrayRef`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
+/// Converts an arrow [`Array`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
 pub fn array_to_json_array(array: &dyn Array) -> Result<Vec<Value>, ArrowError> {
     match array.data_type() {
         DataType::Null => Ok(iter::repeat(Value::Null).take(array.len()).collect()),
