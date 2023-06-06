@@ -1196,9 +1196,10 @@ where
     K: ArrowDictionaryKeyType,
     K::Native: num::ToPrimitive,
 {
-    // TODO: Use take_boolean (#2967)
-    let array = take(&dict_comparison, dict.keys(), None)?;
-    Ok(BooleanArray::from(array.to_data()))
+    let array = take(&dict_comparison, dict.keys(), None)?
+        .as_boolean()
+        .clone();
+    Ok(array)
 }
 
 /// Helper function to perform boolean lambda function on values from two arrays using
