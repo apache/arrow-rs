@@ -432,6 +432,41 @@ pub fn nanosecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     time_fraction_dyn(array, "nanosecond", |t| t.nanosecond() as i32)
 }
 
+/// Extracts the microseconds of a given temporal primitive array as an array of integers
+pub fn microsecond<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    time_fraction_internal(array, "microsecond", |t| (t.nanosecond() / 1_000) as i32)
+}
+
+/// Extracts the microseconds of a given temporal primitive array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn microsecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    time_fraction_dyn(array, "microsecond", |t| (t.nanosecond() / 1_000) as i32)
+}
+
+/// Extracts the milliseconds of a given temporal primitive array as an array of integers
+pub fn millisecond<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    time_fraction_internal(array, "millisecond", |t| {
+        (t.nanosecond() / 1_000_000) as i32
+    })
+}
+/// Extracts the milliseconds of a given temporal primitive array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn millisecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    time_fraction_dyn(array, "millisecond", |t| {
+        (t.nanosecond() / 1_000_000) as i32
+    })
+}
+
 /// Extracts the time fraction of a given temporal array as an array of integers
 fn time_fraction_dyn<F>(
     array: &dyn Array,
@@ -1114,6 +1149,42 @@ mod tests {
         let b = nanosecond_dyn(&dict).unwrap();
 
         let a = Int32Array::from(vec![None, Some(453_000_000)]);
+        let expected_dict = DictionaryArray::new(keys, Arc::new(a));
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
+    }
+
+    #[test]
+    fn test_temporal_array_date64_microsecond() {
+        let a: PrimitiveArray<Date64Type> = vec![None, Some(1667328721453)].into();
+
+        let b = microsecond(&a).unwrap();
+        assert!(!b.is_valid(0));
+        assert_eq!(453_000, b.value(1));
+
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1)]);
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
+        let b = microsecond_dyn(&dict).unwrap();
+
+        let a = Int32Array::from(vec![None, Some(453_000)]);
+        let expected_dict = DictionaryArray::new(keys, Arc::new(a));
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
+    }
+
+    #[test]
+    fn test_temporal_array_date64_millisecond() {
+        let a: PrimitiveArray<Date64Type> = vec![None, Some(1667328721453)].into();
+
+        let b = millisecond(&a).unwrap();
+        assert!(!b.is_valid(0));
+        assert_eq!(453, b.value(1));
+
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1)]);
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
+        let b = millisecond_dyn(&dict).unwrap();
+
+        let a = Int32Array::from(vec![None, Some(453)]);
         let expected_dict = DictionaryArray::new(keys, Arc::new(a));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
