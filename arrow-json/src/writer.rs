@@ -94,7 +94,6 @@
 //! ```
 
 use std::iter;
-use std::sync::Arc;
 use std::{fmt::Debug, io::Write};
 
 use serde_json::map::Map as JsonMap;
@@ -108,7 +107,7 @@ use arrow_schema::*;
 
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 
-fn primitive_array_to_json<T>(array: &ArrayRef) -> Result<Vec<Value>, ArrowError>
+fn primitive_array_to_json<T>(array: &dyn Array) -> Result<Vec<Value>, ArrowError>
 where
     T: ArrowPrimitiveType,
     T::Native: JsonSerializable,
@@ -138,8 +137,8 @@ fn struct_array_to_jsonmap_array(
     Ok(inner_objs)
 }
 
-/// Converts an arrow [`ArrayRef`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
-pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
+/// Converts an arrow [`Array`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
+pub fn array_to_json_array(array: &dyn Array) -> Result<Vec<Value>, ArrowError> {
     match array.data_type() {
         DataType::Null => Ok(iter::repeat(Value::Null).take(array.len()).collect()),
         DataType::Boolean => Ok(array
@@ -206,9 +205,7 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
         DataType::Map(_, _) => as_map_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Ok(Value::Array(array_to_json_array(
-                    &(Arc::new(v) as ArrayRef),
-                )?)),
+                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
                 None => Ok(Value::Null),
             })
             .collect(),
@@ -627,9 +624,9 @@ mod tests {
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
 
-    use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
     use serde_json::json;
 
+    use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
 
