@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Buffer abstractions for [Apache Arrow](https://docs.rs/arrow)
+//! Low-level buffer abstractions for [Apache Arrow Rust](https://docs.rs/arrow)
 
 pub mod alloc;
 pub mod buffer;
