@@ -2696,7 +2696,7 @@ mod tests {
         }
 
         let array = Arc::new(list_a_builder.finish());
-        let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
 
         writer.write(&batch).unwrap();
         let _metadata = writer.close().unwrap();
