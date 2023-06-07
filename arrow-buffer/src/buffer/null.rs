@@ -218,6 +218,30 @@ impl<'a> IntoIterator for &'a NullBuffer {
     }
 }
 
+impl From<BooleanBuffer> for NullBuffer {
+    fn from(value: BooleanBuffer) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&[bool]> for NullBuffer {
+    fn from(value: &[bool]) -> Self {
+        BooleanBuffer::from(value).into()
+    }
+}
+
+impl From<Vec<bool>> for NullBuffer {
+    fn from(value: Vec<bool>) -> Self {
+        BooleanBuffer::from(value).into()
+    }
+}
+
+impl FromIterator<bool> for NullBuffer {
+    fn from_iter<T: IntoIterator<Item = bool>>(iter: T) -> Self {
+        BooleanBuffer::from_iter(iter).into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
