@@ -562,6 +562,7 @@ mod tests {
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
+    use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray,
         FixedLenByteArrayType, Int32Type, Int64Type, Int96Type,
@@ -2131,7 +2132,7 @@ mod tests {
 
     #[test]
     fn test_row_group_exact_multiple() {
-        const BATCH_SIZE: usize = 1024;
+        const BATCH_SIZE: usize = REPETITION_LEVELS_BATCH_SIZE;
         test_row_group_batch(8, 8);
         test_row_group_batch(10, 8);
         test_row_group_batch(8, 10);

@@ -98,7 +98,7 @@
 //!             // You can also use `get_typed_column_reader` method to extract typed reader.
 //!             ColumnReader::Int32ColumnReader(ref mut typed_reader) => {
 //!                 let (records, values, levels) = typed_reader.read_records(
-//!                     8, // batch size
+//!                     8, // maximum records to read
 //!                     Some(&mut def_levels),
 //!                     Some(&mut rep_levels),
 //!                     &mut values,

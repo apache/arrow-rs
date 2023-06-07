@@ -297,12 +297,12 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
 const SKIP_BUFFER_SIZE: usize = 1024;
 
-enum LevelDecoderInner {
+enum LevelDecoder {
     Packed(BitReader, u8),
     Rle(RleDecoder),
 }
 
-impl LevelDecoderInner {
+impl LevelDecoder {
     fn new(encoding: Encoding, data: ByteBufferPtr, bit_width: u8) -> Self {
         match encoding {
             Encoding::RLE => {
@@ -327,7 +327,7 @@ impl LevelDecoderInner {
 
 /// An implementation of [`DefinitionLevelDecoder`] for `[i16]`
 pub struct DefinitionLevelDecoderImpl {
-    decoder: Option<LevelDecoderInner>,
+    decoder: Option<LevelDecoder>,
     bit_width: u8,
 }
 
@@ -345,7 +345,7 @@ impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
     type Slice = [i16];
 
     fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
-        self.decoder = Some(LevelDecoderInner::new(encoding, data, self.bit_width))
+        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width))
     }
 }
 
@@ -385,25 +385,25 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
     }
 }
 
+pub(crate) const REPETITION_LEVELS_BATCH_SIZE: usize = 1024;
+
 /// An implementation of [`RepetitionLevelDecoder`] for `[i16]`
 pub struct RepetitionLevelDecoderImpl {
-    decoder: Option<LevelDecoderInner>,
+    decoder: Option<LevelDecoder>,
     bit_width: u8,
-    buffer: Vec<i16>,
+    buffer: Box<[i16; REPETITION_LEVELS_BATCH_SIZE]>,
     buffer_len: usize,
     buffer_offset: usize,
     has_partial: bool,
 }
 
 impl RepetitionLevelDecoderImpl {
-    const BUFFER_SIZE: usize = 1024;
-
     pub fn new(max_level: i16) -> Self {
         let bit_width = num_required_bits(max_level as u64);
         Self {
             decoder: None,
             bit_width,
-            buffer: vec![0; Self::BUFFER_SIZE],
+            buffer: Box::new([0; REPETITION_LEVELS_BATCH_SIZE]),
             buffer_offset: 0,
             buffer_len: 0,
             has_partial: false,
@@ -411,7 +411,7 @@ impl RepetitionLevelDecoderImpl {
     }
 
     fn fill_buf(&mut self) -> Result<()> {
-        let read = self.decoder.as_mut().unwrap().read(&mut self.buffer)?;
+        let read = self.decoder.as_mut().unwrap().read(self.buffer.as_mut())?;
         self.buffer_offset = 0;
         self.buffer_len = read;
         Ok(())
@@ -448,7 +448,7 @@ impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
     type Slice = [i16];
 
     fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
-        self.decoder = Some(LevelDecoderInner::new(encoding, data, self.bit_width));
+        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width));
         self.buffer_len = 0;
         self.buffer_offset = 0;
     }

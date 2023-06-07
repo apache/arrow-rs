@@ -295,6 +295,9 @@ impl<T: DataType> TypedTripletIter<T> {
     fn read_next(&mut self) -> Result<bool> {
         self.curr_triplet_index += 1;
 
+        // A loop is required to handle the case of a batch size of 1, as in such a case
+        // on reaching the end of a record, read_records will return `Ok((1, 0, 0))`
+        // and therefore not advance `self.triplets_left`
         while self.curr_triplet_index >= self.triplets_left {
             let (records_read, values_read, levels_read) = {
                 // Get slice of definition levels, if available
