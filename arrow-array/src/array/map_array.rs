@@ -79,9 +79,9 @@ impl MapArray {
             }
         }
         if field.is_nullable() || entries.null_count() != 0 {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "MapArray entries cannot contain be null",
-            )));
+            return Err(ArrowError::InvalidArgumentError(
+                "MapArray entries cannot contain be null".to_string(),
+            ));
         }
 
         if field.data_type() != entries.data_type() {
