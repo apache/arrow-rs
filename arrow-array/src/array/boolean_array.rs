@@ -38,7 +38,7 @@ use std::sync::Arc;
 /// // Create from Vec<bool>
 /// let arr = BooleanArray::from(vec![false, true, true]);
 /// // Create from iter/collect
-/// let arr: BooleanArray = std::iter::repeat(true).take(10).collect();
+/// let arr: BooleanArray = std::iter::repeat(Some(true)).take(10).collect();
 /// ```
 ///
 /// Construction and Access
