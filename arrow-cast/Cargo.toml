@@ -49,7 +49,7 @@ chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
 half = { version = "2.1", default-features = false }
 num = { version = "0.4", default-features = false, features = ["std"] }
 lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-comfy-table = { version = "6.0", optional = true, default-features = false }
+comfy-table = { version = "7.0", optional = true, default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }
