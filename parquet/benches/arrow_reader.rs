@@ -17,15 +17,16 @@
 
 use arrow::array::Array;
 use arrow::datatypes::DataType;
+use arrow_schema::Field;
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
 use num::FromPrimitive;
 use num_bigint::BigInt;
 use parquet::arrow::array_reader::{
-    make_byte_array_reader, make_fixed_len_byte_array_reader,
+    make_byte_array_reader, make_fixed_len_byte_array_reader, ListArrayReader,
 };
 use parquet::basic::Type;
-use parquet::data_type::FixedLenByteArrayType;
+use parquet::data_type::{ByteArray, FixedLenByteArrayType};
 use parquet::util::{DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator};
 use parquet::{
     arrow::array_reader::ArrayReader,
@@ -56,6 +57,11 @@ fn build_test_schema() -> SchemaDescPtr {
             OPTIONAL BYTE_ARRAY optional_decimal3_leaf (DECIMAL(16,2));
             REQUIRED FIXED_LEN_BYTE_ARRAY (16) mandatory_decimal4_leaf (DECIMAL(16,2));
             OPTIONAL FIXED_LEN_BYTE_ARRAY (16) optional_decimal4_leaf (DECIMAL(16,2));
+            OPTIONAL GROUP string_list (LIST) {
+                repeated group list {
+                    optional BYTE_ARRAY element (UTF8);
+                }
+            }
         }
         ";
     parse_message_type(message_type)
@@ -68,6 +74,7 @@ const NUM_ROW_GROUPS: usize = 1;
 const PAGES_PER_GROUP: usize = 2;
 const VALUES_PER_PAGE: usize = 10_000;
 const BATCH_SIZE: usize = 8192;
+const MAX_LIST_LEN: usize = 10;
 const EXPECTED_VALUE_COUNT: usize = NUM_ROW_GROUPS * PAGES_PER_GROUP * VALUES_PER_PAGE;
 
 pub fn seedable_rng() -> StdRng {
@@ -361,6 +368,66 @@ fn build_dictionary_encoded_string_page_iterator(
     InMemoryPageIterator::new(pages)
 }
 
+fn build_string_list_page_iterator(
+    column_desc: ColumnDescPtr,
+    null_density: f32,
+) -> impl PageIterator + Clone {
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    assert_eq!(max_def_level, 3);
+    assert_eq!(max_rep_level, 1);
+
+    let mut rng = seedable_rng();
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    for i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = Vec::new();
+        for j in 0..PAGES_PER_GROUP {
+            // generate page
+            let mut values: Vec<ByteArray> =
+                Vec::with_capacity(VALUES_PER_PAGE * MAX_LIST_LEN);
+            let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE * MAX_LIST_LEN);
+            let mut rep_levels = Vec::with_capacity(VALUES_PER_PAGE * MAX_LIST_LEN);
+            for k in 0..VALUES_PER_PAGE {
+                rep_levels.push(0);
+                if rng.gen::<f32>() < null_density {
+                    // Null list
+                    def_levels.push(0);
+                    continue;
+                }
+                let len = rng.gen_range(0..MAX_LIST_LEN);
+                if len == 0 {
+                    // Empty list
+                    def_levels.push(1);
+                    continue;
+                }
+
+                (1..len).for_each(|_| rep_levels.push(1));
+
+                for l in 0..len {
+                    if rng.gen::<f32>() < null_density {
+                        // Null element
+                        def_levels.push(2);
+                    } else {
+                        def_levels.push(3);
+                        let value =
+                            format!("Test value {k}[{l}], row group: {i}, page: {j}");
+                        values.push(value.as_str().into());
+                    }
+                }
+            }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            page_builder.add_values::<ByteArrayType>(Encoding::PLAIN, &values);
+            column_chunk_pages.push(page_builder.consume());
+        }
+        pages.push(column_chunk_pages);
+    }
+
+    InMemoryPageIterator::new(pages)
+}
+
 fn bench_array_reader(mut array_reader: Box<dyn ArrayReader>) -> usize {
     // test procedure: read data in batches of 8192 until no more data
     let mut total_count = 0;
@@ -462,6 +529,16 @@ fn create_string_byte_array_dictionary_reader(
         Some(arrow_type),
     )
     .unwrap()
+}
+
+fn create_string_list_reader(
+    page_iterator: impl PageIterator + 'static,
+    column_desc: ColumnDescPtr,
+) -> Box<dyn ArrayReader> {
+    let items = create_string_byte_array_reader(page_iterator, column_desc);
+    let field = Field::new("item", DataType::Utf8, true);
+    let data_type = DataType::List(Arc::new(field));
+    Box::new(ListArrayReader::<i32>::new(items, data_type, 2, 1, true))
 }
 
 fn bench_byte_decimal<T>(
@@ -798,6 +875,8 @@ fn add_benches(c: &mut Criterion) {
     let optional_string_column_desc = schema.column(3);
     let mandatory_int64_column_desc = schema.column(4);
     let optional_int64_column_desc = schema.column(5);
+    let string_list_desc = schema.column(14);
+
     // primitive / int32 benchmarks
     // =============================
 
@@ -964,6 +1043,29 @@ fn add_benches(c: &mut Criterion) {
     });
 
     group.finish();
+
+    // list benchmarks
+    //==============================
+
+    let list_data = build_string_list_page_iterator(string_list_desc.clone(), 0.);
+    let mut group = c.benchmark_group("arrow_array_reader/ListArray");
+    group.bench_function("plain encoded optional strings no NULLs", |b| {
+        b.iter(|| {
+            let reader =
+                create_string_list_reader(list_data.clone(), string_list_desc.clone());
+            count = bench_array_reader(reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+    let list_data = build_string_list_page_iterator(string_list_desc.clone(), 0.5);
+    group.bench_function("plain encoded optional strings half NULLs", |b| {
+        b.iter(|| {
+            let reader =
+                create_string_list_reader(list_data.clone(), string_list_desc.clone());
+            count = bench_array_reader(reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
 }
 
 criterion_group!(benches, add_benches, decimal_benches,);
