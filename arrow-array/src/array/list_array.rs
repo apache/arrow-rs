@@ -57,6 +57,8 @@ impl OffsetSizeTrait for i64 {
 /// An array of [variable length arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout)
 ///
 /// See [`ListArray`] and [`LargeListArray`]`
+///
+/// See [`GenericListBuilder`](crate::builder::GenericListBuilder) for how to construct a [`GenericListArray`]
 pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
@@ -471,58 +473,10 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
     }
 }
 
-/// An array of variable size lists, storing offsets as `i32`.
-///
-/// # Example
-///
-/// ```
-/// # use arrow_array::{Array, ListArray, Int32Array, types::Int32Type};
-/// # use arrow_schema::DataType;
-/// let data = vec![
-///    Some(vec![]),
-///    None,
-///    Some(vec![Some(3), None, Some(5), Some(19)]),
-///    Some(vec![Some(6), Some(7)]),
-/// ];
-/// let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-///
-/// assert_eq!(false, list_array.is_valid(1));
-///
-/// let list0 = list_array.value(0);
-/// let list2 = list_array.value(2);
-/// let list3 = list_array.value(3);
-///
-/// assert_eq!(&[] as &[i32], list0.as_any().downcast_ref::<Int32Array>().unwrap().values());
-/// assert_eq!(false, list2.as_any().downcast_ref::<Int32Array>().unwrap().is_valid(1));
-/// assert_eq!(&[6, 7], list3.as_any().downcast_ref::<Int32Array>().unwrap().values());
-/// ```
+/// A [`GenericListArray`] of variable size lists, storing offsets as `i32`.
 pub type ListArray = GenericListArray<i32>;
 
-/// An array of variable size lists, storing offsets as `i64`.
-///
-/// # Example
-///
-/// ```
-/// # use arrow_array::{Array, LargeListArray, Int32Array, types::Int32Type};
-/// # use arrow_schema::DataType;
-/// let data = vec![
-///    Some(vec![]),
-///    None,
-///    Some(vec![Some(3), None, Some(5), Some(19)]),
-///    Some(vec![Some(6), Some(7)]),
-/// ];
-/// let list_array = LargeListArray::from_iter_primitive::<Int32Type, _, _>(data);
-///
-/// assert_eq!(false, list_array.is_valid(1));
-///
-/// let list0 = list_array.value(0);
-/// let list2 = list_array.value(2);
-/// let list3 = list_array.value(3);
-///
-/// assert_eq!(&[] as &[i32], list0.as_any().downcast_ref::<Int32Array>().unwrap().values());
-/// assert_eq!(false, list2.as_any().downcast_ref::<Int32Array>().unwrap().is_valid(1));
-/// assert_eq!(&[6, 7], list3.as_any().downcast_ref::<Int32Array>().unwrap().values());
-/// ```
+/// A [`GenericListArray`] of variable size lists, storing offsets as `i64`.
 pub type LargeListArray = GenericListArray<i64>;
 
 #[cfg(test)]

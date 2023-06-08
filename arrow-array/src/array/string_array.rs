@@ -21,7 +21,7 @@ use arrow_buffer::{bit_util, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
-/// See [`StringArray`] and [`LargeStringArray`] for storing string data
+/// A [`GenericByteArray`] for storing `str`
 pub type GenericStringArray<OffsetSize> = GenericByteArray<GenericStringType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
@@ -208,54 +208,10 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<Offse
     }
 }
 
-/// An array of `str` using `i32` offsets
-///
-/// # Examples
-///
-/// Construction
-///
-/// ```
-/// # use arrow_array::StringArray;
-/// // Create from Vec<Option<&str>>
-/// let arr = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
-/// // Create from Vec<&str>
-/// let arr = StringArray::from(vec!["foo", "bar", "baz"]);
-/// // Create from iter/collect (requires Option<&str>)
-/// let arr: StringArray = std::iter::repeat(Some("foo")).take(10).collect();
-/// ```
-///
-/// Construction and Access
-///
-/// ```
-/// # use arrow_array::StringArray;
-/// let array = StringArray::from(vec![Some("foo"), None, Some("bar")]);
-/// assert_eq!(array.value(0), "foo");
-/// ```
+/// A [`GenericStringArray`] of `str` using `i32` offsets
 pub type StringArray = GenericStringArray<i32>;
 
-/// An array of `str` using `i64` offsets
-///
-/// # Examples
-///
-/// Construction
-///
-/// ```
-/// # use arrow_array::LargeStringArray;
-/// // Create from Vec<Option<&str>>
-/// let arr = LargeStringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
-/// // Create from Vec<&str>
-/// let arr = LargeStringArray::from(vec!["foo", "bar", "baz"]);
-/// // Create from iter/collect (requires Option<&str>)
-/// let arr: LargeStringArray = std::iter::repeat(Some("foo")).take(10).collect();
-/// ```
-///
-/// Constructon and Access
-///
-/// ```
-/// use arrow_array::LargeStringArray;
-/// let array = LargeStringArray::from(vec![Some("foo"), None, Some("bar")]);
-/// assert_eq!(array.value(2), "bar");
-/// ```
+/// A [`GenericStringArray`] of `str` using `i64` offsets
 pub type LargeStringArray = GenericStringArray<i64>;
 
 #[cfg(test)]
