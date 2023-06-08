@@ -510,13 +510,13 @@ mod tests {
     fn create_schema_string() {
         let schema = person_schema();
         assert_eq!(schema.to_string(),
-                   "Field { name: \"first_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {\"k\": \"v\"} }, \
-        Field { name: \"last_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
+                   "Field { name: \"first_name\", data_type: Utf8, nullable: false, metadata: {\"k\": \"v\"} }, \
+        Field { name: \"last_name\", data_type: Utf8, nullable: false, metadata: {} }, \
         Field { name: \"address\", data_type: Struct([\
-            Field { name: \"street\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-            Field { name: \"zip\", data_type: UInt16, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }\
-        ]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-        Field { name: \"interests\", data_type: Dictionary(Int32, Utf8), nullable: true, dict_id: 123, dict_is_ordered: true, metadata: {} }")
+            Field { name: \"street\", data_type: Utf8, nullable: false, metadata: {} }, \
+            Field { name: \"zip\", data_type: UInt16, nullable: false, metadata: {} }\
+        ]), nullable: false, metadata: {} }, \
+        Field { name: \"interests\", data_type: Dictionary(Int32, Utf8), nullable: true, metadata: {} }")
     }
 
     #[test]

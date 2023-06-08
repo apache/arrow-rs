@@ -653,7 +653,7 @@ mod tests {
         let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Invalid argument error: batches[1] schema is different with argument schema.\n            batches[1] schema: Schema { fields: [Field { name: \"c\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"d\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} },\n            argument schema: Schema { fields: [Field { name: \"a\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }\n            "
+            "Invalid argument error: batches[1] schema is different with argument schema.\n            batches[1] schema: Schema { fields: [Field { name: \"c\", data_type: Int32, nullable: false, metadata: {} }, Field { name: \"d\", data_type: Utf8, nullable: false, metadata: {} }], metadata: {} },\n            argument schema: Schema { fields: [Field { name: \"a\", data_type: Int32, nullable: false, metadata: {} }, Field { name: \"b\", data_type: Utf8, nullable: false, metadata: {} }], metadata: {} }\n            "
         );
     }
 

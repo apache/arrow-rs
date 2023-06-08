@@ -32,7 +32,7 @@ pub type FieldRef = Arc<Field>;
 ///
 /// A [`Schema`](super::Schema) is an ordered collection of
 /// [`Field`] objects.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Field {
     name: String,
@@ -543,10 +543,23 @@ impl Field {
     }
 }
 
-// TODO: improve display with crate https://crates.io/crates/derive_more ?
+impl std::fmt::Debug for Field {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Field {{ name: \"{}\", data_type: {:?}, nullable: {}, metadata: {:?} }}",
+            self.name, self.data_type, self.nullable, self.metadata
+        )
+    }
+}
+
 impl std::fmt::Display for Field {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        write!(
+            f,
+            "Field {{ name: \"{}\", data_type: {:?}, nullable: {}, metadata: {:?} }}",
+            self.name, self.data_type, self.nullable, self.metadata
+        )
     }
 }
 
