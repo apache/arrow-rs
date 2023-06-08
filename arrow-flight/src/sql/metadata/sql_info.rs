@@ -419,7 +419,7 @@ pub struct SqlInfoData {
 }
 
 impl SqlInfoData {
-    /// Return the raw (not encoded) RecordBatch that will be returned
+    /// Return a  [`RecordBatch`] containing only the requested `u32`, if any
     /// from [`CommandGetSqlInfo`]
     pub fn record_batch(
         &self,
@@ -449,6 +449,7 @@ impl SqlInfoData {
 
 /// A builder for a [`CommandGetSqlInfo`] response.
 pub struct GetSqlInfoBuilder<'a> {
+    /// requested `SqlInfo`s. If empty means return all infos. 
     info: Vec<u32>,
     infos: &'a SqlInfoData,
 }
