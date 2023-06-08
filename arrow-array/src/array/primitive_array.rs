@@ -294,11 +294,16 @@ impl<T: ArrowPrimitiveType> Clone for PrimitiveArray<T> {
 }
 
 impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
-    /// Create a new [`PrimitiveArray`] from the provided data_type, values, nulls
+    /// Create a new [`PrimitiveArray`] from the provided values and nulls
     ///
     /// # Panics
     ///
     /// Panics if [`Self::try_new`] returns an error
+    ///
+    /// # Example
+    ///
+    /// Creating a [`PrimitiveArray`] directly from a [`ScalarBuffer`] and [`NullBuffer`] using
+    /// this constructor is the most performant approach, avoiding any additional allocations
     ///
     /// ```
     /// # use arrow_array::Int32Array;
@@ -314,7 +319,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Self::try_new(values, nulls).unwrap()
     }
 
-    /// Create a new [`PrimitiveArray`] from the provided data_type, values, nulls
+    /// Create a new [`PrimitiveArray`] from the provided values and nulls
     ///
     /// # Errors
     ///
