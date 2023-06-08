@@ -81,6 +81,7 @@ const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
 const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
+const DEFAULT_COLUMN_INDEX_MINMAX_LEN: Option<usize> = Some(128);
 const DEFAULT_CREATED_BY: &str =
     concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
 /// default value for the false positive probability used in a bloom filter.
@@ -128,6 +129,7 @@ pub struct WriterProperties {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
+    truncate_minmax_value_len: Option<usize>,
 }
 
 impl Default for WriterProperties {
@@ -226,6 +228,10 @@ impl WriterProperties {
         self.sorting_columns.as_ref()
     }
 
+    pub fn truncate_minmax_value_len(&self) -> Option<usize> {
+        self.truncate_minmax_value_len
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     /// This is not configurable.
     #[inline]
@@ -320,6 +326,7 @@ pub struct WriterPropertiesBuilder {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
+    truncate_minmax_value_len: Option<usize>,
 }
 
 impl WriterPropertiesBuilder {
@@ -337,6 +344,7 @@ impl WriterPropertiesBuilder {
             default_column_properties: Default::default(),
             column_properties: HashMap::new(),
             sorting_columns: None,
+            truncate_minmax_value_len: DEFAULT_COLUMN_INDEX_MINMAX_LEN,
         }
     }
 
@@ -354,6 +362,7 @@ impl WriterPropertiesBuilder {
             default_column_properties: self.default_column_properties,
             column_properties: self.column_properties,
             sorting_columns: self.sorting_columns,
+            truncate_minmax_value_len: self.truncate_minmax_value_len,
         }
     }
 
@@ -624,6 +633,13 @@ impl WriterPropertiesBuilder {
     /// override the default.
     pub fn set_column_bloom_filter_ndv(mut self, col: ColumnPath, value: u64) -> Self {
         self.get_mut_props(col).set_bloom_filter_ndv(value);
+        self
+    }
+
+    /// Sets the max length of min/max value fields in the column index.
+    /// If set to `None` - there's no effective limit.
+    pub fn set_max_size_to_truncate(mut self, max_length: Option<usize>) -> Self {
+        self.truncate_minmax_value_len = max_length;
         self
     }
 }

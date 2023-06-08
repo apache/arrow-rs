@@ -656,8 +656,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         if null_page && self.column_index_builder.valid() {
             self.column_index_builder.append(
                 null_page,
-                &[0; 1],
-                &[0; 1],
+                vec![0; 1],
+                vec![0; 1],
                 self.page_metrics.num_page_nulls as i64,
             );
         } else if self.column_index_builder.valid() {
@@ -670,8 +670,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 Some(stat) => {
                     self.column_index_builder.append(
                         null_page,
-                        stat.min_bytes(),
-                        stat.max_bytes(),
+                        self.truncate_minmax_value(stat.min_bytes()),
+                        self.truncate_minmax_value(stat.max_bytes()),
                         self.page_metrics.num_page_nulls as i64,
                     );
                 }
@@ -681,6 +681,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // update the offset index
         self.offset_index_builder
             .append_row_count(self.page_metrics.num_buffered_rows as i64);
+    }
+
+    fn truncate_minmax_value(&self, data: &[u8]) -> Vec<u8> {
+        if let Some(max_len) = self.props.truncate_minmax_value_len() {
+            data[0..usize::min(data.len(), max_len)].to_vec()
+        } else {
+            data.to_vec()
+        }
     }
 
     /// Adds data page.
@@ -2218,6 +2226,66 @@ mod tests {
             4,
             offset_index.page_locations.get(1).unwrap().first_row_index
         );
+    }
+
+    /// Verify min/max value truncation iin the column index works as expected
+    #[test]
+    fn test_column_offset_index_metadata_truncating() {
+        // write data
+        // and check the offset index and column index
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer =
+            get_test_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
+
+        let mut data = vec![FixedLenByteArray::default(); 3];
+        // This is the expected min value
+        data[0].set_data(ByteBufferPtr::new(vec![0_u8; 200]));
+        // This is the expected max value
+        data[1].set_data(ByteBufferPtr::new(
+            String::from("Zorro the masked hero").into_bytes(),
+        ));
+        data[2].set_data(ByteBufferPtr::new(Vec::from_iter(0_u8..129)));
+
+        writer.write_batch(&data, None, None).unwrap();
+
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+        let column_index = r.column_index.unwrap();
+        let offset_index = r.offset_index.unwrap();
+
+        assert_eq!(3, r.rows_written);
+
+        // column index
+        assert_eq!(1, column_index.null_pages.len());
+        assert_eq!(1, offset_index.page_locations.len());
+        assert_eq!(BoundaryOrder::UNORDERED, column_index.boundary_order);
+        assert!(!column_index.null_pages[0]);
+        assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
+
+        if let Some(stats) = r.metadata.statistics() {
+            assert!(stats.has_min_max_set());
+            assert_eq!(stats.null_count(), 0);
+            assert_eq!(stats.distinct_count(), None);
+            if let Statistics::FixedLenByteArray(stats) = stats {
+                let column_index_min_value = column_index.min_values.get(0).unwrap();
+                let column_index_max_value = column_index.max_values.get(0).unwrap();
+
+                // Column index stats are truncated, while the column chunk's aren't.
+                assert_ne!(stats.min_bytes(), column_index_min_value.as_slice());
+                // In this case, they are equal because the max value is shorter than the default threshold
+                assert_eq!(stats.max_bytes(), column_index_max_value.as_slice());
+
+                assert_eq!(column_index_min_value.len(), 128);
+                assert_eq!(column_index_min_value.as_slice(), &[0_u8; 128]);
+                assert_eq!(column_index_max_value.len(), 21);
+            } else {
+                panic!("expecting Statistics::FixedLenByteArray");
+            }
+        } else {
+            panic!("metadata missing statistics");
+        }
     }
 
     #[test]
