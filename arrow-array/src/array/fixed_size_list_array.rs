@@ -17,6 +17,7 @@
 
 use crate::array::print_long_array;
 use crate::builder::{FixedSizeListBuilder, PrimitiveBuilder};
+use crate::iterator::FixedSizeListIter;
 use crate::{make_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::ArrowNativeType;
@@ -277,6 +278,11 @@ impl FixedSizeListArray {
         }
         builder.finish()
     }
+
+    /// constructs a new iterator
+    pub fn iter(&self) -> FixedSizeListIter<'_> {
+        FixedSizeListIter::new(self)
+    }
 }
 
 impl From<ArrayData> for FixedSizeListArray {
@@ -389,14 +395,28 @@ impl std::fmt::Debug for FixedSizeListArray {
     }
 }
 
+impl<'a> ArrayAccessor for &'a FixedSizeListArray {
+    type Item = ArrayRef;
+
+    fn value(&self, index: usize) -> Self::Item {
+        FixedSizeListArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        FixedSizeListArray::value(self, index)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use arrow_buffer::{bit_util, BooleanBuffer, Buffer};
+    use arrow_schema::Field;
+
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::Int32Array;
-    use arrow_buffer::{bit_util, BooleanBuffer, Buffer};
-    use arrow_schema::Field;
+
+    use super::*;
 
     #[test]
     fn test_fixed_size_list_array() {

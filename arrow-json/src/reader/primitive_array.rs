@@ -23,6 +23,7 @@ use arrow_array::{Array, ArrowPrimitiveType};
 use arrow_cast::parse::Parser;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
+use half::f16;
 
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
@@ -53,6 +54,12 @@ macro_rules! primitive_parse {
 }
 
 primitive_parse!(i8, i16, i32, i64, u8, u16, u32, u64);
+
+impl ParseJsonNumber for f16 {
+    fn parse(s: &[u8]) -> Option<Self> {
+        lexical_core::parse::<f32>(s).ok().map(f16::from_f32)
+    }
+}
 
 impl ParseJsonNumber for f32 {
     fn parse(s: &[u8]) -> Option<Self> {

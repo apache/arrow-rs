@@ -24,7 +24,7 @@ use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
 use pyo3::prelude::*;
@@ -67,8 +67,27 @@ impl<T: ToPyArrow> IntoPyArrow for T {
     }
 }
 
+fn validate_class(expected: &str, value: &PyAny) -> PyResult<()> {
+    let pyarrow = PyModule::import(value.py(), "pyarrow")?;
+    let class = pyarrow.getattr(expected)?;
+    if !value.is_instance(class)? {
+        let expected_module = class.getattr("__module__")?.extract::<&str>()?;
+        let expected_name = class.getattr("__name__")?.extract::<&str>()?;
+        let found_class = value.get_type();
+        let found_module = found_class.getattr("__module__")?.extract::<&str>()?;
+        let found_name = found_class.getattr("__name__")?.extract::<&str>()?;
+        return Err(PyTypeError::new_err(format!(
+            "Expected instance of {}.{}, got {}.{}",
+            expected_module, expected_name, found_module, found_name
+        )));
+    }
+    Ok(())
+}
+
 impl FromPyArrow for DataType {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        validate_class("DataType", value)?;
+
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
@@ -91,6 +110,8 @@ impl ToPyArrow for DataType {
 
 impl FromPyArrow for Field {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        validate_class("Field", value)?;
+
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
@@ -113,6 +134,8 @@ impl ToPyArrow for Field {
 
 impl FromPyArrow for Schema {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        validate_class("Schema", value)?;
+
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
@@ -135,6 +158,8 @@ impl ToPyArrow for Schema {
 
 impl FromPyArrow for ArrayData {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        validate_class("Array", value)?;
+
         // prepare a pointer to receive the Array struct
         let mut array = FFI_ArrowArray::empty();
         let mut schema = FFI_ArrowSchema::empty();
@@ -194,6 +219,7 @@ impl<T: ToPyArrow> ToPyArrow for Vec<T> {
 
 impl FromPyArrow for RecordBatch {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        validate_class("RecordBatch", value)?;
         // TODO(kszucs): implement the FFI conversions in arrow-rs for RecordBatches
         let schema = value.getattr("schema")?;
         let schema = Arc::new(Schema::from_pyarrow(schema)?);
@@ -235,6 +261,8 @@ impl ToPyArrow for RecordBatch {
 
 impl FromPyArrow for ArrowArrayStreamReader {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        validate_class("RecordBatchReader", value)?;
+
         // prepare a pointer to receive the stream struct
         let mut stream = FFI_ArrowArrayStream::empty();
         let stream_ptr = &mut stream as *mut FFI_ArrowArrayStream;

@@ -502,7 +502,7 @@ mod tests {
                         )
                         .as_str(),
                     )
-                    $(.with_timezone($timezone))?
+                    $(.clone().with_timezone($timezone))?
                     ;
 
                 // create expected array as primitive, and cast to result type
@@ -527,7 +527,7 @@ mod tests {
                         )
                         .as_str(),
                     )
-                    $(.with_timezone($timezone))?
+                    $(.clone().with_timezone($timezone))?
                     ;
                 assert_eq!(expected, array);
             }

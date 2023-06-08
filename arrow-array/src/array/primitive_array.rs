@@ -1132,24 +1132,21 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     }
 
     /// Construct a timestamp array with new timezone
-    pub fn with_timezone(&self, timezone: impl Into<Arc<str>>) -> Self {
+    pub fn with_timezone(self, timezone: impl Into<Arc<str>>) -> Self {
         self.with_timezone_opt(Some(timezone.into()))
     }
 
     /// Construct a timestamp array with UTC
-    pub fn with_timezone_utc(&self) -> Self {
+    pub fn with_timezone_utc(self) -> Self {
         self.with_timezone("+00:00")
     }
 
     /// Construct a timestamp array with an optional timezone
-    pub fn with_timezone_opt<S: Into<Arc<str>>>(&self, timezone: Option<S>) -> Self {
-        let array_data = unsafe {
-            self.to_data()
-                .into_builder()
-                .data_type(DataType::Timestamp(T::UNIT, timezone.map(Into::into)))
-                .build_unchecked()
-        };
-        PrimitiveArray::from(array_data)
+    pub fn with_timezone_opt<S: Into<Arc<str>>>(self, timezone: Option<S>) -> Self {
+        Self {
+            data_type: DataType::Timestamp(T::UNIT, timezone.map(Into::into)),
+            ..self
+        }
     }
 }
 

@@ -21,6 +21,7 @@ use crate::array::{
     ArrayAccessor, BooleanArray, FixedSizeBinaryArray, GenericBinaryArray,
     GenericListArray, GenericStringArray, PrimitiveArray,
 };
+use crate::{FixedSizeListArray, MapArray};
 
 /// An iterator that returns Some(T) or None, that can be used on any [`ArrayAccessor`]
 ///
@@ -124,8 +125,12 @@ pub type GenericStringIter<'a, T> = ArrayIter<&'a GenericStringArray<T>>;
 pub type GenericBinaryIter<'a, T> = ArrayIter<&'a GenericBinaryArray<T>>;
 /// an iterator that returns Some(T) or None, that can be used on any FixedSizeBinaryArray
 pub type FixedSizeBinaryIter<'a> = ArrayIter<&'a FixedSizeBinaryArray>;
+/// an iterator that returns Some(T) or None, that can be used on any FixedSizeListArray
+pub type FixedSizeListIter<'a> = ArrayIter<&'a FixedSizeListArray>;
 /// an iterator that returns Some(T) or None, that can be used on any ListArray
 pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
+/// an iterator that returns Some(T) or None, that can be used on any MapArray
+pub type MapArrayIter<'a> = ArrayIter<&'a MapArray>;
 
 #[cfg(test)]
 mod tests {
