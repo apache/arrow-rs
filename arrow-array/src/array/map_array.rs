@@ -748,14 +748,9 @@ mod tests {
             "Invalid argument error: Incorrect length of null buffer for MapArray, expected 4 got 3"
         );
 
-        let err = MapArray::try_new(
-            field.clone(),
-            offsets.clone(),
-            entries.slice(0, 2),
-            None,
-            false,
-        )
-        .unwrap_err();
+        let err =
+            MapArray::try_new(field, offsets.clone(), entries.slice(0, 2), None, false)
+                .unwrap_err();
 
         assert_eq!(
             err.to_string(),
