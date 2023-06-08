@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::{max, min};
-
 use arrow_buffer::Buffer;
 
 use crate::arrow::record_reader::{
     buffer::{BufferQueue, ScalarBuffer, ValuesBuffer},
     definition_levels::{DefinitionLevelBuffer, DefinitionLevelBufferDecoder},
 };
+use crate::column::reader::decoder::RepetitionLevelDecoderImpl;
 use crate::column::{
     page::PageReader,
     reader::{
-        decoder::{ColumnLevelDecoderImpl, ColumnValueDecoder, ColumnValueDecoderImpl},
+        decoder::{ColumnValueDecoder, ColumnValueDecoderImpl},
         GenericColumnReader,
     },
 };
@@ -37,15 +36,12 @@ use crate::schema::types::ColumnDescPtr;
 pub(crate) mod buffer;
 mod definition_levels;
 
-/// The minimum number of levels read when reading a repeated field
-pub(crate) const MIN_BATCH_SIZE: usize = 1024;
-
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
 pub type RecordReader<T> =
     GenericRecordReader<ScalarBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
 
 pub(crate) type ColumnReader<CV> =
-    GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>;
+    GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>;
 
 /// A generic stateful column reader that delimits semantic records
 ///
@@ -55,19 +51,14 @@ pub(crate) type ColumnReader<CV> =
 pub struct GenericRecordReader<V, CV> {
     column_desc: ColumnDescPtr,
 
-    records: V,
+    values: V,
     def_levels: Option<DefinitionLevelBuffer>,
     rep_levels: Option<ScalarBuffer<i16>>,
     column_reader: Option<ColumnReader<CV>>,
-
-    /// Number of records accumulated in records
-    num_records: usize,
-
-    /// Number of values `num_records` contains.
+    /// Number of buffered levels / null-padded values
     num_values: usize,
-
-    /// Starts from 1, number of values have been written to buffer
-    values_written: usize,
+    /// Number of buffered records
+    num_records: usize,
 }
 
 impl<V, CV> GenericRecordReader<V, CV>
@@ -93,14 +84,13 @@ where
         let rep_levels = (desc.max_rep_level() > 0).then(ScalarBuffer::new);
 
         Self {
-            records,
+            values: records,
             def_levels,
             rep_levels,
             column_reader: None,
             column_desc: desc,
-            num_records: 0,
             num_values: 0,
-            values_written: 0,
+            num_records: 0,
         }
     }
 
@@ -117,7 +107,7 @@ where
         });
 
         let rep_level_decoder = (descr.max_rep_level() != 0)
-            .then(|| ColumnLevelDecoderImpl::new(descr.max_rep_level()));
+            .then(|| RepetitionLevelDecoderImpl::new(descr.max_rep_level()));
 
         self.column_reader = Some(GenericColumnReader::new_with_decoders(
             self.column_desc.clone(),
@@ -142,56 +132,14 @@ where
         let mut records_read = 0;
 
         loop {
-            // Try to find some records from buffers that has been read into memory
-            // but not counted as seen records.
-
-            // Check to see if the column is exhausted. Only peek the next page since in
-            // case we are reading to a page boundary and do not actually need to read
-            // the next page.
-            let end_of_column = !self.column_reader.as_mut().unwrap().peek_next()?;
-
-            let (record_count, value_count) =
-                self.count_records(num_records - records_read, end_of_column);
-
-            self.num_records += record_count;
-            self.num_values += value_count;
-            records_read += record_count;
-
+            let records_to_read = num_records - records_read;
+            records_read += self.read_one_batch(records_to_read)?;
             if records_read == num_records
                 || !self.column_reader.as_mut().unwrap().has_next()?
             {
                 break;
             }
-
-            // If repetition levels present, we don't know how much more to read
-            // in order to read the requested number of records, therefore read at least
-            // MIN_BATCH_SIZE, otherwise read **exactly** what was requested. This helps
-            // to avoid a degenerate case where the buffers are never fully drained.
-            //
-            // Consider the scenario where the user is requesting batches of MIN_BATCH_SIZE.
-            //
-            // When transitioning across a row group boundary, this will read some remainder
-            // from the row group `r`, before reading MIN_BATCH_SIZE from the next row group,
-            // leaving `MIN_BATCH_SIZE + r` in the buffer.
-            //
-            // The client will then only split off the `MIN_BATCH_SIZE` they actually wanted,
-            // leaving behind `r`. This will continue indefinitely.
-            //
-            // Aside from wasting cycles splitting and shuffling buffers unnecessarily, this
-            // prevents dictionary preservation from functioning correctly as the buffer
-            // will never be emptied, allowing a new dictionary to be registered.
-            //
-            // This degenerate case can still occur for repeated fields, but
-            // it is avoided for the more common case of a non-repeated field
-            let batch_size = match &self.rep_levels {
-                Some(_) => max(num_records - records_read, MIN_BATCH_SIZE),
-                None => num_records - records_read,
-            };
-
-            // Try to more value from parquet pages
-            self.read_one_batch(batch_size)?;
         }
-
         Ok(records_read)
     }
 
@@ -201,31 +149,10 @@ where
     ///
     /// Number of records skipped
     pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
-        // First need to clear the buffer
-        let end_of_column = match self.column_reader.as_mut() {
-            Some(reader) => !reader.peek_next()?,
-            None => return Ok(0),
-        };
-
-        let (buffered_records, buffered_values) =
-            self.count_records(num_records, end_of_column);
-
-        self.num_records += buffered_records;
-        self.num_values += buffered_values;
-
-        let remaining = num_records - buffered_records;
-
-        if remaining == 0 {
-            return Ok(buffered_records);
+        match self.column_reader.as_mut() {
+            Some(reader) => reader.skip_records(num_records),
+            None => Ok(0),
         }
-
-        let skipped = self
-            .column_reader
-            .as_mut()
-            .unwrap()
-            .skip_records(remaining)?;
-
-        Ok(skipped + buffered_records)
     }
 
     /// Returns number of records stored in buffer.
@@ -246,25 +173,19 @@ where
     /// definition level values that have already been read into memory but not counted
     /// as record values, e.g. those from `self.num_values` to `self.values_written`.
     pub fn consume_def_levels(&mut self) -> Option<Buffer> {
-        match self.def_levels.as_mut() {
-            Some(x) => x.split_levels(self.num_values),
-            None => None,
-        }
+        self.def_levels.as_mut().and_then(|x| x.consume_levels())
     }
 
     /// Return repetition level data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_rep_levels(&mut self) -> Option<Buffer> {
-        match self.rep_levels.as_mut() {
-            Some(x) => Some(x.split_off(self.num_values)),
-            None => None,
-        }
+        self.rep_levels.as_mut().map(|x| x.consume())
     }
 
     /// Returns currently stored buffer data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_record_data(&mut self) -> V::Output {
-        self.records.split_off(self.num_values)
+        self.values.consume()
     }
 
     /// Returns currently stored null bitmap data.
@@ -277,34 +198,31 @@ where
     /// Should be called after consuming data, e.g. `consume_rep_levels`,
     /// `consume_rep_levels`, `consume_record_data` and `consume_bitmap_buffer`.
     pub fn reset(&mut self) {
-        self.values_written -= self.num_values;
-        self.num_records = 0;
         self.num_values = 0;
+        self.num_records = 0;
     }
 
     /// Returns bitmap data.
     pub fn consume_bitmap(&mut self) -> Option<Buffer> {
         self.def_levels
             .as_mut()
-            .map(|levels| levels.split_bitmask(self.num_values))
+            .map(|levels| levels.consume_bitmask())
     }
 
-    /// Try to read one batch of data.
+    /// Try to read one batch of data returning the number of records read
     fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
         let rep_levels = self
             .rep_levels
             .as_mut()
             .map(|levels| levels.spare_capacity_mut(batch_size));
-
         let def_levels = self.def_levels.as_mut();
+        let values = self.values.spare_capacity_mut(batch_size);
 
-        let values = self.records.spare_capacity_mut(batch_size);
-
-        let (values_read, levels_read) = self
+        let (records_read, values_read, levels_read) = self
             .column_reader
             .as_mut()
             .unwrap()
-            .read_batch(batch_size, def_levels, rep_levels, values)?;
+            .read_records(batch_size, def_levels, rep_levels, values)?;
 
         if values_read < levels_read {
             let def_levels = self.def_levels.as_ref().ok_or_else(|| {
@@ -313,90 +231,29 @@ where
                 )
             })?;
 
-            self.records.pad_nulls(
-                self.values_written,
+            self.values.pad_nulls(
+                self.num_values,
                 values_read,
                 levels_read,
                 def_levels.nulls().as_slice(),
             );
         }
 
-        let values_read = max(levels_read, values_read);
-        self.set_values_written(self.values_written + values_read);
-        Ok(values_read)
-    }
-
-    /// Inspects the buffered repetition levels in the range `self.num_values..self.values_written`
-    /// and returns the number of "complete" records along with the corresponding number of values
-    ///
-    /// If `end_of_column` is true it indicates that there are no further values for this
-    /// column chunk beyond what is currently in the buffers
-    ///
-    /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
-    fn count_records(
-        &self,
-        records_to_read: usize,
-        end_of_column: bool,
-    ) -> (usize, usize) {
-        match self.rep_levels.as_ref() {
-            Some(buf) => {
-                let buf = buf.as_slice();
-
-                let mut records_read = 0;
-                let mut end_of_last_record = self.num_values;
-
-                for (current, item) in buf
-                    .iter()
-                    .enumerate()
-                    .take(self.values_written)
-                    .skip(self.num_values)
-                {
-                    if *item == 0 && current != self.num_values {
-                        records_read += 1;
-                        end_of_last_record = current;
-
-                        if records_read == records_to_read {
-                            break;
-                        }
-                    }
-                }
-
-                // If reached end of column chunk => end of a record
-                if records_read != records_to_read
-                    && end_of_column
-                    && self.values_written != self.num_values
-                {
-                    records_read += 1;
-                    end_of_last_record = self.values_written;
-                }
-
-                (records_read, end_of_last_record - self.num_values)
-            }
-            None => {
-                let records_read =
-                    min(records_to_read, self.values_written - self.num_values);
-
-                (records_read, records_read)
-            }
-        }
-    }
-
-    fn set_values_written(&mut self, new_values_written: usize) {
-        self.values_written = new_values_written;
-        self.records.set_len(self.values_written);
-
+        self.num_records += records_read;
+        self.num_values += levels_read;
+        self.values.set_len(self.num_values);
         if let Some(ref mut buf) = self.rep_levels {
-            buf.set_len(self.values_written)
+            buf.set_len(self.num_values)
         };
-
         if let Some(ref mut buf) = self.def_levels {
-            buf.set_len(self.values_written)
+            buf.set_len(self.num_values)
         };
+        Ok(records_read)
     }
 }
 
 /// Returns true if we do not need to unpack the nullability for this column, this is
-/// only possible if the max defiition level is 1, and corresponds to nulls at the
+/// only possible if the max definition level is 1, and corresponds to nulls at the
 /// leaf level, as opposed to a nullable parent nested type
 fn packed_null_mask(descr: &ColumnDescPtr) -> bool {
     descr.max_def_level() == 1

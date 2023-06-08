@@ -1632,12 +1632,12 @@ mod tests {
             let mut out = [0; 4];
             let c1 = row_group.get_column_reader(0).unwrap();
             let mut c1 = get_typed_column_reader::<Int32Type>(c1);
-            c1.read_batch(4, None, None, &mut out).unwrap();
+            c1.read_records(4, None, None, &mut out).unwrap();
             assert_eq!(out, column_data[0]);
 
             let c2 = row_group.get_column_reader(1).unwrap();
             let mut c2 = get_typed_column_reader::<Int32Type>(c2);
-            c2.read_batch(4, None, None, &mut out).unwrap();
+            c2.read_records(4, None, None, &mut out).unwrap();
             assert_eq!(out, column_data[1]);
         };
 
