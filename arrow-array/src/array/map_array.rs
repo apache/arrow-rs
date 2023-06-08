@@ -27,8 +27,8 @@ use std::sync::Arc;
 ///
 /// Keys should always be non-null, but values can be null.
 ///
-/// [MapArray] is physically a [crate::array::ListArray] that has a
-/// [StructArray] with 2 child fields.
+/// [`MapArray`] is physically a [`ListArray`] of key values pairs stored as an `entries`
+/// [`StructArray`] with 2 child fields.
 ///
 /// See [`MapBuilder`](crate::builder::MapBuilder) for how to construct a [`MapArray`]
 #[derive(Clone)]
