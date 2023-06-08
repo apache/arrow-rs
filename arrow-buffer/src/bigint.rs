@@ -97,6 +97,30 @@ impl FromStr for i256 {
     }
 }
 
+impl From<i8> for i256 {
+    fn from(value: i8) -> Self {
+        Self::from_i128(value.into())
+    }
+}
+
+impl From<i16> for i256 {
+    fn from(value: i16) -> Self {
+        Self::from_i128(value.into())
+    }
+}
+
+impl From<i32> for i256 {
+    fn from(value: i32) -> Self {
+        Self::from_i128(value.into())
+    }
+}
+
+impl From<i64> for i256 {
+    fn from(value: i64) -> Self {
+        Self::from_i128(value.into())
+    }
+}
+
 /// Parse `s` with any sign and leading 0s removed
 fn parse_impl(s: &str, negative: bool) -> Result<i256, ParseI256Error> {
     if s.len() <= 38 {

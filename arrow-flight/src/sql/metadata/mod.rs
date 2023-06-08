@@ -30,11 +30,13 @@ mod catalogs;
 mod db_schemas;
 mod sql_info;
 mod tables;
+mod xdbc_info;
 
 pub use catalogs::GetCatalogsBuilder;
 pub use db_schemas::GetDbSchemasBuilder;
 pub use sql_info::SqlInfoList;
 pub use tables::GetTablesBuilder;
+pub use xdbc_info::{XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder};
 
 use arrow_array::ArrayRef;
 use arrow_array::UInt32Array;
@@ -52,4 +54,19 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
     let mut sort: Vec<_> = rows.iter().enumerate().collect();
     sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
     UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::RecordBatch;
+    use arrow_cast::pretty::pretty_format_batches;
+    pub fn assert_batches_eq(batches: &[RecordBatch], expected_lines: &[&str]) {
+        let formatted = pretty_format_batches(batches).unwrap().to_string();
+        let actual_lines: Vec<_> = formatted.trim().lines().collect();
+        assert_eq!(
+            &actual_lines, expected_lines,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected_lines, actual_lines
+        );
+    }
 }
