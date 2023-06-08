@@ -265,16 +265,36 @@ pub use crate::types::ArrowPrimitiveType;
 
 /// An array of [primitive values](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout)
 ///
+/// # Example: From a Vec
+///
+/// ```
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr: PrimitiveArray<Int32Type> = PrimitiveArray::from(vec![1, 2, 3, 4]);
+/// assert_eq!(4, arr.len());
+/// assert_eq!(0, arr.null_count());
+/// assert_eq!(arr.values(), &[1, 2, 3, 4])
+/// ```
+///
 /// # Example: From an iterator of values
 ///
 /// ```
-/// use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
 /// let arr: PrimitiveArray<Int32Type> = PrimitiveArray::from_iter_values((0..10).map(|x| x + 1));
 /// assert_eq!(10, arr.len());
 /// assert_eq!(0, arr.null_count());
 /// for i in 0..10i32 {
 ///     assert_eq!(i + 1, arr.value(i as usize));
 /// }
+/// ```
+///
+/// # Example: From an iterator of option
+///
+/// ```
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr: PrimitiveArray<Int32Type> = (0..10).map(|x| (x % 2 == 0).then_some(x)).collect();
+/// assert_eq!(10, arr.len());
+/// assert_eq!(5, arr.null_count());
+/// assert_eq!(arr.values(), &[0, 0, 2, 0, 4, 0, 6, 0, 8, 0])
 /// ```
 pub struct PrimitiveArray<T: ArrowPrimitiveType> {
     data_type: DataType,
@@ -294,7 +314,7 @@ impl<T: ArrowPrimitiveType> Clone for PrimitiveArray<T> {
 }
 
 impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
-    /// Create a new [`PrimitiveArray`] from the provided data_type, values, nulls
+    /// Create a new [`PrimitiveArray`] from the provided values and nulls
     ///
     /// # Panics
     ///
@@ -303,7 +323,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Self::try_new(values, nulls).unwrap()
     }
 
-    /// Create a new [`PrimitiveArray`] from the provided data_type, values, nulls
+    /// Create a new [`PrimitiveArray`] from the provided values and nulls
     ///
     /// # Errors
     ///
