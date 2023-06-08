@@ -449,7 +449,7 @@ impl SqlInfoData {
 
 /// A builder for a [`CommandGetSqlInfo`] response.
 pub struct GetSqlInfoBuilder<'a> {
-    /// requested `SqlInfo`s. If empty means return all infos. 
+    /// requested `SqlInfo`s. If empty means return all infos.
     info: Vec<u32>,
     infos: &'a SqlInfoData,
 }
