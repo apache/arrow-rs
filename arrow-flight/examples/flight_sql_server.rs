@@ -31,7 +31,8 @@ use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::sql::metadata::{
-    SqlInfoList, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
+    SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData,
+    XdbcTypeInfoDataBuilder,
 };
 use arrow_flight::sql::{
     server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
@@ -66,13 +67,14 @@ const FAKE_TOKEN: &str = "uuid_token";
 const FAKE_HANDLE: &str = "uuid_handle";
 const FAKE_UPDATE_RESULT: i64 = 1;
 
-static INSTANCE_SQL_INFO: Lazy<SqlInfoList> = Lazy::new(|| {
-    SqlInfoList::new()
-        // Server information
-        .with_sql_info(SqlInfo::FlightSqlServerName, "Example Flight SQL Server")
-        .with_sql_info(SqlInfo::FlightSqlServerVersion, "1")
-        // 1.3 comes from https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/Schema.fbs#L24
-        .with_sql_info(SqlInfo::FlightSqlServerArrowVersion, "1.3")
+static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
+    let mut builder = SqlInfoDataBuilder::new();
+    // Server information
+    builder.append(SqlInfo::FlightSqlServerName, "Example Flight SQL Server");
+    builder.append(SqlInfo::FlightSqlServerVersion, "1");
+    // 1.3 comes from https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/Schema.fbs#L24
+    builder.append(SqlInfo::FlightSqlServerArrowVersion, "1.3");
+    builder.build().unwrap()
 });
 
 static INSTANCE_XBDC_DATA: Lazy<XdbcTypeInfoData> = Lazy::new(|| {
@@ -345,7 +347,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
-            .try_with_schema(SqlInfoList::schema())
+            .try_with_schema(query.into_builder(&INSTANCE_SQL_DATA).schema().as_ref())
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);
@@ -532,9 +534,11 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandGetSqlInfo,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        let batch = INSTANCE_SQL_INFO.filter(&query.info).encode();
+        let builder = query.into_builder(&INSTANCE_SQL_DATA);
+        let schema = builder.schema();
+        let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
-            .with_schema(Arc::new(SqlInfoList::schema().clone()))
+            .with_schema(schema)
             .build(futures::stream::once(async { batch }))
             .map_err(Status::from);
         Ok(Response::new(Box::pin(stream)))
