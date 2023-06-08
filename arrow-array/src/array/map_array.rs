@@ -62,7 +62,7 @@ impl MapArray {
         let len = offsets.len() - 1; // Offsets guaranteed to not be empty
         let end_offset = offsets.last().unwrap().as_usize();
         // don't need to check other values of `offsets` because they are checked
-        // during construction of `OffsetsBuffer`
+        // during construction of `OffsetBuffer`
         if end_offset > entries.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Max offset of {end_offset} exceeds length of entries {}",
@@ -80,7 +80,7 @@ impl MapArray {
         }
         if field.is_nullable() || entries.null_count() != 0 {
             return Err(ArrowError::InvalidArgumentError(
-                "MapArray entries cannot contain be null".to_string(),
+                "MapArray entries cannot contain nulls".to_string(),
             ));
         }
 
