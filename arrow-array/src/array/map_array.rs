@@ -29,6 +29,8 @@ use std::sync::Arc;
 ///
 /// [MapArray] is physically a [crate::array::ListArray] that has a
 /// [StructArray] with 2 child fields.
+///
+/// See [`MapBuilder`](crate::builder::MapBuilder) for how to construct a [`MapArray`]
 #[derive(Clone)]
 pub struct MapArray {
     data_type: DataType,
@@ -41,6 +43,9 @@ pub struct MapArray {
 
 impl MapArray {
     /// Create a new [`MapArray`] from the provided parts
+    ///
+    /// See [`MapBuilder`](crate::builder::MapBuilder) for a higher-level interface
+    /// to construct a [`MapArray`]
     ///
     /// # Errors
     ///
@@ -109,6 +114,9 @@ impl MapArray {
     }
 
     /// Create a new [`MapArray`] from the provided parts
+    ///
+    /// See [`MapBuilder`](crate::builder::MapBuilder) for a higher-level interface
+    /// to construct a [`MapArray`]
     ///
     /// # Panics
     ///
