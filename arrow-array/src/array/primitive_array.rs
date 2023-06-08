@@ -35,36 +35,220 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// A [`PrimitiveArray`] of `i8`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Int8Array;
+/// // Create from Vec<Option<i8>>
+/// let arr = Int8Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i8>
+/// let arr = Int8Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Int8Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Int8Array = PrimitiveArray<Int8Type>;
 
 /// A [`PrimitiveArray`] of `i16`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Int16Array;
+/// // Create from Vec<Option<i16>>
+/// let arr = Int16Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i16>
+/// let arr = Int16Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Int16Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Int16Array = PrimitiveArray<Int16Type>;
 
 /// A [`PrimitiveArray`] of `i32`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Int32Array;
+/// // Create from Vec<Option<i32>>
+/// let arr = Int32Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i32>
+/// let arr = Int32Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Int32Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Int32Array = PrimitiveArray<Int32Type>;
 
 /// A [`PrimitiveArray`] of `i64`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Int64Array;
+/// // Create from Vec<Option<i64>>
+/// let arr = Int64Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i64>
+/// let arr = Int64Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Int64Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Int64Array = PrimitiveArray<Int64Type>;
 
 /// A [`PrimitiveArray`] of `u8`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::UInt8Array;
+/// // Create from Vec<Option<u8>>
+/// let arr = UInt8Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<u8>
+/// let arr = UInt8Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: UInt8Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type UInt8Array = PrimitiveArray<UInt8Type>;
 
 /// A [`PrimitiveArray`] of `u16`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::UInt16Array;
+/// // Create from Vec<Option<u16>>
+/// let arr = UInt16Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<u16>
+/// let arr = UInt16Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: UInt16Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type UInt16Array = PrimitiveArray<UInt16Type>;
 
 /// A [`PrimitiveArray`] of `u32`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::UInt32Array;
+/// // Create from Vec<Option<u32>>
+/// let arr = UInt32Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<u32>
+/// let arr = UInt32Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: UInt32Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type UInt32Array = PrimitiveArray<UInt32Type>;
 
 /// A [`PrimitiveArray`] of `u64`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::UInt64Array;
+/// // Create from Vec<Option<u64>>
+/// let arr = UInt64Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<u64>
+/// let arr = UInt64Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: UInt64Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type UInt64Array = PrimitiveArray<UInt64Type>;
 
 /// A [`PrimitiveArray`] of `f16`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Float16Array;
+/// use half::f16;
+/// // Create from Vec<Option<f16>>
+/// let arr = Float16Array::from(vec![Some(f16::from_f64(1.0)), Some(f16::from_f64(2.0))]);
+/// // Create from Vec<i8>
+/// let arr = Float16Array::from(vec![f16::from_f64(1.0), f16::from_f64(2.0), f16::from_f64(3.0)]);
+/// // Create iter/collect
+/// let arr: Float16Array = std::iter::repeat(f16::from_f64(1.0)).take(10).collect();
+/// ```
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow_array::Float16Array;
+/// use half::f16;
+/// let arr : Float16Array = [Some(f16::from_f64(1.0)), Some(f16::from_f64(2.0))].into_iter().collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Float16Array = PrimitiveArray<Float16Type>;
 
 /// A [`PrimitiveArray`] of `f32`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Float32Array;
+/// // Create from Vec<Option<f32>>
+/// let arr = Float32Array::from(vec![Some(1.0), None, Some(2.0)]);
+/// // Create from Vec<f32>
+/// let arr = Float32Array::from(vec![1.0, 2.0, 3.0]);
+/// // Create iter/collect
+/// let arr: Float32Array = std::iter::repeat(42.0).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Float32Array = PrimitiveArray<Float32Type>;
 
 /// A [`PrimitiveArray`] of `f64`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Float32Array;
+/// // Create from Vec<Option<f32>>
+/// let arr = Float32Array::from(vec![Some(1.0), None, Some(2.0)]);
+/// // Create from Vec<f32>
+/// let arr = Float32Array::from(vec![1.0, 2.0, 3.0]);
+/// // Create iter/collect
+/// let arr: Float32Array = std::iter::repeat(42.0).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Float64Array = PrimitiveArray<Float64Type>;
 
 /// A [`PrimitiveArray`] of seconds since UNIX epoch stored as `i64`
@@ -113,6 +297,7 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_tz).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11 +10:00")
 /// ```
 ///
+/// See [`PrimitiveArray`] for more information and examples
 pub type TimestampSecondArray = PrimitiveArray<TimestampSecondType>;
 
 /// A [`PrimitiveArray`] of milliseconds since UNIX epoch stored as `i64`
@@ -188,9 +373,42 @@ pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
 /// A [`PrimitiveArray`] of 128-bit fixed point decimals
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Decimal128Array;
+/// // Create from Vec<Option<i18>>
+/// let arr = Decimal128Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i128>
+/// let arr = Decimal128Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Decimal128Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
 
 /// A [`PrimitiveArray`] of 256-bit fixed point decimals
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Decimal256Array;
+/// use arrow_buffer::i256;
+/// // Create from Vec<Option<i256>>
+/// let arr = Decimal256Array::from(vec![Some(i256::from(1)), None, Some(i256::from(2))]);
+/// // Create from Vec<i256>
+/// let arr = Decimal256Array::from(vec![i256::from(1), i256::from(2), i256::from(3)]);
+/// // Create iter/collect
+/// let arr: Decimal256Array = std::iter::repeat(i256::from(42)).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
 pub use crate::types::ArrowPrimitiveType;

@@ -31,27 +31,131 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// A [`DictionaryArray`] indexed by `i8`
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow_array::{Array, Int8DictionaryArray, Int8Array, StringArray};
+/// # use std::sync::Arc;
+///
+/// let array: Int8DictionaryArray = vec!["a", "a", "b", "c"].into_iter().collect();
+/// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+/// assert_eq!(array.keys(), &Int8Array::from(vec![0, 0, 1, 2]));
+/// assert_eq!(array.values(), &values);
+/// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int8DictionaryArray = DictionaryArray<Int8Type>;
 
 /// A [`DictionaryArray`] indexed by `i16`
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow_array::{Array, Int16DictionaryArray, Int16Array, StringArray};
+/// # use std::sync::Arc;
+///
+/// let array: Int16DictionaryArray = vec!["a", "a", "b", "c"].into_iter().collect();
+/// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+/// assert_eq!(array.keys(), &Int16Array::from(vec![0, 0, 1, 2]));
+/// assert_eq!(array.values(), &values);
+/// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int16DictionaryArray = DictionaryArray<Int16Type>;
 
 /// A [`DictionaryArray`] indexed by `i32`
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow_array::{Array, Int32DictionaryArray, Int32Array, StringArray};
+/// # use std::sync::Arc;
+///
+/// let array: Int32DictionaryArray = vec!["a", "a", "b", "c"].into_iter().collect();
+/// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+/// assert_eq!(array.keys(), &Int32Array::from(vec![0, 0, 1, 2]));
+/// assert_eq!(array.values(), &values);
+/// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int32DictionaryArray = DictionaryArray<Int32Type>;
 
 /// A [`DictionaryArray`] indexed by `i64`
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow_array::{Array, Int64DictionaryArray, Int64Array, StringArray};
+/// # use std::sync::Arc;
+///
+/// let array: Int64DictionaryArray = vec!["a", "a", "b", "c"].into_iter().collect();
+/// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+/// assert_eq!(array.keys(), &Int64Array::from(vec![0, 0, 1, 2]));
+/// assert_eq!(array.values(), &values);
+/// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int64DictionaryArray = DictionaryArray<Int64Type>;
 
 /// A [`DictionaryArray`] indexed by `u8`
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow_array::{Array, UInt8DictionaryArray, UInt8Array, StringArray};
+/// # use std::sync::Arc;
+///
+/// let array: UInt8DictionaryArray = vec!["a", "a", "b", "c"].into_iter().collect();
+/// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+/// assert_eq!(array.keys(), &UInt8Array::from(vec![0, 0, 1, 2]));
+/// assert_eq!(array.values(), &values);
+/// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt8DictionaryArray = DictionaryArray<UInt8Type>;
 
 /// A [`DictionaryArray`] indexed by `u16`
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow_array::{Array, UInt16DictionaryArray, UInt16Array, StringArray};
+/// # use std::sync::Arc;
+///
+/// let array: UInt16DictionaryArray = vec!["a", "a", "b", "c"].into_iter().collect();
+/// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+/// assert_eq!(array.keys(), &UInt16Array::from(vec![0, 0, 1, 2]));
+/// assert_eq!(array.values(), &values);
+/// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt16DictionaryArray = DictionaryArray<UInt16Type>;
 
 /// A [`DictionaryArray`] indexed by `u32`
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow_array::{Array, UInt32DictionaryArray, UInt32Array, StringArray};
+/// # use std::sync::Arc;
+///
+/// let array: UInt32DictionaryArray = vec!["a", "a", "b", "c"].into_iter().collect();
+/// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+/// assert_eq!(array.keys(), &UInt32Array::from(vec![0, 0, 1, 2]));
+/// assert_eq!(array.values(), &values);
+/// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 
 /// A [`DictionaryArray`] indexed by `u64`
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow_array::{Array, UInt64DictionaryArray, UInt64Array, StringArray};
+/// # use std::sync::Arc;
+///
+/// let array: UInt64DictionaryArray = vec!["a", "a", "b", "c"].into_iter().collect();
+/// let values: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+/// assert_eq!(array.keys(), &UInt64Array::from(vec![0, 0, 1, 2]));
+/// assert_eq!(array.values(), &values);
+/// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 
 /// An array of [dictionary encoded values](https://arrow.apache.org/docs/format/Columnar.html#dictionary-encoded-layout)
