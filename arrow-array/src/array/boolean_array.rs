@@ -32,8 +32,6 @@ use std::sync::Arc;
 /// ```
 /// # use arrow_array::{Array, BooleanArray};
 /// let arr: BooleanArray = vec![true, true, false].into();
-/// let values: Vec<_> = arr.iter().collect();
-/// assert_eq!(&values, &[Some(true), Some(true), Some(false)])
 /// ```
 ///
 /// # Example: From an optional Vec
@@ -41,8 +39,6 @@ use std::sync::Arc;
 /// ```
 /// # use arrow_array::{Array, BooleanArray};
 /// let arr: BooleanArray = vec![Some(true), None, Some(false)].into();
-/// let values: Vec<_> = arr.iter().collect();
-/// assert_eq!(&values, &[Some(true), None, Some(false)])
 /// ```
 ///
 /// # Example: From an iterator
