@@ -94,6 +94,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// * `offsets.len() - 1 != nulls.len()`
     /// * `offsets.last() > values.len()`
     /// * `!field.is_nullable() && values.null_count() != 0`
+    /// * `field.data_type() != values.data_type()`
     pub fn try_new(
         field: FieldRef,
         offsets: OffsetBuffer<OffsetSize>,
@@ -103,7 +104,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         let len = offsets.len() - 1; // Offsets guaranteed to not be empty
         let end_offset = offsets.last().unwrap().as_usize();
         // don't need to check other values of `offsets` because they are checked
-        // during construction of `OffsetsbBuffer`
+        // during construction of `OffsetBuffer`
         if end_offset > values.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Max offset of {end_offset} exceeds length of values {}",

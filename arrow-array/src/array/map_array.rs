@@ -22,7 +22,7 @@ use crate::{
 };
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -30,8 +30,10 @@ use std::sync::Arc;
 ///
 /// Keys should always be non-null, but values can be null.
 ///
-/// [MapArray] is physically a [crate::array::ListArray] that has a
-/// [StructArray] with 2 child fields.
+/// [`MapArray`] is physically a [`ListArray`] of key values pairs stored as an `entries`
+/// [`StructArray`] with 2 child fields.
+///
+/// See [`MapBuilder`](crate::builder::MapBuilder) for how to construct a [`MapArray`]
 #[derive(Clone)]
 pub struct MapArray {
     data_type: DataType,
@@ -43,6 +45,112 @@ pub struct MapArray {
 }
 
 impl MapArray {
+    /// Create a new [`MapArray`] from the provided parts
+    ///
+    /// See [`MapBuilder`](crate::builder::MapBuilder) for a higher-level interface
+    /// to construct a [`MapArray`]
+    ///
+    /// # Errors
+    ///
+    /// Errors if
+    ///
+    /// * `offsets.len() - 1 != nulls.len()`
+    /// * `offsets.last() > entries.len()`
+    /// * `field.is_nullable()`
+    /// * `entries.null_count() != 0`
+    /// * `entries.columns().len() != 2`
+    /// * `field.data_type() != entries.data_type()`
+    pub fn try_new(
+        field: FieldRef,
+        offsets: OffsetBuffer<i32>,
+        entries: StructArray,
+        nulls: Option<NullBuffer>,
+        ordered: bool,
+    ) -> Result<Self, ArrowError> {
+        let len = offsets.len() - 1; // Offsets guaranteed to not be empty
+        let end_offset = offsets.last().unwrap().as_usize();
+        // don't need to check other values of `offsets` because they are checked
+        // during construction of `OffsetBuffer`
+        if end_offset > entries.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Max offset of {end_offset} exceeds length of entries {}",
+                entries.len()
+            )));
+        }
+
+        if let Some(n) = nulls.as_ref() {
+            if n.len() != len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of null buffer for MapArray, expected {len} got {}",
+                    n.len(),
+                )));
+            }
+        }
+        if field.is_nullable() || entries.null_count() != 0 {
+            return Err(ArrowError::InvalidArgumentError(
+                "MapArray entries cannot contain nulls".to_string(),
+            ));
+        }
+
+        if field.data_type() != entries.data_type() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "MapArray expected data type {} got {} for {:?}",
+                field.data_type(),
+                entries.data_type(),
+                field.name()
+            )));
+        }
+
+        if entries.columns().len() != 2 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "MapArray entries must contain two children, got {}",
+                entries.columns().len()
+            )));
+        }
+
+        Ok(Self {
+            data_type: DataType::Map(field, ordered),
+            nulls,
+            entries,
+            value_offsets: offsets,
+        })
+    }
+
+    /// Create a new [`MapArray`] from the provided parts
+    ///
+    /// See [`MapBuilder`](crate::builder::MapBuilder) for a higher-level interface
+    /// to construct a [`MapArray`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`Self::try_new`] returns an error
+    pub fn new(
+        field: FieldRef,
+        offsets: OffsetBuffer<i32>,
+        entries: StructArray,
+        nulls: Option<NullBuffer>,
+        ordered: bool,
+    ) -> Self {
+        Self::try_new(field, offsets, entries, nulls, ordered).unwrap()
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(
+        self,
+    ) -> (
+        FieldRef,
+        OffsetBuffer<i32>,
+        StructArray,
+        Option<NullBuffer>,
+        bool,
+    ) {
+        let (f, ordered) = match self.data_type {
+            DataType::Map(f, ordered) => (f, ordered),
+            _ => unreachable!(),
+        };
+        (f, self.value_offsets, self.entries, self.nulls, ordered)
+    }
+
     /// Returns a reference to the offsets of this map
     ///
     /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
@@ -622,5 +730,83 @@ mod tests {
             assert!(map_array.is_valid(i));
             assert!(!map_array.is_null(i));
         }
+    }
+
+    #[test]
+    fn test_try_new() {
+        let offsets = OffsetBuffer::new(vec![0, 1, 4, 5].into());
+        let fields = Fields::from(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("values", DataType::Int32, false),
+        ]);
+        let columns = vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+        ];
+
+        let entries = StructArray::new(fields.clone(), columns, None);
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+
+        MapArray::new(field.clone(), offsets.clone(), entries.clone(), None, false);
+
+        let nulls = NullBuffer::new_null(3);
+        MapArray::new(field.clone(), offsets, entries.clone(), Some(nulls), false);
+
+        let nulls = NullBuffer::new_null(3);
+        let offsets = OffsetBuffer::new(vec![0, 1, 2, 4, 5].into());
+        let err = MapArray::try_new(
+            field.clone(),
+            offsets.clone(),
+            entries.clone(),
+            Some(nulls),
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for MapArray, expected 4 got 3"
+        );
+
+        let err =
+            MapArray::try_new(field, offsets.clone(), entries.slice(0, 2), None, false)
+                .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Max offset of 5 exceeds length of entries 2"
+        );
+
+        let field = Arc::new(Field::new("element", DataType::Int64, false));
+        let err = MapArray::try_new(field, offsets.clone(), entries, None, false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.starts_with(
+                "Invalid argument error: MapArray expected data type Int64 got Struct"
+            ),
+            "{err}"
+        );
+
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]);
+        let columns = vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+        ];
+
+        let s = StructArray::new(fields.clone(), columns, None);
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+        let err = MapArray::try_new(field, offsets, s, None, false).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: MapArray entries must contain two children, got 3"
+        );
     }
 }
