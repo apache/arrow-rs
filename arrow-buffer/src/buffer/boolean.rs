@@ -18,8 +18,8 @@
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
 use crate::{
-    bit_util, buffer_bin_and, buffer_bin_or, buffer_bin_xor, buffer_unary_not, Buffer,
-    MutableBuffer,
+    bit_util, buffer_bin_and, buffer_bin_or, buffer_bin_xor, buffer_unary_not,
+    BooleanBufferBuilder, Buffer, MutableBuffer,
 };
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
@@ -262,6 +262,30 @@ impl<'a> IntoIterator for &'a BooleanBuffer {
 
     fn into_iter(self) -> Self::IntoIter {
         BitIterator::new(self.values(), self.offset, self.len)
+    }
+}
+
+impl From<&[bool]> for BooleanBuffer {
+    fn from(value: &[bool]) -> Self {
+        let mut builder = BooleanBufferBuilder::new(value.len());
+        builder.append_slice(value);
+        builder.finish()
+    }
+}
+
+impl From<Vec<bool>> for BooleanBuffer {
+    fn from(value: Vec<bool>) -> Self {
+        value.as_slice().into()
+    }
+}
+
+impl FromIterator<bool> for BooleanBuffer {
+    fn from_iter<T: IntoIterator<Item = bool>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let (hint, _) = iter.size_hint();
+        let mut builder = BooleanBufferBuilder::new(hint);
+        iter.for_each(|b| builder.append(b));
+        builder.finish()
     }
 }
 
