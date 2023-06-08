@@ -684,7 +684,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     fn truncate_minmax_value(&self, data: &[u8]) -> Vec<u8> {
-        if let Some(max_len) = self.props.truncate_minmax_value_len() {
+        if let Some(max_len) = self.props.minmax_value_truncate_len() {
             data[0..usize::min(data.len(), max_len)].to_vec()
         } else {
             data.to_vec()
