@@ -548,12 +548,14 @@ mod tests {
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
+    use arrow_array::cast::AsArray;
     use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType};
     use arrow_array::*;
     use arrow_array::{RecordBatch, RecordBatchReader};
     use arrow_buffer::{i256, ArrowNativeType, Buffer};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema};
+    use arrow_select::concat::concat_batches;
 
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReader,
@@ -2623,10 +2625,10 @@ mod tests {
 
         let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None).unwrap();
 
-        for _ in 0..2 {
+        for i in 0..2 {
             let mut list_a_builder = ListBuilder::new(StringBuilder::new());
-            for i in 0..1024 {
-                list_a_builder.values().append_value(format!("{i}"));
+            for j in 0..1024 {
+                list_a_builder.values().append_value(format!("{i} {j}"));
                 list_a_builder.append(true);
             }
             let batch = RecordBatch::try_new(
@@ -2650,8 +2652,23 @@ mod tests {
             .build()
             .unwrap();
 
-        let total_rows: usize = reader.map(|r| r.unwrap().num_rows()).sum();
-        assert_eq!(total_rows, 924 * 2);
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let batch = concat_batches(&schema, &batches).unwrap();
+
+        assert_eq!(batch.num_rows(), 924 * 2);
+        let list = batch.column(0).as_list::<i32>();
+
+        for w in list.value_offsets().windows(2) {
+            assert_eq!(w[0] + 1, w[1])
+        }
+        let mut values = list.values().as_string::<i32>().iter();
+
+        for i in 0..2 {
+            for j in 100..1024 {
+                let expected = format!("{i} {j}");
+                assert_eq!(values.next().unwrap().unwrap(), &expected);
+            }
+        }
     }
 
     #[test]
@@ -2730,33 +2747,36 @@ mod tests {
             ],
         ];
 
-        for selection in cases {
-            let selection = RowSelection::from(selection);
-            let mut reader = ParquetRecordBatchReaderBuilder::try_new(buf.clone())
-                .unwrap()
-                .with_row_selection(selection.clone())
-                .with_batch_size(2048)
-                .build()
-                .unwrap();
+        for batch_size in [100, 1024, 2048] {
+            for selection in &cases {
+                let selection = RowSelection::from(selection.clone());
+                let reader = ParquetRecordBatchReaderBuilder::try_new(buf.clone())
+                    .unwrap()
+                    .with_row_selection(selection.clone())
+                    .with_batch_size(batch_size)
+                    .build()
+                    .unwrap();
 
-            let actual = reader.next().unwrap().unwrap();
-            assert_eq!(actual.num_rows(), selection.row_count());
+                let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+                let actual = concat_batches(&batch.schema(), &batches).unwrap();
+                assert_eq!(actual.num_rows(), selection.row_count());
 
-            let mut batch_offset = 0;
-            let mut actual_offset = 0;
-            for selector in selection.iter() {
-                if selector.skip {
+                let mut batch_offset = 0;
+                let mut actual_offset = 0;
+                for selector in selection.iter() {
+                    if selector.skip {
+                        batch_offset += selector.row_count;
+                        continue;
+                    }
+
+                    assert_eq!(
+                        batch.slice(batch_offset, selector.row_count),
+                        actual.slice(actual_offset, selector.row_count)
+                    );
+
                     batch_offset += selector.row_count;
-                    continue;
+                    actual_offset += selector.row_count;
                 }
-
-                assert_eq!(
-                    batch.slice(batch_offset, selector.row_count),
-                    actual.slice(actual_offset, selector.row_count)
-                );
-
-                batch_offset += selector.row_count;
-                actual_offset += selector.row_count;
             }
         }
     }
