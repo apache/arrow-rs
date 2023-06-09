@@ -23,7 +23,7 @@ use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 
-/// See [`BinaryArray`] and [`LargeBinaryArray`] for storing binary data
+/// A [`GenericBinaryArray`] for storing `[u8]`
 pub type GenericBinaryArray<OffsetSize> = GenericByteArray<GenericBinaryType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
@@ -174,7 +174,7 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericStringArray<OffsetSize>>
     }
 }
 
-/// An array of `[u8]` using `i32` offsets
+/// A [`GenericBinaryArray`] of `[u8]` using `i32` offsets
 ///
 /// The byte length of each element is represented by an i32.
 ///
@@ -213,9 +213,10 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericStringArray<OffsetSize>>
 /// assert!(!array.is_null(4));
 /// ```
 ///
+/// See [`GenericByteArray`] for more information and examples
 pub type BinaryArray = GenericBinaryArray<i32>;
 
-/// An array of `[u8]` using `i64` offsets
+/// A [`GenericBinaryArray`] of `[u8]` using `i64` offsets
 ///
 /// # Examples
 ///
@@ -252,6 +253,7 @@ pub type BinaryArray = GenericBinaryArray<i32>;
 /// assert!(!array.is_null(4));
 /// ```
 ///
+/// See [`GenericByteArray`] for more information and examples
 pub type LargeBinaryArray = GenericBinaryArray<i64>;
 
 #[cfg(test)]

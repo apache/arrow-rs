@@ -21,7 +21,7 @@ use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
-/// See [`StringArray`] and [`LargeStringArray`] for storing string data
+/// A [`GenericByteArray`] for storing `str`
 pub type GenericStringArray<OffsetSize> = GenericByteArray<GenericStringType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
@@ -149,7 +149,7 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<Offse
     }
 }
 
-/// An array of `str` using `i32` offsets
+/// A [`GenericStringArray`] of `str` using `i32` offsets
 ///
 /// # Examples
 ///
@@ -172,9 +172,11 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<Offse
 /// let array = StringArray::from(vec![Some("foo"), None, Some("bar")]);
 /// assert_eq!(array.value(0), "foo");
 /// ```
+///
+/// See [`GenericByteArray`] for more information and examples
 pub type StringArray = GenericStringArray<i32>;
 
-/// An array of `str` using `i64` offsets
+/// A [`GenericStringArray`] of `str` using `i64` offsets
 ///
 /// # Examples
 ///
@@ -197,6 +199,8 @@ pub type StringArray = GenericStringArray<i32>;
 /// let array = LargeStringArray::from(vec![Some("foo"), None, Some("bar")]);
 /// assert_eq!(array.value(2), "bar");
 /// ```
+///
+/// See [`GenericByteArray`] for more information and examples
 pub type LargeStringArray = GenericStringArray<i64>;
 
 #[cfg(test)]

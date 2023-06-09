@@ -30,7 +30,7 @@ use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-/// A dictionary array indexed by `i8`
+/// A [`DictionaryArray`] indexed by `i8`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -42,9 +42,11 @@ use std::sync::Arc;
 /// assert_eq!(array.keys(), &Int8Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int8DictionaryArray = DictionaryArray<Int8Type>;
 
-/// A dictionary array indexed by `i16`
+/// A [`DictionaryArray`] indexed by `i16`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -56,9 +58,11 @@ pub type Int8DictionaryArray = DictionaryArray<Int8Type>;
 /// assert_eq!(array.keys(), &Int16Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int16DictionaryArray = DictionaryArray<Int16Type>;
 
-/// A dictionary array indexed by `i32`
+/// A [`DictionaryArray`] indexed by `i32`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -70,9 +74,11 @@ pub type Int16DictionaryArray = DictionaryArray<Int16Type>;
 /// assert_eq!(array.keys(), &Int32Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int32DictionaryArray = DictionaryArray<Int32Type>;
 
-/// A dictionary array indexed by `i64`
+/// A [`DictionaryArray`] indexed by `i64`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -84,9 +90,11 @@ pub type Int32DictionaryArray = DictionaryArray<Int32Type>;
 /// assert_eq!(array.keys(), &Int64Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int64DictionaryArray = DictionaryArray<Int64Type>;
 
-/// A dictionary array indexed by `u8`
+/// A [`DictionaryArray`] indexed by `u8`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -98,9 +106,11 @@ pub type Int64DictionaryArray = DictionaryArray<Int64Type>;
 /// assert_eq!(array.keys(), &UInt8Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt8DictionaryArray = DictionaryArray<UInt8Type>;
 
-/// A dictionary array indexed by `u16`
+/// A [`DictionaryArray`] indexed by `u16`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -112,9 +122,11 @@ pub type UInt8DictionaryArray = DictionaryArray<UInt8Type>;
 /// assert_eq!(array.keys(), &UInt16Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt16DictionaryArray = DictionaryArray<UInt16Type>;
 
-/// A dictionary array indexed by `u32`
+/// A [`DictionaryArray`] indexed by `u32`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -126,9 +138,11 @@ pub type UInt16DictionaryArray = DictionaryArray<UInt16Type>;
 /// assert_eq!(array.keys(), &UInt32Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 
-/// A dictionary array indexed by `u64`
+/// A [`DictionaryArray`] indexed by `u64`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -140,6 +154,8 @@ pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 /// assert_eq!(array.keys(), &UInt64Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 
 /// An array of [dictionary encoded values](https://arrow.apache.org/docs/format/Columnar.html#dictionary-encoded-layout)
@@ -175,38 +191,53 @@ pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 ///              length = 6
 /// ```
 ///
-/// Example **with nullable** data:
+/// # Example: From Nullable Data
 ///
 /// ```
-/// use arrow_array::{DictionaryArray, Int8Array, types::Int8Type};
+/// # use arrow_array::{DictionaryArray, Int8Array, types::Int8Type};
 /// let test = vec!["a", "a", "b", "c"];
 /// let array : DictionaryArray<Int8Type> = test.iter().map(|&x| if x == "b" {None} else {Some(x)}).collect();
 /// assert_eq!(array.keys(), &Int8Array::from(vec![Some(0), Some(0), None, Some(1)]));
 /// ```
 ///
-/// Example **without nullable** data:
+/// # Example: From Non-Nullable Data
 ///
 /// ```
-/// use arrow_array::{DictionaryArray, Int8Array, types::Int8Type};
+/// # use arrow_array::{DictionaryArray, Int8Array, types::Int8Type};
 /// let test = vec!["a", "a", "b", "c"];
 /// let array : DictionaryArray<Int8Type> = test.into_iter().collect();
 /// assert_eq!(array.keys(), &Int8Array::from(vec![0, 0, 1, 2]));
 /// ```
 ///
-/// Example from existing arrays:
+/// # Example: From Existing Arrays
 ///
 /// ```
-/// use std::sync::Arc;
-/// use arrow_array::{DictionaryArray, Int8Array, StringArray, types::Int8Type};
+/// # use std::sync::Arc;
+/// # use arrow_array::{DictionaryArray, Int8Array, StringArray, types::Int8Type};
 /// // You can form your own DictionaryArray by providing the
 /// // values (dictionary) and keys (indexes into the dictionary):
 /// let values = StringArray::from_iter_values(["a", "b", "c"]);
 /// let keys = Int8Array::from_iter_values([0, 0, 1, 2]);
 /// let array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
-/// let expected: DictionaryArray::<Int8Type> = vec!["a", "a", "b", "c"]
-///    .into_iter()
-///    .collect();
+/// let expected: DictionaryArray::<Int8Type> = vec!["a", "a", "b", "c"].into_iter().collect();
 /// assert_eq!(&array, &expected);
+/// ```
+///
+/// # Example: Using Builder
+///
+/// ```
+/// # use arrow_array::{Array, StringArray};
+/// # use arrow_array::builder::StringDictionaryBuilder;
+/// # use arrow_array::types::Int32Type;
+/// let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+/// builder.append_value("a");
+/// builder.append_null();
+/// builder.append_value("a");
+/// builder.append_value("b");
+/// let array = builder.finish();
+///
+/// let values: Vec<_> = array.downcast_dict::<StringArray>().unwrap().into_iter().collect();
+/// assert_eq!(&values, &[Some("a"), None, Some("a"), Some("b")]);
 /// ```
 pub struct DictionaryArray<K: ArrowDictionaryKeyType> {
     data_type: DataType,
