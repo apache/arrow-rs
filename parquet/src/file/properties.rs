@@ -638,7 +638,7 @@ impl WriterPropertiesBuilder {
 
     /// Sets the max length of min/max value fields in the column index.
     /// If set to `None` - there's no effective limit.
-    pub fn set_value_truncate_length(mut self, max_length: Option<usize>) -> Self {
+    pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
         self.minmax_value_truncate_len = max_length;
         self
     }
