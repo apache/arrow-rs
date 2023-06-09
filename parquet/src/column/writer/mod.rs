@@ -684,32 +684,31 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     fn truncate_min_value(&self, data: &[u8]) -> Vec<u8> {
-        if let Some(max_len) = self.props.minmax_value_truncate_len() {
-            match std::str::from_utf8(data) {
-                Ok(str_data) => truncate_utf8(str_data, max_len),
-                Err(_) => truncate_binary(data, max_len),
-            }
-        } else {
-            data.to_vec()
+        let max_effective_len =
+            self.props.minmax_value_truncate_len().unwrap_or(data.len());
+
+        match std::str::from_utf8(data) {
+            Ok(str_data) => truncate_utf8(str_data, max_effective_len),
+            Err(_) => truncate_binary(data, max_effective_len),
         }
     }
 
     fn truncate_max_value(&self, data: &[u8]) -> Vec<u8> {
-        if let Some(max_len) = self.props.minmax_value_truncate_len() {
-            match std::str::from_utf8(data) {
-                Ok(str_data) => {
-                    let mut v = truncate_utf8(str_data, max_len);
-                    increment_utf8(&mut v);
-                    v
-                }
-                Err(_) => {
-                    let mut v = truncate_binary(data, max_len);
-                    increment(&mut v);
-                    v
-                }
+        // Even if the user disables value truncation, we want to make sure to increase the max value so the user doesn't miss it.
+        let max_effective_len =
+            self.props.minmax_value_truncate_len().unwrap_or(data.len());
+
+        match std::str::from_utf8(data) {
+            Ok(str_data) => {
+                let mut v = truncate_utf8(str_data, max_effective_len);
+                increment_utf8(&mut v);
+                v
             }
-        } else {
-            data.to_vec()
+            Err(_) => {
+                let mut v = truncate_binary(data, max_effective_len);
+                increment(&mut v);
+                v
+            }
         }
     }
 
@@ -1184,17 +1183,17 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
 
 /// Truncate a UTF8 slice to the longest prefix that is still a valid UTF8 string, while being less than `max_len` bytes.
 fn truncate_utf8(data: &str, max_len: usize) -> Vec<u8> {
-    let mut effective_max_len = usize::min(data.len(), max_len);
+    let mut max_possible_len = usize::min(data.len(), max_len);
 
-    if data.is_char_boundary(effective_max_len) {
-        return data.as_bytes()[0..effective_max_len].to_vec();
+    if data.is_char_boundary(max_possible_len) {
+        return data.as_bytes()[0..max_possible_len].to_vec();
     }
 
     // UTF8 characters can only be up to 4 bytes long, so this loop has will only run up to 3 times before returning.
     loop {
-        effective_max_len -= 1;
-        if data.is_char_boundary(effective_max_len) {
-            return data.as_bytes()[0..effective_max_len].to_vec();
+        max_possible_len -= 1;
+        if data.is_char_boundary(max_possible_len) {
+            return data.as_bytes()[0..max_possible_len].to_vec();
         }
     }
 }
