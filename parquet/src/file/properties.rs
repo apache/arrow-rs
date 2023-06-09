@@ -81,7 +81,7 @@ const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
 const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
-const DEFAULT_COLUMN_INDEX_MINMAX_LEN: Option<usize> = Some(128);
+const DEFAULT_COLUMN_INDEX_MINMAX_LEN: Option<usize> = Some(64);
 const DEFAULT_CREATED_BY: &str =
     concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
 /// default value for the false positive probability used in a bloom filter.
