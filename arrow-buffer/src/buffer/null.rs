@@ -41,10 +41,8 @@ impl NullBuffer {
 
     /// Create a new [`NullBuffer`] of length `len` where all values are null
     pub fn new_null(len: usize) -> Self {
-        let buffer = MutableBuffer::new_null(len).into_buffer();
-        let buffer = BooleanBuffer::new(buffer, 0, len);
         Self {
-            buffer,
+            buffer: BooleanBuffer::new_zeroed(len),
             null_count: len,
         }
     }
