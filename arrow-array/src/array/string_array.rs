@@ -17,11 +17,11 @@
 
 use crate::types::GenericStringType;
 use crate::{GenericBinaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::{bit_util, MutableBuffer};
+use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
-/// See [`StringArray`] and [`LargeStringArray`] for storing string data
+/// A [`GenericByteArray`] for storing `str`
 pub type GenericStringArray<OffsetSize> = GenericByteArray<GenericStringType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
@@ -105,65 +105,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     }
 }
 
-impl<'a, Ptr, OffsetSize: OffsetSizeTrait> FromIterator<&'a Option<Ptr>>
-    for GenericStringArray<OffsetSize>
-where
-    Ptr: AsRef<str> + 'a,
-{
-    /// Creates a [`GenericStringArray`] based on an iterator of `Option` references.
-    fn from_iter<I: IntoIterator<Item = &'a Option<Ptr>>>(iter: I) -> Self {
-        // Convert each owned Ptr into &str and wrap in an owned `Option`
-        let iter = iter.into_iter().map(|o| o.as_ref().map(|p| p.as_ref()));
-        // Build a `GenericStringArray` with the resulting iterator
-        iter.collect::<GenericStringArray<OffsetSize>>()
-    }
-}
-
-impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
-    for GenericStringArray<OffsetSize>
-where
-    Ptr: AsRef<str>,
-{
-    /// Creates a [`GenericStringArray`] based on an iterator of [`Option`]s
-    fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
-        let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
-
-        let offset_size = std::mem::size_of::<OffsetSize>();
-        let mut offsets = MutableBuffer::new((data_len + 1) * offset_size);
-        let mut values = MutableBuffer::new(0);
-        let mut null_buf = MutableBuffer::new_null(data_len);
-        let null_slice = null_buf.as_slice_mut();
-        let mut length_so_far = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        for (i, s) in iter.enumerate() {
-            let value_bytes = if let Some(ref s) = s {
-                // set null bit
-                bit_util::set_bit(null_slice, i);
-                let s_bytes = s.as_ref().as_bytes();
-                length_so_far += OffsetSize::from_usize(s_bytes.len()).unwrap();
-                s_bytes
-            } else {
-                b""
-            };
-            values.extend_from_slice(value_bytes);
-            offsets.push(length_so_far);
-        }
-
-        // calculate actual data_len, which may be different from the iterator's upper bound
-        let data_len = (offsets.len() / offset_size) - 1;
-        let array_data = ArrayData::builder(Self::DATA_TYPE)
-            .len(data_len)
-            .add_buffer(offsets.into())
-            .add_buffer(values.into())
-            .null_bit_buffer(Some(null_buf.into()));
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
-    }
-}
-
 impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>>
     for GenericStringArray<OffsetSize>
 {
@@ -208,7 +149,7 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<Offse
     }
 }
 
-/// An array of `str` using `i32` offsets
+/// A [`GenericStringArray`] of `str` using `i32` offsets
 ///
 /// # Examples
 ///
@@ -231,9 +172,11 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<Offse
 /// let array = StringArray::from(vec![Some("foo"), None, Some("bar")]);
 /// assert_eq!(array.value(0), "foo");
 /// ```
+///
+/// See [`GenericByteArray`] for more information and examples
 pub type StringArray = GenericStringArray<i32>;
 
-/// An array of `str` using `i64` offsets
+/// A [`GenericStringArray`] of `str` using `i64` offsets
 ///
 /// # Examples
 ///
@@ -256,6 +199,8 @@ pub type StringArray = GenericStringArray<i32>;
 /// let array = LargeStringArray::from(vec![Some("foo"), None, Some("bar")]);
 /// assert_eq!(array.value(2), "bar");
 /// ```
+///
+/// See [`GenericByteArray`] for more information and examples
 pub type LargeStringArray = GenericStringArray<i64>;
 
 #[cfg(test)]

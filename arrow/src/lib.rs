@@ -21,38 +21,6 @@
 //! Please see the [arrow crates.io](https://crates.io/crates/arrow)
 //! page for feature flags and tips to improve performance.
 //!
-//! # Crate Topology
-//!
-//! The [`arrow`] project is implemented as multiple sub-crates, which are then re-exported by
-//! this top-level crate.
-//!
-//! Crate authors can choose to depend on this top-level crate, or just
-//! the sub-crates they need.
-//!
-//! The current list of sub-crates is:
-//!
-//! * [`arrow-arith`][arrow_arith] - arithmetic kernels
-//! * [`arrow-array`][arrow_array] - type-safe arrow array abstractions
-//! * [`arrow-buffer`][arrow_buffer] - buffer abstractions for arrow arrays
-//! * [`arrow-cast`][arrow_cast] - cast kernels for arrow arrays
-//! * [`arrow-csv`][arrow_csv] - read/write CSV to arrow format
-//! * [`arrow-data`][arrow_data] - the underlying data of arrow arrays
-//! * [`arrow-ipc`][arrow_ipc] - read/write IPC to arrow format
-//! * [`arrow-json`][arrow_json] - read/write JSON to arrow format
-//! * [`arrow-ord`][arrow_ord] - ordering kernels for arrow arrays
-//! * [`arrow-row`][arrow_row] - comparable row format
-//! * [`arrow-schema`][arrow_schema] - the logical types for arrow arrays
-//! * [`arrow-select`][arrow_select] - selection kernels for arrow arrays
-//! * [`arrow-string`][arrow_string] - string kernels for arrow arrays
-//!
-//! _This list is likely to grow as further functionality is split out from the top-level crate_
-//!
-//! Some functionality is also distributed independently of this crate:
-//!
-//! * [`arrow-flight`] - support for [Arrow Flight RPC]
-//! * [`arrow-integration-test`] - support for [Arrow JSON Test Format]
-//! * [`parquet`](https://docs.rs/parquet/latest/parquet/) - support for [Apache Parquet]
-//!
 //! # Columnar Format
 //!
 //! The [`array`] module provides statically typed implementations of all the array types as defined
@@ -73,7 +41,7 @@
 //! ```
 //!
 //! It is also possible to write generic code. For example, the following is generic over
-//! all primitively typed arrays:
+//! all primitively typed arrays
 //!
 //! ```rust
 //! # use std::iter::Sum;
@@ -92,7 +60,7 @@
 //! assert_eq!(sum(&TimestampNanosecondArray::from(vec![1, 2, 3])), 6);
 //! ```
 //!
-//! And the following is generic over all arrays with comparable values:
+//! And the following is generic over all arrays with comparable values
 //!
 //! ```rust
 //! # use arrow::array::{ArrayAccessor, ArrayIter, Int32Array, StringArray};
@@ -109,7 +77,7 @@
 //! assert_eq!(min(&StringArray::from(vec!["b", "a", "c"])), Some("a"));
 //! ```
 //!
-//! For more examples, and details consult the [arrow_array] docs.
+//! **For more examples, and details consult the [arrow_array] docs.**
 //!
 //! # Type Erasure / Trait Objects
 //!
@@ -316,6 +284,36 @@
 //! assert_eq!(string.value(0), "bar");
 //! assert_eq!(string.value(1), "foo");
 //! ```
+//!
+//! # Crate Topology
+//!
+//! The [`arrow`] project is implemented as multiple sub-crates, which are then re-exported by
+//! this top-level crate.
+//!
+//! Crate authors can choose to depend on this top-level crate, or just
+//! the sub-crates they need.
+//!
+//! The current list of sub-crates is:
+//!
+//! * [`arrow-arith`][arrow_arith] - arithmetic kernels
+//! * [`arrow-array`][arrow_array] - type-safe arrow array abstractions
+//! * [`arrow-buffer`][arrow_buffer] - buffer abstractions for arrow arrays
+//! * [`arrow-cast`][arrow_cast] - cast kernels for arrow arrays
+//! * [`arrow-csv`][arrow_csv] - read/write CSV to arrow format
+//! * [`arrow-data`][arrow_data] - the underlying data of arrow arrays
+//! * [`arrow-ipc`][arrow_ipc] - read/write IPC to arrow format
+//! * [`arrow-json`][arrow_json] - read/write JSON to arrow format
+//! * [`arrow-ord`][arrow_ord] - ordering kernels for arrow arrays
+//! * [`arrow-row`][arrow_row] - comparable row format
+//! * [`arrow-schema`][arrow_schema] - the logical types for arrow arrays
+//! * [`arrow-select`][arrow_select] - selection kernels for arrow arrays
+//! * [`arrow-string`][arrow_string] - string kernels for arrow arrays
+//!
+//! Some functionality is also distributed independently of this crate:
+//!
+//! * [`arrow-flight`] - support for [Arrow Flight RPC]
+//! * [`arrow-integration-test`] - support for [Arrow JSON Test Format]
+//! * [`parquet`](https://docs.rs/parquet/latest/parquet/) - support for [Apache Parquet]
 //!
 //! # Safety and Security
 //!

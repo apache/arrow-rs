@@ -34,7 +34,7 @@ use half::f16;
 use std::any::Any;
 use std::sync::Arc;
 
-/// An array of `i8`
+/// A [`PrimitiveArray`] of `i8`
 ///
 /// # Examples
 ///
@@ -49,9 +49,11 @@ use std::sync::Arc;
 /// // Create iter/collect
 /// let arr: Int8Array = std::iter::repeat(42).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Int8Array = PrimitiveArray<Int8Type>;
 
-/// An array of `i16`
+/// A [`PrimitiveArray`] of `i16`
 ///
 /// # Examples
 ///
@@ -66,9 +68,11 @@ pub type Int8Array = PrimitiveArray<Int8Type>;
 /// // Create iter/collect
 /// let arr: Int16Array = std::iter::repeat(42).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Int16Array = PrimitiveArray<Int16Type>;
 
-/// An array of `i32`
+/// A [`PrimitiveArray`] of `i32`
 ///
 /// # Examples
 ///
@@ -83,9 +87,11 @@ pub type Int16Array = PrimitiveArray<Int16Type>;
 /// // Create iter/collect
 /// let arr: Int32Array = std::iter::repeat(42).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Int32Array = PrimitiveArray<Int32Type>;
 
-/// An array of `i64`
+/// A [`PrimitiveArray`] of `i64`
 ///
 /// # Examples
 ///
@@ -100,9 +106,11 @@ pub type Int32Array = PrimitiveArray<Int32Type>;
 /// // Create iter/collect
 /// let arr: Int64Array = std::iter::repeat(42).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Int64Array = PrimitiveArray<Int64Type>;
 
-/// An array of `u8`
+/// A [`PrimitiveArray`] of `u8`
 ///
 /// # Examples
 ///
@@ -117,9 +125,11 @@ pub type Int64Array = PrimitiveArray<Int64Type>;
 /// // Create iter/collect
 /// let arr: UInt8Array = std::iter::repeat(42).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type UInt8Array = PrimitiveArray<UInt8Type>;
 
-/// An array of `u16`
+/// A [`PrimitiveArray`] of `u16`
 ///
 /// # Examples
 ///
@@ -134,9 +144,11 @@ pub type UInt8Array = PrimitiveArray<UInt8Type>;
 /// // Create iter/collect
 /// let arr: UInt16Array = std::iter::repeat(42).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type UInt16Array = PrimitiveArray<UInt16Type>;
 
-/// An array of `u32`
+/// A [`PrimitiveArray`] of `u32`
 ///
 /// # Examples
 ///
@@ -151,9 +163,11 @@ pub type UInt16Array = PrimitiveArray<UInt16Type>;
 /// // Create iter/collect
 /// let arr: UInt32Array = std::iter::repeat(42).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type UInt32Array = PrimitiveArray<UInt32Type>;
 
-/// An array of `u64`
+/// A [`PrimitiveArray`] of `u64`
 ///
 /// # Examples
 ///
@@ -168,9 +182,11 @@ pub type UInt32Array = PrimitiveArray<UInt32Type>;
 /// // Create iter/collect
 /// let arr: UInt64Array = std::iter::repeat(42).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type UInt64Array = PrimitiveArray<UInt64Type>;
 
-/// An array of `f16`
+/// A [`PrimitiveArray`] of `f16`
 ///
 /// # Examples
 ///
@@ -193,9 +209,11 @@ pub type UInt64Array = PrimitiveArray<UInt64Type>;
 /// use half::f16;
 /// let arr : Float16Array = [Some(f16::from_f64(1.0)), Some(f16::from_f64(2.0))].into_iter().collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Float16Array = PrimitiveArray<Float16Type>;
 
-/// An array of `f32`
+/// A [`PrimitiveArray`] of `f32`
 ///
 /// # Examples
 ///
@@ -210,9 +228,11 @@ pub type Float16Array = PrimitiveArray<Float16Type>;
 /// // Create iter/collect
 /// let arr: Float32Array = std::iter::repeat(42.0).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Float32Array = PrimitiveArray<Float32Type>;
 
-/// An array of `f64`
+/// A [`PrimitiveArray`] of `f64`
 ///
 /// # Examples
 ///
@@ -227,9 +247,11 @@ pub type Float32Array = PrimitiveArray<Float32Type>;
 /// // Create iter/collect
 /// let arr: Float32Array = std::iter::repeat(42.0).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Float64Array = PrimitiveArray<Float64Type>;
 
-/// An array of seconds since UNIX epoch stored as `i64`
+/// A [`PrimitiveArray`] of seconds since UNIX epoch stored as `i64`
 ///
 /// This type is similar to the [`chrono::DateTime`] type and can hold
 /// values such as `1970-05-09 14:25:11 +01:00`
@@ -275,83 +297,82 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_tz).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11 +10:00")
 /// ```
 ///
+/// See [`PrimitiveArray`] for more information and examples
 pub type TimestampSecondArray = PrimitiveArray<TimestampSecondType>;
 
-/// An array of milliseconds since UNIX epoch stored as `i64`
+/// A [`PrimitiveArray`] of milliseconds since UNIX epoch stored as `i64`
 ///
 /// See examples for [`TimestampSecondArray`]
 pub type TimestampMillisecondArray = PrimitiveArray<TimestampMillisecondType>;
 
-/// An array of microseconds since UNIX epoch stored as `i64`
+/// A [`PrimitiveArray`] of microseconds since UNIX epoch stored as `i64`
 ///
 /// See examples for [`TimestampSecondArray`]
 pub type TimestampMicrosecondArray = PrimitiveArray<TimestampMicrosecondType>;
 
-/// An array of nanoseconds since UNIX epoch stored as `i64`
+/// A [`PrimitiveArray`] of nanoseconds since UNIX epoch stored as `i64`
 ///
 /// See examples for [`TimestampSecondArray`]
 pub type TimestampNanosecondArray = PrimitiveArray<TimestampNanosecondType>;
 
-// TODO: give examples for the below types
-
-/// An array of days since UNIX epoch stored as `i32`
+/// A [`PrimitiveArray`] of days since UNIX epoch stored as `i32`
 ///
 /// This type is similar to the [`chrono::NaiveDate`] type and can hold
 /// values such as `2018-11-13`
 pub type Date32Array = PrimitiveArray<Date32Type>;
 
-/// An array of milliseconds since UNIX epoch stored as `i64`
+/// A [`PrimitiveArray`] of milliseconds since UNIX epoch stored as `i64`
 ///
 /// This type is similar to the [`chrono::NaiveDate`] type and can hold
 /// values such as `2018-11-13`
 pub type Date64Array = PrimitiveArray<Date64Type>;
 
-/// An array of seconds since midnight stored as `i32`
+/// A [`PrimitiveArray`] of seconds since midnight stored as `i32`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00`
 pub type Time32SecondArray = PrimitiveArray<Time32SecondType>;
 
-/// An array of milliseconds since midnight stored as `i32`
+/// A [`PrimitiveArray`] of milliseconds since midnight stored as `i32`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00.123`
 pub type Time32MillisecondArray = PrimitiveArray<Time32MillisecondType>;
 
-/// An array of microseconds since midnight stored as `i64`
+/// A [`PrimitiveArray`] of microseconds since midnight stored as `i64`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00.123456`
 pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
 
-/// An array of nanoseconds since midnight stored as `i64`
+/// A [`PrimitiveArray`] of nanoseconds since midnight stored as `i64`
 ///
 /// This type is similar to the [`chrono::NaiveTime`] type and can
 /// hold values such as `00:02:00.123456789`
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 
-/// An array of “calendar” intervals in months
+/// A [`PrimitiveArray`] of “calendar” intervals in months
 pub type IntervalYearMonthArray = PrimitiveArray<IntervalYearMonthType>;
 
-/// An array of “calendar” intervals in days and milliseconds
+/// A [`PrimitiveArray`] of “calendar” intervals in days and milliseconds
 pub type IntervalDayTimeArray = PrimitiveArray<IntervalDayTimeType>;
 
-/// An array of “calendar” intervals in  months, days, and nanoseconds
+/// A [`PrimitiveArray`] of “calendar” intervals in  months, days, and nanoseconds
 pub type IntervalMonthDayNanoArray = PrimitiveArray<IntervalMonthDayNanoType>;
 
-/// An array of elapsed durations in seconds
+/// A [`PrimitiveArray`] of elapsed durations in seconds
 pub type DurationSecondArray = PrimitiveArray<DurationSecondType>;
 
-/// An array of elapsed durations in milliseconds
+/// A [`PrimitiveArray`] of elapsed durations in milliseconds
 pub type DurationMillisecondArray = PrimitiveArray<DurationMillisecondType>;
 
-/// An array of elapsed durations in microseconds
+/// A [`PrimitiveArray`] of elapsed durations in microseconds
 pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
 
-/// An array of elapsed durations in nanoseconds
+/// A [`PrimitiveArray`] of elapsed durations in nanoseconds
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
-/// An array of 128-bit fixed point decimals
+/// A [`PrimitiveArray`] of 128-bit fixed point decimals
 ///
 /// # Examples
 ///
@@ -366,9 +387,11 @@ pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 /// // Create iter/collect
 /// let arr: Decimal128Array = std::iter::repeat(42).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
 
-/// An array of 256-bit fixed point decimals
+/// A [`PrimitiveArray`] of 256-bit fixed point decimals
 ///
 /// # Examples
 ///
@@ -384,22 +407,72 @@ pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
 /// // Create iter/collect
 /// let arr: Decimal256Array = std::iter::repeat(i256::from(42)).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
 pub use crate::types::ArrowPrimitiveType;
 
 /// An array of [primitive values](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout)
 ///
+/// # Example: From a Vec
+///
+/// ```
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr: PrimitiveArray<Int32Type> = vec![1, 2, 3, 4].into();
+/// assert_eq!(4, arr.len());
+/// assert_eq!(0, arr.null_count());
+/// assert_eq!(arr.values(), &[1, 2, 3, 4])
+/// ```
+///
+/// # Example: From an optional Vec
+///
+/// ```
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr: PrimitiveArray<Int32Type> = vec![Some(1), None, Some(3), None].into();
+/// assert_eq!(4, arr.len());
+/// assert_eq!(2, arr.null_count());
+/// // Note: values for null indexes are arbitrary
+/// assert_eq!(arr.values(), &[1, 0, 3, 0])
+/// ```
+///
 /// # Example: From an iterator of values
 ///
 /// ```
-/// use arrow_array::{Array, PrimitiveArray, types::Int32Type};
-/// let arr: PrimitiveArray<Int32Type> = PrimitiveArray::from_iter_values((0..10).map(|x| x + 1));
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr: PrimitiveArray<Int32Type> = (0..10).map(|x| x + 1).collect();
 /// assert_eq!(10, arr.len());
 /// assert_eq!(0, arr.null_count());
 /// for i in 0..10i32 {
 ///     assert_eq!(i + 1, arr.value(i as usize));
 /// }
+/// ```
+///
+/// # Example: From an iterator of option
+///
+/// ```
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr: PrimitiveArray<Int32Type> = (0..10).map(|x| (x % 2 == 0).then_some(x)).collect();
+/// assert_eq!(10, arr.len());
+/// assert_eq!(5, arr.null_count());
+/// // Note: values for null indexes are arbitrary
+/// assert_eq!(arr.values(), &[0, 0, 2, 0, 4, 0, 6, 0, 8, 0])
+/// ```
+///
+/// # Example: Using Builder
+///
+/// ```
+/// # use arrow_array::Array;
+/// # use arrow_array::builder::PrimitiveBuilder;
+/// # use arrow_array::types::Int32Type;
+/// let mut builder = PrimitiveBuilder::<Int32Type>::new();
+/// builder.append_value(1);
+/// builder.append_null();
+/// builder.append_value(2);
+/// let array = builder.finish();
+/// // Note: values for null indexes are arbitrary
+/// assert_eq!(array.values(), &[1, 0, 2]);
+/// assert!(array.is_null(1));
 /// ```
 pub struct PrimitiveArray<T: ArrowPrimitiveType> {
     data_type: DataType,

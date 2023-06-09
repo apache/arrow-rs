@@ -27,51 +27,43 @@ use std::sync::Arc;
 
 /// An array of [boolean values](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout)
 ///
-/// # Examples
-///
-/// Construction
+/// # Example: From a Vec
 ///
 /// ```
-///#     use arrow_array::{Array, BooleanArray};
-/// // Create from Vec<Option<bool>>
-/// let arr = BooleanArray::from(vec![Some(false), Some(true), None, Some(true)]);
-/// // Create from Vec<bool>
-/// let arr = BooleanArray::from(vec![false, true, true]);
-/// // Create from iter/collect
-/// let arr: BooleanArray = std::iter::repeat(Some(true)).take(10).collect();
+/// # use arrow_array::{Array, BooleanArray};
+/// let arr: BooleanArray = vec![true, true, false].into();
 /// ```
 ///
-/// Construction and Access
+/// # Example: From an optional Vec
 ///
 /// ```
-/// use arrow_array::{Array, BooleanArray};
-/// let arr = BooleanArray::from(vec![Some(false), Some(true), None, Some(true)]);
-/// assert_eq!(4, arr.len());
-/// assert_eq!(1, arr.null_count());
-/// assert!(arr.is_valid(0));
-/// assert!(!arr.is_null(0));
-/// assert_eq!(false, arr.value(0));
-/// assert!(!arr.is_valid(2));
-/// assert!(arr.is_null(2));
+/// # use arrow_array::{Array, BooleanArray};
+/// let arr: BooleanArray = vec![Some(true), None, Some(false)].into();
 /// ```
 ///
-/// Using `collect`
+/// # Example: From an iterator
+///
 /// ```
-/// use arrow_array::{Array, BooleanArray};
-/// let v = vec![Some(false), Some(true), Some(false), Some(true)];
-/// let arr = v.into_iter().collect::<BooleanArray>();
-/// assert_eq!(4, arr.len());
-/// assert_eq!(0, arr.offset());
-/// assert_eq!(0, arr.null_count());
-/// assert!(arr.is_valid(0));
-/// assert_eq!(false, arr.value(0));
-/// assert!(arr.is_valid(1));
-/// assert_eq!(true, arr.value(1));
-/// assert!(arr.is_valid(2));
-/// assert_eq!(false, arr.value(2));
-/// assert!(arr.is_valid(3));
-/// assert_eq!(true, arr.value(3));
+/// # use arrow_array::{Array, BooleanArray};
+/// let arr: BooleanArray = (0..5).map(|x| (x % 2 == 0).then(|| x % 3 == 0)).collect();
+/// let values: Vec<_> = arr.iter().collect();
+/// assert_eq!(&values, &[Some(true), None, Some(false), None, Some(false)])
 /// ```
+///
+/// # Example: Using Builder
+///
+/// ```
+/// # use arrow_array::Array;
+/// # use arrow_array::builder::BooleanBuilder;
+/// let mut builder = BooleanBuilder::new();
+/// builder.append_value(true);
+/// builder.append_null();
+/// builder.append_value(false);
+/// let array = builder.finish();
+/// let values: Vec<_> = array.iter().collect();
+/// assert_eq!(&values, &[Some(true), None, Some(false)])
+/// ```
+///
 #[derive(Clone)]
 pub struct BooleanArray {
     values: BooleanBuffer,
