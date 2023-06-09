@@ -1183,7 +1183,7 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
 
 /// Truncate a UTF8 slice to the longest prefix that is still a valid UTF8 string, while being less than `max_len` bytes.
 fn truncate_utf8(data: &str, max_len: usize) -> Vec<u8> {
-    let mut max_possible_len = usize::min(data.len(), max_len);
+    let mut max_possible_len = data.len().min(max_len);
 
     if data.is_char_boundary(max_possible_len) {
         return data.as_bytes()[0..max_possible_len].to_vec();
