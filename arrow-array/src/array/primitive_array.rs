@@ -432,6 +432,7 @@ pub use crate::types::ArrowPrimitiveType;
 /// let arr: PrimitiveArray<Int32Type> = vec![Some(1), None, Some(3), None].into();
 /// assert_eq!(4, arr.len());
 /// assert_eq!(2, arr.null_count());
+/// // Note: values for null indexes are arbitrary
 /// assert_eq!(arr.values(), &[1, 0, 3, 0])
 /// ```
 ///
@@ -454,6 +455,7 @@ pub use crate::types::ArrowPrimitiveType;
 /// let arr: PrimitiveArray<Int32Type> = (0..10).map(|x| (x % 2 == 0).then_some(x)).collect();
 /// assert_eq!(10, arr.len());
 /// assert_eq!(5, arr.null_count());
+/// // Note: values for null indexes are arbitrary
 /// assert_eq!(arr.values(), &[0, 0, 2, 0, 4, 0, 6, 0, 8, 0])
 /// ```
 ///
@@ -468,6 +470,7 @@ pub use crate::types::ArrowPrimitiveType;
 /// builder.append_null();
 /// builder.append_value(2);
 /// let array = builder.finish();
+/// // Note: values for null indexes are arbitrary
 /// assert_eq!(array.values(), &[1, 0, 2]);
 /// assert!(array.is_null(1));
 /// ```

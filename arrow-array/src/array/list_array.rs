@@ -474,9 +474,13 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
 }
 
 /// A [`GenericListArray`] of variable size lists, storing offsets as `i32`.
+///
+// See [`ListBuilder`](crate::builder::ListBuilder) for how to construct a [`ListArray`]
 pub type ListArray = GenericListArray<i32>;
 
 /// A [`GenericListArray`] of variable size lists, storing offsets as `i64`.
+///
+// See [`LargeListBuilder`](crate::builder::LargeListBuilder) for how to construct a [`LargeListArray`]
 pub type LargeListArray = GenericListArray<i64>;
 
 #[cfg(test)]
