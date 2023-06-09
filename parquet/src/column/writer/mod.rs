@@ -668,12 +668,25 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     self.column_index_builder.to_invalid();
                 }
                 Some(stat) => {
-                    self.column_index_builder.append(
-                        null_page,
-                        self.truncate_min_value(stat.min_bytes()),
-                        self.truncate_max_value(stat.max_bytes()),
-                        self.page_metrics.num_page_nulls as i64,
-                    );
+                    let physical_type = self.descr.physical_type();
+                    // We only truncate if the data is represented as binary
+                    if physical_type == Type::BYTE_ARRAY
+                        || physical_type == Type::FIXED_LEN_BYTE_ARRAY
+                    {
+                        self.column_index_builder.append(
+                            null_page,
+                            self.truncate_min_value(stat.min_bytes()),
+                            self.truncate_max_value(stat.max_bytes()),
+                            self.page_metrics.num_page_nulls as i64,
+                        );
+                    } else {
+                        self.column_index_builder.append(
+                            null_page,
+                            stat.min_bytes().to_vec(),
+                            stat.max_bytes().to_vec(),
+                            self.page_metrics.num_page_nulls as i64,
+                        );
+                    }
                 }
             }
         }
@@ -697,19 +710,24 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     fn truncate_max_value(&self, data: &[u8]) -> Vec<u8> {
         // Even if the user disables value truncation, we want to make sure to increase the max value so the user doesn't miss it.
-        let max_effective_len = self
+        let column_effective_index_truncate_length = self
             .props
             .column_index_truncate_length()
             .unwrap_or(data.len());
 
+        if data.len() <= column_effective_index_truncate_length {
+            return data.to_vec();
+        }
+
         match std::str::from_utf8(data) {
             Ok(str_data) => {
-                let mut v = truncate_utf8(str_data, max_effective_len);
+                let mut v =
+                    truncate_utf8(str_data, column_effective_index_truncate_length);
                 increment_utf8(&mut v);
                 v
             }
             Err(_) => {
-                let mut v = truncate_binary(data, max_effective_len);
+                let mut v = truncate_binary(data, column_effective_index_truncate_length);
                 increment(&mut v);
                 v
             }
@@ -1187,6 +1205,10 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
 
 /// Truncate a UTF8 slice to the longest prefix that is still a valid UTF8 string, while being less than `max_len` bytes.
 fn truncate_utf8(data: &str, max_len: usize) -> Vec<u8> {
+    if data.len() <= max_len {
+        return data.as_bytes().to_vec();
+    }
+
     let max_possible_len = data.len().min(max_len);
 
     let mut char_indices = data.char_indices();
@@ -1194,10 +1216,13 @@ fn truncate_utf8(data: &str, max_len: usize) -> Vec<u8> {
 
     // We know `data` is a valid UTF8 encoded string, which means it has at least one valid UTF8 byte, which will make this loop exist
     while let Some((idx, c)) = char_indices.next_back() {
-        // The character is between `idx` and `idx + c.len_utf()`, so we want to make sure it fits within the total allowed length.
-        let last_idx = idx + c.len_utf8();
-        if last_idx <= max_possible_len {
-            return data.as_bytes()[0..last_idx].to_vec();
+        let split_point = idx + c.len_utf8();
+        dbg!(split_point);
+        if split_point <= max_possible_len && data.is_char_boundary(split_point) {
+            // The character is between `idx` and `idx + _c.len_utf()`, so we take the longest possible slice.
+            // We take advantage of the fact that every byte prefix of a UTF8 code point is also a valid UTF8 code point.
+
+            return data.as_bytes()[0..split_point].to_vec();
         }
     }
 
@@ -1241,7 +1266,9 @@ fn increment_utf8(data: &mut Vec<u8>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::format::BoundaryOrder;
+    use crate::{
+        file::properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, format::BoundaryOrder,
+    };
     use bytes::Bytes;
     use rand::distributions::uniform::SampleUniform;
     use std::sync::Arc;
@@ -2284,12 +2311,9 @@ mod tests {
             if let Statistics::Int32(stats) = stats {
                 // first page is [1,2,3,4]
                 // second page is [-5,2,4,8]
+                // Note we don't increment here, as this is a non-binary type.
                 assert_eq!(stats.min_bytes(), column_index.min_values[1].as_slice());
-
-                // We expect the max value to be incremented
-                let mut stats_max_bytes = stats.max_bytes().to_vec();
-                increment(&mut stats_max_bytes);
-                assert_eq!(&stats_max_bytes, column_index.max_values.get(1).unwrap());
+                assert_eq!(stats.max_bytes(), column_index.max_values.get(1).unwrap());
             } else {
                 panic!("expecting Statistics::Int32");
             }
@@ -2319,13 +2343,11 @@ mod tests {
             get_test_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
 
         let mut data = vec![FixedLenByteArray::default(); 3];
-        // This is the expected min value
-        data[0].set_data(ByteBufferPtr::new(vec![0_u8; 200]));
-        // This is the expected max value
-        data[1].set_data(ByteBufferPtr::new(
-            String::from("Zorro the masked hero").into_bytes(),
-        ));
-        data[2].set_data(ByteBufferPtr::new(Vec::from_iter(0_u8..129)));
+        // This is the expected min value - "aaa..."
+        data[0].set_data(ByteBufferPtr::new(vec![97_u8; 200]));
+        // This is the expected max value - "ZZZ..."
+        data[1].set_data(ByteBufferPtr::new(vec![112_u8; 200]));
+        data[2].set_data(ByteBufferPtr::new(vec![98_u8; 200]));
 
         writer.write_batch(&data, None, None).unwrap();
 
@@ -2354,14 +2376,23 @@ mod tests {
 
                 // Column index stats are truncated, while the column chunk's aren't.
                 assert_ne!(stats.min_bytes(), column_index_min_value.as_slice());
-                // We expect the max value to be incremented
-                let mut stats_max_bytes = stats.max_bytes().to_vec();
-                increment(&mut stats_max_bytes);
-                assert_eq!(stats_max_bytes, column_index_max_value.as_slice());
+                assert_ne!(stats.max_bytes(), column_index_max_value.as_slice());
 
-                assert_eq!(column_index_min_value.len(), 64);
-                assert_eq!(column_index_min_value.as_slice(), &[0_u8; 64]);
-                assert_eq!(column_index_max_value.len(), 21);
+                assert_eq!(
+                    column_index_min_value.len(),
+                    DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH.unwrap()
+                );
+                assert_eq!(column_index_min_value.as_slice(), &[97_u8; 64]);
+                assert_eq!(
+                    column_index_max_value.len(),
+                    DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH.unwrap()
+                );
+
+                // We expect the last byte to be incremented
+                assert_eq!(
+                    *column_index_max_value.last().unwrap(),
+                    *column_index_max_value.first().unwrap() + 1
+                );
             } else {
                 panic!("expecting Statistics::FixedLenByteArray");
             }
@@ -2371,10 +2402,12 @@ mod tests {
     }
 
     #[test]
-    fn test_column_offset_index_metadata_truncating_spec_example() {
+    fn test_column_offset_index_truncating_spec_example() {
         // write data
         // and check the offset index and column index
         let page_writer = get_test_page_writer();
+
+        // Truncate values at 1 byte
         let builder =
             WriterProperties::builder().set_column_index_truncate_length(Some(1));
         let props = Arc::new(builder.build());
@@ -2459,7 +2492,7 @@ mod tests {
         increment_utf8(&mut v);
         assert_eq!(&v, "hellp".as_bytes());
 
-        // Utf8 string
+        // UTF8 string
         let s = "❤️🧡💛💚💙💜";
         let mut v = s.as_bytes().to_vec();
         increment_utf8(&mut v);
@@ -2470,6 +2503,13 @@ mod tests {
         } else {
             panic!("Expected incremented UTF8 string to also be valid.")
         }
+
+        // Max UTF8 character - should be a No-Op
+        let s = char::MAX.to_string();
+        assert_eq!(s.len(), 4);
+        let mut v = s.as_bytes().to_vec();
+        increment_utf8(&mut v);
+        assert_eq!(&v, s.as_bytes());
     }
 
     #[test]
@@ -2479,11 +2519,12 @@ mod tests {
         let r = truncate_utf8(data, data.as_bytes().len());
         assert_eq!(r.len(), data.as_bytes().len());
         assert_eq!(&r, data.as_bytes());
+        println!("len is {}", data.len());
 
         // We slice it away from the UTF8 boundary
         let r = truncate_utf8(data, 13);
         assert_eq!(r.len(), 10);
-        assert_eq!(&r, "❤️🧡".as_bytes())
+        assert_eq!(&r, "❤️🧡".as_bytes());
     }
 
     /// Performs write-read roundtrip with randomly generated values and levels.

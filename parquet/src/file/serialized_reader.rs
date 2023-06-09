@@ -1751,10 +1751,7 @@ mod tests {
                 let page_idx = &v.indexes[0];
                 assert_eq!(page_idx.null_count.unwrap(), 1);
                 assert_eq!(page_idx.min.as_ref().unwrap().as_ref(), &[0; 11]);
-                assert_eq!(
-                    page_idx.max.as_ref().unwrap().as_ref(),
-                    &[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6]
-                );
+                assert_eq!(page_idx.max.as_ref().unwrap().as_ref(), &[5; 11]);
             }
             _ => unreachable!(),
         }
