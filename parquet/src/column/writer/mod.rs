@@ -684,8 +684,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     fn truncate_min_value(&self, data: &[u8]) -> Vec<u8> {
-        let max_effective_len =
-            self.props.minmax_value_truncate_len().unwrap_or(data.len());
+        let max_effective_len = self
+            .props
+            .column_index_truncate_length()
+            .unwrap_or(data.len());
 
         match std::str::from_utf8(data) {
             Ok(str_data) => truncate_utf8(str_data, max_effective_len),
@@ -695,8 +697,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     fn truncate_max_value(&self, data: &[u8]) -> Vec<u8> {
         // Even if the user disables value truncation, we want to make sure to increase the max value so the user doesn't miss it.
-        let max_effective_len =
-            self.props.minmax_value_truncate_len().unwrap_or(data.len());
+        let max_effective_len = self
+            .props
+            .column_index_truncate_length()
+            .unwrap_or(data.len());
 
         match std::str::from_utf8(data) {
             Ok(str_data) => {
@@ -1183,19 +1187,21 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
 
 /// Truncate a UTF8 slice to the longest prefix that is still a valid UTF8 string, while being less than `max_len` bytes.
 fn truncate_utf8(data: &str, max_len: usize) -> Vec<u8> {
-    let mut max_possible_len = data.len().min(max_len);
+    let max_possible_len = data.len().min(max_len);
 
-    if data.is_char_boundary(max_possible_len) {
-        return data.as_bytes()[0..max_possible_len].to_vec();
-    }
+    let mut char_indices = data.char_indices();
+    dbg!(max_possible_len);
 
-    // UTF8 characters can only be up to 4 bytes long, so this loop has will only run up to 3 times before returning.
-    loop {
-        max_possible_len -= 1;
-        if data.is_char_boundary(max_possible_len) {
-            return data.as_bytes()[0..max_possible_len].to_vec();
+    // We know `data` is a valid UTF8 encoded string, which means it has at least one valid UTF8 byte, which will make this loop exist
+    while let Some((idx, c)) = char_indices.next_back() {
+        // The character is between `idx` and `idx + c.len_utf()`, so we want to make sure it fits within the total allowed length.
+        let last_idx = idx + c.len_utf8();
+        if last_idx <= max_possible_len {
+            return data.as_bytes()[0..last_idx].to_vec();
         }
     }
+
+    unreachable!()
 }
 
 /// Truncate a binary slice to make sure its length is less than `max_len`
@@ -1219,10 +1225,12 @@ fn increment(data: &mut [u8]) {
 fn increment_utf8(data: &mut Vec<u8>) {
     for idx in (0..data.len()).rev() {
         let byte = &mut data[idx];
-        if *byte == u8::MAX {
-            continue;
-        } else {
-            *byte += 1;
+        let incremented = *byte + 1;
+
+        // Abuse UTF8's encoding scheme to only increment up to the UTF8 byte max.
+        // More details are here: https://en.wikipedia.org/wiki/UTF-8#Encoding
+        if byte.leading_ones() == incremented.leading_ones() {
+            *byte = incremented;
         }
 
         if std::str::from_utf8(data).is_ok() {
@@ -2351,8 +2359,8 @@ mod tests {
                 increment(&mut stats_max_bytes);
                 assert_eq!(stats_max_bytes, column_index_max_value.as_slice());
 
-                assert_eq!(column_index_min_value.len(), 128);
-                assert_eq!(column_index_min_value.as_slice(), &[0_u8; 128]);
+                assert_eq!(column_index_min_value.len(), 64);
+                assert_eq!(column_index_min_value.as_slice(), &[0_u8; 64]);
                 assert_eq!(column_index_max_value.len(), 21);
             } else {
                 panic!("expecting Statistics::FixedLenByteArray");
@@ -2367,7 +2375,8 @@ mod tests {
         // write data
         // and check the offset index and column index
         let page_writer = get_test_page_writer();
-        let builder = WriterProperties::builder().set_value_truncate_length(Some(1));
+        let builder =
+            WriterProperties::builder().set_column_index_truncate_length(Some(1));
         let props = Arc::new(builder.build());
         let mut writer =
             get_test_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
@@ -2457,6 +2466,7 @@ mod tests {
         if let Ok(new) = String::from_utf8(v) {
             assert_ne!(&new, s);
             assert_eq!(new, "❤️🧡💛💚💙💝");
+            assert!(new.as_bytes().last().unwrap() > s.as_bytes().last().unwrap());
         } else {
             panic!("Expected incremented UTF8 string to also be valid.")
         }

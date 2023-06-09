@@ -24,7 +24,6 @@ use crate::file::metadata::KeyValue;
 use crate::format::SortingColumn;
 use crate::schema::types::ColumnPath;
 
-
 /// Default value for [`WriterProperties::data_page_size_limit`]
 pub const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
 /// Default value for [`WriterProperties::write_batch_size`]
@@ -46,12 +45,12 @@ pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
 /// Default value for [`WriterProperties::created_by`]
 pub const DEFAULT_CREATED_BY: &str =
     concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
+/// Default value for [`WriterProperties::column_index_truncate_length`]
+pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`BloomFilterProperties::fpp`]
 pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
 /// Default value for [`BloomFilterProperties::ndv`]
 pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
-/// Default value for [`WriterProperties::column_index_truncate_length`]
-pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 
 /// Parquet writer version.
 ///
@@ -124,7 +123,7 @@ pub struct WriterProperties {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
-    minmax_value_truncate_len: Option<usize>,
+    column_index_truncate_length: Option<usize>,
 }
 
 impl Default for WriterProperties {
@@ -223,8 +222,8 @@ impl WriterProperties {
         self.sorting_columns.as_ref()
     }
 
-    pub fn minmax_value_truncate_len(&self) -> Option<usize> {
-        self.minmax_value_truncate_len
+    pub fn column_index_truncate_length(&self) -> Option<usize> {
+        self.column_index_truncate_length
     }
 
     /// Returns encoding for a data page, when dictionary encoding is enabled.
@@ -322,7 +321,7 @@ pub struct WriterPropertiesBuilder {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
-    minmax_value_truncate_len: Option<usize>,
+    column_index_truncate_length: Option<usize>,
 }
 
 impl WriterPropertiesBuilder {
@@ -340,7 +339,7 @@ impl WriterPropertiesBuilder {
             default_column_properties: Default::default(),
             column_properties: HashMap::new(),
             sorting_columns: None,
-            minmax_value_truncate_len: DEFAULT_COLUMN_INDEX_MINMAX_LEN,
+            column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
         }
     }
 
@@ -358,7 +357,7 @@ impl WriterPropertiesBuilder {
             default_column_properties: self.default_column_properties,
             column_properties: self.column_properties,
             sorting_columns: self.sorting_columns,
-            minmax_value_truncate_len: self.minmax_value_truncate_len,
+            column_index_truncate_length: self.column_index_truncate_length,
         }
     }
 
@@ -632,10 +631,14 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets the max length of min/max value fields in the column index.
+    /// Sets the max length of min/max value fields in the column index. Must be greater than 0.
     /// If set to `None` - there's no effective limit.
     pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
-        self.minmax_value_truncate_len = max_length;
+        if let Some(value) = max_length {
+            assert!(value > 0, "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+        }
+
+        self.column_index_truncate_length = max_length;
         self
     }
 }
