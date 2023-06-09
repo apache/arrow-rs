@@ -456,6 +456,29 @@ impl<'a, T: ByteArrayType> IntoIterator for &'a GenericByteArray<T> {
     }
 }
 
+impl<'a, Ptr, T: ByteArrayType> FromIterator<&'a Option<Ptr>> for GenericByteArray<T>
+where
+    Ptr: AsRef<T::Native> + 'a,
+{
+    fn from_iter<I: IntoIterator<Item = &'a Option<Ptr>>>(iter: I) -> Self {
+        iter.into_iter()
+            .map(|o| o.as_ref().map(|p| p.as_ref()))
+            .collect()
+    }
+}
+
+impl<Ptr, T: ByteArrayType> FromIterator<Option<Ptr>> for GenericByteArray<T>
+where
+    Ptr: AsRef<T::Native>,
+{
+    fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let mut builder = GenericByteBuilder::with_capacity(iter.size_hint().0, 1024);
+        builder.extend(iter);
+        builder.finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{BinaryArray, StringArray};
