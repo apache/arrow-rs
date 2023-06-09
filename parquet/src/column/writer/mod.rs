@@ -2228,7 +2228,7 @@ mod tests {
         );
     }
 
-    /// Verify min/max value truncation iin the column index works as expected
+    /// Verify min/max value truncation in the column index works as expected
     #[test]
     fn test_column_offset_index_metadata_truncating() {
         // write data
