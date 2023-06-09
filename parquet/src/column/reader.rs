@@ -17,13 +17,12 @@
 
 //! Contains column reader API.
 
-use std::cmp::min;
-
 use super::page::{Page, PageReader};
 use crate::basic::*;
 use crate::column::reader::decoder::{
-    ColumnLevelDecoderImpl, ColumnValueDecoder, ColumnValueDecoderImpl,
-    DefinitionLevelDecoder, LevelsBufferSlice, RepetitionLevelDecoder, ValuesBufferSlice,
+    ColumnValueDecoder, ColumnValueDecoderImpl, DefinitionLevelDecoder,
+    DefinitionLevelDecoderImpl, LevelsBufferSlice, RepetitionLevelDecoder,
+    RepetitionLevelDecoderImpl, ValuesBufferSlice,
 };
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
@@ -103,8 +102,8 @@ pub fn get_typed_column_reader<T: DataType>(
 
 /// Typed value reader for a particular primitive column.
 pub type ColumnReaderImpl<T> = GenericColumnReader<
-    ColumnLevelDecoderImpl,
-    ColumnLevelDecoderImpl,
+    RepetitionLevelDecoderImpl,
+    DefinitionLevelDecoderImpl,
     ColumnValueDecoderImpl<T>,
 >;
 
@@ -119,11 +118,14 @@ pub struct GenericColumnReader<R, D, V> {
     page_reader: Box<dyn PageReader>,
 
     /// The total number of values stored in the data page.
-    num_buffered_values: u32,
+    num_buffered_values: usize,
 
     /// The number of values from the current data page that has been decoded into memory
     /// so far.
-    num_decoded_values: u32,
+    num_decoded_values: usize,
+
+    /// True if the end of the current data page denotes the end of a record
+    has_record_delimiter: bool,
 
     /// The decoder for the definition levels if any
     def_level_decoder: Option<D>,
@@ -135,7 +137,7 @@ pub struct GenericColumnReader<R, D, V> {
     values_decoder: V,
 }
 
-impl<V> GenericColumnReader<ColumnLevelDecoderImpl, ColumnLevelDecoderImpl, V>
+impl<V> GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelDecoderImpl, V>
 where
     V: ColumnValueDecoder,
 {
@@ -144,10 +146,10 @@ where
         let values_decoder = V::new(&descr);
 
         let def_level_decoder = (descr.max_def_level() != 0)
-            .then(|| ColumnLevelDecoderImpl::new(descr.max_def_level()));
+            .then(|| DefinitionLevelDecoderImpl::new(descr.max_def_level()));
 
         let rep_level_decoder = (descr.max_rep_level() != 0)
-            .then(|| ColumnLevelDecoderImpl::new(descr.max_rep_level()));
+            .then(|| RepetitionLevelDecoderImpl::new(descr.max_rep_level()));
 
         Self::new_with_decoders(
             descr,
@@ -180,6 +182,7 @@ where
             num_buffered_values: 0,
             num_decoded_values: 0,
             values_decoder,
+            has_record_delimiter: false,
         }
     }
 
@@ -195,99 +198,126 @@ where
     ///
     /// `values` will be contiguously populated with the non-null values. Note that if the column
     /// is not required, this may be less than either `batch_size` or the number of levels read
+    #[deprecated(note = "Use read_records")]
     pub fn read_batch(
         &mut self,
         batch_size: usize,
+        def_levels: Option<&mut D::Slice>,
+        rep_levels: Option<&mut R::Slice>,
+        values: &mut V::Slice,
+    ) -> Result<(usize, usize)> {
+        let (_, values, levels) =
+            self.read_records(batch_size, def_levels, rep_levels, values)?;
+
+        Ok((values, levels))
+    }
+
+    /// Read up to `num_records` returning the number of complete records, non-null
+    /// values and levels decoded
+    ///
+    /// If the max definition level is 0, `def_levels` will be ignored, otherwise it will be
+    /// populated with the number of levels read, with an error returned if it is `None`.
+    ///
+    /// If the max repetition level is 0, `rep_levels` will be ignored, otherwise it will be
+    /// populated with the number of levels read, with an error returned if it is `None`.
+    ///
+    /// `values` will be contiguously populated with the non-null values. Note that if the column
+    /// is not required, this may be less than either `max_records` or the number of levels read
+    pub fn read_records(
+        &mut self,
+        max_records: usize,
         mut def_levels: Option<&mut D::Slice>,
         mut rep_levels: Option<&mut R::Slice>,
         values: &mut V::Slice,
-    ) -> Result<(usize, usize)> {
-        let mut values_read = 0;
-        let mut levels_read = 0;
-
-        // Compute the smallest batch size we can read based on provided slices
-        let mut batch_size = min(batch_size, values.capacity());
+    ) -> Result<(usize, usize, usize)> {
+        let mut max_levels = values.capacity().min(max_records);
         if let Some(ref levels) = def_levels {
-            batch_size = min(batch_size, levels.capacity());
+            max_levels = max_levels.min(levels.capacity());
         }
         if let Some(ref levels) = rep_levels {
-            batch_size = min(batch_size, levels.capacity());
+            max_levels = max_levels.min(levels.capacity())
         }
 
-        // Read exhaustively all pages until we read all batch_size values/levels
-        // or there are no more values/levels to read.
-        while levels_read < batch_size {
-            if !self.has_next()? {
-                break;
-            }
+        let mut total_records_read = 0;
+        let mut total_levels_read = 0;
+        let mut total_values_read = 0;
 
-            // Batch size for the current iteration
-            let iter_batch_size = (batch_size - levels_read)
-                .min((self.num_buffered_values - self.num_decoded_values) as usize);
+        while total_records_read < max_records
+            && total_levels_read < max_levels
+            && self.has_next()?
+        {
+            let remaining_records = max_records - total_records_read;
+            let remaining_levels = self.num_buffered_values - self.num_decoded_values;
+            let levels_to_read = remaining_levels.min(max_levels - total_levels_read);
 
-            // If the field is required and non-repeated, there are no definition levels
-            let null_count = match self.descr.max_def_level() > 0 {
-                true => {
-                    let levels = def_levels
+            let (records_read, levels_read) = match self.rep_level_decoder.as_mut() {
+                Some(reader) => {
+                    let out = rep_levels
+                        .as_mut()
+                        .ok_or_else(|| general_err!("must specify repetition levels"))?;
+
+                    let (mut records_read, levels_read) = reader.read_rep_levels(
+                        out,
+                        total_levels_read..total_levels_read + levels_to_read,
+                        remaining_records,
+                    )?;
+
+                    if levels_read == remaining_levels && self.has_record_delimiter {
+                        // Reached end of page, which implies records_read < remaining_records
+                        // as otherwise would have stopped reading before reaching the end
+                        assert!(records_read < remaining_records); // Sanity check
+                        records_read += 1;
+                    }
+                    (records_read, levels_read)
+                }
+                None => {
+                    let min = remaining_records.min(levels_to_read);
+                    (min, min)
+                }
+            };
+
+            let values_to_read = match self.def_level_decoder.as_mut() {
+                Some(reader) => {
+                    let out = def_levels
                         .as_mut()
                         .ok_or_else(|| general_err!("must specify definition levels"))?;
 
-                    let num_def_levels = self
-                        .def_level_decoder
-                        .as_mut()
-                        .expect("def_level_decoder be set")
-                        .read(levels, levels_read..levels_read + iter_batch_size)?;
+                    let read = reader.read_def_levels(
+                        out,
+                        total_levels_read..total_levels_read + levels_read,
+                    )?;
 
-                    if num_def_levels != iter_batch_size {
-                        return Err(general_err!("insufficient definition levels read from column - expected {}, got {}", iter_batch_size, num_def_levels));
+                    if read != levels_read {
+                        return Err(general_err!("insufficient definition levels read from column - expected {rep_levels}, got {read}"));
                     }
 
-                    levels.count_nulls(
-                        levels_read..levels_read + num_def_levels,
+                    let null_count = out.count_nulls(
+                        total_levels_read..total_levels_read + read,
                         self.descr.max_def_level(),
-                    )
+                    );
+                    levels_read - null_count
                 }
-                false => 0,
+                None => levels_read,
             };
 
-            if self.descr.max_rep_level() > 0 {
-                let levels = rep_levels
-                    .as_mut()
-                    .ok_or_else(|| general_err!("must specify repetition levels"))?;
+            let values_read = self.values_decoder.read(
+                values,
+                total_values_read..total_values_read + values_to_read,
+            )?;
 
-                let rep_levels = self
-                    .rep_level_decoder
-                    .as_mut()
-                    .expect("rep_level_decoder be set")
-                    .read(levels, levels_read..levels_read + iter_batch_size)?;
-
-                if rep_levels != iter_batch_size {
-                    return Err(general_err!("insufficient repetition levels read from column - expected {}, got {}", iter_batch_size, rep_levels));
-                }
-            }
-
-            let values_to_read = iter_batch_size - null_count;
-            let curr_values_read = self
-                .values_decoder
-                .read(values, values_read..values_read + values_to_read)?;
-
-            if curr_values_read != values_to_read {
+            if values_read != values_to_read {
                 return Err(general_err!(
-                    "insufficient values read from column - expected: {}, got: {}",
-                    values_to_read,
-                    curr_values_read
+                    "insufficient values read from column - expected: {values_to_read}, got: {values_read}",
                 ));
             }
 
-            // Update all "return" counters and internal state.
-
-            // This is to account for when def or rep levels are not provided
-            self.num_decoded_values += iter_batch_size as u32;
-            levels_read += iter_batch_size;
-            values_read += curr_values_read;
+            self.num_decoded_values += levels_read;
+            total_records_read += records_read;
+            total_levels_read += levels_read;
+            total_values_read += values_read;
         }
 
-        Ok((values_read, levels_read))
+        Ok((total_records_read, total_values_read, total_levels_read))
     }
 
     /// Skips over `num_records` records, where records are delimited by repetition levels of 0
@@ -336,21 +366,30 @@ where
             // start skip values in page level
 
             // The number of levels in the current data page
-            let buffered_levels =
-                (self.num_buffered_values - self.num_decoded_values) as usize;
+            let remaining_levels = self.num_buffered_values - self.num_decoded_values;
 
             let (records_read, rep_levels_read) = match self.rep_level_decoder.as_mut() {
                 Some(decoder) => {
-                    decoder.skip_rep_levels(remaining_records, buffered_levels)?
+                    let (mut records_read, levels_read) =
+                        decoder.skip_rep_levels(remaining_records, remaining_levels)?;
+
+                    if levels_read == remaining_levels && self.has_record_delimiter {
+                        // Reached end of page, which implies records_read < remaining_records
+                        // as otherwise would have stopped reading before reaching the end
+                        assert!(records_read < remaining_records); // Sanity check
+                        records_read += 1;
+                    }
+
+                    (records_read, levels_read)
                 }
                 None => {
                     // No repetition levels, so each level corresponds to a row
-                    let levels = buffered_levels.min(remaining_records);
+                    let levels = remaining_levels.min(remaining_records);
                     (levels, levels)
                 }
             };
 
-            self.num_decoded_values += rep_levels_read as u32;
+            self.num_decoded_values += rep_levels_read;
             remaining_records -= records_read;
 
             if self.num_buffered_values == self.num_decoded_values {
@@ -431,7 +470,7 @@ where
                             rep_level_encoding,
                             statistics: _,
                         } => {
-                            self.num_buffered_values = num_values;
+                            self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
 
                             let max_rep_level = self.descr.max_rep_level();
@@ -447,6 +486,9 @@ where
                                     buf.start_from(offset),
                                 )?;
                                 offset += bytes_read;
+
+                                self.has_record_delimiter =
+                                    self.page_reader.peek_next_page()?.is_none();
 
                                 self.rep_level_decoder
                                     .as_mut()
@@ -493,12 +535,18 @@ where
                                 return Err(general_err!("more nulls than values in page, contained {} values and {} nulls", num_values, num_nulls));
                             }
 
-                            self.num_buffered_values = num_values;
+                            self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
 
                             // DataPage v2 only supports RLE encoding for repetition
                             // levels
                             if self.descr.max_rep_level() > 0 {
+                                // Technically a DataPage v2 should not write a record
+                                // across multiple pages, however, the parquet writer
+                                // used to do this so we preserve backwards compatibility
+                                self.has_record_delimiter =
+                                    self.page_reader.peek_next_page()?.is_none();
+
                                 self.rep_level_decoder.as_mut().unwrap().set_data(
                                     Encoding::RLE,
                                     buf.range(0, rep_levels_byte_len as usize),
@@ -530,21 +578,6 @@ where
                     };
                 }
             }
-        }
-    }
-
-    /// Check whether there is more data to read from this column,
-    /// If the current page is fully decoded, this will NOT load the next page
-    /// into the buffer
-    #[inline]
-    #[cfg(feature = "arrow")]
-    pub(crate) fn peek_next(&mut self) -> Result<bool> {
-        if self.num_buffered_values == 0
-            || self.num_buffered_values == self.num_decoded_values
-        {
-            Ok(self.page_reader.peek_next_page()?.is_some())
-        } else {
-            Ok(true)
         }
     }
 
@@ -1359,15 +1392,14 @@ mod tests {
 
             let mut curr_values_read = 0;
             let mut curr_levels_read = 0;
-            let mut done = false;
-            while !done {
+            loop {
                 let actual_def_levels =
                     def_levels.as_mut().map(|vec| &mut vec[curr_levels_read..]);
                 let actual_rep_levels =
                     rep_levels.as_mut().map(|vec| &mut vec[curr_levels_read..]);
 
-                let (values_read, levels_read) = typed_column_reader
-                    .read_batch(
+                let (_, values_read, levels_read) = typed_column_reader
+                    .read_records(
                         batch_size,
                         actual_def_levels,
                         actual_rep_levels,
@@ -1375,12 +1407,12 @@ mod tests {
                     )
                     .expect("read_batch() should be OK");
 
-                if values_read == 0 && levels_read == 0 {
-                    done = true;
-                }
-
                 curr_values_read += values_read;
                 curr_levels_read += levels_read;
+
+                if values_read == 0 && levels_read == 0 {
+                    break;
+                }
             }
 
             assert!(

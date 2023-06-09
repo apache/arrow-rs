@@ -2332,7 +2332,7 @@ mod tests {
         let mut actual_def_levels = def_levels.map(|_| vec![0i16; max_batch_size]);
         let mut actual_rep_levels = rep_levels.map(|_| vec![0i16; max_batch_size]);
 
-        let (values_read, levels_read) = read_fully(
+        let (_, values_read, levels_read) = read_fully(
             reader,
             max_batch_size,
             actual_def_levels.as_mut(),
@@ -2409,11 +2409,11 @@ mod tests {
         mut def_levels: Option<&mut Vec<i16>>,
         mut rep_levels: Option<&mut Vec<i16>>,
         values: &mut [T::T],
-    ) -> (usize, usize) {
+    ) -> (usize, usize, usize) {
         let actual_def_levels = def_levels.as_mut().map(|vec| &mut vec[..]);
         let actual_rep_levels = rep_levels.as_mut().map(|vec| &mut vec[..]);
         reader
-            .read_batch(batch_size, actual_def_levels, actual_rep_levels, values)
+            .read_records(batch_size, actual_def_levels, actual_rep_levels, values)
             .unwrap()
     }
 

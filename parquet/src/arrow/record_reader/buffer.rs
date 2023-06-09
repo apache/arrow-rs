@@ -30,13 +30,8 @@ pub trait BufferQueue: Sized {
 
     type Slice: ?Sized;
 
-    /// Split out the first `len` items
-    ///
-    /// # Panics
-    ///
-    /// Implementations must panic if `len` is beyond the length of [`BufferQueue`]
-    ///
-    fn split_off(&mut self, len: usize) -> Self::Output;
+    /// Consumes the contents of this [`BufferQueue`]
+    fn consume(&mut self) -> Self::Output;
 
     /// Returns a [`Self::Slice`] with at least `batch_size` capacity that can be used
     /// to append data to the end of this [`BufferQueue`]
@@ -146,31 +141,6 @@ impl<T: ScalarValue> ScalarBuffer<T> {
         assert!(prefix.is_empty() && suffix.is_empty());
         buf
     }
-
-    pub fn take(&mut self, len: usize) -> Self {
-        assert!(len <= self.len);
-
-        let num_bytes = len * std::mem::size_of::<T>();
-        let remaining_bytes = self.buffer.len() - num_bytes;
-        // TODO: Optimize to reduce the copy
-        // create an empty buffer, as it will be resized below
-        let mut remaining = MutableBuffer::new(0);
-        remaining.resize(remaining_bytes, 0);
-
-        let new_records = remaining.as_slice_mut();
-
-        new_records[0..remaining_bytes]
-            .copy_from_slice(&self.buffer.as_slice()[num_bytes..]);
-
-        self.buffer.resize(num_bytes, 0);
-        self.len -= len;
-
-        Self {
-            buffer: std::mem::replace(&mut self.buffer, remaining),
-            len,
-            _phantom: Default::default(),
-        }
-    }
 }
 
 impl<T: ScalarValue + ArrowNativeType> ScalarBuffer<T> {
@@ -196,8 +166,8 @@ impl<T: ScalarValue> BufferQueue for ScalarBuffer<T> {
 
     type Slice = [T];
 
-    fn split_off(&mut self, len: usize) -> Self::Output {
-        self.take(len).into()
+    fn consume(&mut self) -> Self::Output {
+        std::mem::take(self).into()
     }
 
     fn spare_capacity_mut(&mut self, batch_size: usize) -> &mut Self::Slice {

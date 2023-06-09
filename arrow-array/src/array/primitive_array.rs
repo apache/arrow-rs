@@ -497,6 +497,22 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// # Panics
     ///
     /// Panics if [`Self::try_new`] returns an error
+    ///
+    /// # Example
+    ///
+    /// Creating a [`PrimitiveArray`] directly from a [`ScalarBuffer`] and [`NullBuffer`] using
+    /// this constructor is the most performant approach, avoiding any additional allocations
+    ///
+    /// ```
+    /// # use arrow_array::Int32Array;
+    /// # use arrow_array::types::Int32Type;
+    /// # use arrow_buffer::NullBuffer;
+    /// // [1, 2, 3, 4]
+    /// let array = Int32Array::new(vec![1, 2, 3, 4].into(), None);
+    /// // [1, null, 3, 4]
+    /// let nulls = NullBuffer::from(vec![true, false, true, true]);
+    /// let array = Int32Array::new(vec![1, 2, 3, 4].into(), Some(nulls));
+    /// ```
     pub fn new(values: ScalarBuffer<T::Native>, nulls: Option<NullBuffer>) -> Self {
         Self::try_new(values, nulls).unwrap()
     }

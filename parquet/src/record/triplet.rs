@@ -295,8 +295,11 @@ impl<T: DataType> TypedTripletIter<T> {
     fn read_next(&mut self) -> Result<bool> {
         self.curr_triplet_index += 1;
 
-        if self.curr_triplet_index >= self.triplets_left {
-            let (values_read, levels_read) = {
+        // A loop is required to handle the case of a batch size of 1, as in such a case
+        // on reaching the end of a record, read_records will return `Ok((1, 0, 0))`
+        // and therefore not advance `self.triplets_left`
+        while self.curr_triplet_index >= self.triplets_left {
+            let (records_read, values_read, levels_read) = {
                 // Get slice of definition levels, if available
                 let def_levels = self.def_levels.as_mut().map(|vec| &mut vec[..]);
 
@@ -304,7 +307,7 @@ impl<T: DataType> TypedTripletIter<T> {
                 let rep_levels = self.rep_levels.as_mut().map(|vec| &mut vec[..]);
 
                 // Buffer triplets
-                self.reader.read_batch(
+                self.reader.read_records(
                     self.batch_size,
                     def_levels,
                     rep_levels,
@@ -313,7 +316,7 @@ impl<T: DataType> TypedTripletIter<T> {
             };
 
             // No more values or levels to read
-            if values_read == 0 && levels_read == 0 {
+            if records_read == 0 && values_read == 0 && levels_read == 0 {
                 self.has_next = false;
                 return Ok(false);
             }
