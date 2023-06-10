@@ -20,6 +20,7 @@
 use crate::bloom_filter::Sbbf;
 use crate::format::{ColumnIndex, OffsetIndex};
 use std::collections::{BTreeSet, VecDeque};
+use std::str;
 
 use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
@@ -697,41 +698,50 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     fn truncate_min_value(&self, data: &[u8]) -> Vec<u8> {
-        let max_effective_len = self
+        let effective_column_index_truncate_length = self
             .props
             .column_index_truncate_length()
             .unwrap_or(data.len());
 
-        match std::str::from_utf8(data) {
-            Ok(str_data) => truncate_utf8(str_data, max_effective_len),
-            Err(_) => truncate_binary(data, max_effective_len),
-        }
-    }
-
-    fn truncate_max_value(&self, data: &[u8]) -> Vec<u8> {
-        // Even if the user disables value truncation, we want to make sure to increase the max value so the user doesn't miss it.
-        let column_effective_index_truncate_length = self
-            .props
-            .column_index_truncate_length()
-            .unwrap_or(data.len());
-
-        if data.len() <= column_effective_index_truncate_length {
+        // If there's no need to truncate, we just return the value without any modification.
+        if data.len() <= effective_column_index_truncate_length {
             return data.to_vec();
         }
 
-        match std::str::from_utf8(data) {
+        let result = match str::from_utf8(data) {
             Ok(str_data) => {
-                let mut v =
-                    truncate_utf8(str_data, column_effective_index_truncate_length);
-                increment_utf8(&mut v);
-                v
+                truncate_utf8(str_data, effective_column_index_truncate_length)
             }
-            Err(_) => {
-                let mut v = truncate_binary(data, column_effective_index_truncate_length);
-                increment(&mut v);
-                v
-            }
+            Err(_) => truncate_binary(data, effective_column_index_truncate_length),
+        };
+
+        // If we couldn't truncate the value, we just return the original value
+        result.unwrap_or(data.to_vec())
+    }
+
+    fn truncate_max_value(&self, data: &[u8]) -> Vec<u8> {
+        let effective_column_index_truncate_length = self
+            .props
+            .column_index_truncate_length()
+            .unwrap_or(data.len());
+
+        // If there's no need to truncate, we just return the value without any modification.
+        if data.len() <= effective_column_index_truncate_length {
+            return data.to_vec();
         }
+
+        let result = match str::from_utf8(data) {
+            Ok(utf8_data) => {
+                truncate_utf8(utf8_data, effective_column_index_truncate_length)
+                    .and_then(increment_utf8)
+            }
+
+            Err(_) => truncate_binary(data, effective_column_index_truncate_length)
+                .and_then(increment),
+        };
+
+        // If we couldn't truncate or increment the value, we just return the original value
+        result.unwrap_or(data.to_vec())
     }
 
     /// Adds data page.
@@ -1203,65 +1213,71 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     (a[1..]) > (b[1..])
 }
 
-/// Truncate a UTF8 slice to the longest prefix that is still a valid UTF8 string, while being less than `max_len` bytes.
-fn truncate_utf8(data: &str, max_len: usize) -> Vec<u8> {
-    if data.len() <= max_len {
-        return data.as_bytes().to_vec();
-    }
-
-    let max_possible_len = data.len().min(max_len);
-
+/// Truncate a UTF8 slice to the longest prefix that is still a valid UTF8 string, while being less than `length` bytes.
+fn truncate_utf8(data: &str, length: usize) -> Option<Vec<u8>> {
+    // We return values like that at an earlier stage in the process.
+    assert!(data.len() >= length);
     let mut char_indices = data.char_indices();
-    dbg!(max_possible_len);
 
-    // We know `data` is a valid UTF8 encoded string, which means it has at least one valid UTF8 byte, which will make this loop exist
+    // We know `data` is a valid UTF8 encoded string, which means it has at least one valid UTF8 byte, which will make this loop exist.
     while let Some((idx, c)) = char_indices.next_back() {
         let split_point = idx + c.len_utf8();
-        dbg!(split_point);
-        if split_point <= max_possible_len && data.is_char_boundary(split_point) {
-            // The character is between `idx` and `idx + _c.len_utf()`, so we take the longest possible slice.
-            // We take advantage of the fact that every byte prefix of a UTF8 code point is also a valid UTF8 code point.
-
-            return data.as_bytes()[0..split_point].to_vec();
+        if split_point <= length {
+            return data.as_bytes()[0..split_point].to_vec().into();
         }
     }
 
     unreachable!()
 }
 
-/// Truncate a binary slice to make sure its length is less than `max_len`
-fn truncate_binary(data: &[u8], max_len: usize) -> Vec<u8> {
-    data[0..usize::min(data.len(), max_len)].to_vec()
+/// Truncate a binary slice to make sure its length is less than `length`
+fn truncate_binary(data: &[u8], length: usize) -> Option<Vec<u8>> {
+    // We return values like that at an earlier stage in the process.
+    assert!(data.len() >= length);
+    // If all bytes are already maximal, no need to truncate
+    if data.iter().all(|b| *b == u8::MAX) {
+        None
+    } else {
+        data[0..length].to_vec().into()
+    }
 }
 
 /// Try and increment the bytes from right to left.
-fn increment(data: &mut [u8]) {
+///
+/// Returns `None` if all bytes are set to `u8::MAX`.
+fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
     for byte in data.iter_mut().rev() {
-        if *byte == u8::MAX {
-            continue;
-        } else {
-            *byte += 1;
-            break;
+        *byte = byte.checked_add(1).unwrap_or(0);
+
+        if *byte != 0 {
+            return Some(data);
         }
     }
+
+    None
 }
 
-/// Try and increment the string's bytes from right to left, returning when the result is a valid UTF8 string.
-fn increment_utf8(data: &mut Vec<u8>) {
+/// Try and increment the the string's bytes from right to left, returning when the result is a valid UTF8 string.
+/// Returns `None` when it can't increment any byte.
+fn increment_utf8(mut data: Vec<u8>) -> Option<Vec<u8>> {
     for idx in (0..data.len()).rev() {
-        let byte = &mut data[idx];
-        let incremented = *byte + 1;
+        let original = data[idx];
+        let mut byte = data[idx].checked_add(1).unwrap_or(0);
 
-        // Abuse UTF8's encoding scheme to only increment up to the UTF8 byte max.
-        // More details are here: https://en.wikipedia.org/wiki/UTF-8#Encoding
-        if byte.leading_ones() == incremented.leading_ones() {
-            *byte = incremented;
+        // Until overflow: 0xFF -> 0x00
+        while byte != 0 {
+            data[idx] = byte;
+
+            if str::from_utf8(&data).is_ok() {
+                return Some(data);
+            }
+            byte = byte.checked_add(1).unwrap_or(0);
         }
 
-        if std::str::from_utf8(data).is_ok() {
-            break;
-        }
+        data[idx] = original;
     }
+
+    None
 }
 
 #[cfg(test)]
@@ -2311,7 +2327,7 @@ mod tests {
             if let Statistics::Int32(stats) = stats {
                 // first page is [1,2,3,4]
                 // second page is [-5,2,4,8]
-                // Note we don't increment here, as this is a non-binary type.
+                // note that we don't increment here, as this is a non BinaryArray type.
                 assert_eq!(stats.min_bytes(), column_index.min_values[1].as_slice());
                 assert_eq!(stats.max_bytes(), column_index.max_values.get(1).unwrap());
             } else {
@@ -2445,15 +2461,14 @@ mod tests {
                 let column_index_min_value = column_index.min_values.get(0).unwrap();
                 let column_index_max_value = column_index.max_values.get(0).unwrap();
 
-                assert_ne!(column_index_min_value, column_index_max_value);
-
                 assert_eq!(column_index_min_value.len(), 1);
                 assert_eq!(column_index_max_value.len(), 1);
 
-                // Column index stats are truncated, while the column chunk's aren't.
                 assert_eq!("B".as_bytes(), column_index_min_value.as_slice());
-                // In this case, they are equal because the max value is shorter than the default threshold
                 assert_eq!("C".as_bytes(), column_index_max_value.as_slice());
+
+                assert_ne!(column_index_min_value, stats.min_bytes());
+                assert_ne!(column_index_max_value, stats.max_bytes());
             } else {
                 panic!("expecting Statistics::FixedLenByteArray");
             }
@@ -2470,32 +2485,35 @@ mod tests {
 
     #[test]
     fn test_increment() {
-        let mut v = vec![0, 0, 0];
-        increment(&mut v);
+        let v = increment(vec![0, 0, 0]).unwrap();
         assert_eq!(&v, &[0, 0, 1]);
 
         // Handle overflow
-        let mut v = vec![0, 255, 255];
-        increment(&mut v);
-        assert_eq!(&v, &[1, 255, 255]);
+        let v = increment(vec![0, 255, 255]).unwrap();
+        assert_eq!(&v, &[1, 0, 0]);
 
-        // No-op if all bytes are u8::MAX
-        let mut v = vec![255, 255, 255];
-        increment(&mut v);
-        assert_eq!(&v, &[255, 255, 255]);
+        // Return `None` if all bytes are u8::MAX
+        let v = increment(vec![255, 255, 255]);
+        assert!(v.is_none());
     }
 
     #[test]
     fn test_increment_utf8() {
         // Basic ASCII case
-        let mut v = "hello".as_bytes().to_vec();
-        increment_utf8(&mut v);
+        let v = increment_utf8("hello".as_bytes().to_vec()).unwrap();
         assert_eq!(&v, "hellp".as_bytes());
+
+        // Also show that BinaryArray level comparison works here
+        let mut greater = ByteArray::new();
+        greater.set_data(ByteBufferPtr::new(v));
+        let mut original = ByteArray::new();
+        original.set_data(ByteBufferPtr::new("hello".as_bytes().to_vec()));
+        assert!(greater > original);
 
         // UTF8 string
         let s = "❤️🧡💛💚💙💜";
-        let mut v = s.as_bytes().to_vec();
-        increment_utf8(&mut v);
+        let v = increment_utf8(s.as_bytes().to_vec()).unwrap();
+
         if let Ok(new) = String::from_utf8(v) {
             assert_ne!(&new, s);
             assert_eq!(new, "❤️🧡💛💚💙💝");
@@ -2507,24 +2525,40 @@ mod tests {
         // Max UTF8 character - should be a No-Op
         let s = char::MAX.to_string();
         assert_eq!(s.len(), 4);
-        let mut v = s.as_bytes().to_vec();
-        increment_utf8(&mut v);
-        assert_eq!(&v, s.as_bytes());
+        let v = increment_utf8(s.as_bytes().to_vec());
+        assert!(v.is_none());
+
+        // Handle multi-byte UTF8 characters
+        let s = "a\u{10ffff}";
+        let v = increment_utf8(s.as_bytes().to_vec());
+        assert_eq!(&v.unwrap(), "b\u{10ffff}".as_bytes());
     }
 
     #[test]
     fn test_truncate_utf8() {
         // No-op
         let data = "❤️🧡💛💚💙💜";
-        let r = truncate_utf8(data, data.as_bytes().len());
+        let r = truncate_utf8(data, data.as_bytes().len()).unwrap();
         assert_eq!(r.len(), data.as_bytes().len());
         assert_eq!(&r, data.as_bytes());
         println!("len is {}", data.len());
 
         // We slice it away from the UTF8 boundary
-        let r = truncate_utf8(data, 13);
+        let r = truncate_utf8(data, 13).unwrap();
         assert_eq!(r.len(), 10);
         assert_eq!(&r, "❤️🧡".as_bytes());
+    }
+
+    #[test]
+    fn test_truncate_max_binary_chars() {
+        let r =
+            truncate_binary(&[0xFF, 0xFE, 0xFD, 0xFF, 0xFF, 0xFF], 5).and_then(increment);
+
+        assert_eq!(&r.unwrap(), &[0xFF, 0xFE, 0xFE, 0x00, 0x00]);
+
+        // Can't truncate this slice.
+        let r = truncate_binary(&[0xFF, 0xFF, 0xFF, 0xFF], 3);
+        assert!(r.is_none());
     }
 
     /// Performs write-read roundtrip with randomly generated values and levels.

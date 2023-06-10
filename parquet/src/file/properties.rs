@@ -222,6 +222,9 @@ impl WriterProperties {
         self.sorting_columns.as_ref()
     }
 
+    /// Returns the maximum length of truncated min/max values in the column index.
+    ///
+    /// `None` if truncation is disabled, must be greater than 0 otherwise.
     pub fn column_index_truncate_length(&self) -> Option<usize> {
         self.column_index_truncate_length
     }
