@@ -1246,7 +1246,7 @@ fn increment(data: &mut [u8]) {
     }
 }
 
-/// Try and increment the the string's bytes from right to left, returning when the result is a valid UTF8 string.
+/// Try and increment the string's bytes from right to left, returning when the result is a valid UTF8 string.
 fn increment_utf8(data: &mut Vec<u8>) {
     for idx in (0..data.len()).rev() {
         let byte = &mut data[idx];
