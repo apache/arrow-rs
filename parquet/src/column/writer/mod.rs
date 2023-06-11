@@ -698,50 +698,25 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     fn truncate_min_value(&self, data: &[u8]) -> Vec<u8> {
-        let effective_column_index_truncate_length = self
-            .props
+        self.props
             .column_index_truncate_length()
-            .unwrap_or(data.len());
-
-        // If there's no need to truncate, we just return the value without any modification.
-        if data.len() <= effective_column_index_truncate_length {
-            return data.to_vec();
-        }
-
-        let result = match str::from_utf8(data) {
-            Ok(str_data) => {
-                truncate_utf8(str_data, effective_column_index_truncate_length)
-            }
-            Err(_) => truncate_binary(data, effective_column_index_truncate_length),
-        };
-
-        // If we couldn't truncate the value, we just return the original value
-        result.unwrap_or(data.to_vec())
+            .filter(|l| data.len() > *l)
+            .and_then(|l| match str::from_utf8(data) {
+                Ok(str_data) => truncate_utf8(str_data, l),
+                Err(_) => truncate_binary(data, l),
+            })
+            .unwrap_or_else(|| data.to_vec())
     }
 
     fn truncate_max_value(&self, data: &[u8]) -> Vec<u8> {
-        let effective_column_index_truncate_length = self
-            .props
+        self.props
             .column_index_truncate_length()
-            .unwrap_or(data.len());
-
-        // If there's no need to truncate, we just return the value without any modification.
-        if data.len() <= effective_column_index_truncate_length {
-            return data.to_vec();
-        }
-
-        let result = match str::from_utf8(data) {
-            Ok(utf8_data) => {
-                truncate_utf8(utf8_data, effective_column_index_truncate_length)
-                    .and_then(increment_utf8)
-            }
-
-            Err(_) => truncate_binary(data, effective_column_index_truncate_length)
-                .and_then(increment),
-        };
-
-        // If we couldn't truncate or increment the value, we just return the original value
-        result.unwrap_or(data.to_vec())
+            .filter(|l| data.len() > *l)
+            .and_then(|l| match str::from_utf8(data) {
+                Ok(str_data) => truncate_utf8(str_data, l).and_then(increment_utf8),
+                Err(_) => truncate_binary(data, l).and_then(increment),
+            })
+            .unwrap_or_else(|| data.to_vec())
     }
 
     /// Adds data page.
@@ -1227,7 +1202,7 @@ fn truncate_utf8(data: &str, length: usize) -> Option<Vec<u8>> {
         }
     }
 
-    unreachable!()
+    None
 }
 
 /// Truncate a binary slice to make sure its length is less than `length`
@@ -1235,11 +1210,8 @@ fn truncate_binary(data: &[u8], length: usize) -> Option<Vec<u8>> {
     // We return values like that at an earlier stage in the process.
     assert!(data.len() >= length);
     // If all bytes are already maximal, no need to truncate
-    if data.iter().all(|b| *b == u8::MAX) {
-        None
-    } else {
-        data[0..length].to_vec().into()
-    }
+
+    data[0..length].to_vec().into()
 }
 
 /// Try and increment the bytes from right to left.
@@ -1247,9 +1219,10 @@ fn truncate_binary(data: &[u8], length: usize) -> Option<Vec<u8>> {
 /// Returns `None` if all bytes are set to `u8::MAX`.
 fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
     for byte in data.iter_mut().rev() {
-        *byte = byte.checked_add(1).unwrap_or(0);
+        let (incremented, overflow) = byte.overflowing_add(1);
+        *byte = incremented;
 
-        if *byte != 0 {
+        if !overflow {
             return Some(data);
         }
     }
@@ -1262,16 +1235,16 @@ fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
 fn increment_utf8(mut data: Vec<u8>) -> Option<Vec<u8>> {
     for idx in (0..data.len()).rev() {
         let original = data[idx];
-        let mut byte = data[idx].checked_add(1).unwrap_or(0);
+        let (mut byte, mut overflow) = data[idx].overflowing_add(1);
 
         // Until overflow: 0xFF -> 0x00
-        while byte != 0 {
+        while !overflow {
             data[idx] = byte;
 
             if str::from_utf8(&data).is_ok() {
                 return Some(data);
             }
-            byte = byte.checked_add(1).unwrap_or(0);
+            (byte, overflow) = data[idx].overflowing_add(1);
         }
 
         data[idx] = original;
@@ -2547,6 +2520,10 @@ mod tests {
         let r = truncate_utf8(data, 13).unwrap();
         assert_eq!(r.len(), 10);
         assert_eq!(&r, "❤️🧡".as_bytes());
+
+        // One multi-byte code point, and a length shorter than it, so we can't slice it
+        let r = truncate_utf8("\u{0836}", 1);
+        assert!(r.is_none());
     }
 
     #[test]
@@ -2556,9 +2533,12 @@ mod tests {
 
         assert_eq!(&r.unwrap(), &[0xFF, 0xFE, 0xFE, 0x00, 0x00]);
 
-        // Can't truncate this slice.
-        let r = truncate_binary(&[0xFF, 0xFF, 0xFF, 0xFF], 3);
-        assert!(r.is_none());
+        // We can truncate this slice, but increment it will fail
+        let truncated = truncate_binary(&[0xFF, 0xFF, 0xFF, 0xFF], 3);
+        assert!(truncated.is_some());
+
+        let incremented = truncated.and_then(increment);
+        assert!(incremented.is_none())
     }
 
     /// Performs write-read roundtrip with randomly generated values and levels.
