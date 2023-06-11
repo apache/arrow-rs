@@ -45,6 +45,8 @@ pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
 /// Default value for [`WriterProperties::created_by`]
 pub const DEFAULT_CREATED_BY: &str =
     concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
+/// Default value for [`WriterProperties::column_index_truncate_length`]
+pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`BloomFilterProperties::fpp`]
 pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
 /// Default value for [`BloomFilterProperties::ndv`]
@@ -121,6 +123,7 @@ pub struct WriterProperties {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
+    column_index_truncate_length: Option<usize>,
 }
 
 impl Default for WriterProperties {
@@ -219,6 +222,13 @@ impl WriterProperties {
         self.sorting_columns.as_ref()
     }
 
+    /// Returns the maximum length of truncated min/max values in the column index.
+    ///
+    /// `None` if truncation is disabled, must be greater than 0 otherwise.
+    pub fn column_index_truncate_length(&self) -> Option<usize> {
+        self.column_index_truncate_length
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     /// This is not configurable.
     #[inline]
@@ -314,6 +324,7 @@ pub struct WriterPropertiesBuilder {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
+    column_index_truncate_length: Option<usize>,
 }
 
 impl WriterPropertiesBuilder {
@@ -331,6 +342,7 @@ impl WriterPropertiesBuilder {
             default_column_properties: Default::default(),
             column_properties: HashMap::new(),
             sorting_columns: None,
+            column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
         }
     }
 
@@ -348,6 +360,7 @@ impl WriterPropertiesBuilder {
             default_column_properties: self.default_column_properties,
             column_properties: self.column_properties,
             sorting_columns: self.sorting_columns,
+            column_index_truncate_length: self.column_index_truncate_length,
         }
     }
 
@@ -618,6 +631,17 @@ impl WriterPropertiesBuilder {
     /// override the default.
     pub fn set_column_bloom_filter_ndv(mut self, col: ColumnPath, value: u64) -> Self {
         self.get_mut_props(col).set_bloom_filter_ndv(value);
+        self
+    }
+
+    /// Sets the max length of min/max value fields in the column index. Must be greater than 0.
+    /// If set to `None` - there's no effective limit.
+    pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
+        if let Some(value) = max_length {
+            assert!(value > 0, "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+        }
+
+        self.column_index_truncate_length = max_length;
         self
     }
 }
