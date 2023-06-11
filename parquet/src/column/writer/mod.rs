@@ -669,32 +669,32 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     self.column_index_builder.to_invalid();
                 }
                 Some(stat) => {
-                    let physical_type = self.descr.physical_type();
                     // We only truncate if the data is represented as binary
-                    if physical_type == Type::BYTE_ARRAY
-                        || physical_type == Type::FIXED_LEN_BYTE_ARRAY
-                    {
-                        self.column_index_builder.append(
-                            null_page,
-                            self.truncate_min_value(stat.min_bytes()),
-                            self.truncate_max_value(stat.max_bytes()),
-                            self.page_metrics.num_page_nulls as i64,
-                        );
-                    } else {
-                        self.column_index_builder.append(
-                            null_page,
-                            stat.min_bytes().to_vec(),
-                            stat.max_bytes().to_vec(),
-                            self.page_metrics.num_page_nulls as i64,
-                        );
+                    match self.descr.physical_type() {
+                        Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
+                            self.column_index_builder.append(
+                                null_page,
+                                self.truncate_min_value(stat.min_bytes()),
+                                self.truncate_max_value(stat.max_bytes()),
+                                self.page_metrics.num_page_nulls as i64,
+                            );
+                        }
+                        _ => {
+                            self.column_index_builder.append(
+                                null_page,
+                                stat.min_bytes().to_vec(),
+                                stat.max_bytes().to_vec(),
+                                self.page_metrics.num_page_nulls as i64,
+                            );
+                        }
                     }
                 }
             }
-        }
 
-        // update the offset index
-        self.offset_index_builder
-            .append_row_count(self.page_metrics.num_buffered_rows as i64);
+            // update the offset index
+            self.offset_index_builder
+                .append_row_count(self.page_metrics.num_buffered_rows as i64);
+        }
     }
 
     fn truncate_min_value(&self, data: &[u8]) -> Vec<u8> {
