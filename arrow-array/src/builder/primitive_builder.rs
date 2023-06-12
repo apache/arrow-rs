@@ -21,7 +21,7 @@ use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -328,6 +328,36 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             self.values_builder.as_slice_mut(),
             self.null_buffer_builder.as_slice_mut(),
         )
+    }
+}
+
+impl<P: DecimalType> PrimitiveBuilder<P> {
+    /// Sets the precision and scale
+    pub fn with_precision_and_scale(
+        self,
+        precision: u8,
+        scale: i8,
+    ) -> Result<Self, ArrowError> {
+        validate_decimal_precision_and_scale::<P>(precision, scale)?;
+        Ok(Self {
+            data_type: P::TYPE_CONSTRUCTOR(precision, scale),
+            ..self
+        })
+    }
+}
+
+impl<P: ArrowTimestampType> PrimitiveBuilder<P> {
+    /// Sets the timezone
+    pub fn with_timezone(self, timezone: impl Into<Arc<str>>) -> Self {
+        self.with_timezone_opt(Some(timezone.into()))
+    }
+
+    /// Sets an optional timezone
+    pub fn with_timezone_opt<S: Into<Arc<str>>>(self, timezone: Option<S>) -> Self {
+        Self {
+            data_type: DataType::Timestamp(P::UNIT, timezone.map(Into::into)),
+            ..self
+        }
     }
 }
 
