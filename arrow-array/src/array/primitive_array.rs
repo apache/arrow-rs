@@ -1388,62 +1388,17 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns a Decimal array with the same data as self, with the
     /// specified precision and scale.
     ///
-    /// Returns an Error if:
-    /// - `precision` is zero
-    /// - `precision` is larger than `T:MAX_PRECISION`
-    /// - `scale` is larger than `T::MAX_SCALE`
-    /// - `scale` is > `precision`
+    /// See [`validate_decimal_precision_and_scale`]
     pub fn with_precision_and_scale(
         self,
         precision: u8,
         scale: i8,
-    ) -> Result<Self, ArrowError>
-    where
-        Self: Sized,
-    {
-        // validate precision and scale
-        self.validate_precision_scale(precision, scale)?;
-
-        // safety: self.data is valid DataType::Decimal as checked above
+    ) -> Result<Self, ArrowError> {
+        validate_decimal_precision_and_scale::<T>(precision, scale)?;
         Ok(Self {
             data_type: T::TYPE_CONSTRUCTOR(precision, scale),
             ..self
         })
-    }
-
-    // validate that the new precision and scale are valid or not
-    fn validate_precision_scale(
-        &self,
-        precision: u8,
-        scale: i8,
-    ) -> Result<(), ArrowError> {
-        if precision == 0 {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "precision cannot be 0, has to be between [1, {}]",
-                T::MAX_PRECISION
-            )));
-        }
-        if precision > T::MAX_PRECISION {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "precision {} is greater than max {}",
-                precision,
-                T::MAX_PRECISION
-            )));
-        }
-        if scale > T::MAX_SCALE {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "scale {} is greater than max {}",
-                scale,
-                T::MAX_SCALE
-            )));
-        }
-        if scale > 0 && scale as u8 > precision {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "scale {scale} is greater than precision {precision}"
-            )));
-        }
-
-        Ok(())
     }
 
     /// Validates values in this array can be properly interpreted
