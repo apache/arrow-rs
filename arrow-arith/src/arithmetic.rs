@@ -23,7 +23,6 @@
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
 use crate::arity::*;
-use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::i256;
@@ -39,6 +38,7 @@ use std::sync::Arc;
 /// # Errors
 ///
 /// This function errors if the arrays have different lengths
+#[deprecated(note = "Use arrow_arith::arity::binary")]
 pub fn math_op<LT, RT, F>(
     left: &PrimitiveArray<LT>,
     right: &PrimitiveArray<RT>,
@@ -50,43 +50,6 @@ where
     F: Fn(LT::Native, RT::Native) -> LT::Native,
 {
     binary(left, right, op)
-}
-
-/// This is similar to `math_op` as it performs given operation between two input primitive arrays.
-/// But the given operation can return `Err` if overflow is detected. For the case, this function
-/// returns an `Err`.
-fn math_checked_op<LT, RT, F>(
-    left: &PrimitiveArray<LT>,
-    right: &PrimitiveArray<RT>,
-    op: F,
-) -> Result<PrimitiveArray<LT>, ArrowError>
-where
-    LT: ArrowNumericType,
-    RT: ArrowNumericType,
-    F: Fn(LT::Native, RT::Native) -> Result<LT::Native, ArrowError>,
-{
-    try_binary(left, right, op)
-}
-
-/// Helper function for operations where a valid `0` on the right array should
-/// result in an [ArrowError::DivideByZero], namely the division and modulo operations
-///
-/// # Errors
-///
-/// This function errors if:
-/// * the arrays have different lengths
-/// * there is an element where both left and right values are valid and the right value is `0`
-fn math_checked_divide_op<LT, RT, F>(
-    left: &PrimitiveArray<LT>,
-    right: &PrimitiveArray<RT>,
-    op: F,
-) -> Result<PrimitiveArray<LT>, ArrowError>
-where
-    LT: ArrowNumericType,
-    RT: ArrowNumericType,
-    F: Fn(LT::Native, RT::Native) -> Result<LT::Native, ArrowError>,
-{
-    math_checked_op(left, right, op)
 }
 
 /// Calculates the modulus operation `left % right` on two SIMD inputs.
@@ -335,11 +298,12 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `add_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::add_wrapping")]
 pub fn add<T: ArrowNumericType>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
-    math_op(left, right, |a, b| a.add_wrapping(b))
+    binary(left, right, |a, b| a.add_wrapping(b))
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
@@ -347,11 +311,12 @@ pub fn add<T: ArrowNumericType>(
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `add` instead.
+#[deprecated(note = "Use arrow_arith::numeric::add")]
 pub fn add_checked<T: ArrowNumericType>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
-    math_checked_op(left, right, |a, b| a.add_checked(b))
+    try_binary(left, right, |a, b| a.add_checked(b))
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
@@ -359,176 +324,9 @@ pub fn add_checked<T: ArrowNumericType>(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `add_dyn_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::add_wrapping")]
 pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    match left.data_type() {
-        DataType::Date32 => {
-            let l = left.as_primitive::<Date32Type>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_op(l, r, Date32Type::add_year_months)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_op(l, r, Date32Type::add_day_time)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_op(l, r, Date32Type::add_month_day_nano)?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Date64 => {
-            let l = left.as_primitive::<Date64Type>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_op(l, r, Date64Type::add_year_months)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_op(l, r, Date64Type::add_day_time)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_op(l, r, Date64Type::add_month_day_nano)?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            let l = left.as_primitive::<TimestampSecondType>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_checked_op(l, r, TimestampSecondType::add_year_months)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_checked_op(l, r, TimestampSecondType::add_day_time)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_checked_op(l, r, TimestampSecondType::add_month_day_nano)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            let l = left.as_primitive::<TimestampMicrosecondType>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_checked_op(l, r, TimestampMicrosecondType::add_year_months)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_checked_op(l, r, TimestampMicrosecondType::add_day_time)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_checked_op(l, r, TimestampMicrosecondType::add_month_day_nano)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            let l = left.as_primitive::<TimestampMillisecondType>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_checked_op(l, r, TimestampMillisecondType::add_year_months)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_checked_op(l, r, TimestampMillisecondType::add_day_time)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_checked_op(l, r, TimestampMillisecondType::add_month_day_nano)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            let l = left.as_primitive::<TimestampNanosecondType>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_checked_op(l, r, TimestampNanosecondType::add_year_months)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_checked_op(l, r, TimestampNanosecondType::add_day_time)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_checked_op(l, r, TimestampNanosecondType::add_month_day_nano)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-
-        DataType::Interval(_)
-            if matches!(
-                right.data_type(),
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
-            ) =>
-        {
-            add_dyn(right, left)
-        }
-        _ => {
-            downcast_primitive_array!(
-                (left, right) => {
-                    math_op(left, right, |a, b| a.add_wrapping(b)).map(|a| Arc::new(a) as ArrayRef)
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Unsupported data type {}, {}",
-                    left.data_type(), right.data_type()
-                )))
-            )
-        }
-    }
+    crate::numeric::add_wrapping(&left, &right)
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
@@ -536,71 +334,12 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowErr
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `add_dyn` instead.
+#[deprecated(note = "Use arrow_arith::numeric::add")]
 pub fn add_dyn_checked(
     left: &dyn Array,
     right: &dyn Array,
 ) -> Result<ArrayRef, ArrowError> {
-    match left.data_type() {
-        DataType::Date32 => {
-            let l = left.as_primitive::<Date32Type>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_op(l, r, Date32Type::add_year_months)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_op(l, r, Date32Type::add_day_time)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_op(l, r, Date32Type::add_month_day_nano)?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Date64 => {
-            let l = left.as_primitive::<Date64Type>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_op(l, r, Date64Type::add_year_months)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_op(l, r, Date64Type::add_day_time)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_op(l, r, Date64Type::add_month_day_nano)?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        _ => {
-            downcast_primitive_array!(
-                (left, right) => {
-                    math_checked_op(left, right, |a, b| a.add_checked(b)).map(|a| Arc::new(a) as ArrayRef)
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Unsupported data type {}, {}",
-                    left.data_type(), right.data_type()
-                )))
-            )
-        }
-    }
+    crate::numeric::add(&left, &right)
 }
 
 /// Add every value in an array by a scalar. If any value in the array is null then the
@@ -608,6 +347,7 @@ pub fn add_dyn_checked(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `add_scalar_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::add_wrapping")]
 pub fn add_scalar<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
@@ -620,6 +360,7 @@ pub fn add_scalar<T: ArrowNumericType>(
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `add_scalar` instead.
+#[deprecated(note = "Use arrow_arith::numeric::add")]
 pub fn add_scalar_checked<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
@@ -635,6 +376,7 @@ pub fn add_scalar_checked<T: ArrowNumericType>(
 /// For an overflow-checking variant, use `add_scalar_checked_dyn` instead.
 ///
 /// This returns an `Err` when the input array is not supported for adding operation.
+#[deprecated(note = "Use arrow_arith::numeric::add_wrapping")]
 pub fn add_scalar_dyn<T: ArrowNumericType>(
     array: &dyn Array,
     scalar: T::Native,
@@ -651,6 +393,7 @@ pub fn add_scalar_dyn<T: ArrowNumericType>(
 ///
 /// As this kernel has the branching costs and also prevents LLVM from vectorising it correctly,
 /// it is usually much slower than non-checking variant.
+#[deprecated(note = "Use arrow_arith::numeric::add")]
 pub fn add_scalar_checked_dyn<T: ArrowNumericType>(
     array: &dyn Array,
     scalar: T::Native,
@@ -664,11 +407,12 @@ pub fn add_scalar_checked_dyn<T: ArrowNumericType>(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `subtract_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::sub_wrapping")]
 pub fn subtract<T: ArrowNumericType>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
-    math_op(left, right, |a, b| a.sub_wrapping(b))
+    binary(left, right, |a, b| a.sub_wrapping(b))
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -676,11 +420,12 @@ pub fn subtract<T: ArrowNumericType>(
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `subtract` instead.
+#[deprecated(note = "Use arrow_arith::numeric::sub")]
 pub fn subtract_checked<T: ArrowNumericType>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
-    math_checked_op(left, right, |a, b| a.sub_checked(b))
+    try_binary(left, right, |a, b| a.sub_checked(b))
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -688,184 +433,9 @@ pub fn subtract_checked<T: ArrowNumericType>(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `subtract_dyn_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::sub_wrapping")]
 pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    match left.data_type() {
-        DataType::Date32 => {
-            let l = left.as_primitive::<Date32Type>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_op(l, r, Date32Type::subtract_year_months)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_op(l, r, Date32Type::subtract_day_time)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_op(l, r, Date32Type::subtract_month_day_nano)?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Date64 => {
-            let l = left.as_primitive::<Date64Type>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_op(l, r, Date64Type::subtract_year_months)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_op(l, r, Date64Type::subtract_day_time)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_op(l, r, Date64Type::subtract_month_day_nano)?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            let l = left.as_primitive::<TimestampSecondType>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_checked_op(l, r, TimestampSecondType::subtract_year_months)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_checked_op(l, r, TimestampSecondType::subtract_day_time)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_checked_op(l, r, TimestampSecondType::subtract_month_day_nano)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Timestamp(TimeUnit::Second, _) => {
-                    let r = right.as_primitive::<TimestampSecondType>();
-                    let res: PrimitiveArray<DurationSecondType> = binary(l, r, |a, b| a.wrapping_sub(b))?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            let l = left.as_primitive::<TimestampMicrosecondType>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_checked_op(l, r, TimestampMicrosecondType::subtract_year_months)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_checked_op(l, r, TimestampMicrosecondType::subtract_day_time)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_checked_op(l, r, TimestampMicrosecondType::subtract_month_day_nano)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                    let r = right.as_primitive::<TimestampMicrosecondType>();
-                    let res: PrimitiveArray<DurationMicrosecondType> = binary(l, r, |a, b| a.wrapping_sub(b))?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            let l = left.as_primitive::<TimestampMillisecondType>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_checked_op(l, r, TimestampMillisecondType::subtract_year_months)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_checked_op(l, r, TimestampMillisecondType::subtract_day_time)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_checked_op(l, r, TimestampMillisecondType::subtract_month_day_nano)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                    let r = right.as_primitive::<TimestampMillisecondType>();
-                    let res: PrimitiveArray<DurationMillisecondType> = binary(l, r, |a, b| a.wrapping_sub(b))?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            let l = left.as_primitive::<TimestampNanosecondType>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_checked_op(l, r, TimestampNanosecondType::subtract_year_months)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_checked_op(l, r, TimestampNanosecondType::subtract_day_time)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_checked_op(l, r, TimestampNanosecondType::subtract_month_day_nano)?;
-                    Ok(Arc::new(res.with_timezone_opt(l.timezone())))
-                }
-                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                    let r = right.as_primitive::<TimestampNanosecondType>();
-                    let res: PrimitiveArray<DurationNanosecondType> = binary(l, r, |a, b| a.wrapping_sub(b))?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        _ => {
-            downcast_primitive_array!(
-                (left, right) => {
-                    math_op(left, right, |a, b| a.sub_wrapping(b)).map(|a| Arc::new(a) as ArrayRef)
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Unsupported data type {}, {}",
-                    left.data_type(), right.data_type()
-                )))
-            )
-        }
-    }
+    crate::numeric::sub_wrapping(&left, &right)
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -873,127 +443,12 @@ pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `subtract_dyn` instead.
+#[deprecated(note = "Use arrow_arith::numeric::sub")]
 pub fn subtract_dyn_checked(
     left: &dyn Array,
     right: &dyn Array,
 ) -> Result<ArrayRef, ArrowError> {
-    match left.data_type() {
-        DataType::Date32 => {
-            let l = left.as_primitive::<Date32Type>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_op(l, r, Date32Type::subtract_year_months)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_op(l, r, Date32Type::subtract_day_time)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_op(l, r, Date32Type::subtract_month_day_nano)?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Date64 => {
-            let l = left.as_primitive::<Date64Type>();
-            match right.data_type() {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_primitive::<IntervalYearMonthType>();
-                    let res = math_op(l, r, Date64Type::subtract_year_months)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_primitive::<IntervalDayTimeType>();
-                    let res = math_op(l, r, Date64Type::subtract_day_time)?;
-                    Ok(Arc::new(res))
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_primitive::<IntervalMonthDayNanoType>();
-                    let res = math_op(l, r, Date64Type::subtract_month_day_nano)?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            let l = left.as_primitive::<TimestampSecondType>();
-            match right.data_type() {
-                DataType::Timestamp(TimeUnit::Second, _) => {
-                    let r = right.as_primitive::<TimestampSecondType>();
-                    let res: PrimitiveArray<DurationSecondType> = try_binary(l, r, |a, b| a.sub_checked(b))?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            let l = left.as_primitive::<TimestampMicrosecondType>();
-            match right.data_type() {
-                DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                    let r = right.as_primitive::<TimestampMicrosecondType>();
-                    let res: PrimitiveArray<DurationMicrosecondType> = try_binary(l, r, |a, b| a.sub_checked(b))?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            let l = left.as_primitive::<TimestampMillisecondType>();
-            match right.data_type() {
-                DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                    let r = right.as_primitive::<TimestampMillisecondType>();
-                    let res: PrimitiveArray<DurationMillisecondType> = try_binary(l, r, |a, b| a.sub_checked(b))?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            let l = left.as_primitive::<TimestampNanosecondType>();
-            match right.data_type() {
-                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                    let r = right.as_primitive::<TimestampNanosecondType>();
-                    let res: PrimitiveArray<DurationNanosecondType> = try_binary(l, r, |a, b| a.sub_checked(b))?;
-                    Ok(Arc::new(res))
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
-                    left.data_type(), right.data_type()
-                ))),
-            }
-        }
-        _ => {
-            downcast_primitive_array!(
-                (left, right) => {
-                    math_checked_op(left, right, |a, b| a.sub_checked(b)).map(|a| Arc::new(a) as ArrayRef)
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Unsupported data type {}, {}",
-                    left.data_type(), right.data_type()
-                )))
-            )
-        }
-    }
+    crate::numeric::sub(&left, &right)
 }
 
 /// Subtract every value in an array by a scalar. If any value in the array is null then the
@@ -1001,6 +456,7 @@ pub fn subtract_dyn_checked(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `subtract_scalar_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::sub_wrapping")]
 pub fn subtract_scalar<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
@@ -1013,6 +469,7 @@ pub fn subtract_scalar<T: ArrowNumericType>(
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `subtract_scalar` instead.
+#[deprecated(note = "Use arrow_arith::numeric::sub")]
 pub fn subtract_scalar_checked<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
@@ -1026,6 +483,7 @@ pub fn subtract_scalar_checked<T: ArrowNumericType>(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `subtract_scalar_checked_dyn` instead.
+#[deprecated(note = "Use arrow_arith::numeric::sub_wrapping")]
 pub fn subtract_scalar_dyn<T: ArrowNumericType>(
     array: &dyn Array,
     scalar: T::Native,
@@ -1039,6 +497,7 @@ pub fn subtract_scalar_dyn<T: ArrowNumericType>(
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `subtract_scalar_dyn` instead.
+#[deprecated(note = "Use arrow_arith::numeric::sub")]
 pub fn subtract_scalar_checked_dyn<T: ArrowNumericType>(
     array: &dyn Array,
     scalar: T::Native,
@@ -1072,11 +531,12 @@ pub fn negate_checked<T: ArrowNumericType>(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `multiply_check` instead.
+#[deprecated(note = "Use arrow_arith::numeric::mul_wrapping")]
 pub fn multiply<T: ArrowNumericType>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
-    math_op(left, right, |a, b| a.mul_wrapping(b))
+    binary(left, right, |a, b| a.mul_wrapping(b))
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -1084,11 +544,12 @@ pub fn multiply<T: ArrowNumericType>(
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `multiply` instead.
+#[deprecated(note = "Use arrow_arith::numeric::mul")]
 pub fn multiply_checked<T: ArrowNumericType>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
-    math_checked_op(left, right, |a, b| a.mul_checked(b))
+    try_binary(left, right, |a, b| a.mul_checked(b))
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -1096,16 +557,9 @@ pub fn multiply_checked<T: ArrowNumericType>(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `multiply_dyn_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::mul_wrapping")]
 pub fn multiply_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    downcast_primitive_array!(
-        (left, right) => {
-            math_op(left, right, |a, b| a.mul_wrapping(b)).map(|a| Arc::new(a) as ArrayRef)
-        }
-        _ => Err(ArrowError::CastError(format!(
-            "Unsupported data type {}, {}",
-            left.data_type(), right.data_type()
-        )))
-    )
+    crate::numeric::mul_wrapping(&left, &right)
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -1113,19 +567,12 @@ pub fn multiply_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arr
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `multiply_dyn` instead.
+#[deprecated(note = "Use arrow_arith::numeric::mul")]
 pub fn multiply_dyn_checked(
     left: &dyn Array,
     right: &dyn Array,
 ) -> Result<ArrayRef, ArrowError> {
-    downcast_primitive_array!(
-        (left, right) => {
-            math_checked_op(left, right, |a, b| a.mul_checked(b)).map(|a| Arc::new(a) as ArrayRef)
-        }
-        _ => Err(ArrowError::CastError(format!(
-            "Unsupported data type {}, {}",
-            left.data_type(), right.data_type()
-        )))
-    )
+    crate::numeric::mul(&left, &right)
 }
 
 /// Returns the precision and scale of the result of a multiplication of two decimal types,
@@ -1210,8 +657,10 @@ pub fn multiply_fixed_point_checked(
     )?;
 
     if required_scale == product_scale {
-        return multiply_checked(left, right)?
-            .with_precision_and_scale(precision, required_scale);
+        return try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
+            a.mul_checked(b)
+        })?
+        .with_precision_and_scale(precision, required_scale);
     }
 
     try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
@@ -1254,7 +703,7 @@ pub fn multiply_fixed_point(
     )?;
 
     if required_scale == product_scale {
-        return multiply(left, right)?
+        return binary(left, right, |a, b| a.mul_wrapping(b))?
             .with_precision_and_scale(precision, required_scale);
     }
 
@@ -1294,6 +743,7 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `multiply_scalar_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::mul_wrapping")]
 pub fn multiply_scalar<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
@@ -1306,6 +756,7 @@ pub fn multiply_scalar<T: ArrowNumericType>(
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `multiply_scalar` instead.
+#[deprecated(note = "Use arrow_arith::numeric::mul")]
 pub fn multiply_scalar_checked<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     scalar: T::Native,
@@ -1319,6 +770,7 @@ pub fn multiply_scalar_checked<T: ArrowNumericType>(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `multiply_scalar_checked_dyn` instead.
+#[deprecated(note = "Use arrow_arith::numeric::mul_wrapping")]
 pub fn multiply_scalar_dyn<T: ArrowNumericType>(
     array: &dyn Array,
     scalar: T::Native,
@@ -1332,6 +784,7 @@ pub fn multiply_scalar_dyn<T: ArrowNumericType>(
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `multiply_scalar_dyn` instead.
+#[deprecated(note = "Use arrow_arith::numeric::mul")]
 pub fn multiply_scalar_checked_dyn<T: ArrowNumericType>(
     array: &dyn Array,
     scalar: T::Native,
@@ -1343,6 +796,7 @@ pub fn multiply_scalar_checked_dyn<T: ArrowNumericType>(
 /// Perform `left % right` operation on two arrays. If either left or right value is null
 /// then the result is also null. If any right hand value is zero then the result of this
 /// operation will be `Err(ArrowError::DivideByZero)`.
+#[deprecated(note = "Use arrow_arith::numeric::rem")]
 pub fn modulus<T: ArrowNumericType>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
@@ -1364,22 +818,9 @@ pub fn modulus<T: ArrowNumericType>(
 /// Perform `left % right` operation on two arrays. If either left or right value is null
 /// then the result is also null. If any right hand value is zero then the result of this
 /// operation will be `Err(ArrowError::DivideByZero)`.
+#[deprecated(note = "Use arrow_arith::numeric::rem")]
 pub fn modulus_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    downcast_primitive_array!(
-        (left, right) => {
-            math_checked_divide_op(left, right, |a, b| {
-                if b.is_zero() {
-                    Err(ArrowError::DivideByZero)
-                } else {
-                    Ok(a.mod_wrapping(b))
-                }
-            }).map(|a| Arc::new(a) as ArrayRef)
-        }
-        _ => Err(ArrowError::CastError(format!(
-            "Unsupported data type {}, {}",
-            left.data_type(), right.data_type()
-        )))
-    )
+    crate::numeric::rem(&left, &right)
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1388,6 +829,7 @@ pub fn modulus_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arro
 ///
 /// When `simd` feature is not enabled. This detects overflow and returns an `Err` for that.
 /// For an non-overflow-checking variant, use `divide` instead.
+#[deprecated(note = "Use arrow_arith::numeric::div")]
 pub fn divide_checked<T: ArrowNumericType>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
@@ -1397,7 +839,7 @@ pub fn divide_checked<T: ArrowNumericType>(
         a.div_wrapping(b)
     });
     #[cfg(not(feature = "simd"))]
-    return math_checked_divide_op(left, right, |a, b| a.div_checked(b));
+    return try_binary(left, right, |a, b| a.div_checked(b));
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1414,6 +856,7 @@ pub fn divide_checked<T: ArrowNumericType>(
 ///
 /// For integer types overflow will wrap around.
 ///
+#[deprecated(note = "Use arrow_arith::numeric::div")]
 pub fn divide_opt<T: ArrowNumericType>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
@@ -1433,17 +876,23 @@ pub fn divide_opt<T: ArrowNumericType>(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `divide_dyn_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::div")]
 pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    fn divide_op<T: ArrowPrimitiveType>(
+        left: &PrimitiveArray<T>,
+        right: &PrimitiveArray<T>,
+    ) -> Result<PrimitiveArray<T>, ArrowError> {
+        try_binary(left, right, |a, b| {
+            if b.is_zero() {
+                Err(ArrowError::DivideByZero)
+            } else {
+                Ok(a.div_wrapping(b))
+            }
+        })
+    }
+
     downcast_primitive_array!(
-        (left, right) => {
-            math_checked_divide_op(left, right, |a, b| {
-                if b.is_zero() {
-                    Err(ArrowError::DivideByZero)
-                } else {
-                    Ok(a.div_wrapping(b))
-                }
-            }).map(|a| Arc::new(a) as ArrayRef)
-        }
+        (left, right) => divide_op(left, right).map(|a| Arc::new(a) as ArrayRef),
         _ => Err(ArrowError::CastError(format!(
             "Unsupported data type {}, {}",
             left.data_type(), right.data_type()
@@ -1457,19 +906,12 @@ pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, Arrow
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `divide_dyn` instead.
+#[deprecated(note = "Use arrow_arith::numeric::div")]
 pub fn divide_dyn_checked(
     left: &dyn Array,
     right: &dyn Array,
 ) -> Result<ArrayRef, ArrowError> {
-    downcast_primitive_array!(
-        (left, right) => {
-            math_checked_divide_op(left, right, |a, b| a.div_checked(b)).map(|a| Arc::new(a) as ArrayRef)
-        }
-        _ => Err(ArrowError::CastError(format!(
-            "Unsupported data type {}, {}",
-            left.data_type(), right.data_type()
-        )))
-    )
+    crate::numeric::div(&left, &right)
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1481,6 +923,7 @@ pub fn divide_dyn_checked(
 /// Unlike `divide_dyn` or `divide_dyn_checked`, division by zero will get a null value instead
 /// returning an `Err`, this also doesn't check overflowing, overflowing will just wrap
 /// the result around.
+#[deprecated(note = "Use arrow_arith::numeric::div")]
 pub fn divide_dyn_opt(
     left: &dyn Array,
     right: &dyn Array,
@@ -1513,18 +956,20 @@ pub fn divide_dyn_opt(
 /// If either left or right value is null then the result is also null.
 ///
 /// For an overflow-checking variant, use `divide_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::div")]
 pub fn divide<T: ArrowNumericType>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
     // TODO: This is incorrect as div_wrapping has side-effects for integer types
     // and so may panic on null values (#2647)
-    math_op(left, right, |a, b| a.div_wrapping(b))
+    binary(left, right, |a, b| a.div_wrapping(b))
 }
 
 /// Modulus every value in an array by a scalar. If any value in the array is null then the
 /// result is also null. If the scalar is zero then the result of this operation will be
 /// `Err(ArrowError::DivideByZero)`.
+#[deprecated(note = "Use arrow_arith::numeric::rem")]
 pub fn modulus_scalar<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     modulo: T::Native,
@@ -1539,6 +984,7 @@ pub fn modulus_scalar<T: ArrowNumericType>(
 /// Modulus every value in an array by a scalar. If any value in the array is null then the
 /// result is also null. If the scalar is zero then the result of this operation will be
 /// `Err(ArrowError::DivideByZero)`.
+#[deprecated(note = "Use arrow_arith::numeric::rem")]
 pub fn modulus_scalar_dyn<T: ArrowNumericType>(
     array: &dyn Array,
     modulo: T::Native,
@@ -1552,6 +998,7 @@ pub fn modulus_scalar_dyn<T: ArrowNumericType>(
 /// Divide every value in an array by a scalar. If any value in the array is null then the
 /// result is also null. If the scalar is zero then the result of this operation will be
 /// `Err(ArrowError::DivideByZero)`.
+#[deprecated(note = "Use arrow_arith::numeric::div")]
 pub fn divide_scalar<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     divisor: T::Native,
@@ -1569,6 +1016,7 @@ pub fn divide_scalar<T: ArrowNumericType>(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `divide_scalar_checked_dyn` instead.
+#[deprecated(note = "Use arrow_arith::numeric::div")]
 pub fn divide_scalar_dyn<T: ArrowNumericType>(
     array: &dyn Array,
     divisor: T::Native,
@@ -1586,6 +1034,7 @@ pub fn divide_scalar_dyn<T: ArrowNumericType>(
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `divide_scalar_dyn` instead.
+#[deprecated(note = "Use arrow_arith::numeric::div")]
 pub fn divide_scalar_checked_dyn<T: ArrowNumericType>(
     array: &dyn Array,
     divisor: T::Native,
@@ -1608,6 +1057,7 @@ pub fn divide_scalar_checked_dyn<T: ArrowNumericType>(
 /// Unlike `divide_scalar_dyn` or `divide_scalar_checked_dyn`, division by zero will get a
 /// null value instead returning an `Err`, this also doesn't check overflowing, overflowing
 /// will just wrap the result around.
+#[deprecated(note = "Use arrow_arith::numeric::div")]
 pub fn divide_scalar_opt_dyn<T: ArrowNumericType>(
     array: &dyn Array,
     divisor: T::Native,
@@ -1625,11 +1075,13 @@ pub fn divide_scalar_opt_dyn<T: ArrowNumericType>(
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use arrow_array::builder::{
         BooleanBufferBuilder, BufferBuilder, PrimitiveDictionaryBuilder,
     };
+    use arrow_array::cast::AsArray;
     use arrow_array::temporal_conversions::SECONDS_IN_DAY;
     use arrow_buffer::buffer::NullBuffer;
     use arrow_buffer::i256;
@@ -1678,16 +1130,14 @@ mod tests {
         )]);
         let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
-        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
-            c.value(0),
+            c.as_primitive::<Date32Type>().value(0),
             Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
         );
 
         let c = add_dyn(&b, &a).unwrap();
-        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
-            c.value(0),
+            c.as_primitive::<Date32Type>().value(0),
             Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
         );
     }
@@ -1702,16 +1152,14 @@ mod tests {
                 1, 2, 3,
             )]);
         let c = add_dyn(&a, &b).unwrap();
-        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
-            c.value(0),
+            c.as_primitive::<Date32Type>().value(0),
             Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
         );
 
         let c = add_dyn(&b, &a).unwrap();
-        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
-            c.value(0),
+            c.as_primitive::<Date32Type>().value(0),
             Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
         );
     }
@@ -1724,16 +1172,14 @@ mod tests {
         let b =
             IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
-        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
-            c.value(0),
+            c.as_primitive::<Date64Type>().value(0),
             Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
         );
 
         let c = add_dyn(&b, &a).unwrap();
-        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
-            c.value(0),
+            c.as_primitive::<Date64Type>().value(0),
             Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2001, 3, 1).unwrap())
         );
     }
@@ -1745,16 +1191,14 @@ mod tests {
         )]);
         let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
-        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
-            c.value(0),
+            c.as_primitive::<Date64Type>().value(0),
             Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
         );
 
         let c = add_dyn(&b, &a).unwrap();
-        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
-            c.value(0),
+            c.as_primitive::<Date64Type>().value(0),
             Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 1, 2).unwrap())
         );
     }
@@ -1769,16 +1213,14 @@ mod tests {
                 1, 2, 3,
             )]);
         let c = add_dyn(&a, &b).unwrap();
-        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
-            c.value(0),
+            c.as_primitive::<Date64Type>().value(0),
             Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
         );
 
         let c = add_dyn(&b, &a).unwrap();
-        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
-            c.value(0),
+            c.as_primitive::<Date64Type>().value(0),
             Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap())
         );
     }
@@ -2584,11 +2026,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "DivideByZero")]
     fn test_f32_array_modulus_dyn_by_zero() {
         let a = Float32Array::from(vec![1.5]);
         let b = Float32Array::from(vec![0.0]);
-        modulus_dyn(&a, &b).unwrap();
+        let result = modulus_dyn(&a, &b).unwrap();
+        assert!(result.as_primitive::<Float32Type>().value(0).is_nan());
     }
 
     #[test]
@@ -3838,10 +3280,6 @@ mod tests {
             <TimestampSecondType as ArrowPrimitiveType>::Native::MIN,
         ]);
 
-        // unchecked
-        let result = subtract_dyn(&a, &b);
-        assert!(!&result.is_err());
-
         // checked
         let result = subtract_dyn_checked(&a, &b);
         assert!(&result.is_err());
@@ -3866,16 +3304,8 @@ mod tests {
 
     #[test]
     fn test_timestamp_microsecond_subtract_timestamp_overflow() {
-        let a = TimestampMicrosecondArray::from(vec![
-            <TimestampMicrosecondType as ArrowPrimitiveType>::Native::MAX,
-        ]);
-        let b = TimestampMicrosecondArray::from(vec![
-            <TimestampMicrosecondType as ArrowPrimitiveType>::Native::MIN,
-        ]);
-
-        // unchecked
-        let result = subtract_dyn(&a, &b);
-        assert!(!&result.is_err());
+        let a = TimestampMicrosecondArray::from(vec![i64::MAX]);
+        let b = TimestampMicrosecondArray::from(vec![i64::MIN]);
 
         // checked
         let result = subtract_dyn_checked(&a, &b);
@@ -3901,16 +3331,8 @@ mod tests {
 
     #[test]
     fn test_timestamp_millisecond_subtract_timestamp_overflow() {
-        let a = TimestampMillisecondArray::from(vec![
-            <TimestampMillisecondType as ArrowPrimitiveType>::Native::MAX,
-        ]);
-        let b = TimestampMillisecondArray::from(vec![
-            <TimestampMillisecondType as ArrowPrimitiveType>::Native::MIN,
-        ]);
-
-        // unchecked
-        let result = subtract_dyn(&a, &b);
-        assert!(!&result.is_err());
+        let a = TimestampMillisecondArray::from(vec![i64::MAX]);
+        let b = TimestampMillisecondArray::from(vec![i64::MIN]);
 
         // checked
         let result = subtract_dyn_checked(&a, &b);
@@ -3942,10 +3364,6 @@ mod tests {
         let b = TimestampNanosecondArray::from(vec![
             <TimestampNanosecondType as ArrowPrimitiveType>::Native::MIN,
         ]);
-
-        // unchecked
-        let result = subtract_dyn(&a, &b);
-        assert!(!&result.is_err());
 
         // checked
         let result = subtract_dyn_checked(&a, &b);

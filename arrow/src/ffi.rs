@@ -105,6 +105,8 @@ To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 
 use std::{mem::size_of, ptr::NonNull, sync::Arc};
 
+pub use arrow_data::ffi::FFI_ArrowArray;
+pub use arrow_schema::ffi::{FFI_ArrowSchema, Flags};
 use arrow_schema::UnionMode;
 
 use crate::array::{layout, ArrayData};
@@ -112,9 +114,6 @@ use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-
-pub use arrow_data::ffi::FFI_ArrowArray;
-pub use arrow_schema::ffi::{FFI_ArrowSchema, Flags};
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
@@ -412,7 +411,16 @@ impl<'a> ArrowArray<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashMap;
+    use std::convert::TryFrom;
+    use std::mem::ManuallyDrop;
+    use std::ptr::addr_of_mut;
+
+    use arrow_array::builder::UnionBuilder;
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Float64Type, Int32Type};
+    use arrow_array::{StructArray, UnionArray};
+
     use crate::array::{
         make_array, Array, ArrayData, BooleanArray, Decimal128Array, DictionaryArray,
         DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray,
@@ -421,14 +429,8 @@ mod tests {
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
-    use arrow_array::builder::UnionBuilder;
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::{Float64Type, Int32Type};
-    use arrow_array::{StructArray, UnionArray};
-    use std::collections::HashMap;
-    use std::convert::TryFrom;
-    use std::mem::ManuallyDrop;
-    use std::ptr::addr_of_mut;
+
+    use super::*;
 
     #[test]
     fn test_round_trip() {
@@ -440,10 +442,10 @@ mod tests {
 
         // (simulate consumer) import it
         let array = Int32Array::from(from_ffi(array, &schema).unwrap());
-        let array = kernels::arithmetic::add(&array, &array).unwrap();
+        let array = kernels::numeric::add(&array, &array).unwrap();
 
         // verify
-        assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
+        assert_eq!(array.as_ref(), &Int32Array::from(vec![2, 4, 6]));
     }
 
     #[test]
@@ -491,10 +493,10 @@ mod tests {
         let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(array, &Int32Array::from(vec![Some(2), None]));
 
-        let array = kernels::arithmetic::add(array, array).unwrap();
+        let array = kernels::numeric::add(array, array).unwrap();
 
         // verify
-        assert_eq!(array, Int32Array::from(vec![Some(4), None]));
+        assert_eq!(array.as_ref(), &Int32Array::from(vec![Some(4), None]));
 
         // (drop/release)
         Ok(())
