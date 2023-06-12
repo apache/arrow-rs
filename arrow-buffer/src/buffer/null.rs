@@ -41,11 +41,19 @@ impl NullBuffer {
 
     /// Create a new [`NullBuffer`] of length `len` where all values are null
     pub fn new_null(len: usize) -> Self {
-        let buffer = MutableBuffer::new_null(len).into_buffer();
-        let buffer = BooleanBuffer::new(buffer, 0, len);
         Self {
-            buffer,
+            buffer: BooleanBuffer::new_unset(len),
             null_count: len,
+        }
+    }
+
+    /// Create a new [`NullBuffer`] of length `len` where all values are valid
+    ///
+    /// Note: it is more efficient to not set the null buffer if it is known to be all valid
+    pub fn new_valid(len: usize) -> Self {
+        Self {
+            buffer: BooleanBuffer::new_set(len),
+            null_count: 0,
         }
     }
 

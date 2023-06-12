@@ -93,6 +93,14 @@ impl BooleanArray {
         Self { values, nulls }
     }
 
+    /// Create a new [`BooleanArray`] with length `len` consisting only of nulls
+    pub fn new_null(len: usize) -> Self {
+        Self {
+            values: BooleanBuffer::new_unset(len),
+            nulls: Some(NullBuffer::new_null(len)),
+        }
+    }
+
     /// Returns the length of this array.
     pub fn len(&self) -> usize {
         self.values.len()
