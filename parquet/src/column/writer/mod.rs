@@ -703,7 +703,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .filter(|l| data.len() > *l)
             .and_then(|l| match str::from_utf8(data) {
                 Ok(str_data) => truncate_utf8(str_data, l),
-                Err(_) => truncate_binary(data, l),
+                Err(_) => Some(data[..l].to_vec()),
             })
             .unwrap_or_else(|| data.to_vec())
     }
@@ -714,7 +714,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .filter(|l| data.len() > *l)
             .and_then(|l| match str::from_utf8(data) {
                 Ok(str_data) => truncate_utf8(str_data, l).and_then(increment_utf8),
-                Err(_) => truncate_binary(data, l).and_then(increment),
+                Err(_) => increment(data[..l].to_vec()),
             })
             .unwrap_or_else(|| data.to_vec())
     }
@@ -1188,30 +1188,11 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     (a[1..]) > (b[1..])
 }
 
-/// Truncate a UTF8 slice to the longest prefix that is still a valid UTF8 string, while being less than `length` bytes.
+/// Truncate a UTF8 slice to the longest prefix that is still a valid UTF8 string,
+/// while being less than `length` bytes and non-empty
 fn truncate_utf8(data: &str, length: usize) -> Option<Vec<u8>> {
-    // We return values like that at an earlier stage in the process.
-    assert!(data.len() >= length);
-    let mut char_indices = data.char_indices();
-
-    // We know `data` is a valid UTF8 encoded string, which means it has at least one valid UTF8 byte, which will make this loop exist.
-    while let Some((idx, c)) = char_indices.next_back() {
-        let split_point = idx + c.len_utf8();
-        if split_point <= length {
-            return data.as_bytes()[0..split_point].to_vec().into();
-        }
-    }
-
-    None
-}
-
-/// Truncate a binary slice to make sure its length is less than `length`
-fn truncate_binary(data: &[u8], length: usize) -> Option<Vec<u8>> {
-    // We return values like that at an earlier stage in the process.
-    assert!(data.len() >= length);
-    // If all bytes are already maximal, no need to truncate
-
-    data[0..length].to_vec().into()
+    let split = (1..=length).rfind(|x| data.is_char_boundary(*x))?;
+    Some(data.as_bytes()[..split].to_vec())
 }
 
 /// Try and increment the bytes from right to left.
@@ -1230,24 +1211,19 @@ fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
     None
 }
 
-/// Try and increment the the string's bytes from right to left, returning when the result is a valid UTF8 string.
-/// Returns `None` when it can't increment any byte.
+/// Try and increment the the string's bytes from right to left, returning when the result
+/// is a valid UTF8 string. Returns `None` when it can't increment any byte.
 fn increment_utf8(mut data: Vec<u8>) -> Option<Vec<u8>> {
     for idx in (0..data.len()).rev() {
         let original = data[idx];
-        let (mut byte, mut overflow) = data[idx].overflowing_add(1);
-
-        // Until overflow: 0xFF -> 0x00
-        while !overflow {
+        let (byte, overflow) = original.overflowing_add(1);
+        if !overflow {
             data[idx] = byte;
-
             if str::from_utf8(&data).is_ok() {
                 return Some(data);
             }
-            (byte, overflow) = data[idx].overflowing_add(1);
+            data[idx] = original;
         }
-
-        data[idx] = original;
     }
 
     None
@@ -2527,17 +2503,11 @@ mod tests {
     }
 
     #[test]
-    fn test_truncate_max_binary_chars() {
-        let r =
-            truncate_binary(&[0xFF, 0xFE, 0xFD, 0xFF, 0xFF, 0xFF], 5).and_then(increment);
-
+    fn test_increment_max_binary_chars() {
+        let r = increment(vec![0xFF, 0xFE, 0xFD, 0xFF, 0xFF]);
         assert_eq!(&r.unwrap(), &[0xFF, 0xFE, 0xFE, 0x00, 0x00]);
 
-        // We can truncate this slice, but increment it will fail
-        let truncated = truncate_binary(&[0xFF, 0xFF, 0xFF, 0xFF], 3);
-        assert!(truncated.is_some());
-
-        let incremented = truncated.and_then(increment);
+        let incremented = increment(vec![0xFF, 0xFF, 0xFF]);
         assert!(incremented.is_none())
     }
 
