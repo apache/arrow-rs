@@ -868,13 +868,13 @@ impl ColumnIndexBuilder {
     pub fn append(
         &mut self,
         null_page: bool,
-        min_value: &[u8],
-        max_value: &[u8],
+        min_value: Vec<u8>,
+        max_value: Vec<u8>,
         null_count: i64,
     ) {
         self.null_pages.push(null_page);
-        self.min_values.push(min_value.to_vec());
-        self.max_values.push(max_value.to_vec());
+        self.min_values.push(min_value);
+        self.max_values.push(max_value);
         self.null_counts.push(null_count);
     }
 

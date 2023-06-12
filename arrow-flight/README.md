@@ -33,7 +33,7 @@ arrow-flight = "39.0.0"
 Apache Arrow Flight is a gRPC based protocol for exchanging Arrow data between processes. See the blog post [Introducing Apache Arrow Flight: A Framework for Fast Data Transport](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for more information.
 
 This crate provides a Rust implementation of the
-[Flight.proto](../../format/Flight.proto) gRPC protocol and
+[Flight.proto](../format/Flight.proto) gRPC protocol and
 [examples](https://github.com/apache/arrow-rs/tree/master/arrow-flight/examples)
 that demonstrate how to build a Flight server implemented with [tonic](https://docs.rs/crate/tonic/latest).
 

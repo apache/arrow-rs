@@ -60,13 +60,20 @@ impl BooleanBuffer {
         }
     }
 
-    /// Create a new [`BooleanBuffer`] of the given `length` where all values are `false`
-    pub fn new_zeroed(len: usize) -> Self {
-        let buffer = MutableBuffer::new_null(len).into_buffer();
+    /// Create a new [`BooleanBuffer`] of `length` where all values are `true`
+    pub fn new_set(length: usize) -> Self {
+        let mut builder = BooleanBufferBuilder::new(length);
+        builder.append_n(length, true);
+        builder.finish()
+    }
+
+    /// Create a new [`BooleanBuffer`] of `length` where all values are `false`
+    pub fn new_unset(length: usize) -> Self {
+        let buffer = MutableBuffer::new_null(length).into_buffer();
         Self {
             buffer,
             offset: 0,
-            len,
+            len: length,
         }
     }
 

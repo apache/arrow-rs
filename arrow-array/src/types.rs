@@ -1403,6 +1403,46 @@ pub trait DecimalType:
     ) -> Result<(), ArrowError>;
 }
 
+/// Validate that `precision` and `scale` are valid for `T`
+///
+/// Returns an Error if:
+/// - `precision` is zero
+/// - `precision` is larger than `T:MAX_PRECISION`
+/// - `scale` is larger than `T::MAX_SCALE`
+/// - `scale` is > `precision`
+pub fn validate_decimal_precision_and_scale<T: DecimalType>(
+    precision: u8,
+    scale: i8,
+) -> Result<(), ArrowError> {
+    if precision == 0 {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "precision cannot be 0, has to be between [1, {}]",
+            T::MAX_PRECISION
+        )));
+    }
+    if precision > T::MAX_PRECISION {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "precision {} is greater than max {}",
+            precision,
+            T::MAX_PRECISION
+        )));
+    }
+    if scale > T::MAX_SCALE {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "scale {} is greater than max {}",
+            scale,
+            T::MAX_SCALE
+        )));
+    }
+    if scale > 0 && scale as u8 > precision {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "scale {scale} is greater than precision {precision}"
+        )));
+    }
+
+    Ok(())
+}
+
 /// The decimal type for a Decimal128Array
 #[derive(Debug)]
 pub struct Decimal128Type {}

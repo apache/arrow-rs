@@ -20,6 +20,7 @@
 use crate::bloom_filter::Sbbf;
 use crate::format::{ColumnIndex, OffsetIndex};
 use std::collections::{BTreeSet, VecDeque};
+use std::str;
 
 use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
@@ -656,8 +657,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         if null_page && self.column_index_builder.valid() {
             self.column_index_builder.append(
                 null_page,
-                &[0; 1],
-                &[0; 1],
+                vec![0; 1],
+                vec![0; 1],
                 self.page_metrics.num_page_nulls as i64,
             );
         } else if self.column_index_builder.valid() {
@@ -668,19 +669,54 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     self.column_index_builder.to_invalid();
                 }
                 Some(stat) => {
-                    self.column_index_builder.append(
-                        null_page,
-                        stat.min_bytes(),
-                        stat.max_bytes(),
-                        self.page_metrics.num_page_nulls as i64,
-                    );
+                    // We only truncate if the data is represented as binary
+                    match self.descr.physical_type() {
+                        Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
+                            self.column_index_builder.append(
+                                null_page,
+                                self.truncate_min_value(stat.min_bytes()),
+                                self.truncate_max_value(stat.max_bytes()),
+                                self.page_metrics.num_page_nulls as i64,
+                            );
+                        }
+                        _ => {
+                            self.column_index_builder.append(
+                                null_page,
+                                stat.min_bytes().to_vec(),
+                                stat.max_bytes().to_vec(),
+                                self.page_metrics.num_page_nulls as i64,
+                            );
+                        }
+                    }
                 }
             }
-        }
 
-        // update the offset index
-        self.offset_index_builder
-            .append_row_count(self.page_metrics.num_buffered_rows as i64);
+            // update the offset index
+            self.offset_index_builder
+                .append_row_count(self.page_metrics.num_buffered_rows as i64);
+        }
+    }
+
+    fn truncate_min_value(&self, data: &[u8]) -> Vec<u8> {
+        self.props
+            .column_index_truncate_length()
+            .filter(|l| data.len() > *l)
+            .and_then(|l| match str::from_utf8(data) {
+                Ok(str_data) => truncate_utf8(str_data, l),
+                Err(_) => Some(data[..l].to_vec()),
+            })
+            .unwrap_or_else(|| data.to_vec())
+    }
+
+    fn truncate_max_value(&self, data: &[u8]) -> Vec<u8> {
+        self.props
+            .column_index_truncate_length()
+            .filter(|l| data.len() > *l)
+            .and_then(|l| match str::from_utf8(data) {
+                Ok(str_data) => truncate_utf8(str_data, l).and_then(increment_utf8),
+                Err(_) => increment(data[..l].to_vec()),
+            })
+            .unwrap_or_else(|| data.to_vec())
     }
 
     /// Adds data page.
@@ -1152,9 +1188,52 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     (a[1..]) > (b[1..])
 }
 
+/// Truncate a UTF8 slice to the longest prefix that is still a valid UTF8 string,
+/// while being less than `length` bytes and non-empty
+fn truncate_utf8(data: &str, length: usize) -> Option<Vec<u8>> {
+    let split = (1..=length).rfind(|x| data.is_char_boundary(*x))?;
+    Some(data.as_bytes()[..split].to_vec())
+}
+
+/// Try and increment the bytes from right to left.
+///
+/// Returns `None` if all bytes are set to `u8::MAX`.
+fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
+    for byte in data.iter_mut().rev() {
+        let (incremented, overflow) = byte.overflowing_add(1);
+        *byte = incremented;
+
+        if !overflow {
+            return Some(data);
+        }
+    }
+
+    None
+}
+
+/// Try and increment the the string's bytes from right to left, returning when the result
+/// is a valid UTF8 string. Returns `None` when it can't increment any byte.
+fn increment_utf8(mut data: Vec<u8>) -> Option<Vec<u8>> {
+    for idx in (0..data.len()).rev() {
+        let original = data[idx];
+        let (byte, overflow) = original.overflowing_add(1);
+        if !overflow {
+            data[idx] = byte;
+            if str::from_utf8(&data).is_ok() {
+                return Some(data);
+            }
+            data[idx] = original;
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::format::BoundaryOrder;
+    use crate::{
+        file::properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, format::BoundaryOrder,
+    };
     use bytes::Bytes;
     use rand::distributions::uniform::SampleUniform;
     use std::sync::Arc;
@@ -2197,11 +2276,9 @@ mod tests {
             if let Statistics::Int32(stats) = stats {
                 // first page is [1,2,3,4]
                 // second page is [-5,2,4,8]
+                // note that we don't increment here, as this is a non BinaryArray type.
                 assert_eq!(stats.min_bytes(), column_index.min_values[1].as_slice());
-                assert_eq!(
-                    stats.max_bytes(),
-                    column_index.max_values.get(1).unwrap().as_slice()
-                );
+                assert_eq!(stats.max_bytes(), column_index.max_values.get(1).unwrap());
             } else {
                 panic!("expecting Statistics::Int32");
             }
@@ -2220,10 +2297,218 @@ mod tests {
         );
     }
 
+    /// Verify min/max value truncation in the column index works as expected
+    #[test]
+    fn test_column_offset_index_metadata_truncating() {
+        // write data
+        // and check the offset index and column index
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer =
+            get_test_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
+
+        let mut data = vec![FixedLenByteArray::default(); 3];
+        // This is the expected min value - "aaa..."
+        data[0].set_data(ByteBufferPtr::new(vec![97_u8; 200]));
+        // This is the expected max value - "ZZZ..."
+        data[1].set_data(ByteBufferPtr::new(vec![112_u8; 200]));
+        data[2].set_data(ByteBufferPtr::new(vec![98_u8; 200]));
+
+        writer.write_batch(&data, None, None).unwrap();
+
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+        let column_index = r.column_index.unwrap();
+        let offset_index = r.offset_index.unwrap();
+
+        assert_eq!(3, r.rows_written);
+
+        // column index
+        assert_eq!(1, column_index.null_pages.len());
+        assert_eq!(1, offset_index.page_locations.len());
+        assert_eq!(BoundaryOrder::UNORDERED, column_index.boundary_order);
+        assert!(!column_index.null_pages[0]);
+        assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
+
+        if let Some(stats) = r.metadata.statistics() {
+            assert!(stats.has_min_max_set());
+            assert_eq!(stats.null_count(), 0);
+            assert_eq!(stats.distinct_count(), None);
+            if let Statistics::FixedLenByteArray(stats) = stats {
+                let column_index_min_value = column_index.min_values.get(0).unwrap();
+                let column_index_max_value = column_index.max_values.get(0).unwrap();
+
+                // Column index stats are truncated, while the column chunk's aren't.
+                assert_ne!(stats.min_bytes(), column_index_min_value.as_slice());
+                assert_ne!(stats.max_bytes(), column_index_max_value.as_slice());
+
+                assert_eq!(
+                    column_index_min_value.len(),
+                    DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH.unwrap()
+                );
+                assert_eq!(column_index_min_value.as_slice(), &[97_u8; 64]);
+                assert_eq!(
+                    column_index_max_value.len(),
+                    DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH.unwrap()
+                );
+
+                // We expect the last byte to be incremented
+                assert_eq!(
+                    *column_index_max_value.last().unwrap(),
+                    *column_index_max_value.first().unwrap() + 1
+                );
+            } else {
+                panic!("expecting Statistics::FixedLenByteArray");
+            }
+        } else {
+            panic!("metadata missing statistics");
+        }
+    }
+
+    #[test]
+    fn test_column_offset_index_truncating_spec_example() {
+        // write data
+        // and check the offset index and column index
+        let page_writer = get_test_page_writer();
+
+        // Truncate values at 1 byte
+        let builder =
+            WriterProperties::builder().set_column_index_truncate_length(Some(1));
+        let props = Arc::new(builder.build());
+        let mut writer =
+            get_test_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
+
+        let mut data = vec![FixedLenByteArray::default(); 1];
+        // This is the expected min value
+        data[0].set_data(ByteBufferPtr::new(
+            String::from("Blart Versenwald III").into_bytes(),
+        ));
+
+        writer.write_batch(&data, None, None).unwrap();
+
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+        let column_index = r.column_index.unwrap();
+        let offset_index = r.offset_index.unwrap();
+
+        assert_eq!(1, r.rows_written);
+
+        // column index
+        assert_eq!(1, column_index.null_pages.len());
+        assert_eq!(1, offset_index.page_locations.len());
+        assert_eq!(BoundaryOrder::UNORDERED, column_index.boundary_order);
+        assert!(!column_index.null_pages[0]);
+        assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
+
+        if let Some(stats) = r.metadata.statistics() {
+            assert!(stats.has_min_max_set());
+            assert_eq!(stats.null_count(), 0);
+            assert_eq!(stats.distinct_count(), None);
+            if let Statistics::FixedLenByteArray(_stats) = stats {
+                let column_index_min_value = column_index.min_values.get(0).unwrap();
+                let column_index_max_value = column_index.max_values.get(0).unwrap();
+
+                assert_eq!(column_index_min_value.len(), 1);
+                assert_eq!(column_index_max_value.len(), 1);
+
+                assert_eq!("B".as_bytes(), column_index_min_value.as_slice());
+                assert_eq!("C".as_bytes(), column_index_max_value.as_slice());
+
+                assert_ne!(column_index_min_value, stats.min_bytes());
+                assert_ne!(column_index_max_value, stats.max_bytes());
+            } else {
+                panic!("expecting Statistics::FixedLenByteArray");
+            }
+        } else {
+            panic!("metadata missing statistics");
+        }
+    }
+
     #[test]
     fn test_send() {
         fn test<T: Send>() {}
         test::<ColumnWriterImpl<Int32Type>>();
+    }
+
+    #[test]
+    fn test_increment() {
+        let v = increment(vec![0, 0, 0]).unwrap();
+        assert_eq!(&v, &[0, 0, 1]);
+
+        // Handle overflow
+        let v = increment(vec![0, 255, 255]).unwrap();
+        assert_eq!(&v, &[1, 0, 0]);
+
+        // Return `None` if all bytes are u8::MAX
+        let v = increment(vec![255, 255, 255]);
+        assert!(v.is_none());
+    }
+
+    #[test]
+    fn test_increment_utf8() {
+        // Basic ASCII case
+        let v = increment_utf8("hello".as_bytes().to_vec()).unwrap();
+        assert_eq!(&v, "hellp".as_bytes());
+
+        // Also show that BinaryArray level comparison works here
+        let mut greater = ByteArray::new();
+        greater.set_data(ByteBufferPtr::new(v));
+        let mut original = ByteArray::new();
+        original.set_data(ByteBufferPtr::new("hello".as_bytes().to_vec()));
+        assert!(greater > original);
+
+        // UTF8 string
+        let s = "❤️🧡💛💚💙💜";
+        let v = increment_utf8(s.as_bytes().to_vec()).unwrap();
+
+        if let Ok(new) = String::from_utf8(v) {
+            assert_ne!(&new, s);
+            assert_eq!(new, "❤️🧡💛💚💙💝");
+            assert!(new.as_bytes().last().unwrap() > s.as_bytes().last().unwrap());
+        } else {
+            panic!("Expected incremented UTF8 string to also be valid.")
+        }
+
+        // Max UTF8 character - should be a No-Op
+        let s = char::MAX.to_string();
+        assert_eq!(s.len(), 4);
+        let v = increment_utf8(s.as_bytes().to_vec());
+        assert!(v.is_none());
+
+        // Handle multi-byte UTF8 characters
+        let s = "a\u{10ffff}";
+        let v = increment_utf8(s.as_bytes().to_vec());
+        assert_eq!(&v.unwrap(), "b\u{10ffff}".as_bytes());
+    }
+
+    #[test]
+    fn test_truncate_utf8() {
+        // No-op
+        let data = "❤️🧡💛💚💙💜";
+        let r = truncate_utf8(data, data.as_bytes().len()).unwrap();
+        assert_eq!(r.len(), data.as_bytes().len());
+        assert_eq!(&r, data.as_bytes());
+        println!("len is {}", data.len());
+
+        // We slice it away from the UTF8 boundary
+        let r = truncate_utf8(data, 13).unwrap();
+        assert_eq!(r.len(), 10);
+        assert_eq!(&r, "❤️🧡".as_bytes());
+
+        // One multi-byte code point, and a length shorter than it, so we can't slice it
+        let r = truncate_utf8("\u{0836}", 1);
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn test_increment_max_binary_chars() {
+        let r = increment(vec![0xFF, 0xFE, 0xFD, 0xFF, 0xFF]);
+        assert_eq!(&r.unwrap(), &[0xFF, 0xFE, 0xFE, 0x00, 0x00]);
+
+        let incremented = increment(vec![0xFF, 0xFF, 0xFF]);
+        assert!(incremented.is_none())
     }
 
     /// Performs write-read roundtrip with randomly generated values and levels.

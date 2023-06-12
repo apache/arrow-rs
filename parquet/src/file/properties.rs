@@ -15,55 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`WriterProperties`]
-//!
-//! # Usage
-//!
-//! ```rust
-//! use parquet::{
-//!     basic::{Compression, Encoding},
-//!     file::properties::*,
-//!     schema::types::ColumnPath,
-//! };
-//!
-//! // Create properties with default configuration.
-//! let props = WriterProperties::default();
-//!
-//! // Use properties builder to set certain options and assemble the configuration.
-//! let props = WriterProperties::builder()
-//!     .set_writer_version(WriterVersion::PARQUET_1_0)
-//!     .set_encoding(Encoding::PLAIN)
-//!     .set_column_encoding(ColumnPath::from("col1"), Encoding::DELTA_BINARY_PACKED)
-//!     .set_compression(Compression::SNAPPY)
-//!     .build();
-//!
-//! assert_eq!(props.writer_version(), WriterVersion::PARQUET_1_0);
-//! assert_eq!(
-//!     props.encoding(&ColumnPath::from("col1")),
-//!     Some(Encoding::DELTA_BINARY_PACKED)
-//! );
-//! assert_eq!(
-//!     props.encoding(&ColumnPath::from("col2")),
-//!     Some(Encoding::PLAIN)
-//! );
-//! ```
-//!
-//! Reader properties.
-//!
-//! # Usage
-//!
-//! ```rust
-//! use parquet::file::properties::ReaderProperties;
-//!
-//! // Create properties with default configuration.
-//! let props = ReaderProperties::builder().build();
-//!
-//! // Use properties builder to set certain options and assemble the configuration.
-//! let props = ReaderProperties::builder()
-//!     .set_backward_compatible_lz4(false)
-//!     .build();
-//! ```
-
+//! Configuration via [`WriterProperties`] and [`ReaderProperties`]
 use std::{collections::HashMap, sync::Arc};
 
 use crate::basic::{Compression, Encoding};
@@ -72,20 +24,32 @@ use crate::file::metadata::KeyValue;
 use crate::format::SortingColumn;
 use crate::schema::types::ColumnPath;
 
-const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
-const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
-const DEFAULT_WRITER_VERSION: WriterVersion = WriterVersion::PARQUET_1_0;
-const DEFAULT_COMPRESSION: Compression = Compression::UNCOMPRESSED;
-const DEFAULT_DICTIONARY_ENABLED: bool = true;
-const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
-const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
-const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
-const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
-const DEFAULT_CREATED_BY: &str =
+/// Default value for [`WriterProperties::data_page_size_limit`]
+pub const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
+/// Default value for [`WriterProperties::write_batch_size`]
+pub const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
+/// Default value for [`WriterProperties::writer_version`]
+pub const DEFAULT_WRITER_VERSION: WriterVersion = WriterVersion::PARQUET_1_0;
+/// Default value for [`WriterProperties::compression`]
+pub const DEFAULT_COMPRESSION: Compression = Compression::UNCOMPRESSED;
+/// Default value for [`WriterProperties::dictionary_enabled`]
+pub const DEFAULT_DICTIONARY_ENABLED: bool = true;
+/// Default value for [`WriterProperties::dictionary_page_size_limit`]
+pub const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
+/// Default value for [`WriterProperties::statistics_enabled`]
+pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
+/// Default value for [`WriterProperties::max_statistics_size`]
+pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
+/// Default value for [`WriterProperties::max_row_group_size`]
+pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
+/// Default value for [`WriterProperties::created_by`]
+pub const DEFAULT_CREATED_BY: &str =
     concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
-/// default value for the false positive probability used in a bloom filter.
+/// Default value for [`WriterProperties::column_index_truncate_length`]
+pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
+/// Default value for [`BloomFilterProperties::fpp`]
 pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
-/// default value for the expected number of distinct values used in a bloom filter.
+/// Default value for [`BloomFilterProperties::ndv`]
 pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
 
 /// Parquet writer version.
@@ -111,10 +75,41 @@ impl WriterVersion {
 /// Reference counted writer properties.
 pub type WriterPropertiesPtr = Arc<WriterProperties>;
 
-/// Writer properties.
+/// Configuration settings for writing parquet files.
 ///
 /// All properties except the key-value metadata are immutable,
 /// use [`WriterPropertiesBuilder`] to assemble these properties.
+///
+/// # Example
+///
+/// ```rust
+/// use parquet::{
+///     basic::{Compression, Encoding},
+///     file::properties::*,
+///     schema::types::ColumnPath,
+/// };
+///
+/// // Create properties with default configuration.
+/// let props = WriterProperties::default();
+///
+/// // Use properties builder to set certain options and assemble the configuration.
+/// let props = WriterProperties::builder()
+///     .set_writer_version(WriterVersion::PARQUET_1_0)
+///     .set_encoding(Encoding::PLAIN)
+///     .set_column_encoding(ColumnPath::from("col1"), Encoding::DELTA_BINARY_PACKED)
+///     .set_compression(Compression::SNAPPY)
+///     .build();
+///
+/// assert_eq!(props.writer_version(), WriterVersion::PARQUET_1_0);
+/// assert_eq!(
+///     props.encoding(&ColumnPath::from("col1")),
+///     Some(Encoding::DELTA_BINARY_PACKED)
+/// );
+/// assert_eq!(
+///     props.encoding(&ColumnPath::from("col2")),
+///     Some(Encoding::PLAIN)
+/// );
+/// ```
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
     data_page_size_limit: usize,
@@ -128,6 +123,7 @@ pub struct WriterProperties {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
+    column_index_truncate_length: Option<usize>,
 }
 
 impl Default for WriterProperties {
@@ -226,6 +222,13 @@ impl WriterProperties {
         self.sorting_columns.as_ref()
     }
 
+    /// Returns the maximum length of truncated min/max values in the column index.
+    ///
+    /// `None` if truncation is disabled, must be greater than 0 otherwise.
+    pub fn column_index_truncate_length(&self) -> Option<usize> {
+        self.column_index_truncate_length
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     /// This is not configurable.
     #[inline]
@@ -307,7 +310,8 @@ impl WriterProperties {
     }
 }
 
-/// Writer properties builder.
+/// Builder for parquet file writer configuration. See example on
+/// [`WriterProperties`]
 pub struct WriterPropertiesBuilder {
     data_page_size_limit: usize,
     dictionary_page_size_limit: usize,
@@ -320,6 +324,7 @@ pub struct WriterPropertiesBuilder {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
+    column_index_truncate_length: Option<usize>,
 }
 
 impl WriterPropertiesBuilder {
@@ -337,6 +342,7 @@ impl WriterPropertiesBuilder {
             default_column_properties: Default::default(),
             column_properties: HashMap::new(),
             sorting_columns: None,
+            column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
         }
     }
 
@@ -354,6 +360,7 @@ impl WriterPropertiesBuilder {
             default_column_properties: self.default_column_properties,
             column_properties: self.column_properties,
             sorting_columns: self.sorting_columns,
+            column_index_truncate_length: self.column_index_truncate_length,
         }
     }
 
@@ -626,6 +633,17 @@ impl WriterPropertiesBuilder {
         self.get_mut_props(col).set_bloom_filter_ndv(value);
         self
     }
+
+    /// Sets the max length of min/max value fields in the column index. Must be greater than 0.
+    /// If set to `None` - there's no effective limit.
+    pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
+        if let Some(value) = max_length {
+            assert!(value > 0, "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+        }
+
+        self.column_index_truncate_length = max_length;
+        self
+    }
 }
 
 /// Controls the level of statistics to be computed by the writer
@@ -809,10 +827,24 @@ pub type ReaderPropertiesPtr = Arc<ReaderProperties>;
 
 const DEFAULT_READ_BLOOM_FILTER: bool = false;
 
-/// Reader properties.
+/// Configuration settings for reading parquet files.
 ///
 /// All properties are immutable and `Send` + `Sync`.
 /// Use [`ReaderPropertiesBuilder`] to assemble these properties.
+///
+/// # Example
+///
+/// ```rust
+/// use parquet::file::properties::ReaderProperties;
+///
+/// // Create properties with default configuration.
+/// let props = ReaderProperties::builder().build();
+///
+/// // Use properties builder to set certain options and assemble the configuration.
+/// let props = ReaderProperties::builder()
+///     .set_backward_compatible_lz4(false)
+///     .build();
+/// ```
 pub struct ReaderProperties {
     codec_options: CodecOptions,
     read_bloom_filter: bool,
@@ -835,7 +867,8 @@ impl ReaderProperties {
     }
 }
 
-/// Reader properties builder.
+/// Builder for parquet file reader configuration. See example on
+/// [`ReaderProperties`]
 pub struct ReaderPropertiesBuilder {
     codec_options_builder: CodecOptionsBuilder,
     read_bloom_filter: Option<bool>,

@@ -95,12 +95,9 @@ impl BooleanArray {
 
     /// Create a new [`BooleanArray`] with length `len` consisting only of nulls
     pub fn new_null(len: usize) -> Self {
-        let buffer = MutableBuffer::from_len_zeroed(bit_util::ceil(len, 8));
-        let values = BooleanBuffer::new(buffer.into(), 0, len);
-        let nulls = NullBuffer::new_null(len);
         Self {
-            values,
-            nulls: Some(nulls),
+            values: BooleanBuffer::new_unset(len),
+            nulls: Some(NullBuffer::new_null(len)),
         }
     }
 
