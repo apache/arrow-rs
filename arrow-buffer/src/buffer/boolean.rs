@@ -60,6 +60,23 @@ impl BooleanBuffer {
         }
     }
 
+    /// Create a new [`BooleanBuffer`] of `length` where all values are `true`
+    pub fn new_set(length: usize) -> Self {
+        let mut builder = BooleanBufferBuilder::new(length);
+        builder.append_n(length, true);
+        builder.finish()
+    }
+
+    /// Create a new [`BooleanBuffer`] of `length` where all values are `false`
+    pub fn new_unset(length: usize) -> Self {
+        let buffer = MutableBuffer::new_null(length).into_buffer();
+        Self {
+            buffer,
+            offset: 0,
+            len: length,
+        }
+    }
+
     /// Invokes `f` with indexes `0..len` collecting the boolean results into a new `BooleanBuffer`
     pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, f: F) -> Self {
         let buffer = MutableBuffer::collect_bool(len, f);
