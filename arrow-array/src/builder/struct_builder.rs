@@ -16,9 +16,8 @@
 // under the License.
 
 use crate::builder::*;
-use crate::{Array, ArrayRef, StructArray};
+use crate::{ArrayRef, StructArray};
 use arrow_buffer::NullBufferBuilder;
-use arrow_data::ArrayData;
 use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
@@ -240,42 +239,24 @@ impl StructBuilder {
     pub fn finish(&mut self) -> StructArray {
         self.validate_content();
 
-        let mut child_data = Vec::with_capacity(self.field_builders.len());
-        for f in &mut self.field_builders {
-            let arr = f.finish();
-            child_data.push(arr.to_data());
-        }
-        let length = self.len();
+        let arrays = self.field_builders.iter_mut().map(|f| f.finish()).collect();
         let nulls = self.null_buffer_builder.finish();
-
-        let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
-            .len(length)
-            .child_data(child_data)
-            .nulls(nulls);
-
-        let array_data = unsafe { builder.build_unchecked() };
-        StructArray::from(array_data)
+        StructArray::new(self.fields.clone(), arrays, nulls)
     }
 
     /// Builds the `StructArray` without resetting the builder.
     pub fn finish_cloned(&self) -> StructArray {
         self.validate_content();
 
-        let mut child_data = Vec::with_capacity(self.field_builders.len());
-        for f in &self.field_builders {
-            let arr = f.finish_cloned();
-            child_data.push(arr.to_data());
-        }
-        let length = self.len();
+        let arrays = self
+            .field_builders
+            .iter()
+            .map(|f| f.finish_cloned())
+            .collect();
+
         let nulls = self.null_buffer_builder.finish_cloned();
 
-        let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
-            .len(length)
-            .child_data(child_data)
-            .nulls(nulls);
-
-        let array_data = unsafe { builder.build_unchecked() };
-        StructArray::from(array_data)
+        StructArray::new(self.fields.clone(), arrays, nulls)
     }
 
     /// Constructs and validates contents in the builder to ensure that
@@ -295,6 +276,7 @@ impl StructBuilder {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
+    use arrow_data::ArrayData;
     use arrow_schema::Field;
 
     use crate::array::Array;
@@ -305,8 +287,8 @@ mod tests {
         let int_builder = Int32Builder::new();
 
         let fields = vec![
-            Field::new("f1", DataType::Utf8, false),
-            Field::new("f2", DataType::Int32, false),
+            Field::new("f1", DataType::Utf8, true),
+            Field::new("f2", DataType::Int32, true),
         ];
         let field_builders = vec![
             Box::new(string_builder) as Box<dyn ArrayBuilder>,
@@ -595,5 +577,23 @@ mod tests {
 
         let mut builder = StructBuilder::new(fields, field_builders);
         builder.finish();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Incorrect datatype for StructArray field \\\"timestamp\\\", expected Timestamp(Nanosecond, Some(\\\"UTC\\\")) got Timestamp(Nanosecond, None)"
+    )]
+    fn test_struct_array_mismatch_builder() {
+        let fields = vec![Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_owned().into())),
+            false,
+        )];
+
+        let field_builders: Vec<Box<dyn ArrayBuilder>> =
+            vec![Box::new(TimestampNanosecondBuilder::new())];
+
+        let mut sa = StructBuilder::new(fields, field_builders);
+        sa.finish();
     }
 }
