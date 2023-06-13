@@ -49,7 +49,7 @@ use crate::parse::{
 use arrow_array::{
     builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *,
 };
-use arrow_buffer::{i256, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{i256, ArrowNativeType, Buffer, MutableBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
@@ -3466,34 +3466,21 @@ fn unpack_dictionary<K>(
 where
     K: ArrowDictionaryKeyType,
 {
-    let dict_array = array
-        .as_any()
-        .downcast_ref::<DictionaryArray<K>>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError(
-                "Internal Error: Cannot cast dictionary to DictionaryArray of expected type".to_string(),
-            )
-        })?;
-
-    // attempt to cast the dict values to the target type
-    // use the take kernel to expand out the dictionary
+    let dict_array = array.as_dictionary::<K>();
     let cast_dict_values = cast_with_options(dict_array.values(), to_type, cast_options)?;
-
-    // Note take requires first casting the indices to u32
-    let keys_array: ArrayRef =
-        Arc::new(PrimitiveArray::<K>::from(dict_array.keys().to_data()));
-    let indices = cast_with_options(&keys_array, &DataType::UInt32, cast_options)?;
-    let u32_indices =
-        indices
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .ok_or_else(|| {
-                ArrowError::ComputeError(
-                    "Internal Error: Cannot cast dict indices to UInt32".to_string(),
-                )
-            })?;
-
-    take(cast_dict_values.as_ref(), u32_indices, None)
+    let keys = dict_array.keys();
+    match K::DATA_TYPE {
+        DataType::Int32 => {
+            // Dictionary guarantees all non-null keys >= 0
+            let buffer = ScalarBuffer::new(keys.values().inner().clone(), 0, keys.len());
+            let indices = PrimitiveArray::new(buffer, keys.nulls().cloned());
+            take::<UInt32Type>(cast_dict_values.as_ref(), &indices, None)
+        }
+        _ => {
+            let indices = cast_with_options(keys, &DataType::UInt32, cast_options)?;
+            take::<UInt32Type>(cast_dict_values.as_ref(), indices.as_primitive(), None)
+        }
+    }
 }
 
 /// Attempts to encode an array into an `ArrayDictionary` with index
