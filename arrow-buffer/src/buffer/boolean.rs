@@ -128,6 +128,7 @@ impl BooleanBuffer {
     /// # Panics
     ///
     /// Panics if `i >= self.len()`
+    #[inline]
     pub fn value(&self, idx: usize) -> bool {
         assert!(idx < self.len);
         unsafe { self.value_unchecked(idx) }
