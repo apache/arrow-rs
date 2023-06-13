@@ -30,7 +30,7 @@ use arrow_buffer::{
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 
-use num::{ToPrimitive, Zero};
+use num::Zero;
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///
@@ -62,44 +62,36 @@ use num::{ToPrimitive, Zero};
 ///
 /// # Examples
 /// ```
-/// # use arrow_array::{StringArray, UInt32Array};
+/// # use arrow_array::{StringArray, UInt32Array, cast::AsArray};
 /// # use arrow_select::take::take;
 /// let values = StringArray::from(vec!["zero", "one", "two"]);
 ///
 /// // Take items at index 2, and 1:
 /// let indices = UInt32Array::from(vec![2, 1]);
 /// let taken = take(&values, &indices, None).unwrap();
-/// let taken = taken.as_any().downcast_ref::<StringArray>().unwrap();
+/// let taken = taken.as_string::<i32>();
 ///
 /// assert_eq!(*taken, StringArray::from(vec!["two", "one"]));
 /// ```
-pub fn take<IndexType>(
+pub fn take<IndexType: ArrowPrimitiveType>(
     values: &dyn Array,
     indices: &PrimitiveArray<IndexType>,
     options: Option<TakeOptions>,
-) -> Result<ArrayRef, ArrowError>
-where
-    IndexType: ArrowPrimitiveType,
-    IndexType::Native: ToPrimitive,
-{
+) -> Result<ArrayRef, ArrowError> {
     take_impl(values, indices, options)
 }
 
-fn take_impl<IndexType>(
+fn take_impl<IndexType: ArrowPrimitiveType>(
     values: &dyn Array,
     indices: &PrimitiveArray<IndexType>,
     options: Option<TakeOptions>,
-) -> Result<ArrayRef, ArrowError>
-where
-    IndexType: ArrowPrimitiveType,
-    IndexType::Native: ToPrimitive,
-{
+) -> Result<ArrayRef, ArrowError> {
     let options = options.unwrap_or_default();
     if options.check_bounds {
         let len = values.len();
         if indices.null_count() > 0 {
             indices.iter().flatten().try_for_each(|index| {
-                let ix = ToPrimitive::to_usize(&index).ok_or_else(|| {
+                let ix = index.to_usize().ok_or_else(|| {
                     ArrowError::ComputeError("Cast to usize failed".to_string())
                 })?;
                 if ix >= len {
@@ -111,7 +103,7 @@ where
             })?;
         } else {
             indices.values().iter().try_for_each(|index| {
-                let ix = ToPrimitive::to_usize(index).ok_or_else(|| {
+                let ix = index.to_usize().ok_or_else(|| {
                     ArrowError::ComputeError("Cast to usize failed".to_string())
                 })?;
                 if ix >= len {
@@ -251,7 +243,6 @@ fn take_primitive<T, I>(
 where
     T: ArrowPrimitiveType,
     I: ArrowPrimitiveType,
-    I::Native: ToPrimitive,
 {
     let values_buf = take_native(values.values(), indices);
     let nulls = take_nulls(values.nulls(), indices);
@@ -323,29 +314,20 @@ fn take_bits<I: ArrowPrimitiveType>(
 }
 
 /// `take` implementation for boolean arrays
-fn take_boolean<IndexType>(
+fn take_boolean<IndexType: ArrowPrimitiveType>(
     values: &BooleanArray,
     indices: &PrimitiveArray<IndexType>,
-) -> BooleanArray
-where
-    IndexType: ArrowPrimitiveType,
-    IndexType::Native: ToPrimitive,
-{
+) -> BooleanArray {
     let val_buf = take_bits(values.values(), indices);
     let null_buf = take_nulls(values.nulls(), indices);
     BooleanArray::new(val_buf, null_buf)
 }
 
 /// `take` implementation for string arrays
-fn take_bytes<T, IndexType>(
+fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     array: &GenericByteArray<T>,
     indices: &PrimitiveArray<IndexType>,
-) -> Result<GenericByteArray<T>, ArrowError>
-where
-    T: ByteArrayType,
-    IndexType: ArrowPrimitiveType,
-    IndexType::Native: ToPrimitive,
-{
+) -> Result<GenericByteArray<T>, ArrowError> {
     let data_len = indices.len();
 
     let bytes_offset = (data_len + 1) * std::mem::size_of::<T::Offset>();
@@ -359,7 +341,7 @@ where
     let nulls;
     if array.null_count() == 0 && indices.null_count() == 0 {
         for (i, offset) in offsets.iter_mut().skip(1).enumerate() {
-            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
+            let index = indices.value(i).to_usize().ok_or_else(|| {
                 ArrowError::ComputeError("Cast to usize failed".to_string())
             })?;
 
@@ -378,7 +360,7 @@ where
         let null_slice = null_buf.as_slice_mut();
 
         for (i, offset) in offsets.iter_mut().skip(1).enumerate() {
-            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
+            let index = indices.value(i).to_usize().ok_or_else(|| {
                 ArrowError::ComputeError("Cast to usize failed".to_string())
             })?;
 
@@ -396,10 +378,9 @@ where
     } else if array.null_count() == 0 {
         for (i, offset) in offsets.iter_mut().skip(1).enumerate() {
             if indices.is_valid(i) {
-                let index =
-                    ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
-                        ArrowError::ComputeError("Cast to usize failed".to_string())
-                    })?;
+                let index = indices.value(i).to_usize().ok_or_else(|| {
+                    ArrowError::ComputeError("Cast to usize failed".to_string())
+                })?;
 
                 let s: &[u8] = array.value(index).as_ref();
 
@@ -416,7 +397,7 @@ where
         let null_slice = null_buf.as_slice_mut();
 
         for (i, offset) in offsets.iter_mut().skip(1).enumerate() {
-            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
+            let index = indices.value(i).to_usize().ok_or_else(|| {
                 ArrowError::ComputeError("Cast to usize failed".to_string())
             })?;
 
@@ -457,9 +438,8 @@ fn take_list<IndexType, OffsetType>(
 ) -> Result<GenericListArray<OffsetType::Native>, ArrowError>
 where
     IndexType: ArrowPrimitiveType,
-    IndexType::Native: ToPrimitive,
     OffsetType: ArrowPrimitiveType,
-    OffsetType::Native: ToPrimitive + OffsetSizeTrait,
+    OffsetType::Native: OffsetSizeTrait,
     PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
     // TODO: Some optimizations can be done here such as if it is
@@ -487,15 +467,11 @@ where
 /// Calculates the index and indexed offset for the inner array,
 /// applying `take` on the inner array, then reconstructing a list array
 /// with the indexed offsets
-fn take_fixed_size_list<IndexType>(
+fn take_fixed_size_list<IndexType: ArrowPrimitiveType>(
     values: &FixedSizeListArray,
     indices: &PrimitiveArray<IndexType>,
     length: <UInt32Type as ArrowPrimitiveType>::Native,
-) -> Result<FixedSizeListArray, ArrowError>
-where
-    IndexType: ArrowPrimitiveType,
-    IndexType::Native: ToPrimitive,
-{
+) -> Result<FixedSizeListArray, ArrowError> {
     let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
     let taken = take_impl::<UInt32Type>(values.values().as_ref(), &list_indices, None)?;
 
@@ -505,7 +481,7 @@ where
     let null_slice = null_buf.as_slice_mut();
 
     for i in 0..indices.len() {
-        let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
+        let index = indices.value(i).to_usize().ok_or_else(|| {
             ArrowError::ComputeError("Cast to usize failed".to_string())
         })?;
         if !indices.is_valid(i) || values.is_null(index) {
@@ -524,15 +500,11 @@ where
     Ok(FixedSizeListArray::from(list_data))
 }
 
-fn take_fixed_size_binary<IndexType>(
+fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
     values: &FixedSizeBinaryArray,
     indices: &PrimitiveArray<IndexType>,
     size: i32,
-) -> Result<FixedSizeBinaryArray, ArrowError>
-where
-    IndexType: ArrowPrimitiveType,
-    IndexType::Native: ToPrimitive,
-{
+) -> Result<FixedSizeBinaryArray, ArrowError> {
     let nulls = values.nulls();
     let array_iter = indices
         .values()
@@ -555,16 +527,10 @@ where
 ///
 /// applies `take` to the keys of the dictionary array and returns a new dictionary array
 /// with the same dictionary values and reordered keys
-fn take_dict<T, I>(
+fn take_dict<T: ArrowDictionaryKeyType, I: ArrowPrimitiveType>(
     values: &DictionaryArray<T>,
     indices: &PrimitiveArray<I>,
-) -> Result<DictionaryArray<T>, ArrowError>
-where
-    T: ArrowDictionaryKeyType,
-    T::Native: num::Num,
-    I: ArrowPrimitiveType,
-    I::Native: ToPrimitive,
-{
+) -> Result<DictionaryArray<T>, ArrowError> {
     let new_keys = take_primitive(values.keys(), indices)?;
     Ok(unsafe { DictionaryArray::new_unchecked(new_keys, values.values().clone()) })
 }
@@ -577,16 +543,10 @@ where
 /// For e.g. an input `RunArray{ run_ends = [2,4,6,8], values=[1,2,1,2] }` and `logical_indices=[2,3,6,7]`
 /// would be converted to `physical_indices=[1,1,3,3]` which will be used to build
 /// output `RunArray{ run_ends=[2,4], values=[2,2] }`.
-fn take_run<T, I>(
+fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     run_array: &RunArray<T>,
     logical_indices: &PrimitiveArray<I>,
-) -> Result<RunArray<T>, ArrowError>
-where
-    T: RunEndIndexType,
-    T::Native: num::Num,
-    I: ArrowPrimitiveType,
-    I::Native: ToPrimitive,
-{
+) -> Result<RunArray<T>, ArrowError> {
     // get physical indices for the input logical indices
     let physical_indices = run_array.get_physical_indices(logical_indices.values())?;
 
@@ -662,7 +622,6 @@ fn take_value_indices_from_list<IndexType, OffsetType>(
 >
 where
     IndexType: ArrowPrimitiveType,
-    IndexType::Native: ToPrimitive,
     OffsetType: ArrowPrimitiveType,
     OffsetType::Native: OffsetSizeTrait + std::ops::Add + num::Zero + num::One,
     PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
@@ -684,7 +643,7 @@ where
     // compute the value indices, and set offsets accordingly
     for i in 0..indices.len() {
         if indices.is_valid(i) {
-            let ix = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
+            let ix = indices.value(i).to_usize().ok_or_else(|| {
                 ArrowError::ComputeError("Cast to usize failed".to_string())
             })?;
             let start = offsets[ix];
@@ -723,13 +682,12 @@ fn take_value_indices_from_fixed_size_list<IndexType>(
 ) -> Result<PrimitiveArray<UInt32Type>, ArrowError>
 where
     IndexType: ArrowPrimitiveType,
-    IndexType::Native: ToPrimitive,
 {
     let mut values = vec![];
 
     for i in 0..indices.len() {
         if indices.is_valid(i) {
-            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
+            let index = indices.value(i).to_usize().ok_or_else(|| {
                 ArrowError::ComputeError("Cast to usize failed".to_string())
             })?;
             let start =
@@ -830,7 +788,6 @@ mod tests {
         T: ArrowPrimitiveType,
         PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
         I: ArrowPrimitiveType,
-        I::Native: ToPrimitive,
     {
         let output = PrimitiveArray::<T>::from(data);
         let expected = PrimitiveArray::<T>::from(expected_data);
