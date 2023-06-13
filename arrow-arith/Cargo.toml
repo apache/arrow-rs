@@ -44,9 +44,5 @@ num = { version = "0.4", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 
-[package.metadata.docs.rs]
-features = ["dyn_arith_dict"]
-
 [features]
-dyn_arith_dict = []
 simd = ["arrow-array/simd"]
