@@ -140,6 +140,12 @@ impl<T: ArrowNativeType> From<Vec<T>> for ScalarBuffer<T> {
     }
 }
 
+impl<T: ArrowNativeType> FromIterator<T> for ScalarBuffer<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        iter.into_iter().collect::<Vec<_>>().into()
+    }
+}
+
 impl<'a, T: ArrowNativeType> IntoIterator for &'a ScalarBuffer<T> {
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
