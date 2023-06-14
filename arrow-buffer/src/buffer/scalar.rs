@@ -142,6 +142,8 @@ impl<T: ArrowNativeType> From<Vec<T>> for ScalarBuffer<T> {
 
 impl<T: ArrowNativeType> FromIterator<T> for ScalarBuffer<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        // Vec::from_iter has a number of specializations including for
+        // TrustedLen and std::vec::IntoIter that make this fast
         iter.into_iter().collect::<Vec<_>>().into()
     }
 }
