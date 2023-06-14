@@ -23,8 +23,9 @@ use crate::{
     make_array, Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType,
     PrimitiveArray, StringArray,
 };
+use arrow_buffer::bit_util::set_bit;
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, BooleanBufferBuilder};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -548,6 +549,29 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
             .iter_mut()
             .for_each(|v| *v = op(*v));
         Ok(builder.finish())
+    }
+
+    /// Computes an occupancy mask for this dictionary's values
+    ///
+    /// For each value in [`Self::values`] the corresponding bit will be set in the
+    /// returned mask if it is referenced by a key in this [`DictionaryArray`]
+    pub fn occupancy(&self) -> BooleanBuffer {
+        let len = self.values.len();
+        let mut builder = BooleanBufferBuilder::new(len);
+        builder.resize(len);
+        let slice = builder.as_slice_mut();
+        match self.keys.nulls().filter(|n| n.null_count() > 0) {
+            Some(n) => {
+                let v = self.keys.values();
+                n.valid_indices()
+                    .for_each(|idx| set_bit(slice, v[idx].as_usize()))
+            }
+            None => {
+                let v = self.keys.values();
+                v.iter().for_each(|v| set_bit(slice, v.as_usize()))
+            }
+        }
+        builder.finish()
     }
 }
 
@@ -1206,5 +1230,27 @@ mod tests {
 
         let expected = DictionaryArray::new(keys, Arc::new(values));
         assert_eq!(expected, returned);
+    }
+
+    #[test]
+    fn test_occupancy() {
+        let keys = Int32Array::new((100..200).collect(), None);
+        let values = Int32Array::from(vec![0; 1024]);
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+        for (idx, v) in dict.occupancy().iter().enumerate() {
+            let expected = (100..200).contains(&idx);
+            assert_eq!(v, expected, "{idx}");
+        }
+
+        let keys = Int32Array::new(
+            (0..100).collect(),
+            Some((0..100).map(|x| x % 4 == 0).collect()),
+        );
+        let values = Int32Array::from(vec![0; 1024]);
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+        for (idx, v) in dict.occupancy().iter().enumerate() {
+            let expected = idx % 4 == 0 && idx < 100;
+            assert_eq!(v, expected, "{idx}");
+        }
     }
 }
