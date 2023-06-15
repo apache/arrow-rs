@@ -394,16 +394,19 @@ impl GetClient for GoogleCloudStorageClient {
             false => Method::GET,
         };
 
-        let response = self
-            .client
-            .request(method, url)
-            .bearer_auth(&credential.bearer)
-            .with_get_options(options)
-            .send_retry(&self.retry_config)
-            .await
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
-            })?;
+        let mut request = self.client.request(method, url).with_get_options(options);
+
+        if !credential.bearer.is_empty() {
+            request = request.bearer_auth(&credential.bearer);
+        }
+
+        let response =
+            request
+                .send_retry(&self.retry_config)
+                .await
+                .context(GetRequestSnafu {
+                    path: path.as_ref(),
+                })?;
 
         Ok(response)
     }
