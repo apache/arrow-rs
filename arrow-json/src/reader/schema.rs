@@ -597,7 +597,7 @@ mod tests {
         let inferred_schema = infer_json_schema_from_iterator(
             vec![
                 Ok(serde_json::json!({
-                    "c1": -1i64, "c2": (u64::MAX - 1) as u64, "c3": 1.0f64,
+                    "c1": -1i64, "c2": i64::MAX as u64 + 1, "c3": 1.0f64,
                 })),
                 Ok(serde_json::json!({
                     "c1": -1i64, "c2": 1u64, "c3": 1.0f64,
