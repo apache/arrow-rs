@@ -830,15 +830,19 @@ impl FromStr for IntervalAmount {
         match s.split_once('.') {
             Some((integer, frac))
                 if frac.len() <= INTERVAL_PRECISION as usize
-                    && !integer.is_empty()
                     && !frac.is_empty()
                     && !frac.starts_with('-') =>
             {
-                let integer = integer.parse::<i64>().map_err(|_| {
-                    ArrowError::ParseError(format!(
-                        "Failed to parse {s} as interval amount"
-                    ))
-                })?;
+                // integer will be "" for values like ".5"
+                let integer = if integer.is_empty() {
+                    Ok(0)
+                } else {
+                    integer.parse::<i64>().map_err(|_| {
+                        ArrowError::ParseError(format!(
+                            "Failed to parse {s} as interval amount"
+                        ))
+                    })
+                }?;
 
                 let frac_unscaled = frac.parse::<i64>().map_err(|_| {
                     ArrowError::ParseError(format!(
@@ -1799,6 +1803,16 @@ mod tests {
         );
 
         assert_eq!(
+            Interval::new(0i32, 15i32, 0),
+            Interval::parse("0.5 months", &config).unwrap(),
+        );
+
+        assert_eq!(
+            Interval::new(0i32, 15i32, 0),
+            Interval::parse(".5 months", &config).unwrap(),
+        );
+
+        assert_eq!(
             Interval::new(2i32, 10i32, 9 * NANOS_PER_HOUR),
             Interval::parse("2.1 months 7.25 days 3 hours", &config).unwrap(),
         );
@@ -1943,10 +1957,6 @@ mod tests {
         let expected = IntervalAmount::new(-3, -5 * 10_i64.pow(INTERVAL_PRECISION - 1));
 
         assert_eq!(result, expected);
-
-        // invalid: missing integer
-        let result = IntervalAmount::from_str(".5");
-        assert!(result.is_err());
 
         // invalid: missing fractional
         let result = IntervalAmount::from_str("3.");
