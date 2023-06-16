@@ -1479,7 +1479,7 @@ mod tests {
         assert_eq!(schema, batch_schema);
 
         let a = schema.column_with_name("a").unwrap();
-        assert_eq!(&DataType::Int64, a.1.data_type());
+        assert_eq!(&DataType::UInt64, a.1.data_type());
         let b = schema.column_with_name("b").unwrap();
         assert_eq!(&DataType::Float64, b.1.data_type());
         let c = schema.column_with_name("c").unwrap();
@@ -1487,7 +1487,7 @@ mod tests {
         let d = schema.column_with_name("d").unwrap();
         assert_eq!(&DataType::Utf8, d.1.data_type());
 
-        let aa = batch.column(a.0).as_primitive::<Int64Type>();
+        let aa = batch.column(a.0).as_primitive::<UInt64Type>();
         assert!(aa.is_valid(0));
         assert!(!aa.is_valid(1));
         assert!(!aa.is_valid(11));

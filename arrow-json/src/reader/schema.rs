@@ -314,7 +314,9 @@ fn infer_scalar_array_type(array: &[Value]) -> Result<InferredType, ArrowError> 
         match v {
             Value::Null => {}
             Value::Number(n) => {
-                if n.is_i64() {
+                if n.is_u64() {
+                    hs.insert(DataType::UInt64);
+                } else if n.is_i64() {
                     hs.insert(DataType::Int64);
                 } else {
                     hs.insert(DataType::Float64);
