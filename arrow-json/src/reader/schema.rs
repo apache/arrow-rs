@@ -442,7 +442,9 @@ fn collect_field_types_from_object(
                 // inferring
             }
             Value::Number(n) => {
-                if n.is_i64() {
+                if n.is_u64() {
+                    set_object_scalar_field_type(field_types, k, DataType::UInt64)?;
+                } else if n.is_i64() {
                     set_object_scalar_field_type(field_types, k, DataType::Int64)?;
                 } else {
                     set_object_scalar_field_type(field_types, k, DataType::Float64)?;
@@ -580,6 +582,30 @@ mod tests {
                 .into_iter(),
         )
             .unwrap();
+
+        assert_eq!(inferred_schema, schema);
+    }
+
+    #[test]
+    fn test_json_infer_schema_number() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Int64, true),
+            Field::new("c2", DataType::UInt64, true),
+            Field::new("c3", DataType::Float64, true),
+        ]);
+
+        let inferred_schema = infer_json_schema_from_iterator(
+            vec![
+                Ok(serde_json::json!({
+                    "c1": -1i64, "c2": (u64::MAX - 1) as u64, "c3": 1.0f64,
+                })),
+                Ok(serde_json::json!({
+                    "c1": -1i64, "c2": 1u64, "c3": 1.0f64,
+                })),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
 
         assert_eq!(inferred_schema, schema);
     }
