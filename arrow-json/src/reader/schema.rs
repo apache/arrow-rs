@@ -86,9 +86,16 @@ fn coerce_data_type(dt: Vec<&DataType>) -> DataType {
     dt_iter.fold(dt_init, |l, r| match (l, r) {
         (DataType::Boolean, DataType::Boolean) => DataType::Boolean,
         (DataType::Int64, DataType::Int64) => DataType::Int64,
+        (DataType::UInt64, DataType::UInt64) => DataType::UInt64,
+        // Caution overflow!
+        (DataType::Int64, DataType::UInt64) | (DataType::UInt64, DataType::Int64) => {
+            DataType::Int64
+        }
         (DataType::Float64, DataType::Float64)
         | (DataType::Float64, DataType::Int64)
-        | (DataType::Int64, DataType::Float64) => DataType::Float64,
+        | (DataType::Int64, DataType::Float64)
+        | (DataType::Float64, DataType::UInt64)
+        | (DataType::UInt64, DataType::Float64) => DataType::Float64,
         (DataType::List(l), DataType::List(r)) => DataType::List(Arc::new(Field::new(
             "item",
             coerce_data_type(vec![l.data_type(), r.data_type()]),
@@ -478,6 +485,10 @@ fn collect_field_types_from_object(
 /// Infer the fields of a JSON file by reading all items from the JSON Value Iterator.
 ///
 /// The following type coercion logic is implemented:
+/// * Unsigned integer are converted to `UInt64`
+/// * Signed integer are converted to `Int64`
+/// * `Int64` and `UInt64` are converted to `Int64`
+/// * Less than `i64::MIN` or greater than `u64::MAX` are converted to `Float64`
 /// * `Int64` and `Float64` are converted to `Float64`
 /// * Lists and scalars are coerced to a list of a compatible scalar
 /// * All other cases are coerced to `Utf8` (String)
@@ -569,7 +580,7 @@ mod tests {
                 ])),
                 true,
             ),
-            Field::new("c2", DataType::Int64, true),
+            Field::new("c2", DataType::UInt64, true),
             Field::new("c3", DataType::Utf8, true),
         ]);
 
@@ -619,7 +630,7 @@ mod tests {
                     "item",
                     DataType::Struct(Fields::from(vec![
                         Field::new("a", DataType::Utf8, true),
-                        Field::new("b", DataType::Int64, true),
+                        Field::new("b", DataType::UInt64, true),
                         Field::new("c", DataType::Boolean, true),
                     ])),
                     true,
@@ -701,7 +712,7 @@ mod tests {
         let fields = inferred_schema.fields();
 
         let (_, big_field) = fields.find("bigger_than_i64_max").unwrap();
-        assert_eq!(big_field.data_type(), &DataType::Float64);
+        assert_eq!(big_field.data_type(), &DataType::UInt64);
         let (_, small_field) = fields.find("smaller_than_i64_min").unwrap();
         assert_eq!(small_field.data_type(), &DataType::Float64);
     }
