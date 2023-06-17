@@ -639,8 +639,8 @@ impl Field {
     /// Converts Parquet BYTE_ARRAY type with converted type into either UTF8 string or
     /// array of bytes.
     #[inline]
-    pub fn convert_byte_array(descr: &ColumnDescPtr, value: ByteArray) -> Self {
-        match descr.physical_type() {
+    pub fn convert_byte_array(descr: &ColumnDescPtr, value: ByteArray) -> Result<Self> {
+        let field = match descr.physical_type() {
             PhysicalType::BYTE_ARRAY => match descr.converted_type() {
                 ConvertedType::UTF8 | ConvertedType::ENUM | ConvertedType::JSON => {
                     let value = String::from_utf8(value.data().to_vec()).unwrap();
@@ -664,7 +664,8 @@ impl Field {
                 _ => nyi!(descr, value),
             },
             _ => nyi!(descr, value),
-        }
+        };
+        Ok(field)
     }
 
     #[cfg(any(feature = "json", test))]

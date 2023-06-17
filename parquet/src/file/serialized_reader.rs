@@ -79,7 +79,7 @@ impl<'a> TryFrom<&'a str> for SerializedFileReader<File> {
 /// Conversion into a [`RowIter`](crate::record::reader::RowIter)
 /// using the full file schema over all row groups.
 impl IntoIterator for SerializedFileReader<File> {
-    type Item = Row;
+    type Item = Result<Row>;
     type IntoIter = RowIter<'static>;
 
     fn into_iter(self) -> Self::IntoIter {

@@ -1244,7 +1244,7 @@ mod tests {
             "ﬀkoß",
             "😃sadlksFFkoSSsh😃klF", // Original was case insensitive "😃sadlksffkosSsh😃klF"
             "😱slgFFkoSSsh😃klF",    // Original was case insensitive "😱slgffkosSsh😃klF"
-            "FFkoSS",                // "FFKoSS"
+            "FFkoSS",                    // "FFKoSS"
         ],
         "FFkoSS",
         contains_utf8_scalar,
