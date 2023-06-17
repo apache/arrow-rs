@@ -164,6 +164,8 @@ mod generic_list_builder;
 pub use generic_list_builder::*;
 mod map_builder;
 pub use map_builder::*;
+mod null_builder;
+pub use null_builder::*;
 mod primitive_builder;
 pub use primitive_builder::*;
 mod primitive_dictionary_builder;
