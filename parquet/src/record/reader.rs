@@ -1627,7 +1627,7 @@ mod tests {
     fn test_file_reader_rows(file_name: &str, schema: Option<Type>) -> Result<Vec<Row>> {
         let file = get_test_file(file_name);
         let file_reader: Box<dyn FileReader> = Box::new(SerializedFileReader::new(file)?);
-        let mut iter = file_reader.get_row_iter(schema)?;
+        let iter = file_reader.get_row_iter(schema)?;
         Ok(iter.map(|row| row.unwrap()).collect())
     }
 
@@ -1637,7 +1637,7 @@ mod tests {
         // Check the first row group only, because files will contain only single row
         // group
         let row_group_reader = file_reader.get_row_group(0).unwrap();
-        let mut iter = row_group_reader.get_row_iter(schema)?;
+        let iter = row_group_reader.get_row_iter(schema)?;
         Ok(iter.map(|row| row.unwrap()).collect())
     }
 }

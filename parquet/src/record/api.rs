@@ -1058,7 +1058,10 @@ mod tests {
             make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::DECIMAL, 0, 8, 2];
         let value = ByteArray::from(vec![207, 200]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row.unwrap(), Field::Decimal(Decimal::from_bytes(value, 8, 2)));
+        assert_eq!(
+            row.unwrap(),
+            Field::Decimal(Decimal::from_bytes(value, 8, 2))
+        );
 
         // DECIMAL (FIXED_LEN_BYTE_ARRAY)
         let descr = make_column_descr![
@@ -1070,7 +1073,10 @@ mod tests {
         ];
         let value = ByteArray::from(vec![0, 0, 0, 0, 0, 4, 147, 224]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row.unwrap(), Field::Decimal(Decimal::from_bytes(value, 17, 5)));
+        assert_eq!(
+            row.unwrap(),
+            Field::Decimal(Decimal::from_bytes(value, 17, 5))
+        );
 
         // NONE (FIXED_LEN_BYTE_ARRAY)
         let descr = make_column_descr![
