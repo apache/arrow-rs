@@ -419,7 +419,7 @@ impl Reader {
         let field = match *self {
             Reader::PrimitiveReader(_, ref mut column) => {
                 let value = column.current_value()?;
-                column.read_next().unwrap();
+                column.read_next()?;
                 value
             }
             Reader::OptionReader(def_level, ref mut reader) => {
@@ -774,15 +774,18 @@ impl<'a> Iterator for RowIter<'a> {
                     .get_row_group(self.current_row_group)
                     .expect("Row group is required to advance");
 
-                let mut iter = self
+                match self
                     .tree_builder
                     .as_iter(self.descr.clone(), row_group_reader)
-                    .unwrap();
+                {
+                    Ok(mut iter) => {
+                        row = iter.next();
 
-                row = iter.next();
-
-                self.current_row_group += 1;
-                self.row_iter = Some(iter);
+                        self.current_row_group += 1;
+                        self.row_iter = Some(iter);
+                    }
+                    Err(e) => return Some(Err(e)),
+                }
             }
         }
 

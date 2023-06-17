@@ -643,7 +643,13 @@ impl Field {
         let field = match descr.physical_type() {
             PhysicalType::BYTE_ARRAY => match descr.converted_type() {
                 ConvertedType::UTF8 | ConvertedType::ENUM | ConvertedType::JSON => {
-                    let value = String::from_utf8(value.data().to_vec()).unwrap();
+                    let value =
+                        String::from_utf8(value.data().to_vec()).map_err(|e| {
+                            general_err!(
+                                "Error reading BYTE_ARRAY as String. Bytes: {:?} Error: {:?}",
+                                value.data(), e
+                            )
+                        })?;
                     Field::Str(value)
                 }
                 ConvertedType::BSON | ConvertedType::NONE => Field::Bytes(value),
