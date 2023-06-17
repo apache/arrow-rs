@@ -1337,7 +1337,7 @@ mod tests {
         for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
             let row_group_reader = reader.get_row_group(i).unwrap();
             let iter = row_group_reader.get_row_iter(None).unwrap();
-            let res: Vec<_> = iter.map(&value).collect();
+            let res: Vec<_> = iter.map(|row| &row.unwrap()).collect();
             let row_group_size = row_group_reader.metadata().total_byte_size();
             let uncompressed_size: i64 = row_group_reader
                 .metadata()

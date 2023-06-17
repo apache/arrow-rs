@@ -1505,7 +1505,7 @@ mod tests {
             .iter()
             .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
             .flat_map(|r| RowIter::from_file_into(Box::new(r)))
-            .flat_map(|r| r.get_int(0))
+            .flat_map(|r| r.unwrap().get_int(0))
             .collect::<Vec<_>>();
 
         assert_eq!(vec, vec![4, 5, 6, 7, 2, 3, 0, 1]);
@@ -1523,7 +1523,7 @@ mod tests {
 
                 RowIter::from_file_into(Box::new(r)).project(proj).unwrap()
             })
-            .map(|r| format!("id:{}", r.fmt(0)))
+            .map(|r| format!("id:{}", r.unwrap().fmt(0)))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -1627,8 +1627,8 @@ mod tests {
     fn test_file_reader_rows(file_name: &str, schema: Option<Type>) -> Result<Vec<Row>> {
         let file = get_test_file(file_name);
         let file_reader: Box<dyn FileReader> = Box::new(SerializedFileReader::new(file)?);
-        let iter = file_reader.get_row_iter(schema)?;
-        Ok(iter.collect())
+        let mut iter = file_reader.get_row_iter(schema)?;
+        Ok(iter.map(|row| row.unwrap()).collect())
     }
 
     fn test_row_group_rows(file_name: &str, schema: Option<Type>) -> Result<Vec<Row>> {
@@ -1637,7 +1637,7 @@ mod tests {
         // Check the first row group only, because files will contain only single row
         // group
         let row_group_reader = file_reader.get_row_group(0).unwrap();
-        let iter = row_group_reader.get_row_iter(schema)?;
-        Ok(iter.collect())
+        let mut iter = row_group_reader.get_row_iter(schema)?;
+        Ok(iter.map(|row| row.unwrap()).collect())
     }
 }

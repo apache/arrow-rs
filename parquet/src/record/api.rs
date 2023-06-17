@@ -1027,38 +1027,38 @@ mod tests {
         let descr = make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::UTF8];
         let value = ByteArray::from(vec![b'A', b'B', b'C', b'D']);
         let row = Field::convert_byte_array(&descr, value);
-        assert_eq!(row, Field::Str("ABCD".to_string()));
+        assert_eq!(row.unwrap(), Field::Str("ABCD".to_string()));
 
         // ENUM
         let descr = make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::ENUM];
         let value = ByteArray::from(vec![b'1', b'2', b'3']);
         let row = Field::convert_byte_array(&descr, value);
-        assert_eq!(row, Field::Str("123".to_string()));
+        assert_eq!(row.unwrap(), Field::Str("123".to_string()));
 
         // JSON
         let descr = make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::JSON];
         let value = ByteArray::from(vec![b'{', b'"', b'a', b'"', b':', b'1', b'}']);
         let row = Field::convert_byte_array(&descr, value);
-        assert_eq!(row, Field::Str("{\"a\":1}".to_string()));
+        assert_eq!(row.unwrap(), Field::Str("{\"a\":1}".to_string()));
 
         // NONE
         let descr = make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::NONE];
         let value = ByteArray::from(vec![1, 2, 3, 4, 5]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row, Field::Bytes(value));
+        assert_eq!(row.unwrap(), Field::Bytes(value));
 
         // BSON
         let descr = make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::BSON];
         let value = ByteArray::from(vec![1, 2, 3, 4, 5]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row, Field::Bytes(value));
+        assert_eq!(row.unwrap(), Field::Bytes(value));
 
         // DECIMAL
         let descr =
             make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::DECIMAL, 0, 8, 2];
         let value = ByteArray::from(vec![207, 200]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row, Field::Decimal(Decimal::from_bytes(value, 8, 2)));
+        assert_eq!(row.unwrap(), Field::Decimal(Decimal::from_bytes(value, 8, 2)));
 
         // DECIMAL (FIXED_LEN_BYTE_ARRAY)
         let descr = make_column_descr![
@@ -1070,7 +1070,7 @@ mod tests {
         ];
         let value = ByteArray::from(vec![0, 0, 0, 0, 0, 4, 147, 224]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row, Field::Decimal(Decimal::from_bytes(value, 17, 5)));
+        assert_eq!(row.unwrap(), Field::Decimal(Decimal::from_bytes(value, 17, 5)));
 
         // NONE (FIXED_LEN_BYTE_ARRAY)
         let descr = make_column_descr![
@@ -1082,7 +1082,7 @@ mod tests {
         ];
         let value = ByteArray::from(vec![1, 2, 3, 4, 5, 6]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row, Field::Bytes(value));
+        assert_eq!(row.unwrap(), Field::Bytes(value));
     }
 
     #[test]
