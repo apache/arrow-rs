@@ -59,7 +59,7 @@ impl NullBuilder {
         Self { len: 0 }
     }
 
-    /// Creates a new boolean builder with space for `capacity` elements without re-allocating
+    /// Creates a new null builder with space for `capacity` elements without re-allocating
     pub fn with_capacity(capacity: usize) -> Self {
         Self { len: capacity }
     }
@@ -81,13 +81,13 @@ impl NullBuilder {
         self.len += n;
     }
 
-    /// Appends a value of type `T` into the builder
+    /// Appends a null slot into the builder
     #[inline]
     pub fn append_empty_value(&mut self) {
         self.append_null();
     }
 
-    /// Appends values from a slice of type `T` and a validity boolean slice.
+    /// Appends `n` `null`s into the builder.
     #[inline]
     pub fn append_empty_values(&mut self, n: usize) {
         self.append_nulls(n);

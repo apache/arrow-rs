@@ -64,7 +64,7 @@ impl NullArray {
         Self { len }
     }
 
-    /// Returns a new boolean array builder
+    /// Returns a new null array builder
     pub fn builder(capacity: usize) -> NullBuilder {
         NullBuilder::with_capacity(capacity)
     }
