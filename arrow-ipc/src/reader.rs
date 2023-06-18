@@ -36,6 +36,8 @@ use crate::compression::CompressionCodec;
 use crate::{FieldNode, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
 
+use flatbuffers::VerifierOptions;
+
 /// Read a buffer based on offset and length
 /// From <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
 /// Each constituent buffer is first compressed with the indicated
@@ -647,7 +649,15 @@ impl<R: Read + Seek> FileReader<R> {
         reader.seek(SeekFrom::End(-10 - footer_len as i64))?;
         reader.read_exact(&mut footer_data)?;
 
-        let footer = crate::root_as_footer(&footer_data[..]).map_err(|err| {
+        // construct verifier options that reflect actual number of columns
+        // in file
+        let verifier_options = VerifierOptions {
+            max_depth: 128,
+            max_tables: footer_len as usize * 8,
+            ..Default::default()
+        };
+
+        let footer = crate::root_as_footer_with_opts(&verifier_options, &footer_data[..]).map_err(|err| {
             ArrowError::IoError(format!("Unable to get root as footer: {err:?}"))
         })?;
 
