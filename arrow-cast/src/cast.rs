@@ -836,16 +836,16 @@ pub fn cast_with_options(
                     "cannot cast fixed-size-list to list with different child data".into(),
                 ))
             } else {
-                cast_fixed_size_list_to_list::<i32, i32>(array, cast_options)
+                cast_fixed_size_list_to_list::<i32>(array)
             }
         }
         (FixedSizeList(list_from, _), LargeList(list_to)) => {
             if list_to.data_type() != list_from.data_type() {
                 Err(ArrowError::CastError(
-                    "cannot cast fixed-size-list to list with different child data".into(),
+                    "cannot cast fixed-size-list to largelist with different child data".into(),
                 ))
             } else {
-                cast_fixed_size_list_to_list::<i64, i64>(array, cast_options)
+                cast_fixed_size_list_to_list::<i64>(array)
             }
         }
 
@@ -3847,60 +3847,15 @@ where
     Ok(Arc::new(GenericByteArray::<TO>::from(array_data)))
 }
 
-fn cast_fixed_size_list_to_list<OffsetSizeFrom, OffsetSizeTo>(
+fn cast_fixed_size_list_to_list<OffsetSize>(
     array: &dyn Array,
-    _cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
-    OffsetSizeFrom: OffsetSizeTrait + ToPrimitive,
-    OffsetSizeTo: OffsetSizeTrait + NumCast,
+    OffsetSize: OffsetSizeTrait,
 {
-    let list: &FixedSizeListArray = array.as_fixed_size_list();
-
-    match array.data_type() {
-        DataType::FixedSizeList(value_type, _) => {
-            match value_type.data_type() {
-                DataType::Int32 => {
-                    let mut builder = ListBuilder::new(Int32Builder::new());
-                    for i in 0..list.len() {
-                        let v = list
-                            .value(i)
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .unwrap()
-                            .values()
-                            .to_vec();
-                        let opt_v: Vec<Option<i32>> = v.into_iter().map(Some).collect();
-                        builder.append_value(opt_v);
-                    }
-                    let list_array = builder.finish();
-                    Ok(Arc::new(list_array))
-                }
-                DataType::Int64 => {
-                    let mut builder = LargeListBuilder::new(Int64Builder::new());
-                    for i in 0..list.len() {
-                        let v = list
-                            .value(i)
-                            .as_any()
-                            .downcast_ref::<Int64Array>()
-                            .unwrap()
-                            .values()
-                            .to_vec();
-                        let opt_v: Vec<Option<i64>> = v.into_iter().map(Some).collect();
-                        builder.append_value(opt_v);
-                    }
-                    let list_array = builder.finish();
-                    Ok(Arc::new(list_array))
-                }
-                _ => Err(ArrowError::ComputeError(
-                    "Casting from FixedSizeList to List is only supported for FixedSizeList<i32> and FixedSizeList<i64>".to_string(),
-                )),
-            }
-        }
-        _ => Err(ArrowError::ComputeError(
-            "Casting from FixedSizeList to List is only supported for FixedSizeList".to_string(),
-        )),
-    }
+    let fixed_size_list: &FixedSizeListArray = array.as_fixed_size_list();
+    let list: GenericListArray<OffsetSize> = fixed_size_list.clone().into();
+    Ok(Arc::new(list))
 }
 
 /// Cast the container type of List/Largelist array but not the inner types.
@@ -7971,12 +7926,12 @@ mod tests {
 
         // DataType::LargeList
         let array2 = Arc::new(make_fixed_size_list_array_for_large_list()) as ArrayRef;
-        let list_array = cast(
+        let list_array2 = cast(
             &array2,
             &DataType::LargeList(Arc::new(Field::new("", DataType::Int64, false))),
         )
         .unwrap();
-        let actual = list_array
+        let actual = list_array2
             .as_any()
             .downcast_ref::<LargeListArray>()
             .unwrap();
@@ -7987,7 +7942,7 @@ mod tests {
         assert_eq!(expected.values(), actual.values());
         assert_eq!(expected.len(), actual.len());
 
-        // Cast LargeList to List
+        // Cast previous LargeList to List
         let array3 = Arc::new(actual.clone()) as ArrayRef;
         let list_array3 = cast(
             &array3,
