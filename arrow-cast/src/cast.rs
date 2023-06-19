@@ -3868,7 +3868,7 @@ where
     OffsetSizeFrom: OffsetSizeTrait + ToPrimitive,
     OffsetSizeTo: OffsetSizeTrait + NumCast,
 {
-    let list: &GenericListArray<OffsetSizeFrom> = array.as_list::<OffsetSizeFrom>();
+    let list = array.as_list::<OffsetSizeFrom>();
     // the value data stored by the list
     let values = list.values();
 
