@@ -834,7 +834,9 @@ impl FromStr for IntervalAmount {
                     && !frac.starts_with('-') =>
             {
                 // integer will be "" for values like ".5"
-                let integer = if integer.is_empty() {
+                // and "-" for values like "-.5"
+                let explicit_neg = integer.starts_with('-');
+                let integer = if integer.is_empty() || integer == "-" {
                     Ok(0)
                 } else {
                     integer.parse::<i64>().map_err(|_| {
@@ -855,7 +857,11 @@ impl FromStr for IntervalAmount {
                     frac_unscaled * 10_i64.pow(INTERVAL_PRECISION - frac.len() as u32);
 
                 // propagate the sign of the integer part to the fractional part
-                let frac = if integer < 0 { -frac } else { frac };
+                let frac = if integer < 0 || explicit_neg {
+                    -frac
+                } else {
+                    frac
+                };
 
                 let result = Self { integer, frac };
 
@@ -933,7 +939,8 @@ impl Interval {
         (self.months, self.days, self.nanos)
     }
 
-    /// Parse string value in traditional Postgres format (e.g. 1 year 2 months 3 days 4 hours 5 minutes 6 seconds)
+    /// Parse string value in traditional Postgres format such as
+    /// `1 year 2 months 3 days 4 hours 5 minutes 6 seconds`
     fn parse(value: &str, config: &IntervalParseConfig) -> Result<Self, ArrowError> {
         let components = parse_interval_components(value, config)?;
 
@@ -1810,6 +1817,16 @@ mod tests {
         assert_eq!(
             Interval::new(0i32, 15i32, 0),
             Interval::parse(".5 months", &config).unwrap(),
+        );
+
+        assert_eq!(
+            Interval::new(0i32, -15i32, 0),
+            Interval::parse("-0.5 months", &config).unwrap(),
+        );
+
+        assert_eq!(
+            Interval::new(0i32, -15i32, 0),
+            Interval::parse("-.5 months", &config).unwrap(),
         );
 
         assert_eq!(
