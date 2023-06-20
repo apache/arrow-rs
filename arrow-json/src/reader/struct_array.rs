@@ -25,6 +25,7 @@ use arrow_schema::{ArrowError, DataType, Fields};
 pub struct StructArrayDecoder {
     data_type: DataType,
     decoders: Vec<Box<dyn ArrayDecoder>>,
+    strict_mode: bool,
     is_nullable: bool,
 }
 
@@ -32,6 +33,7 @@ impl StructArrayDecoder {
     pub fn new(
         data_type: DataType,
         coerce_primitive: bool,
+        strict_mode: bool,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
         let decoders = struct_fields(&data_type)
@@ -41,13 +43,19 @@ impl StructArrayDecoder {
                 // StructArrayDecoder::decode verifies that if the child is not nullable
                 // it doesn't contain any nulls not masked by its parent
                 let nullable = f.is_nullable() || is_nullable;
-                make_decoder(f.data_type().clone(), coerce_primitive, nullable)
+                make_decoder(
+                    f.data_type().clone(),
+                    coerce_primitive,
+                    strict_mode,
+                    nullable,
+                )
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         Ok(Self {
             data_type,
             decoders,
+            strict_mode,
             is_nullable,
         })
     }
@@ -86,10 +94,16 @@ impl ArrayDecoder for StructArrayDecoder {
                 };
 
                 // Update child pos if match found
-                if let Some(field_idx) =
-                    fields.iter().position(|x| x.name() == field_name)
-                {
-                    child_pos[field_idx][row] = cur_idx + 1;
+                match fields.iter().position(|x| x.name() == field_name) {
+                    Some(field_idx) => child_pos[field_idx][row] = cur_idx + 1,
+                    None => {
+                        if self.strict_mode {
+                            return Err(ArrowError::JsonError(format!(
+                                "column '{}' missing from schema",
+                                field_name
+                            )));
+                        }
+                    }
                 }
 
                 // Advance to next field
