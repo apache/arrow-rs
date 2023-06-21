@@ -142,10 +142,10 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (List(_), _) => false,
         (FixedSizeList(list_from,_), List(list_to)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
+            list_from.data_type() == list_to.data_type()
         }
         (FixedSizeList(list_from,_), LargeList(list_to)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
+            list_from.data_type() == list_to.data_type()
         }
         (_, List(list_to)) => can_cast_types(from_type, list_to.data_type()),
         (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
@@ -7900,7 +7900,7 @@ mod tests {
         assert_eq!(
             can_cast_types(
                 &array2.data_type(),
-                &DataType::LargeList(Arc::new(Field::new("", DataType::Int32, false)))
+                &DataType::LargeList(Arc::new(Field::new("", DataType::Int64, false)))
             ),
             true
         );
