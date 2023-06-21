@@ -657,9 +657,10 @@ impl<R: Read + Seek> FileReader<R> {
             ..Default::default()
         };
 
-        let footer = crate::root_as_footer_with_opts(&verifier_options, &footer_data[..]).map_err(|err| {
-            ArrowError::IoError(format!("Unable to get root as footer: {err:?}"))
-        })?;
+        let footer = crate::root_as_footer_with_opts(&verifier_options, &footer_data[..])
+            .map_err(|err| {
+                ArrowError::IoError(format!("Unable to get root as footer: {err:?}"))
+            })?;
 
         let blocks = footer.recordBatches().ok_or_else(|| {
             ArrowError::IoError(
