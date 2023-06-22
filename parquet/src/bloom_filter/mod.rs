@@ -133,13 +133,9 @@ impl Sbbf {
 
     /// Write the bitset in serialized form to the writer.
     fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
-        writer
-            .write_all(self.0.as_bytes())
-            .map_err(|e| {
-                ParquetError::General(format!(
-                    "Could not write bloom filter bit set: {e}"
-                ))
-            })?;
+        writer.write_all(self.0.as_bytes()).map_err(|e| {
+            ParquetError::General(format!("Could not write bloom filter bit set: {e}"))
+        })?;
         Ok(())
     }
 
