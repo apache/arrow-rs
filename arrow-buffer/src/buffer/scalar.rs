@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::alloc::Deallocation;
 use crate::buffer::Buffer;
 use crate::native::ArrowNativeType;
 use crate::MutableBuffer;
@@ -118,11 +119,16 @@ impl<T: ArrowNativeType> From<MutableBuffer> for ScalarBuffer<T> {
 impl<T: ArrowNativeType> From<Buffer> for ScalarBuffer<T> {
     fn from(buffer: Buffer) -> Self {
         let align = std::mem::align_of::<T>();
-        assert_eq!(
-            buffer.as_ptr().align_offset(align),
-            0,
-            "memory is not aligned"
-        );
+        let is_aligned = buffer.as_ptr().align_offset(align) == 0;
+
+        match buffer.deallocation() {
+            Deallocation::Standard(_) => assert!(
+                is_aligned,
+                "Memory pointer is not aligned with the specified scalar type."
+            ),
+            Deallocation::Custom(_) =>
+                assert!(is_aligned, "Memory pointer from external source (e.g, FFI) is not aligned with the specified scalar type. Before importing buffer through FFI, please make sure the allocation is aligned."),
+        }
 
         Self {
             buffer,
@@ -201,7 +207,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "memory is not aligned")]
+    #[should_panic(
+        expected = "Memory pointer is not aligned with the specified scalar type."
+    )]
     fn test_unaligned() {
         let expected = [0_i32, 1, 2];
         let buffer = Buffer::from_iter(expected.iter().cloned());

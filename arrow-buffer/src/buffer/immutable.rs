@@ -165,6 +165,10 @@ impl Buffer {
         unsafe { std::slice::from_raw_parts(self.ptr, self.length) }
     }
 
+    pub(crate) fn deallocation(&self) -> &Deallocation {
+        self.data.deallocation()
+    }
+
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`.
     /// Doing so allows the same memory region to be shared between buffers.
     /// # Panics
