@@ -488,7 +488,7 @@ fn collect_field_types_from_object(
 ///
 /// The following type coercion logic is implemented:
 /// * Unsigned integer are converted to `UInt64`
-/// * Signed integer are converted to `Int64`
+/// * Signed integer smaller than 64 bits are converted to `Int64`
 /// * `Int64` and `UInt64` are converted to `Int64`
 /// * Less than `i64::MIN` or greater than `u64::MAX` are converted to `Float64`
 /// * `Int64` and `Float64` are converted to `Float64`
