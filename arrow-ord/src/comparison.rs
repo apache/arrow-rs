@@ -35,13 +35,13 @@ use half::f16;
 
 /// Helper function to perform boolean lambda function on values from two array accessors, this
 /// version does not attempt to use SIMD.
-fn compare_op<T: ArrayAccessor, S: ArrayAccessor, F>(
+fn compare_op<T: ArrayAccessor, F>(
     left: T,
-    right: S,
+    right: T,
     op: F,
 ) -> Result<BooleanArray, ArrowError>
 where
-    F: Fn(T::Item, S::Item) -> bool,
+    F: Fn(T::Item, T::Item) -> bool,
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
