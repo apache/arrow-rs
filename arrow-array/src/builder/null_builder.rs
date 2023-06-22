@@ -96,7 +96,7 @@ impl NullBuilder {
     /// Builds the [NullArray] and reset this builder.
     pub fn finish(&mut self) -> NullArray {
         let len = self.len();
-        let builder = ArrayData::builder(DataType::Null).len(len);
+        let builder = ArrayData::new_null(&DataType::Null, len).into_builder();
 
         let array_data = unsafe { builder.build_unchecked() };
         NullArray::from(array_data)
@@ -105,7 +105,7 @@ impl NullBuilder {
     /// Builds the [NullArray] without resetting the builder.
     pub fn finish_cloned(&self) -> NullArray {
         let len = self.len();
-        let builder = ArrayData::builder(DataType::Null).len(len);
+        let builder = ArrayData::new_null(&DataType::Null, len).into_builder();
 
         let array_data = unsafe { builder.build_unchecked() };
         NullArray::from(array_data)
