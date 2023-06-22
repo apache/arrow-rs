@@ -66,7 +66,7 @@ impl Row {
     ///
     /// let file = File::open("/path/to/file").unwrap();
     /// let reader = SerializedFileReader::new(file).unwrap();
-    /// let row: Row = reader.get_row_iter(None).unwrap().next().unwrap();
+    /// let row: Row = reader.get_row_iter(None).unwrap().next().unwrap().unwrap();
     /// for (idx, (name, field)) in row.get_column_iter().enumerate() {
     ///     println!("column index: {}, column name: {}, column value: {}", idx, name, field);
     /// }
@@ -146,7 +146,7 @@ pub trait RowAccessor {
 ///
 /// if let Ok(file) = File::open(&Path::new("test.parquet")) {
 ///     let reader = SerializedFileReader::new(file).unwrap();
-///     let row = reader.get_row_iter(None).unwrap().next().unwrap();
+///     let row = reader.get_row_iter(None).unwrap().next().unwrap().unwrap();
 ///     println!("column 0: {}, column 1: {}", row.fmt(0), row.fmt(1));
 /// }
 /// ```
