@@ -30,7 +30,7 @@ use arrow_buffer::{
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 
-use num::Zero;
+use num::{One, Zero};
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///
@@ -623,7 +623,7 @@ fn take_value_indices_from_list<IndexType, OffsetType>(
 where
     IndexType: ArrowPrimitiveType,
     OffsetType: ArrowPrimitiveType,
-    OffsetType::Native: OffsetSizeTrait + std::ops::Add + num::Zero + num::One,
+    OffsetType::Native: OffsetSizeTrait + std::ops::Add + Zero + One,
     PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
     // TODO: benchmark this function, there might be a faster unsafe alternative
@@ -656,7 +656,7 @@ where
             // if start == end, this slot is empty
             while curr < end {
                 values.push(curr);
-                curr += num::One::one();
+                curr += One::one();
             }
             if !list.is_valid(ix) {
                 bit_util::unset_bit(null_slice, i);

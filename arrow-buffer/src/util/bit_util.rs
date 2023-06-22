@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64")))]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     fn test_ceil() {
         assert_eq!(ceil(0, 1), 0);
         assert_eq!(ceil(1, 1), 1);
