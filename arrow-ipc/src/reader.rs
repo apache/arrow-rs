@@ -650,7 +650,7 @@ impl<R: Read + Seek> FileReader<R> {
         reader.read_exact(&mut footer_data)?;
 
         // construct verifier options that reflect actual number of columns
-        // in file
+        // in file and avoid an error if the file contains more than 1M rows
         let verifier_options = VerifierOptions {
             max_depth: 128,
             max_tables: footer_len as usize * 8,
