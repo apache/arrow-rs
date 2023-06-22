@@ -79,7 +79,7 @@ impl<'a> TryFrom<&'a str> for SerializedFileReader<File> {
 /// Conversion into a [`RowIter`](crate::record::reader::RowIter)
 /// using the full file schema over all row groups.
 impl IntoIterator for SerializedFileReader<File> {
-    type Item = Row;
+    type Item = Result<Row>;
     type IntoIter = RowIter<'static>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -854,7 +854,7 @@ mod tests {
             .iter()
             .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
             .flat_map(|r| r.into_iter())
-            .flat_map(|r| r.get_int(0))
+            .flat_map(|r| r.unwrap().get_int(0))
             .collect::<Vec<_>>();
 
         // rows in the parquet file are not sorted by "id"
@@ -874,7 +874,7 @@ mod tests {
 
                 r.into_iter().project(proj).unwrap()
             })
-            .map(|r| format!("{r}"))
+            .map(|r| format!("{}", r.unwrap()))
             .collect::<Vec<_>>()
             .join(",");
 

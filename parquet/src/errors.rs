@@ -44,6 +44,23 @@ pub enum ParquetError {
     External(Box<dyn Error + Send + Sync>),
 }
 
+impl PartialEq for ParquetError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::General(l0), Self::General(r0)) => l0 == r0,
+            (Self::NYI(l0), Self::NYI(r0)) => l0 == r0,
+            (Self::EOF(l0), Self::EOF(r0)) => l0 == r0,
+            #[cfg(feature = "arrow")]
+            (Self::ArrowError(l0), Self::ArrowError(r0)) => l0 == r0,
+            (Self::IndexOutOfBound(l0, l1), Self::IndexOutOfBound(r0, r1)) => {
+                l0 == r0 && l1 == r1
+            }
+            (Self::External(l0), Self::External(r0)) => l0.to_string() == r0.to_string(),
+            _ => false,
+        }
+    }
+}
+
 impl std::fmt::Display for ParquetError {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
         match &self {

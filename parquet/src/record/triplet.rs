@@ -136,11 +136,11 @@ impl TripletIter {
     }
 
     /// Updates non-null value for current row.
-    pub fn current_value(&self) -> Field {
+    pub fn current_value(&self) -> Result<Field> {
         if self.is_null() {
-            return Field::Null;
+            return Ok(Field::Null);
         }
-        match *self {
+        let field = match *self {
             TripletIter::BoolTripletIter(ref typed) => {
                 Field::convert_bool(typed.column_descr(), *typed.current_value())
             }
@@ -162,14 +162,15 @@ impl TripletIter {
             TripletIter::ByteArrayTripletIter(ref typed) => Field::convert_byte_array(
                 typed.column_descr(),
                 typed.current_value().clone(),
-            ),
+            )?,
             TripletIter::FixedLenByteArrayTripletIter(ref typed) => {
                 Field::convert_byte_array(
                     typed.column_descr(),
                     typed.current_value().clone().into(),
-                )
+                )?
             }
-        }
+        };
+        Ok(field)
     }
 }
 
@@ -553,7 +554,7 @@ mod tests {
         while let Ok(true) = iter.read_next() {
             assert!(iter.has_next());
             if !iter.is_null() {
-                values.push(iter.current_value());
+                values.push(iter.current_value().unwrap());
             }
             def_levels.push(iter.current_def_level());
             rep_levels.push(iter.current_rep_level());
