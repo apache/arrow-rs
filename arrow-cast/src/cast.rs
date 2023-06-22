@@ -7887,23 +7887,17 @@ mod tests {
     fn test_can_cast_types_fixed_size_list_to_list() {
         // DataType::List
         let array1 = Arc::new(make_fixed_size_list_array()) as ArrayRef;
-        assert_eq!(
-            can_cast_types(
-                &array1.data_type(),
-                &DataType::List(Arc::new(Field::new("", DataType::Int32, false)))
-            ),
-            true
-        );
+        assert!(can_cast_types(
+            array1.data_type(),
+            &DataType::List(Arc::new(Field::new("", DataType::Int32, false)))
+        ));
 
         // DataType::LargeList
         let array2 = Arc::new(make_fixed_size_list_array_for_large_list()) as ArrayRef;
-        assert_eq!(
-            can_cast_types(
-                &array2.data_type(),
-                &DataType::LargeList(Arc::new(Field::new("", DataType::Int64, false)))
-            ),
-            true
-        );
+        assert!(can_cast_types(
+            array2.data_type(),
+            &DataType::LargeList(Arc::new(Field::new("", DataType::Int64, false)))
+        ));
     }
 
     #[test]
