@@ -17,6 +17,7 @@
 
 //! Contains the `NullArray` type.
 
+use crate::builder::NullBuilder;
 use crate::{Array, ArrayRef};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -61,6 +62,11 @@ impl NullArray {
         );
 
         Self { len }
+    }
+
+    /// Returns a new null array builder
+    pub fn builder(capacity: usize) -> NullBuilder {
+        NullBuilder::with_capacity(capacity)
     }
 }
 
