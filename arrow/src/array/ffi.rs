@@ -19,29 +19,9 @@
 
 use std::convert::TryFrom;
 
-use crate::{
-    error::{ArrowError, Result},
-    ffi,
-    ffi::ArrowArrayRef,
-};
+use crate::{error::Result, ffi};
 
-use super::{ArrayData, ArrayRef};
-
-impl TryFrom<ffi::ArrowArray> for ArrayData {
-    type Error = ArrowError;
-
-    fn try_from(value: ffi::ArrowArray) -> Result<Self> {
-        value.to_data()
-    }
-}
-
-impl TryFrom<ArrayData> for ffi::ArrowArray {
-    type Error = ArrowError;
-
-    fn try_from(value: ArrayData) -> Result<Self> {
-        ffi::ArrowArray::try_new(value)
-    }
-}
+use super::ArrayRef;
 
 /// Exports an array to raw pointers of the C Data Interface provided by the consumer.
 /// # Safety
@@ -79,7 +59,7 @@ mod tests {
             StructArray, UInt32Array, UInt64Array,
         },
         datatypes::{DataType, Field},
-        ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema},
+        ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
     };
     use std::convert::TryFrom;
     use std::sync::Arc;
@@ -90,9 +70,7 @@ mod tests {
         let schema = FFI_ArrowSchema::try_from(expected.data_type())?;
 
         // simulate an external consumer by being the consumer
-        let d1 = ArrowArray::new(array, schema);
-
-        let result = &ArrayData::try_from(d1)?;
+        let result = &from_ffi(array, &schema)?;
 
         assert_eq!(result, expected);
         Ok(())

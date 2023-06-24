@@ -346,12 +346,7 @@ impl Iterator for ArrowArrayStreamReader {
             let schema_ref = self.schema();
             let schema = FFI_ArrowSchema::try_from(schema_ref.as_ref()).ok()?;
 
-            let data = ArrowArray {
-                array: Arc::new(array),
-                schema: Arc::new(schema),
-            }
-            .to_data()
-            .ok()?;
+            let data = from_ffi(array, &schema).ok()?;
 
             let record_batch = RecordBatch::from(StructArray::from(data));
 
@@ -442,8 +437,6 @@ mod tests {
         let exported_schema = Schema::try_from(&ffi_schema).unwrap();
         assert_eq!(&exported_schema, schema.as_ref());
 
-        let ffi_schema = Arc::new(ffi_schema);
-
         // Get array from `FFI_ArrowArrayStream`
         let mut produced_batches = vec![];
         loop {
@@ -456,12 +449,7 @@ mod tests {
                 break;
             }
 
-            let array = ArrowArray {
-                array: Arc::new(ffi_array),
-                schema: ffi_schema.clone(),
-            }
-            .to_data()
-            .unwrap();
+            let array = from_ffi(ffi_array, &ffi_schema).unwrap();
 
             let record_batch = RecordBatch::from(StructArray::from(array));
             produced_batches.push(record_batch);
