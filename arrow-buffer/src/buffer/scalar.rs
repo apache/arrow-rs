@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Memory pointer is not aligned with the specified scalar type."
+        expected = "Memory pointer is not aligned with the specified scalar type"
     )]
     fn test_unaligned() {
         let expected = [0_i32, 1, 2];

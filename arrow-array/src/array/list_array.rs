@@ -1010,7 +1010,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Memory pointer is not aligned with the specified scalar type."
+        expected = "Memory pointer is not aligned with the specified scalar type"
     )]
     fn test_primitive_array_alignment() {
         let buf = Buffer::from_slice_ref([0_u64]);
@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Memory pointer is not aligned with the specified scalar type."
+        expected = "Memory pointer is not aligned with the specified scalar type"
     )]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
