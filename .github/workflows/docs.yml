@@ -66,6 +66,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-pages-artifact@v1
         with:
+          name: crate-docs
           path: target/doc
 
   deploy:
@@ -73,13 +74,24 @@ jobs:
     if: github.ref_name == 'master' && github.event_name == 'push'
     needs: docs
     permissions:
-      pages: write # to deploy to Pages
-      id-token: write # to verify the deployment originates from an appropriate source
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: write
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v2
+      - uses: actions/checkout@v3
+      - name: Download crate docs
+        uses: actions/download-artifact@v3
+        with:
+          name: crate-docs
+          path: website/build
+      - name: Prepare website
+        run: |
+          tar -xf website/build/artifact.tar -C website/build
+          rm website/build/artifact.tar
+          cp .asf.yaml ./website/build/.asf.yaml
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v3.9.2
+        if: github.event_name == 'push' && github.ref_name == 'master'
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: website/build
+          publish_branch: asf-site
