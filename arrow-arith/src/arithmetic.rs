@@ -1117,19 +1117,15 @@ pub fn multiply_dyn_checked(
     left: &dyn Array,
     right: &dyn Array,
 ) -> Result<ArrayRef, ArrowError> {
-    match left.data_type() {
-        _ => {
-            downcast_primitive_array!(
-                (left, right) => {
-                    math_checked_op(left, right, |a, b| a.mul_checked(b)).map(|a| Arc::new(a) as ArrayRef)
-                }
-                _ => Err(ArrowError::CastError(format!(
-                    "Unsupported data type {}, {}",
-                    left.data_type(), right.data_type()
-                )))
-            )
+    downcast_primitive_array!(
+        (left, right) => {
+            math_checked_op(left, right, |a, b| a.mul_checked(b)).map(|a| Arc::new(a) as ArrayRef)
         }
-    }
+        _ => Err(ArrowError::CastError(format!(
+            "Unsupported data type {}, {}",
+            left.data_type(), right.data_type()
+        )))
+    )
 }
 
 /// Returns the precision and scale of the result of a multiplication of two decimal types,
