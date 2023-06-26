@@ -40,7 +40,7 @@ arrow-cast = { workspace = true  }
 arrow-data = { workspace = true  }
 arrow-schema = { workspace = true  }
 half = { version = "2.1", default-features = false }
-indexmap = { version = "1.9", default-features = false, features = ["std"] }
+indexmap = { version = "2.0", default-features = false, features = ["std"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
