@@ -175,10 +175,7 @@ impl FromPyArrow for ArrayData {
             ),
         )?;
 
-        let ffi_array = ffi::ArrowArray::new(array, schema);
-        let data = ArrayData::try_from(ffi_array).map_err(to_py_err)?;
-
-        Ok(data)
+        ffi::from_ffi(array, &schema).map_err(to_py_err)
     }
 }
 
