@@ -110,12 +110,7 @@ impl Sbbf {
     /// to the next power of two bounded by [BITSET_MIN_LENGTH] and [BITSET_MAX_LENGTH].
     pub(crate) fn new_with_num_of_bytes(num_bytes: usize) -> Self {
         let num_bytes = optimal_num_of_bytes(num_bytes);
-        let bitset = vec![0_u8; num_bytes];
-        Self::new(&bitset)
-    }
-
-    fn new(bitset: &[u8]) -> Self {
-        Self(Filter::from_bytes(bitset).unwrap())
+        Self(Filter::new(8, num_bytes))
     }
 
     /// Write the bloom filter data (header and then bitset) to the output. This doesn't
@@ -197,17 +192,20 @@ impl Sbbf {
     }
 
     /// Insert an [AsBytes] value into the filter
+    #[inline]
     pub fn insert<T: AsBytes + ?Sized>(&mut self, value: &T) {
         self.insert_hash(hash_as_bytes(value));
     }
 
     /// Insert a hash into the filter.
     /// Returns true if the filter might have already contained the hash.
+    #[inline]
     fn insert_hash(&mut self, hash: u64) -> bool {
         self.0.insert_hash(hash)
     }
 
     /// Check if an [AsBytes] value is probably present or definitely absent in the filter
+    #[inline]
     pub fn check<T: AsBytes>(&self, value: &T) -> bool {
         self.check_hash(hash_as_bytes(value))
     }
@@ -215,6 +213,7 @@ impl Sbbf {
     /// Check if a hash is in the filter. May return
     /// true for values that was never inserted ("false positive")
     /// but will always return false if a hash has not been inserted.
+    #[inline]
     fn check_hash(&self, hash: u64) -> bool {
         self.0.contains_hash(hash)
     }
