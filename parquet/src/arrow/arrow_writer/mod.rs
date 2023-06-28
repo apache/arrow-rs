@@ -790,6 +790,7 @@ mod tests {
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
     use arrow_array::RecordBatch;
+    use arrow_buffer::NullBuffer;
     use arrow_schema::Fields;
 
     use crate::basic::Encoding;
@@ -2608,5 +2609,31 @@ mod tests {
         assert_eq!(writer.in_progress_rows(), 0);
 
         writer.close().unwrap();
+    }
+
+    #[test]
+    fn test_writer_all_null() {
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let b = Int32Array::new(vec![0; 5].into(), Some(NullBuffer::new_null(5)));
+        let batch = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(a) as ArrayRef),
+            ("b", Arc::new(b) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(bytes, options).unwrap();
+        let index = reader.metadata().offset_index().unwrap();
+
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0].len(), 2); // 2 columns
+        assert_eq!(index[0][0].len(), 1); // 1 page
+        assert_eq!(index[0][1].len(), 1); // 1 page
     }
 }
