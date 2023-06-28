@@ -28,6 +28,7 @@ use crate::format::{
 };
 use bytes::{Buf, Bytes};
 use sbbf_rs_safe::Filter;
+use std::io::Read;
 use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::{
@@ -185,8 +186,14 @@ impl Sbbf {
         let length: usize = header.num_bytes.try_into().map_err(|_| {
             ParquetError::General("Bloom filter length is invalid".to_string())
         })?;
-        let bitset = reader.get_bytes(bitset_offset, length)?;
-        Ok(Some(Self::new(&bitset)))
+
+        let mut filter = Filter::new(8, length);
+
+        reader
+            .get_read(bitset_offset)?
+            .read_exact(filter.as_bytes_mut())?;
+
+        Ok(Some(Self(filter)))
     }
 
     /// Insert an [AsBytes] value into the filter
