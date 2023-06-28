@@ -247,7 +247,7 @@ mod tests {
             200, 1, 80, 20, 64, 68, 8, 109, 6, 37, 4, 67, 144, 80, 96, 32, 8, 132, 43,
             33, 0, 5, 99, 65, 2, 0, 224, 44, 64, 78, 96, 4,
         ];
-        let sbbf = Sbbf::new(bitset);
+        let sbbf = Sbbf(Filter::from_bytes(bitset).unwrap());
         for a in 0..10i64 {
             let value = format!("a{a}");
             assert!(sbbf.check(&value.as_str()));
