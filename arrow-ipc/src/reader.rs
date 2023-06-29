@@ -29,7 +29,6 @@ use std::sync::Arc;
 
 use arrow_array::*;
 use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_cast::cast;
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
@@ -234,14 +233,6 @@ fn create_primitive_array(
                 .null_bit_buffer(null_buffer)
                 .build()?
         }
-        FixedSizeBinary(_) => {
-            // read 2 buffers: null buffer (optional) and data buffer
-            ArrayData::builder(data_type.clone())
-                .len(length)
-                .add_buffer(buffers[1].clone())
-                .null_bit_buffer(null_buffer)
-                .build()?
-        }
         Int8
         | Int16
         | Int32
@@ -250,57 +241,25 @@ fn create_primitive_array(
         | UInt32
         | Time32(_)
         | Date32
-        | Interval(IntervalUnit::YearMonth) => {
-            if buffers[1].len() / 8 == length && length != 1 {
-                // interpret as a signed i64, and cast appropriately
-                let data = ArrayData::builder(DataType::Int64)
-                    .len(length)
-                    .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
-                    .build()?;
-                let values = Arc::new(Int64Array::from(data)) as ArrayRef;
-                let casted = cast(&values, data_type)?;
-                casted.into_data()
-            } else {
-                ArrayData::builder(data_type.clone())
-                    .len(length)
-                    .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
-                    .build()?
-            }
-        }
-        Float32 => {
-            if buffers[1].len() / 8 == length && length != 1 {
-                // interpret as a f64, and cast appropriately
-                let data = ArrayData::builder(DataType::Float64)
-                    .len(length)
-                    .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
-                    .build()?;
-                let values = Arc::new(Float64Array::from(data)) as ArrayRef;
-                let casted = cast(&values, data_type)?;
-                casted.into_data()
-            } else {
-                ArrayData::builder(data_type.clone())
-                    .len(length)
-                    .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
-                    .build()?
-            }
-        }
-        Boolean
+        | Interval(IntervalUnit::YearMonth)
+        | Interval(IntervalUnit::DayTime)
+        | FixedSizeBinary(_)
+        | Boolean
         | Int64
         | UInt64
+        | Float32
         | Float64
         | Time64(_)
         | Timestamp(_, _)
         | Date64
-        | Duration(_)
-        | Interval(IntervalUnit::DayTime) => ArrayData::builder(data_type.clone())
-            .len(length)
-            .add_buffer(buffers[1].clone())
-            .null_bit_buffer(null_buffer)
-            .build()?,
+        | Duration(_) => {
+            // read 2 buffers: null buffer (optional) and data buffer
+            ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(buffers[1].clone())
+                .null_bit_buffer(null_buffer)
+                .build()?
+        }
         Interval(IntervalUnit::MonthDayNano) | Decimal128(_, _) => {
             let buffer = get_aligned_buffer::<i128>(&buffers[1], length);
 

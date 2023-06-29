@@ -35,6 +35,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
     pub fn new(
         data_type: DataType,
         coerce_primitive: bool,
+        strict_mode: bool,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
         let field = match &data_type {
@@ -45,6 +46,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
         let decoder = make_decoder(
             field.data_type().clone(),
             coerce_primitive,
+            strict_mode,
             field.is_nullable(),
         )?;
 

@@ -73,11 +73,8 @@ git checkout -b <RELEASE_BRANCH>
 sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
 git commit -a -m 'Update version'
 
-# Copy the content of CHANGELOG.md to the beginning of CHANGELOG-old.md
-
 # ensure your github token is available
 export ARROW_GITHUB_API_TOKEN=<TOKEN>
-
 
 # manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog

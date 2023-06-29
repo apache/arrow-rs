@@ -39,3 +39,9 @@ github:
         strict: true
         # don't require any jobs to pass
         contexts: []
+
+# publishes the content of the `asf-site` branch to
+# https://arrow.apache.org/rust/
+publish:
+  whoami: asf-site
+  subdir: rust

@@ -70,7 +70,7 @@ impl ArrayReader for StructArrayReader {
                 Some(expected) => {
                     if expected != child_read {
                         return Err(general_err!(
-                            "StructArrayReader out of sync in read_records, expected {} skipped, got {}",
+                            "StructArrayReader out of sync in read_records, expected {} read, got {}",
                             expected,
                             child_read
                         ));

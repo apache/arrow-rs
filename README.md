@@ -32,6 +32,8 @@ This repo contains the following main components:
 | arrow-flight | Support for Arrow-Flight IPC protocol                                     | [(README)][flight-readme]      |
 | object-store | Support for object store interactions (aws, azure, gcp, local, in-memory) | [(README)][objectstore-readme] |
 
+See the list of all crates in this repo and their rustdocs [here](https://arrow.apache.org/rust).
+
 There are two related crates in a different repository
 
 | Crate      | Description                             | Documentation                 |

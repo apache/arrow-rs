@@ -152,8 +152,15 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                     let min = K::from_usize(0).unwrap();
                     let max = K::from_usize(values.len()).unwrap();
 
-                    // It may be possible to use SIMD here
-                    if keys.as_slice().iter().any(|x| *x < min || *x >= max) {
+                    // using copied and fold gets auto-vectorized since rust 1.70
+                    // all/any would allow early exit on invalid values
+                    // but in the happy case all values have to be checked anyway
+                    if !keys
+                        .as_slice()
+                        .iter()
+                        .copied()
+                        .fold(true, |a, x| a && x >= min && x < max)
+                    {
                         return Err(general_err!(
                             "dictionary key beyond bounds of dictionary: 0..{}",
                             values.len()

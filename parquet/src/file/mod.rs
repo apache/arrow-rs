@@ -91,7 +91,7 @@
 //!     .flat_map(|r| r.into_iter());
 //!
 //! for row in rows {
-//!     println!("{}", row);
+//!     println!("{}", row.unwrap());
 //! }
 //! ```
 pub mod footer;

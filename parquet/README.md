@@ -24,7 +24,7 @@
 
 This crate contains the official Native Rust implementation of [Apache Parquet](https://parquet.apache.org/), which is part of the [Apache Arrow](https://arrow.apache.org/) project.
 
-See [crate documentation](https://docs.rs/parquet/latest/parquet/) for examples and the full API.
+See [crate documentation](https://arrow.apache.org/rust/parquet/index.html) for examples and the full API.
 
 ## Rust Version Compatibility
 
