@@ -263,6 +263,18 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
 
     // do_put
 
+    /// Implementors may override to handle additional calls to do_put()
+    async fn do_put_fallback(
+        &self,
+        mut request: Request<Streaming<FlightData>>,
+        message: Any,
+    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+        Err(Status::unimplemented(format!(
+            "do_put: The defined request is invalid: {}",
+            message.type_url
+        )))
+    }
+
     /// Execute an update SQL statement.
     async fn do_put_statement_update(
         &self,
@@ -292,6 +304,24 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     ) -> Result<i64, Status>;
 
     // do_action
+
+    /// Implementors may override to handle additional calls to do_action()
+    async fn do_action_fallback(
+        &self,
+        request: Request<Action>,
+    ) -> Result<Response<<Self as FlightService>::DoActionStream>, Status> {
+        Err(Status::invalid_argument(format!(
+            "do_action: The defined request is invalid: {:?}",
+            request.get_ref().r#type
+        )))
+    }
+
+    /// Add custom actions to list_actions() result
+    async fn list_custom_actions(
+        &self
+    ) -> Option<Vec<Result<ActionType, Status>>> {
+        None
+    }
 
     /// Create a prepared statement from given SQL statement.
     async fn do_action_create_prepared_statement(
@@ -348,6 +378,16 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
         query: ActionCancelQueryRequest,
         request: Request<Action>,
     ) -> Result<ActionCancelQueryResult, Status>;
+
+    /// do_exchange
+
+    /// Implementors may override to handle additional calls to do_exchange()
+    async fn do_exchange_fallback(
+        &self,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<Response<<Self as FlightService>::DoExchangeStream>, Status> {
+        Err(Status::unimplemented("Not yet implemented"))
+    }
 
     /// Register a new SqlInfo result, making it available when calling GetSqlInfo.
     async fn register_sql_info(&self, id: i32, result: &SqlInfo);
@@ -537,10 +577,7 @@ where
                 })]);
                 Ok(Response::new(Box::pin(output)))
             }
-            cmd => Err(Status::invalid_argument(format!(
-                "do_put: The defined request is invalid: {}",
-                cmd.type_url()
-            ))),
+            cmd => self.do_put_fallback(request, cmd.into_any()),
         }
     }
 
@@ -605,7 +642,7 @@ where
                 Response Message: ActionCancelQueryResult"
                 .into(),
         };
-        let actions: Vec<Result<ActionType, Status>> = vec![
+        let mut actions: Vec<Result<ActionType, Status>> = vec![
             Ok(create_prepared_statement_action_type),
             Ok(close_prepared_statement_action_type),
             Ok(create_prepared_substrait_plan_action_type),
@@ -615,6 +652,11 @@ where
             Ok(end_savepoint_action_type),
             Ok(cancel_query_action_type),
         ];
+
+        if let Some(mut custom_actions) = self.list_custom_actions() {
+            actions.append(custom_actions);
+        }
+
         let output = futures::stream::iter(actions);
         Ok(Response::new(Box::pin(output) as Self::ListActionsStream))
     }
@@ -751,17 +793,14 @@ where
             return Ok(Response::new(Box::pin(output)));
         }
 
-        Err(Status::invalid_argument(format!(
-            "do_action: The defined request is invalid: {:?}",
-            request.get_ref().r#type
-        )))
+        self.do_action_fallback(request)
     }
 
     async fn do_exchange(
         &self,
-        _request: Request<Streaming<FlightData>>,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoExchangeStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        self.do_exchange_fallback(request)
     }
 }
 
