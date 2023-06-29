@@ -317,9 +317,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     }
 
     /// Add custom actions to list_actions() result
-    async fn list_custom_actions(
-        &self
-    ) -> Option<Vec<Result<ActionType, Status>>> {
+    async fn list_custom_actions(&self) -> Option<Vec<Result<ActionType, Status>>> {
         None
     }
 
