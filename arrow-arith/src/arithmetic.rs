@@ -1269,6 +1269,91 @@ pub fn multiply_fixed_point(
     .and_then(|a| a.with_precision_and_scale(precision, required_scale))
 }
 
+/// Perform `left * right` operation on decimal array and a scalar. If any value in the array is null
+/// then the result is also null.
+///
+/// This performs decimal multiplication which allows precision loss if an exact representation
+/// is not possible for the result, according to the required scale. In the case, the result
+/// will be rounded to the required scale.
+///
+/// If the required scale is greater than the product scale, an error is returned.
+///
+/// It is implemented for compatibility with precision loss `multiply` function provided by
+/// other data processing engines. For multiplication with precision loss detection, use
+/// `multiply_scalar` or `multiply_scalar_checked` instead.
+pub fn multiply_fixed_point_scalar_checked(
+    left: &PrimitiveArray<Decimal128Type>,
+    scalar: i128,
+    required_scale: i8,
+) -> Result<PrimitiveArray<Decimal128Type>, ArrowError> {
+    let (precision, product_scale, divisor) = get_fixed_point_info(
+        (left.precision(), left.scale()),
+        (left.precision(), left.scale()),
+        required_scale,
+    )?;
+
+    if required_scale == product_scale {
+        return multiply_scalar_checked(left, scalar)?
+            .with_precision_and_scale(precision, required_scale);
+    }
+
+    let b = i256::from_i128(scalar);
+
+    try_unary::<_, _, Decimal128Type>(left, |a| {
+        let a = i256::from_i128(a);
+
+        let mut mul = a.wrapping_mul(b);
+        mul = divide_and_round::<Decimal256Type>(mul, divisor);
+        mul.to_i128().ok_or_else(|| {
+            ArrowError::ComputeError(format!("Overflow happened on: {:?} * {:?}", a, b))
+        })
+    })
+    .and_then(|a| a.with_precision_and_scale(precision, required_scale))
+}
+
+/// Perform `left * right` operation on decimal array and a scalar. If any value in the array is null
+/// then the result is also null.
+///
+/// This performs decimal multiplication which allows precision loss if an exact representation
+/// is not possible for the result, according to the required scale. In the case, the result
+/// will be rounded to the required scale.
+///
+/// If the required scale is greater than the product scale, an error is returned.
+///
+/// This doesn't detect overflow. Once overflowing, the result will wrap around.
+/// For an overflow-checking variant, use `multiply_fixed_point_scalar_checked` instead.
+///
+/// It is implemented for compatibility with precision loss `multiply` function provided by
+/// other data processing engines. For multiplication with precision loss detection, use
+/// `multiply_scalar` or `multiply_scalar_checked` instead.
+pub fn multiply_fixed_point_scalar(
+    left: &PrimitiveArray<Decimal128Type>,
+    scalar: i128,
+    required_scale: i8,
+) -> Result<PrimitiveArray<Decimal128Type>, ArrowError> {
+    let (precision, product_scale, divisor) = get_fixed_point_info(
+        (left.precision(), left.scale()),
+        (left.precision(), left.scale()),
+        required_scale,
+    )?;
+
+    if required_scale == product_scale {
+        return multiply_scalar(left, scalar)?
+            .with_precision_and_scale(precision, required_scale);
+    }
+
+    let b = i256::from_i128(scalar);
+
+    unary::<_, _, Decimal128Type>(left, |a| {
+        let a = i256::from_i128(a);
+
+        let mut mul = a.wrapping_mul(b);
+        mul = divide_and_round::<Decimal256Type>(mul, divisor);
+        mul.as_i128()
+    })
+    .with_precision_and_scale(precision, required_scale)
+}
+
 /// Divide a decimal native value by given divisor and round the result.
 fn divide_and_round<I>(input: I::Native, div: I::Native) -> I::Native
 where
