@@ -266,7 +266,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     /// Implementors may override to handle additional calls to do_put()
     async fn do_put_fallback(
         &self,
-        mut request: Request<Streaming<FlightData>>,
+        _request: Request<Streaming<FlightData>>,
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented(format!(
@@ -575,7 +575,7 @@ where
                 })]);
                 Ok(Response::new(Box::pin(output)))
             }
-            cmd => self.do_put_fallback(request, cmd.into_any()),
+            cmd => self.do_put_fallback(request, cmd.into_any()).await,
         }
     }
 
@@ -651,8 +651,8 @@ where
             Ok(cancel_query_action_type),
         ];
 
-        if let Some(mut custom_actions) = self.list_custom_actions() {
-            actions.append(custom_actions);
+        if let Some(mut custom_actions) = self.list_custom_actions().await {
+            actions.append(&mut custom_actions);
         }
 
         let output = futures::stream::iter(actions);
@@ -791,14 +791,14 @@ where
             return Ok(Response::new(Box::pin(output)));
         }
 
-        self.do_action_fallback(request)
+        self.do_action_fallback(request).await
     }
 
     async fn do_exchange(
         &self,
         request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoExchangeStream>, Status> {
-        self.do_exchange_fallback(request)
+        self.do_exchange_fallback(request).await
     }
 }
 
