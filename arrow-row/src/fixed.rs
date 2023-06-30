@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::PrimitiveArray;
-use crate::{null_sentinel, Rows};
+use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
@@ -177,14 +177,15 @@ where
 /// - 1 byte `0` if null or `1` if valid
 /// - bytes of [`FixedLengthEncoding`]
 pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
-    out: &mut Rows,
+    data: &mut [u8],
+    offsets: &mut [usize],
     i: I,
     opts: SortOptions,
 ) {
-    for (offset, maybe_val) in out.offsets.iter_mut().skip(1).zip(i) {
+    for (offset, maybe_val) in offsets.iter_mut().skip(1).zip(i) {
         let end_offset = *offset + T::ENCODED_LEN;
         if let Some(val) = maybe_val {
-            let to_write = &mut out.buffer[*offset..end_offset];
+            let to_write = &mut data[*offset..end_offset];
             to_write[0] = 1;
             let mut encoded = val.encode();
             if opts.descending {
@@ -193,22 +194,23 @@ pub fn encode<T: FixedLengthEncoding, I: IntoIterator<Item = Option<T>>>(
             }
             to_write[1..].copy_from_slice(encoded.as_ref())
         } else {
-            out.buffer[*offset] = null_sentinel(opts);
+            data[*offset] = null_sentinel(opts);
         }
         *offset = end_offset;
     }
 }
 
 pub fn encode_fixed_size_binary(
-    out: &mut Rows,
+    data: &mut [u8],
+    offsets: &mut [usize],
     array: &FixedSizeBinaryArray,
     opts: SortOptions,
 ) {
     let len = array.value_length() as usize;
-    for (offset, maybe_val) in out.offsets.iter_mut().skip(1).zip(array.iter()) {
+    for (offset, maybe_val) in offsets.iter_mut().skip(1).zip(array.iter()) {
         let end_offset = *offset + len + 1;
         if let Some(val) = maybe_val {
-            let to_write = &mut out.buffer[*offset..end_offset];
+            let to_write = &mut data[*offset..end_offset];
             to_write[0] = 1;
             to_write[1..].copy_from_slice(&val[..len]);
             if opts.descending {
@@ -216,7 +218,7 @@ pub fn encode_fixed_size_binary(
                 to_write[1..1 + len].iter_mut().for_each(|v| *v = !*v)
             }
         } else {
-            out.buffer[*offset] = null_sentinel(opts);
+            data[*offset] = null_sentinel(opts);
         }
         *offset = end_offset;
     }
