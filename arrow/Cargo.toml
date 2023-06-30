@@ -63,7 +63,7 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 pyo3 = { version = "0.19", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
-features = ["prettyprint", "ipc_compression", "dyn_cmp_dict", "dyn_arith_dict", "ffi", "pyarrow"]
+features = ["prettyprint", "ipc_compression", "dyn_cmp_dict", "ffi", "pyarrow"]
 
 [features]
 default = ["csv", "ipc", "json"]
@@ -88,9 +88,6 @@ ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
 # Enable dyn-comparison of dictionary arrays with other arrays
 # Note: this does not impact comparison against scalars
 dyn_cmp_dict = ["arrow-string/dyn_cmp_dict", "arrow-ord/dyn_cmp_dict"]
-# Enable dyn-arithmetic kernels for dictionary arrays
-# Note: this does not impact arithmetic with scalars
-dyn_arith_dict = ["arrow-arith/dyn_arith_dict"]
 chrono-tz = ["arrow-array/chrono-tz"]
 
 [dev-dependencies]
