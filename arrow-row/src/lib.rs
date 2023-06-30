@@ -715,7 +715,13 @@ impl RowConverter {
             columns.iter().zip(self.fields.iter()).zip(encoders)
         {
             // We encode a column at a time to minimise dispatch overheads
-            encode_column(&mut rows, column.as_ref(), field.options, &encoder)
+            encode_column(
+                &mut rows.buffer,
+                &mut rows.offsets,
+                column.as_ref(),
+                field.options,
+                &encoder,
+            )
         }
 
         if cfg!(debug_assertions) {
@@ -1232,7 +1238,8 @@ fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) ->
 
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
 fn encode_column(
-    out: &mut Rows,
+    data: &mut [u8],
+    offsets: &mut [usize],
     column: &dyn Array,
     opts: SortOptions,
     encoder: &Encoder<'_>,
@@ -1240,22 +1247,22 @@ fn encode_column(
     match encoder {
         Encoder::Stateless => {
             downcast_primitive_array! {
-                column => fixed::encode(out, column, opts),
+                column => fixed::encode(data, offsets, column, opts),
                 DataType::Null => {}
-                DataType::Boolean => fixed::encode(out, column.as_boolean(), opts),
+                DataType::Boolean => fixed::encode(data, offsets, column.as_boolean(), opts),
                 DataType::Binary => {
-                    variable::encode(out, as_generic_binary_array::<i32>(column).iter(), opts)
+                    variable::encode(data, offsets, as_generic_binary_array::<i32>(column).iter(), opts)
                 }
                 DataType::LargeBinary => {
-                    variable::encode(out, as_generic_binary_array::<i64>(column).iter(), opts)
+                    variable::encode(data, offsets, as_generic_binary_array::<i64>(column).iter(), opts)
                 }
                 DataType::Utf8 => variable::encode(
-                    out,
+                    data, offsets,
                     column.as_string::<i32>().iter().map(|x| x.map(|x| x.as_bytes())),
                     opts,
                 ),
                 DataType::LargeUtf8 => variable::encode(
-                    out,
+                    data, offsets,
                     column.as_string::<i64>()
                         .iter()
                         .map(|x| x.map(|x| x.as_bytes())),
@@ -1263,27 +1270,27 @@ fn encode_column(
                 ),
                 DataType::FixedSizeBinary(_) => {
                     let array = column.as_any().downcast_ref().unwrap();
-                    fixed::encode_fixed_size_binary(out, array, opts)
+                    fixed::encode_fixed_size_binary(data, offsets, array, opts)
                 }
                 _ => unreachable!(),
             }
         }
         Encoder::Dictionary(dict) => {
             downcast_dictionary_array! {
-                column => encode_dictionary(out, column, dict, opts),
+                column => encode_dictionary(data, offsets, column, dict, opts),
                 _ => unreachable!()
             }
         }
         Encoder::DictionaryValues(values, nulls) => {
             downcast_dictionary_array! {
-                column => encode_dictionary_values(out, column, values, nulls),
+                column => encode_dictionary_values(data, offsets, column, values, nulls),
                 _ => unreachable!()
             }
         }
         Encoder::Struct(rows, null) => {
             let array = as_struct_array(column);
             let null_sentinel = null_sentinel(opts);
-            out.offsets
+            offsets
                 .iter_mut()
                 .skip(1)
                 .enumerate()
@@ -1293,15 +1300,17 @@ fn encode_column(
                         false => (*null, null_sentinel),
                     };
                     let end_offset = *offset + 1 + row.as_ref().len();
-                    out.buffer[*offset] = sentinel;
-                    out.buffer[*offset + 1..end_offset].copy_from_slice(row.as_ref());
+                    data[*offset] = sentinel;
+                    data[*offset + 1..end_offset].copy_from_slice(row.as_ref());
                     *offset = end_offset;
                 })
         }
         Encoder::List(rows) => match column.data_type() {
-            DataType::List(_) => list::encode(out, rows, opts, as_list_array(column)),
+            DataType::List(_) => {
+                list::encode(data, offsets, rows, opts, as_list_array(column))
+            }
             DataType::LargeList(_) => {
-                list::encode(out, rows, opts, as_large_list_array(column))
+                list::encode(data, offsets, rows, opts, as_large_list_array(column))
             }
             _ => unreachable!(),
         },
