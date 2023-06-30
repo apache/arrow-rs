@@ -759,7 +759,7 @@ impl RowConverter {
     /// Returns an empty [`Rows`] with capacity for `row_capacity` rows with
     /// a total length of `data_capacity`
     ///
-    /// This can be used to efficiently buffer a selection of [`Row`]
+    /// This can be used to buffer a selection of [`Row`]
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -772,11 +772,14 @@ impl RowConverter {
     /// let mut converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
     /// let array = StringArray::from(vec!["hello", "world", "a", "a", "hello"]);
     ///
+    /// // Convert to row format and deduplicate
     /// let converted = converter.convert_columns(&[Arc::new(array)]).unwrap();
     /// let mut distinct_rows = converter.empty_rows(3, 100);
     /// let mut dedup: HashSet<Row> = HashSet::with_capacity(3);
     /// converted.iter().filter(|row| dedup.insert(*row)).for_each(|row| distinct_rows.push(row));
     ///
+    /// // Note: we could skip buffering and feed the filtered iterator directly
+    /// // into convert_rows, this is done for demonstration purposes only
     /// let distinct = converter.convert_rows(&distinct_rows).unwrap();
     /// let values: Vec<_> = distinct[0].as_string::<i32>().iter().map(Option::unwrap).collect();
     /// assert_eq!(&values, &["hello", "world", "a"]);
