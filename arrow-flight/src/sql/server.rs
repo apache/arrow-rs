@@ -87,179 +87,279 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     /// Get a FlightInfo for executing a SQL query.
     async fn get_flight_info_statement(
         &self,
-        query: CommandStatementQuery,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandStatementQuery,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_statement has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo for executing a substrait plan.
     async fn get_flight_info_substrait_plan(
         &self,
-        query: CommandStatementSubstraitPlan,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandStatementSubstraitPlan,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_substrait_plan has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo for executing an already created prepared statement.
     async fn get_flight_info_prepared_statement(
         &self,
-        query: CommandPreparedStatementQuery,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandPreparedStatementQuery,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_prepared_statement has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo for listing catalogs.
     async fn get_flight_info_catalogs(
         &self,
-        query: CommandGetCatalogs,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandGetCatalogs,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_catalogs has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo for listing schemas.
     async fn get_flight_info_schemas(
         &self,
-        query: CommandGetDbSchemas,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandGetDbSchemas,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_schemas has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo for listing tables.
     async fn get_flight_info_tables(
         &self,
-        query: CommandGetTables,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandGetTables,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_tables has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo to extract information about the table types.
     async fn get_flight_info_table_types(
         &self,
-        query: CommandGetTableTypes,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandGetTableTypes,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_table_types has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo for retrieving other information (See SqlInfo).
     async fn get_flight_info_sql_info(
         &self,
-        query: CommandGetSqlInfo,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandGetSqlInfo,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_sql_info has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo to extract information about primary and foreign keys.
     async fn get_flight_info_primary_keys(
         &self,
-        query: CommandGetPrimaryKeys,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandGetPrimaryKeys,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_primary_keys has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo to extract information about exported keys.
     async fn get_flight_info_exported_keys(
         &self,
-        query: CommandGetExportedKeys,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandGetExportedKeys,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_exported_keys has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo to extract information about imported keys.
     async fn get_flight_info_imported_keys(
         &self,
-        query: CommandGetImportedKeys,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandGetImportedKeys,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_imported_keys has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo to extract information about cross reference.
     async fn get_flight_info_cross_reference(
         &self,
-        query: CommandGetCrossReference,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandGetCrossReference,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_cross_reference has no default implementation",
+        ))
+    }
 
     /// Get a FlightInfo to extract information about the supported XDBC types.
     async fn get_flight_info_xdbc_type_info(
         &self,
-        query: CommandGetXdbcTypeInfo,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status>;
+        _query: CommandGetXdbcTypeInfo,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_xdbc_type_info has no default implementation",
+        ))
+    }
 
     // do_get
 
     /// Get a FlightDataStream containing the query results.
     async fn do_get_statement(
         &self,
-        ticket: TicketStatementQuery,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _ticket: TicketStatementQuery,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_statement has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the prepared statement query results.
     async fn do_get_prepared_statement(
         &self,
-        query: CommandPreparedStatementQuery,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandPreparedStatementQuery,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_prepared_statement has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the list of catalogs.
     async fn do_get_catalogs(
         &self,
-        query: CommandGetCatalogs,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandGetCatalogs,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_catalogs has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the list of schemas.
     async fn do_get_schemas(
         &self,
-        query: CommandGetDbSchemas,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandGetDbSchemas,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_schemas has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the list of tables.
     async fn do_get_tables(
         &self,
-        query: CommandGetTables,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandGetTables,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_tables has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the data related to the table types.
     async fn do_get_table_types(
         &self,
-        query: CommandGetTableTypes,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandGetTableTypes,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_table_types has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the list of SqlInfo results.
     async fn do_get_sql_info(
         &self,
-        query: CommandGetSqlInfo,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandGetSqlInfo,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_sql_info has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the data related to the primary and foreign keys.
     async fn do_get_primary_keys(
         &self,
-        query: CommandGetPrimaryKeys,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandGetPrimaryKeys,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_primary_keys has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the data related to the exported keys.
     async fn do_get_exported_keys(
         &self,
-        query: CommandGetExportedKeys,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandGetExportedKeys,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_exported_keys has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the data related to the imported keys.
     async fn do_get_imported_keys(
         &self,
-        query: CommandGetImportedKeys,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandGetImportedKeys,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_imported_keys has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the data related to the cross reference.
     async fn do_get_cross_reference(
         &self,
-        query: CommandGetCrossReference,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandGetCrossReference,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_cross_reference has no default implementation",
+        ))
+    }
 
     /// Get a FlightDataStream containing the data related to the supported XDBC types.
     async fn do_get_xdbc_type_info(
         &self,
-        query: CommandGetXdbcTypeInfo,
-        request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+        _query: CommandGetXdbcTypeInfo,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_xdbc_type_info has no default implementation",
+        ))
+    }
 
     // do_put
 
@@ -278,30 +378,46 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     /// Execute an update SQL statement.
     async fn do_put_statement_update(
         &self,
-        ticket: CommandStatementUpdate,
-        request: Request<Streaming<FlightData>>,
-    ) -> Result<i64, Status>;
+        _ticket: CommandStatementUpdate,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<i64, Status> {
+        Err(Status::unimplemented(
+            "do_put_statement_update has no default implementation",
+        ))
+    }
 
     /// Bind parameters to given prepared statement.
     async fn do_put_prepared_statement_query(
         &self,
-        query: CommandPreparedStatementQuery,
-        request: Request<Streaming<FlightData>>,
-    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status>;
+        _query: CommandPreparedStatementQuery,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+        Err(Status::unimplemented(
+            "do_put_prepared_statement_query has no default implementation",
+        ))
+    }
 
     /// Execute an update SQL prepared statement.
     async fn do_put_prepared_statement_update(
         &self,
-        query: CommandPreparedStatementUpdate,
-        request: Request<Streaming<FlightData>>,
-    ) -> Result<i64, Status>;
+        _query: CommandPreparedStatementUpdate,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<i64, Status> {
+        Err(Status::unimplemented(
+            "do_put_prepared_statement_update has no default implementation",
+        ))
+    }
 
     /// Execute a substrait plan
     async fn do_put_substrait_plan(
         &self,
-        query: CommandStatementSubstraitPlan,
-        request: Request<Streaming<FlightData>>,
-    ) -> Result<i64, Status>;
+        _query: CommandStatementSubstraitPlan,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<i64, Status> {
+        Err(Status::unimplemented(
+            "do_put_substrait_plan has no default implementation",
+        ))
+    }
 
     // do_action
 
@@ -324,58 +440,90 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     /// Create a prepared statement from given SQL statement.
     async fn do_action_create_prepared_statement(
         &self,
-        query: ActionCreatePreparedStatementRequest,
-        request: Request<Action>,
-    ) -> Result<ActionCreatePreparedStatementResult, Status>;
+        _query: ActionCreatePreparedStatementRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionCreatePreparedStatementResult, Status> {
+        Err(Status::unimplemented(
+            "do_action_create_prepared_statement has no default implementation",
+        ))
+    }
 
     /// Close a prepared statement.
     async fn do_action_close_prepared_statement(
         &self,
-        query: ActionClosePreparedStatementRequest,
-        request: Request<Action>,
-    ) -> Result<(), Status>;
+        _query: ActionClosePreparedStatementRequest,
+        _request: Request<Action>,
+    ) -> Result<(), Status> {
+        Err(Status::unimplemented(
+            "do_action_close_prepared_statement has no default implementation",
+        ))
+    }
 
     /// Create a prepared substrait plan.
     async fn do_action_create_prepared_substrait_plan(
         &self,
-        query: ActionCreatePreparedSubstraitPlanRequest,
-        request: Request<Action>,
-    ) -> Result<ActionCreatePreparedStatementResult, Status>;
+        _query: ActionCreatePreparedSubstraitPlanRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionCreatePreparedStatementResult, Status> {
+        Err(Status::unimplemented(
+            "do_action_create_prepared_substrait_plan has no default implementation",
+        ))
+    }
 
     /// Begin a transaction
     async fn do_action_begin_transaction(
         &self,
-        query: ActionBeginTransactionRequest,
-        request: Request<Action>,
-    ) -> Result<ActionBeginTransactionResult, Status>;
+        _query: ActionBeginTransactionRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionBeginTransactionResult, Status> {
+        Err(Status::unimplemented(
+            "do_action_begin_transaction has no default implementation",
+        ))
+    }
 
     /// End a transaction
     async fn do_action_end_transaction(
         &self,
-        query: ActionEndTransactionRequest,
-        request: Request<Action>,
-    ) -> Result<(), Status>;
+        _query: ActionEndTransactionRequest,
+        _request: Request<Action>,
+    ) -> Result<(), Status> {
+        Err(Status::unimplemented(
+            "do_action_end_transaction has no default implementation",
+        ))
+    }
 
     /// Begin a savepoint
     async fn do_action_begin_savepoint(
         &self,
-        query: ActionBeginSavepointRequest,
-        request: Request<Action>,
-    ) -> Result<ActionBeginSavepointResult, Status>;
+        _query: ActionBeginSavepointRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionBeginSavepointResult, Status> {
+        Err(Status::unimplemented(
+            "do_action_begin_savepoint has no default implementation",
+        ))
+    }
 
     /// End a savepoint
     async fn do_action_end_savepoint(
         &self,
-        query: ActionEndSavepointRequest,
-        request: Request<Action>,
-    ) -> Result<(), Status>;
+        _query: ActionEndSavepointRequest,
+        _request: Request<Action>,
+    ) -> Result<(), Status> {
+        Err(Status::unimplemented(
+            "do_action_end_savepoint has no default implementation",
+        ))
+    }
 
     /// Cancel a query
     async fn do_action_cancel_query(
         &self,
-        query: ActionCancelQueryRequest,
-        request: Request<Action>,
-    ) -> Result<ActionCancelQueryResult, Status>;
+        _query: ActionCancelQueryRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionCancelQueryResult, Status> {
+        Err(Status::unimplemented(
+            "do_action_cancel_query has no default implementation",
+        ))
+    }
 
     /// do_exchange
 
