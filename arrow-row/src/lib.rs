@@ -1230,8 +1230,8 @@ fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) ->
     let buffer = vec![0_u8; cur_offset];
 
     Rows {
-        buffer: buffer.into(),
-        offsets: offsets.into(),
+        buffer,
+        offsets,
         config,
     }
 }
