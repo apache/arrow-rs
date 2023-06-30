@@ -810,7 +810,9 @@ mod tests {
         let file_iter = read_from_file.get_row_iter(None).unwrap();
         let cursor_iter = read_from_cursor.get_row_iter(None).unwrap();
 
-        assert!(file_iter.eq(cursor_iter));
+        for (a, b) in file_iter.zip(cursor_iter) {
+            assert_eq!(a.unwrap(), b.unwrap())
+        }
     }
 
     #[test]
