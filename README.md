@@ -25,14 +25,14 @@ Welcome to the implementation of Arrow, the popular in-memory columnar format, i
 
 This repo contains the following main components:
 
-| Crate        | Description                                                               | Documentation                  |
-| ------------ | ------------------------------------------------------------------------- | ------------------------------ |
-| arrow        | Core functionality (memory layout, arrays, low level computations)        | [(README)][arrow-readme]       |
-| parquet      | Support for Parquet columnar file format                                  | [(README)][parquet-readme]     |
-| arrow-flight | Support for Arrow-Flight IPC protocol                                     | [(README)][flight-readme]      |
-| object-store | Support for object store interactions (aws, azure, gcp, local, in-memory) | [(README)][objectstore-readme] |
+| Crate        | Description                                                               | Latest API Docs                                | README                         |
+| ------------ | ------------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------ |
+| arrow        | Core functionality (memory layout, arrays, low level computations)        | [docs.rs](https://docs.rs/arrow/latest)        | [(README)][arrow-readme]       |
+| parquet      | Support for Parquet columnar file format                                  | [docs.rs](https://docs.rs/parquet/latest)      | [(README)][parquet-readme]     |
+| arrow-flight | Support for Arrow-Flight IPC protocol                                     | [docs.rs](https://docs.rs/arrow-flight/latest) | [(README)][flight-readme]      |
+| object-store | Support for object store interactions (aws, azure, gcp, local, in-memory) | [docs.rs](https://docs.rs/object_store/latest) | [(README)][objectstore-readme] |
 
-See the list of all crates in this repo and their rustdocs [here](https://arrow.apache.org/rust).
+The current development version the API documentation in this repo can be found [here](https://arrow.apache.org/rust).
 
 There are two related crates in a different repository
 

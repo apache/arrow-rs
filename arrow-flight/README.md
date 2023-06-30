@@ -21,6 +21,10 @@
 
 [![Crates.io](https://img.shields.io/crates/v/arrow-flight.svg)](https://crates.io/crates/arrow-flight)
 
+See the [API documentation](https://docs.rs/arrow_flight/latest) for examples and the full API.
+
+The API documentation for most recent, unreleased code is available [here](https://arrow.apache.org/rust/arrow_flight/index.html).
+
 ## Usage
 
 Add this to your Cargo.toml:
