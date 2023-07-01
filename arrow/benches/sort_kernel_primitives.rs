@@ -38,7 +38,6 @@ fn bench_sort(array: &ArrayRef) {
 }
 
 fn add_benchmark(c: &mut Criterion) {
-
     let arr_a = create_i64_array(2u64.pow(10) as usize, false);
 
     c.bench_function("sort 2^10", |b| b.iter(|| bench_sort(&arr_a)));

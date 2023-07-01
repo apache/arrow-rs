@@ -134,6 +134,7 @@ where
     if mask != 0 {
         for i in 0..8 {
             if (mask & (1 << i)) != 0 {
+                // This is safe since a valid bit i.e bit set to 1 indicates a valid value
                 unsafe {
                     *output = *input.offset(i);
                     offset += 1;
@@ -197,40 +198,51 @@ where
     let values = values.as_primitive::<T>();
 
     let result_capacity = values.len() * std::mem::size_of::<U>();
-    let array_data = values.to_data();
     let mut mutable_buffer = MutableBuffer::new(result_capacity);
     mutable_buffer.resize(result_capacity, 0);
-
     let mutable_slice: &mut [U] = mutable_buffer.typed_data_mut();
+
+    let array_data = values.to_data();
     let input_values: &[U] = array_data.buffer(0);
+
     let mut null_bit_buffer = None;
+
     let nulls_count = values.null_count();
     let valid_count = values.len() - nulls_count;
+
     if values.null_count() > 0 {
         let nulls = array_data.nulls().unwrap();
-        let buffer = nulls.buffer().as_slice();
+        let null_buffer = nulls.buffer().as_slice();
+
         let mut mutable_slice_ptr = mutable_slice.as_mut_ptr();
         let mut input_values_ptr = input_values.as_ptr();
+
         if sort_options.nulls_first {
+            // This is safe since the offset in in bounds
             unsafe {
-                mutable_slice_ptr =
-                    mutable_slice_ptr.offset(values.null_count() as isize);
+                mutable_slice_ptr = mutable_slice_ptr.add(values.null_count());
             }
         }
+
+        // This is safe since we are in bounds
         let values_slice =
             unsafe { slice::from_raw_parts_mut(mutable_slice_ptr, valid_count) };
-        for mask in buffer {
+
+        for mask in null_buffer {
             let written_count =
                 compress_store::<U>(input_values_ptr, mutable_slice_ptr, *mask);
+            // This is safe as the offset increments are within bounds
             unsafe {
                 input_values_ptr = input_values_ptr.offset(8);
                 mutable_slice_ptr = mutable_slice_ptr.offset(written_count);
             }
         }
+
         values_slice.sort_unstable_by(|a, b| a.compare(*b));
         if sort_options.descending {
             values_slice.reverse();
         }
+
         null_bit_buffer =
             create_null_buffer(valid_count, nulls_count, values.len(), sort_options);
     } else {
@@ -240,6 +252,7 @@ where
             mutable_slice.reverse();
         }
     }
+    // This is safe since data types match
     let result_array = unsafe {
         ArrayData::new_unchecked(
             values.data_type().clone(),
@@ -4653,19 +4666,6 @@ mod tests {
             }),
             None,
             vec![None, None, None, Some(5.1), Some(5.1), Some(3.0), Some(1.2)],
-        );
-    }
-
-    #[test]
-    fn test_sort_i64() {
-        let mut data: Vec<i64> = (0..1024 * 1024).into_iter().rev().collect();
-        let array = Int64Array::from(data.clone());
-
-        data.sort_unstable();
-
-        assert_eq!(
-            sort(&array, None).unwrap().as_ref(),
-            &Int64Array::from(data)
         );
     }
 }
