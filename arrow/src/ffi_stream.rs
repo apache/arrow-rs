@@ -119,7 +119,7 @@ unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
 }
 
 struct StreamPrivateData {
-    batch_reader: Box<dyn RecordBatchReader>,
+    batch_reader: Box<dyn RecordBatchReader + Send>,
     last_error: String,
 }
 
@@ -157,7 +157,7 @@ impl Drop for FFI_ArrowArrayStream {
 
 impl FFI_ArrowArrayStream {
     /// Creates a new [`FFI_ArrowArrayStream`].
-    pub fn new(batch_reader: Box<dyn RecordBatchReader>) -> Self {
+    pub fn new(batch_reader: Box<dyn RecordBatchReader + Send>) -> Self {
         let private_data = Box::new(StreamPrivateData {
             batch_reader,
             last_error: String::new(),
@@ -371,7 +371,7 @@ impl RecordBatchReader for ArrowArrayStreamReader {
 /// Assumes that the pointer represents valid C Stream Interfaces, both in memory
 /// representation and lifetime via the `release` mechanism.
 pub unsafe fn export_reader_into_raw(
-    reader: Box<dyn RecordBatchReader>,
+    reader: Box<dyn RecordBatchReader + Send>,
     out_stream: *mut FFI_ArrowArrayStream,
 ) {
     let stream = FFI_ArrowArrayStream::new(reader);
@@ -388,13 +388,13 @@ mod tests {
 
     struct TestRecordBatchReader {
         schema: SchemaRef,
-        iter: Box<dyn Iterator<Item = Result<RecordBatch>>>,
+        iter: Box<dyn Iterator<Item = Result<RecordBatch>> + Send>,
     }
 
     impl TestRecordBatchReader {
         pub fn new(
             schema: SchemaRef,
-            iter: Box<dyn Iterator<Item = Result<RecordBatch>>>,
+            iter: Box<dyn Iterator<Item = Result<RecordBatch>> + Send>,
         ) -> Box<TestRecordBatchReader> {
             Box::new(TestRecordBatchReader { schema, iter })
         }
