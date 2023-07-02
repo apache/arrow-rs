@@ -43,6 +43,12 @@ pub trait RecordBatchReader: Iterator<Item = Result<RecordBatch, ArrowError>> {
     }
 }
 
+impl<R: RecordBatchReader + ?Sized> RecordBatchReader for Box<R> {
+    fn schema(&self) -> SchemaRef {
+        self.as_ref().schema()
+    }
+}
+
 /// Trait for types that can write `RecordBatch`'s.
 pub trait RecordBatchWriter {
     /// Write a single batch to the writer.
@@ -1114,5 +1120,23 @@ mod tests {
 
         // Cannot remove metadata
         batch.with_schema(nullable_schema).unwrap_err();
+    }
+
+    #[test]
+    fn test_boxed_reader() {
+        // Make sure we can pass a boxed reader to a function generic over
+        // RecordBatchReader.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Arc::new(schema);
+
+        let reader = RecordBatchIterator::new(std::iter::empty(), schema);
+        let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
+
+        fn get_size(reader: impl RecordBatchReader) -> usize {
+            reader.size_hint().0
+        }
+
+        let size = get_size(reader);
+        assert_eq!(size, 0);
     }
 }
