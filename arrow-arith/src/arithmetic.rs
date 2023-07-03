@@ -1285,10 +1285,12 @@ pub fn multiply_fixed_point_scalar_checked(
     left: &PrimitiveArray<Decimal128Type>,
     scalar: i128,
     required_scale: i8,
+    scalar_precision: u8,
+    scalar_scale: i8,
 ) -> Result<PrimitiveArray<Decimal128Type>, ArrowError> {
     let (precision, product_scale, divisor) = get_fixed_point_info(
         (left.precision(), left.scale()),
-        (left.precision(), left.scale()),
+        (scalar_precision, scalar_scale),
         required_scale,
     )?;
 
@@ -1330,10 +1332,12 @@ pub fn multiply_fixed_point_scalar(
     left: &PrimitiveArray<Decimal128Type>,
     scalar: i128,
     required_scale: i8,
+    scalar_precision: u8,
+    scalar_scale: i8,
 ) -> Result<PrimitiveArray<Decimal128Type>, ArrowError> {
     let (precision, product_scale, divisor) = get_fixed_point_info(
         (left.precision(), left.scale()),
-        (left.precision(), left.scale()),
+        (scalar_precision, scalar_scale),
         required_scale,
     )?;
 
@@ -3322,6 +3326,55 @@ mod tests {
             result.value_as_string(0),
             "1234567890.0000000000000000000000000000"
         );
+    }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point_scalar() {
+        // [123456789]
+        let a = Decimal128Array::from(vec![123456789000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        // 10
+        let b = 10000000000000000000;
+
+        // `multiply_scalar` overflows on this case.
+        let result = multiply_scalar(&a, b).unwrap();
+        let expected =
+            Decimal128Array::from(vec![-16672482290199102048610367863168958464])
+                .with_precision_and_scale(38, 10)
+                .unwrap();
+        assert_eq!(&expected, &result);
+
+        // Avoid overflow by reducing the scale.
+        let result = multiply_fixed_point_scalar(&a, b, 28, 38, 18).unwrap();
+        // [1234567890]
+        let expected =
+            Decimal128Array::from(vec![12345678900000000000000000000000000000])
+                .with_precision_and_scale(38, 28)
+                .unwrap();
+
+        assert_eq!(&expected, &result);
+        assert_eq!(
+            result.value_as_string(0),
+            "1234567890.0000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point_scalar_checked_overflow() {
+        // [99999999999123456789]
+        let a = Decimal128Array::from(vec![99999999999123456789000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        // 9999999999910
+        let b = 9999999999910000000000000000000;
+
+        let err = multiply_fixed_point_scalar_checked(&a, b, 28, 38, 18).unwrap_err();
+        assert!(err.to_string().contains(
+            "Overflow happened on: 99999999999123456789000000000000000000 * 9999999999910000000000000000000"
+        ));
     }
 
     #[test]
