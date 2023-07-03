@@ -147,7 +147,7 @@ impl Sbbf {
     }
 
     /// Create a new [Sbbf] with given number of bytes, the exact number of bytes will be adjusted
-    /// to the next power of two bounded by [BITSET_MIN_LENGTH] and [BITSET_MAX_LENGTH].
+    /// to the next power of two bounded by [super::BITSET_MIN_LENGTH] and [super::BITSET_MAX_LENGTH].
     pub(crate) fn new_with_num_of_bytes(num_bytes: usize) -> Self {
         let num_bytes = optimal_num_of_bytes(num_bytes);
         let bitset = vec![0_u8; num_bytes];
