@@ -22,14 +22,12 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::Buffer;
+use arrow_buffer::BooleanBufferBuilder;
 use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
 use arrow_select::take::take;
-use core::slice;
-use std::cmp::min;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -61,62 +59,62 @@ pub fn sort(
     options: Option<SortOptions>,
 ) -> Result<ArrayRef, ArrowError> {
     match values.data_type() {
-        DataType::Int8 => sort_native_type::<Int8Type, i8>(values, options),
-        DataType::Int16 => sort_native_type::<Int16Type, i16>(values, options),
-        DataType::Int32 => sort_native_type::<Int32Type, i32>(values, options),
-        DataType::Int64 => sort_native_type::<Int64Type, i64>(values, options),
-        DataType::UInt8 => sort_native_type::<UInt8Type, u8>(values, options),
-        DataType::UInt16 => sort_native_type::<UInt16Type, u16>(values, options),
-        DataType::UInt32 => sort_native_type::<UInt32Type, u32>(values, options),
-        DataType::UInt64 => sort_native_type::<UInt64Type, u64>(values, options),
-        DataType::Float32 => sort_native_type::<Float32Type, f32>(values, options),
-        DataType::Float64 => sort_native_type::<Float64Type, f64>(values, options),
-        DataType::Date32 => sort_native_type::<Date32Type, i32>(values, options),
-        DataType::Date64 => sort_native_type::<Date64Type, i64>(values, options),
+        DataType::Int8 => sort_native_type::<Int8Type>(values, options),
+        DataType::Int16 => sort_native_type::<Int16Type>(values, options),
+        DataType::Int32 => sort_native_type::<Int32Type>(values, options),
+        DataType::Int64 => sort_native_type::<Int64Type>(values, options),
+        DataType::UInt8 => sort_native_type::<UInt8Type>(values, options),
+        DataType::UInt16 => sort_native_type::<UInt16Type>(values, options),
+        DataType::UInt32 => sort_native_type::<UInt32Type>(values, options),
+        DataType::UInt64 => sort_native_type::<UInt64Type>(values, options),
+        DataType::Float32 => sort_native_type::<Float32Type>(values, options),
+        DataType::Float64 => sort_native_type::<Float64Type>(values, options),
+        DataType::Date32 => sort_native_type::<Date32Type>(values, options),
+        DataType::Date64 => sort_native_type::<Date64Type>(values, options),
         DataType::Time32(TimeUnit::Second) => {
-            sort_native_type::<Time32SecondType, i32>(values, options)
+            sort_native_type::<Time32SecondType>(values, options)
         }
         DataType::Time32(TimeUnit::Millisecond) => {
-            sort_native_type::<Time32MillisecondType, i32>(values, options)
+            sort_native_type::<Time32MillisecondType>(values, options)
         }
         DataType::Time64(TimeUnit::Microsecond) => {
-            sort_native_type::<Time64MicrosecondType, i64>(values, options)
+            sort_native_type::<Time64MicrosecondType>(values, options)
         }
         DataType::Time64(TimeUnit::Nanosecond) => {
-            sort_native_type::<Time64NanosecondType, i64>(values, options)
+            sort_native_type::<Time64NanosecondType>(values, options)
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
-            sort_native_type::<TimestampSecondType, i64>(values, options)
+            sort_native_type::<TimestampSecondType>(values, options)
         }
         DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            sort_native_type::<TimestampMillisecondType, i64>(values, options)
+            sort_native_type::<TimestampMillisecondType>(values, options)
         }
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            sort_native_type::<TimestampMicrosecondType, i64>(values, options)
+            sort_native_type::<TimestampMicrosecondType>(values, options)
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            sort_native_type::<TimestampNanosecondType, i64>(values, options)
+            sort_native_type::<TimestampNanosecondType>(values, options)
         }
         DataType::Interval(IntervalUnit::YearMonth) => {
-            sort_native_type::<IntervalYearMonthType, i32>(values, options)
+            sort_native_type::<IntervalYearMonthType>(values, options)
         }
         DataType::Interval(IntervalUnit::DayTime) => {
-            sort_native_type::<IntervalDayTimeType, i64>(values, options)
+            sort_native_type::<IntervalDayTimeType>(values, options)
         }
         DataType::Interval(IntervalUnit::MonthDayNano) => {
-            sort_native_type::<IntervalMonthDayNanoType, i128>(values, options)
+            sort_native_type::<IntervalMonthDayNanoType>(values, options)
         }
         DataType::Duration(TimeUnit::Second) => {
-            sort_native_type::<DurationSecondType, i64>(values, options)
+            sort_native_type::<DurationSecondType>(values, options)
         }
         DataType::Duration(TimeUnit::Millisecond) => {
-            sort_native_type::<DurationMillisecondType, i64>(values, options)
+            sort_native_type::<DurationMillisecondType>(values, options)
         }
         DataType::Duration(TimeUnit::Microsecond) => {
-            sort_native_type::<DurationMicrosecondType, i64>(values, options)
+            sort_native_type::<DurationMicrosecondType>(values, options)
         }
         DataType::Duration(TimeUnit::Nanosecond) => {
-            sort_native_type::<DurationNanosecondType, i64>(values, options)
+            sort_native_type::<DurationNanosecondType>(values, options)
         }
         DataType::RunEndEncoded(_, _) => sort_run(values, options, None),
         _ => {
@@ -126,84 +124,27 @@ pub fn sort(
     }
 }
 
-fn compress_store<U>(input: *const U, mut output: *mut U, mask: u8) -> isize
-where
-    U: ArrowNativeType,
-{
-    let mut offset = 0;
-    if mask != 0 {
-        for i in 0..8 {
-            if (mask & (1 << i)) != 0 {
-                // This is safe since a valid bit i.e bit set to 1 indicates a valid value
-                unsafe {
-                    *output = *input.offset(i);
-                    offset += 1;
-                    output = output.offset(1);
-                }
-            }
-        }
-    }
-    offset
-}
-
-fn create_null_buffer(
-    valid_count: usize,
-    nulls_count: usize,
-    length: usize,
-    sort_options: SortOptions,
-) -> Option<Buffer> {
-    let null_capacity = (length / 8) + (length % 8 != 0) as usize;
-    let mut mutable_null_buffer = MutableBuffer::new(null_capacity * 8);
-    mutable_null_buffer.resize(null_capacity, 0);
-
-    let mutable_null_buffer_slice = mutable_null_buffer.as_slice_mut();
-
-    if valid_count > 0 {
-        let mut count = valid_count;
-        let mut index = 0;
-        if sort_options.nulls_first {
-            let remaining_nulls = nulls_count % 8;
-            index = nulls_count / 8;
-
-            if remaining_nulls != 0 {
-                let valid_values_count = min(8 - remaining_nulls, valid_count);
-                mutable_null_buffer_slice[index] =
-                    ((1 << valid_values_count) - 1) << remaining_nulls;
-                count -= valid_values_count;
-                index += 1;
-            }
-        }
-        while count >= 8 {
-            mutable_null_buffer_slice[index] = u8::MAX;
-            index += 1;
-            count -= 8;
-        }
-        if count != 0 {
-            mutable_null_buffer_slice[index] = (1 << count) - 1;
-        }
-    }
-
-    Some(mutable_null_buffer.into())
-}
-
-fn sort_native_type<T, U>(
+fn sort_native_type<T>(
     values: &dyn Array,
     options: Option<SortOptions>,
 ) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
-    U: ArrowNativeTypeOp,
+    <T as arrow_array::ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
 {
     let sort_options = options.unwrap_or_default();
-    let values = values.as_primitive::<T>();
+    let primitive_values = values.as_primitive::<T>();
 
-    let result_capacity = values.len() * std::mem::size_of::<U>();
+    let result_capacity = values.len()
+        * std::mem::size_of::<<T as arrow_array::ArrowPrimitiveType>::Native>();
     let mut mutable_buffer = MutableBuffer::new(result_capacity);
     mutable_buffer.resize(result_capacity, 0);
-    let mutable_slice: &mut [U] = mutable_buffer.typed_data_mut();
+
+    let mutable_slice =
+        mutable_buffer.typed_data_mut::<<T as arrow_array::ArrowPrimitiveType>::Native>();
 
     let array_data = values.to_data();
-    let input_values: &[U] = array_data.buffer(0);
+    let input_values = array_data.buffer(0);
 
     let mut null_bit_buffer = None;
 
@@ -212,30 +153,22 @@ where
 
     if values.null_count() > 0 {
         let nulls = array_data.nulls().unwrap();
-        let null_buffer = nulls.buffer().as_slice();
 
-        let mut mutable_slice_ptr = mutable_slice.as_mut_ptr();
-        let mut input_values_ptr = input_values.as_ptr();
+        let mut validity_buffer = BooleanBufferBuilder::new(values.len());
+        let values_slice;
 
         if sort_options.nulls_first {
-            // This is safe since the offset in in bounds
-            unsafe {
-                mutable_slice_ptr = mutable_slice_ptr.add(values.null_count());
-            }
+            values_slice = &mut mutable_slice[nulls_count..];
+            validity_buffer.append_n(nulls_count, false);
+            validity_buffer.append_n(valid_count, true);
+        } else {
+            values_slice = &mut mutable_slice[..valid_count];
+            validity_buffer.append_n(valid_count, true);
+            validity_buffer.append_n(nulls_count, false);
         }
 
-        // This is safe since we are in bounds
-        let values_slice =
-            unsafe { slice::from_raw_parts_mut(mutable_slice_ptr, valid_count) };
-
-        for mask in null_buffer {
-            let written_count =
-                compress_store::<U>(input_values_ptr, mutable_slice_ptr, *mask);
-            // This is safe as the offset increments are within bounds
-            unsafe {
-                input_values_ptr = input_values_ptr.offset(8);
-                mutable_slice_ptr = mutable_slice_ptr.offset(written_count);
-            }
+        for (write_index, index) in nulls.valid_indices().enumerate() {
+            values_slice[write_index] = primitive_values.value(index);
         }
 
         values_slice.sort_unstable_by(|a, b| a.compare(*b));
@@ -243,28 +176,19 @@ where
             values_slice.reverse();
         }
 
-        null_bit_buffer =
-            create_null_buffer(valid_count, nulls_count, values.len(), sort_options);
+        null_bit_buffer = Some(validity_buffer.finish().into());
     } else {
-        mutable_slice.copy_from_slice(input_values);
+        mutable_slice.copy_from_slice(&input_values[..values.len()]);
         mutable_slice.sort_unstable_by(|a, b| a.compare(*b));
         if sort_options.descending {
             mutable_slice.reverse();
         }
     }
-    // This is safe since data types match
-    let result_array = unsafe {
-        ArrayData::new_unchecked(
-            values.data_type().clone(),
-            values.len(),
-            Some(nulls_count),
-            null_bit_buffer,
-            0,
-            vec![mutable_buffer.into()],
-            vec![],
-        )
-    };
-    Ok(Arc::new(PrimitiveArray::<T>::from(result_array)))
+
+    let result_array = PrimitiveArray::<T>::new(mutable_buffer.into(), null_bit_buffer)
+        .with_data_type(values.data_type().clone());
+
+    Ok(Arc::new(result_array))
 }
 
 /// Sort the `ArrayRef` partially.
