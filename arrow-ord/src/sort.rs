@@ -59,13 +59,13 @@ pub fn sort(
     options: Option<SortOptions>,
 ) -> Result<ArrayRef, ArrowError> {
     downcast_primitive_array!(
-        values => return sort_native_type(values, options),
-        DataType::RunEndEncoded(_, _) => return sort_run(values, options, None),
+        values => sort_native_type(values, options),
+        DataType::RunEndEncoded(_, _) => sort_run(values, options, None),
         _ => {
             let indices = sort_to_indices(values, options, None)?;
-            return take(values, &indices, None)
+            take(values, &indices, None)
         }
-    );
+    )
 }
 
 fn sort_native_type<T>(
