@@ -22,6 +22,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_buffer::BooleanBufferBuilder;
 use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_data::ArrayDataBuilder;
@@ -57,11 +58,74 @@ pub fn sort(
     values: &dyn Array,
     options: Option<SortOptions>,
 ) -> Result<ArrayRef, ArrowError> {
-    if let DataType::RunEndEncoded(_, _) = values.data_type() {
-        return sort_run(values, options, None);
+    downcast_primitive_array!(
+        values => sort_native_type(values, options),
+        DataType::RunEndEncoded(_, _) => sort_run(values, options, None),
+        _ => {
+            let indices = sort_to_indices(values, options, None)?;
+            take(values, &indices, None)
+        }
+    )
+}
+
+fn sort_native_type<T>(
+    primitive_values: &PrimitiveArray<T>,
+    options: Option<SortOptions>,
+) -> Result<ArrayRef, ArrowError>
+where
+    T: ArrowPrimitiveType,
+{
+    let sort_options = options.unwrap_or_default();
+
+    let mut mutable_buffer = vec![T::default_value(); primitive_values.len()];
+    let mutable_slice = &mut mutable_buffer;
+
+    let input_values = primitive_values.values().as_ref();
+
+    let nulls_count = primitive_values.null_count();
+    let valid_count = primitive_values.len() - nulls_count;
+
+    let null_bit_buffer = match nulls_count > 0 {
+        true => {
+            let mut validity_buffer = BooleanBufferBuilder::new(primitive_values.len());
+            if sort_options.nulls_first {
+                validity_buffer.append_n(nulls_count, false);
+                validity_buffer.append_n(valid_count, true);
+            } else {
+                validity_buffer.append_n(valid_count, true);
+                validity_buffer.append_n(nulls_count, false);
+            }
+            Some(validity_buffer.finish().into())
+        }
+        false => None,
+    };
+
+    if let Some(nulls) = primitive_values.nulls().filter(|n| n.null_count() > 0) {
+        let values_slice = match sort_options.nulls_first {
+            true => &mut mutable_slice[nulls_count..],
+            false => &mut mutable_slice[..valid_count],
+        };
+
+        for (write_index, index) in nulls.valid_indices().enumerate() {
+            values_slice[write_index] = primitive_values.value(index);
+        }
+
+        values_slice.sort_unstable_by(|a, b| a.compare(*b));
+        if sort_options.descending {
+            values_slice.reverse();
+        }
+    } else {
+        mutable_slice.copy_from_slice(input_values);
+        mutable_slice.sort_unstable_by(|a, b| a.compare(*b));
+        if sort_options.descending {
+            mutable_slice.reverse();
+        }
     }
-    let indices = sort_to_indices(values, options, None)?;
-    take(values, &indices, None)
+
+    Ok(Arc::new(
+        PrimitiveArray::<T>::new(mutable_buffer.into(), null_bit_buffer)
+            .with_data_type(primitive_values.data_type().clone()),
+    ))
 }
 
 /// Sort the `ArrayRef` partially.
