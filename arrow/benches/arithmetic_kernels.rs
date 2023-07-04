@@ -19,7 +19,7 @@ use criterion::*;
 
 extern crate arrow;
 
-use arrow::compute::kernels::operation::*;
+use arrow::compute::kernels::numeric::*;
 use arrow::datatypes::Float32Type;
 use arrow::util::bench_util::*;
 use arrow_array::Scalar;
