@@ -457,17 +457,17 @@ impl TimestampSecondType {
         timestamp: <TimestampSecondType as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> Result<<TimestampSecondType as ArrowPrimitiveType>::Native, ArrowError> {
-        let (days, ms) = IntervalDayTimeType::to_parts(-delta);
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = NaiveDateTime::from_timestamp_opt(timestamp, 0).ok_or_else(|| {
             ArrowError::ComputeError("Timestamp out of range".to_string())
         })?;
         let res = res
-            .checked_add_signed(Duration::days(days as i64))
+            .checked_sub_signed(Duration::days(days as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
         let res = res
-            .checked_add_signed(Duration::microseconds(ms as i64))
+            .checked_sub_signed(Duration::milliseconds(ms as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
@@ -491,12 +491,12 @@ impl TimestampSecondType {
         })?;
         let res = shift_months(res, -months);
         let res = res
-            .checked_add_signed(Duration::days(-days as i64))
+            .checked_sub_signed(Duration::days(days as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
         let res = res
-            .checked_add_signed(Duration::nanoseconds(-nanos))
+            .checked_sub_signed(Duration::nanoseconds(nanos))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
@@ -616,17 +616,17 @@ impl TimestampMicrosecondType {
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> Result<<TimestampMicrosecondType as ArrowPrimitiveType>::Native, ArrowError>
     {
-        let (days, ms) = IntervalDayTimeType::to_parts(-delta);
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = NaiveDateTime::from_timestamp_micros(timestamp).ok_or_else(|| {
             ArrowError::ComputeError("Timestamp out of range".to_string())
         })?;
         let res = res
-            .checked_add_signed(Duration::days(days as i64))
+            .checked_sub_signed(Duration::days(days as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
         let res = res
-            .checked_add_signed(Duration::milliseconds(ms as i64))
+            .checked_sub_signed(Duration::milliseconds(ms as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
@@ -651,12 +651,12 @@ impl TimestampMicrosecondType {
         })?;
         let res = shift_months(res, -months);
         let res = res
-            .checked_add_signed(Duration::days(-days as i64))
+            .checked_sub_signed(Duration::days(days as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
         let res = res
-            .checked_add_signed(Duration::nanoseconds(-nanos))
+            .checked_sub_signed(Duration::nanoseconds(nanos))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
@@ -776,17 +776,17 @@ impl TimestampMillisecondType {
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> Result<<TimestampMillisecondType as ArrowPrimitiveType>::Native, ArrowError>
     {
-        let (days, ms) = IntervalDayTimeType::to_parts(-delta);
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = NaiveDateTime::from_timestamp_millis(timestamp).ok_or_else(|| {
             ArrowError::ComputeError("Timestamp out of range".to_string())
         })?;
         let res = res
-            .checked_add_signed(Duration::days(days as i64))
+            .checked_sub_signed(Duration::days(days as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
         let res = res
-            .checked_add_signed(Duration::milliseconds(ms as i64))
+            .checked_sub_signed(Duration::milliseconds(ms as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
@@ -811,12 +811,12 @@ impl TimestampMillisecondType {
         })?;
         let res = shift_months(res, -months);
         let res = res
-            .checked_add_signed(Duration::days(-days as i64))
+            .checked_sub_signed(Duration::days(days as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
         let res = res
-            .checked_add_signed(Duration::nanoseconds(-nanos))
+            .checked_sub_signed(Duration::nanoseconds(nanos))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
@@ -946,14 +946,14 @@ impl TimestampNanosecondType {
             || ArrowError::ComputeError("Timestamp out of range".to_string()),
         )?;
 
-        let (days, ms) = IntervalDayTimeType::to_parts(-delta);
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = res
-            .checked_add_signed(Duration::days(days as i64))
+            .checked_sub_signed(Duration::days(days as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
         let res = res
-            .checked_add_signed(Duration::milliseconds(ms as i64))
+            .checked_sub_signed(Duration::milliseconds(ms as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
@@ -980,12 +980,12 @@ impl TimestampNanosecondType {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = shift_months(res, -months);
         let res = res
-            .checked_add_signed(Duration::days(-days as i64))
+            .checked_sub_signed(Duration::days(days as i64))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
         let res = res
-            .checked_add_signed(Duration::nanoseconds(-nanos))
+            .checked_sub_signed(Duration::nanoseconds(nanos))
             .ok_or_else(|| {
                 ArrowError::ComputeError("Timestamp out of range".to_string())
             })?;
@@ -1206,10 +1206,10 @@ impl Date32Type {
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
-        let (days, ms) = IntervalDayTimeType::to_parts(-delta);
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = Date32Type::to_naive_date(date);
-        let res = res.add(Duration::days(days as i64));
-        let res = res.add(Duration::milliseconds(ms as i64));
+        let res = res.sub(Duration::days(days as i64));
+        let res = res.sub(Duration::milliseconds(ms as i64));
         Date32Type::from_naive_date(res)
     }
 
@@ -1226,8 +1226,8 @@ impl Date32Type {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date32Type::to_naive_date(date);
         let res = shift_months(res, -months);
-        let res = res.add(Duration::days(-days as i64));
-        let res = res.add(Duration::nanoseconds(-nanos));
+        let res = res.sub(Duration::days(days as i64));
+        let res = res.sub(Duration::nanoseconds(nanos));
         Date32Type::from_naive_date(res)
     }
 }
@@ -1330,10 +1330,10 @@ impl Date64Type {
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
-        let (days, ms) = IntervalDayTimeType::to_parts(-delta);
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = Date64Type::to_naive_date(date);
-        let res = res.add(Duration::days(days as i64));
-        let res = res.add(Duration::milliseconds(ms as i64));
+        let res = res.sub(Duration::days(days as i64));
+        let res = res.sub(Duration::milliseconds(ms as i64));
         Date64Type::from_naive_date(res)
     }
 
@@ -1350,8 +1350,8 @@ impl Date64Type {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date64Type::to_naive_date(date);
         let res = shift_months(res, -months);
-        let res = res.add(Duration::days(-days as i64));
-        let res = res.add(Duration::nanoseconds(-nanos));
+        let res = res.sub(Duration::days(days as i64));
+        let res = res.sub(Duration::nanoseconds(nanos));
         Date64Type::from_naive_date(res)
     }
 }
