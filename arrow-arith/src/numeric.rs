@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines numeric kernels on PrimitiveArray
+//! Defines numeric arithmetic kernels on [`PrimitiveArray`], such as [`add`]
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -33,7 +33,7 @@ pub fn add(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     arithmetic_op(Op::Add, lhs, rhs)
 }
 
-/// Perform `lhs + rhs`, wrapping on overflow for integers
+/// Perform `lhs + rhs`, wrapping on overflow for [`DataType::is_integer`]
 pub fn add_wrapping(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     arithmetic_op(Op::AddWrapping, lhs, rhs)
 }
@@ -43,7 +43,7 @@ pub fn sub(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     arithmetic_op(Op::Sub, lhs, rhs)
 }
 
-/// Perform `lhs - rhs`, wrapping on overflow for integers
+/// Perform `lhs - rhs`, wrapping on overflow for [`DataType::is_integer`]
 pub fn sub_wrapping(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     arithmetic_op(Op::SubWrapping, lhs, rhs)
 }
@@ -53,7 +53,7 @@ pub fn mul(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     arithmetic_op(Op::Mul, lhs, rhs)
 }
 
-/// Perform `lhs * rhs`, wrapping on overflow for integers
+/// Perform `lhs * rhs`, wrapping on overflow for [`DataType::is_integer`]
 pub fn mul_wrapping(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     arithmetic_op(Op::MulWrapping, lhs, rhs)
 }
