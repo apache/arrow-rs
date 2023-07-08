@@ -517,6 +517,15 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Self::try_new(values, nulls).unwrap()
     }
 
+    /// Create a new [`PrimitiveArray`] of the given length where all values are null
+    pub fn new_null(length: usize) -> Self {
+        Self {
+            data_type: T::DATA_TYPE,
+            values: vec![T::Native::usize_as(0); length].into(),
+            nulls: Some(NullBuffer::new_null(length)),
+        }
+    }
+
     /// Create a new [`PrimitiveArray`] from the provided values and nulls
     ///
     /// # Errors

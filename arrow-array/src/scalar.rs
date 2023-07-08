@@ -92,6 +92,12 @@ impl Datum for dyn Array {
     }
 }
 
+impl Datum for &dyn Array {
+    fn get(&self) -> (&dyn Array, bool) {
+        (*self, false)
+    }
+}
+
 /// A wrapper around a single value [`Array`] indicating kernels should treat it as a scalar value
 ///
 /// See [`Datum`] for more information
