@@ -801,9 +801,7 @@ pub fn cast_with_options(
             ))),
         },
         (List(_), List(ref to)) => {
-            // cast_list::<i32>(array, to.data_type(), to, to_type, cast_options)
-            cast_list_v2::<i32>(array, to.data_type(), to, to_type, cast_options)
-            // cast_list_inner::<i32>(array, to, to_type, cast_options)
+            cast_list::<i32>(array, to, to_type, cast_options)
         }
         (LargeList(_), LargeList(ref to)) => {
             cast_list_inner::<i64>(array, to, to_type, cast_options)
@@ -3683,15 +3681,13 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
     Ok(list_array)
 }
 
-fn build_list_array_with_data_type<OffsetSize: OffsetSizeTrait>(array: &dyn Array, data_type: &DataType) -> ArrayRef {
-    let array_len = array.len() as i32;
+fn build_list_array_with_data_type<OffsetSize: OffsetSizeTrait>(
+    array: &dyn Array,
+    data_type: &DataType,
+) -> Result<ArrayRef, ArrowError> {
+    let array_len = array.len();
     let data = array.to_data();
 
-    // let builder = data.clone()
-    //     .into_builder()
-    //     .buffers(vec![Buffer::from_slice_ref([0, array_len])])
-    //     .data_type(data_type.clone())
-    //     .child_data(vec![data.clone()]);
     let builder = if std::mem::size_of::<OffsetSize>() == std::mem::size_of::<i32>() {
         data.clone()
             .into_builder()
@@ -3709,93 +3705,29 @@ fn build_list_array_with_data_type<OffsetSize: OffsetSizeTrait>(array: &dyn Arra
     // Safety
     // Data was valid before
     let array_data = unsafe { builder.build_unchecked() };
-    let list = GenericListArray::<i32>::from(array_data);
-    Arc::new(list) as ArrayRef
-}
-
-/// Helper function that casts an Generic list container
-fn cast_list_v2<OffsetSize: OffsetSizeTrait>(
-    array: &dyn Array,
-    inner_type: &DataType,
-    to_type_field: &Field,
-    to_type: &DataType,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    match to_type_field.data_type() {
-        DataType::List(inner_field) => {
-            let array = cast_list_v2::<OffsetSize>(
-                array,
-                inner_field.data_type(),
-                inner_field,
-                to_type_field.data_type(),
-                cast_options,
-            )?;
-
-            let array_len = array.len();
-            let data = array.to_data();
-            let builder = if std::mem::size_of::<OffsetSize>() == std::mem::size_of::<i32>() {
-                data.clone()
-                    .into_builder()
-                    .buffers(vec![Buffer::from_slice_ref([0, array_len as i32])])
-                    .data_type(to_type.clone())
-                    .child_data(vec![data.clone()])
-            } else {
-                data.clone()
-                    .into_builder()
-                    .buffers(vec![Buffer::from_slice_ref([0, array_len as i64])])
-                    .data_type(to_type.clone())
-                    .child_data(vec![data.clone()])
-            };
-
-            // Safety
-            // Data was valid before
-            let array_data = unsafe { builder.build_unchecked() };
-            let list_array = GenericListArray::<OffsetSize>::from(array_data);
-            Ok(Arc::new(list_array) as ArrayRef)
-        }
-        _ => {
-            cast_list_inner::<OffsetSize>(array, to_type_field, to_type, cast_options)
-        }
-    }
+    let list = GenericListArray::<OffsetSize>::from(array_data);
+    Ok(Arc::new(list) as ArrayRef)
 }
 
 /// Helper function that casts an Generic list container
 fn cast_list<OffsetSize: OffsetSizeTrait>(
     array: &dyn Array,
-    inner_type: &DataType,
-    inner_field: &Field,
+    to: &Field,
     to_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    match inner_type {
-        DataType::List(_) =>{
-            let array_len = array.len();
-            let data = array.to_data();
-            let builder = if std::mem::size_of::<OffsetSize>() == std::mem::size_of::<i32>() {
-                data.clone()
-                    .into_builder()
-                    .buffers(vec![Buffer::from_slice_ref([0, array_len as i32])])
-                    .data_type(to_type.clone())
-                    .child_data(vec![data.clone()])
-            } else {
-                data.clone()
-                    .into_builder()
-                    .buffers(vec![Buffer::from_slice_ref([0, array_len as i64])])
-                    .data_type(to_type.clone())
-                    .child_data(vec![data.clone()])
-            };
+    match to.data_type() {
+        DataType::List(inner_field) => {
+            let array = cast_list::<OffsetSize>(
+                array,
+                inner_field,
+                to.data_type(),
+                cast_options,
+            )?;
 
-            // Safety
-            // Data was valid before
-            let array_data = unsafe { builder.build_unchecked() };
-            let list_array = GenericListArray::<OffsetSize>::from(array_data);
-            let array = Arc::new(list_array) as ArrayRef;
-            cast_list_inner::<OffsetSize>(&array, inner_field, to_type, cast_options)
-            // cast_list(array, inner_type, inner_field, to_type, cast_options)
+            build_list_array_with_data_type::<OffsetSize>(array.as_ref(), to_type)
         }
-        _ => {
-            cast_list_inner::<OffsetSize>(array, inner_field, to_type, cast_options)
-        }
+        _ => cast_list_inner::<OffsetSize>(array, to, to_type, cast_options),
     }
 }
 
@@ -3806,12 +3738,11 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
     to_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-
     let data = array.to_data();
     let underlying_array = make_array(data.child_data()[0].clone());
     let cast_array =
         cast_with_options(underlying_array.as_ref(), to.data_type(), cast_options)?;
-    println!("cast_array: {:?}", cast_array);
+        
     let builder = data
         .into_builder()
         .data_type(to_type.clone())
@@ -8204,9 +8135,8 @@ mod tests {
         assert_eq!(strs, &["b", "c"])
     }
 
-
     #[test]
-    fn test_list_casting_1d_to_2d() {
+    fn test_list_casting_1d_to_2d() -> Result<(), ArrowError> {
         let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
         let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
 
@@ -8218,13 +8148,15 @@ mod tests {
         )));
 
         let casted_list_array = cast(&list_array, &to_type).unwrap();
-        let expected_list_array = build_list_array_with_data_type::<i32>(&list_array, &to_type);
+        let expected_list_array =
+            build_list_array_with_data_type::<i32>(&list_array, &to_type)?;
 
         assert_eq!(&expected_list_array, &casted_list_array);
+        Ok(())
     }
 
     #[test]
-    fn test_list_casting_1d_to_3d() {
+    fn test_list_casting_1d_to_3d() -> Result<(), ArrowError> {
         let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
         let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
 
@@ -8236,19 +8168,19 @@ mod tests {
         )));
 
         // 3d list
-        let to_3d_list = DataType::List(Arc::new(Field::new(
-            "item",
-            to_2d_list.clone(),
-            true,
-        )));
+        let to_3d_list =
+            DataType::List(Arc::new(Field::new("item", to_2d_list.clone(), true)));
 
         let casted_list_array = cast(&list_array, &to_3d_list).unwrap();
 
-        let list_array_2d = build_list_array_with_data_type::<i32>(&list_array, &to_2d_list);
+        let list_array_2d =
+            build_list_array_with_data_type::<i32>(&list_array, &to_2d_list)?;
 
-        let expected_list_array = build_list_array_with_data_type::<i32>(&list_array_2d, &to_3d_list);
+        let expected_list_array =
+            build_list_array_with_data_type::<i32>(&list_array_2d, &to_3d_list)?;
 
         assert_eq!(&expected_list_array, &casted_list_array);
+        Ok(())
     }
 
     #[test]
