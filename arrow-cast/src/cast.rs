@@ -3690,12 +3690,14 @@ fn build_list_array_with_data_type<OffsetSize: OffsetSizeTrait>(
     let builder = if std::mem::size_of::<OffsetSize>() == std::mem::size_of::<i32>() {
         data.clone()
             .into_builder()
+            .len(1)
             .buffers(vec![Buffer::from_slice_ref([0, array_len as i32])])
             .data_type(data_type.clone())
             .child_data(vec![data])
     } else {
         data.clone()
             .into_builder()
+            .len(1)
             .buffers(vec![Buffer::from_slice_ref([0, array_len as i64])])
             .data_type(data_type.clone())
             .child_data(vec![data])
@@ -8192,6 +8194,30 @@ mod tests {
         let casted_list_array = cast(&list_array, &to_2d_list).unwrap();
         let expected_list_array =
             build_list_array_with_data_type::<i64>(&list_array, &to_2d_list)?;
+        assert_eq!(&expected_list_array, &casted_list_array);
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_column_casting() -> Result<(), ArrowError> {
+        let data = vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5)]),
+            Some(vec![Some(6)]),
+        ];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        // 2d list
+        let to_2d_list = DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        )));
+
+        // Verify 1d to 2d
+        let casted_list_array = cast(&list_array, &to_2d_list).unwrap();
+        let expected_list_array =
+            build_list_array_with_data_type::<i32>(&list_array, &to_2d_list)?;
         assert_eq!(&expected_list_array, &casted_list_array);
         Ok(())
     }
