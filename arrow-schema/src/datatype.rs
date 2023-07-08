@@ -407,6 +407,19 @@ impl DataType {
         }
     }
 
+    /// Returns the number of dimensions if the data type is nested (List, FixedSizeList, LargeList).
+    /// Otherwise, returns 0.
+    pub fn get_list_ndims(&self) -> u8 {
+        use DataType::*;
+
+        match self {
+            List(field) | FixedSizeList(field, _) | LargeList(field) => {
+                DataType::get_list_ndims(field.data_type()) + 1
+            }
+            _ => 0,
+        }
+    }
+
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
     pub fn equals_datatype(&self, other: &DataType) -> bool {
@@ -647,6 +660,18 @@ mod tests {
         let deserialized = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(person, deserialized);
+    }
+
+    #[test]
+    fn test_list_ndims() {
+        let list = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert_eq!(list.get_list_ndims(), 1);
+        let list = DataType::List(Arc::new(Field::new("item", list, true)));
+        assert_eq!(list.get_list_ndims(), 2);
+        let list = DataType::List(Arc::new(Field::new("item", list, true)));
+        assert_eq!(list.get_list_ndims(), 3);
+        let dtype_int64 = DataType::Int64;
+        assert_eq!(dtype_int64.get_list_ndims(), 0);
     }
 
     #[test]
