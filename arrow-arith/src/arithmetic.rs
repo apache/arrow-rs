@@ -1315,7 +1315,7 @@ mod tests {
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2023, 3, 27).unwrap())
+            Date32Type::from_naive_date(NaiveDate::from_ymd_opt(2023, 3, 28).unwrap())
         );
     }
 
@@ -1362,7 +1362,7 @@ mod tests {
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
             c.value(0),
-            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2023, 3, 27).unwrap())
+            Date64Type::from_naive_date(NaiveDate::from_ymd_opt(2023, 3, 28).unwrap())
         );
     }
 
