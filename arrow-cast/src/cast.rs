@@ -740,6 +740,7 @@ pub fn cast_with_options(
     if from_type == to_type {
         return Ok(make_array(array.to_data()));
     }
+    println!("cast_with_options: {:?} -> {:?}", from_type, to_type);
     match (from_type, to_type) {
         (
             Null,
@@ -800,7 +801,10 @@ pub fn cast_with_options(
             ))),
         },
         (List(_), List(ref to)) => {
-            cast_list_inner::<i32>(array, to, to_type, cast_options)
+            println!("to: {:?}", to);
+
+            cast_list::<i32>(array, to.data_type(), to, to_type, cast_options)
+            // cast_list_inner::<i32>(array, to, to_type, cast_options)
         }
         (LargeList(_), LargeList(ref to)) => {
             cast_list_inner::<i64>(array, to, to_type, cast_options)
@@ -3680,6 +3684,66 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
     Ok(list_array)
 }
 
+/// Helper function that casts an Generic list container
+fn cast_list<OffsetSize: OffsetSizeTrait>(
+    array: &dyn Array,
+    inner_to_type: &DataType,
+    to: &Field,
+    to_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    match inner_to_type {
+        DataType::List(field) => {
+            println!("field: {:?}", field);
+            // let array_len = if std::mem::size_of::<OffsetSize>() == std::mem::size_of::<i32>() {
+            //     array.len() as i32
+            // } else {
+            //     array.len() as i64
+            // };
+            // let array_len = OffsetSize::from_usize(array.len()).unwrap();
+            let array_len = array.len();
+            println!("array_len: {:?}", array_len);
+            let data = array.to_data();
+            // let underlying_array = make_array(data.child_data()[0].clone());
+            // let cast_array =
+            //     cast_with_options(underlying_array.as_ref(), to.data_type(), cast_options)?;
+            // println!("cast_array: {:?}", cast_array);
+
+            let builder = if std::mem::size_of::<OffsetSize>() == std::mem::size_of::<i32>() {
+                data.clone()
+                    .into_builder()
+                    .buffers(vec![Buffer::from_slice_ref([0, array_len as i32])])
+                    .data_type(to_type.clone())
+                    .child_data(vec![data.clone()])
+            } else {
+                data.clone()
+                    .into_builder()
+                    .buffers(vec![Buffer::from_slice_ref([0, array_len as i64])])
+                    .data_type(to_type.clone())
+                    .child_data(vec![data.clone()])
+            };
+
+            // Safety
+            // Data was valid before
+            let array_data = unsafe { builder.build_unchecked() };
+            println!("data: {:?}", data);
+            println!("array_data: {:?}", array_data);
+            let list = GenericListArray::<OffsetSize>::from(array_data);
+            let list = Arc::new(list) as ArrayRef;
+
+            println!("list: {:?}", list);
+
+            cast_list_inner::<OffsetSize>(&list, to, to_type, cast_options)
+            
+
+        }
+        _ => {
+            // cast list inner
+            cast_list_inner::<OffsetSize>(array, to, to_type, cast_options)
+        }
+    }
+}
+
 /// Helper function that takes an Generic list container and casts the inner datatype.
 fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
     array: &dyn Array,
@@ -3687,10 +3751,12 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
     to_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
+
     let data = array.to_data();
     let underlying_array = make_array(data.child_data()[0].clone());
     let cast_array =
         cast_with_options(underlying_array.as_ref(), to.data_type(), cast_options)?;
+    println!("cast_array: {:?}", cast_array);
     let builder = data
         .into_builder()
         .data_type(to_type.clone())
@@ -8081,6 +8147,73 @@ mod tests {
         let large_str_array = out.as_any().downcast_ref::<LargeStringArray>().unwrap();
         let strs = large_str_array.into_iter().flatten().collect::<Vec<_>>();
         assert_eq!(strs, &["b", "c"])
+    }
+
+    #[test]
+    fn test_ndims_list_casting() {
+        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        // 2d list
+        let to_type = DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        )));
+
+        let casted_list_array = cast(&list_array, &to_type).unwrap();
+
+
+        let data = list_array.clone().to_data();
+        let array_len = data.len() as i32;
+        println!("array_len: {:?}", array_len);
+        let builder = data.clone()
+            .into_builder()
+            .buffers(vec![Buffer::from_slice_ref([0, array_len])])
+            .data_type(to_type.clone())
+            // .child_data(vec![casted_list_array.clone().into_data()]);
+            // .child_data(vec![casted_list_array.into_data()]);
+            // .child_data(vec![list_array.into_data()]);
+            .child_data(vec![data.clone()]);
+
+        // Safety
+        // Data was valid before
+        let array_data = unsafe { builder.build_unchecked() };
+        // println!("array_data: {:?}", array_data);
+        let list = GenericListArray::<i32>::from(array_data);
+        // println!("list: {:?}", list);
+        let expected_list_array = Arc::new(list) as ArrayRef;
+
+        println!("expected_list_array: {:?}", expected_list_array);
+        println!("casted_list_array: {:?}", casted_list_array);
+
+        // let data = vec![
+        //     vec![Some(vec![Some(1), Some(2), Some(3)])]
+        // ];
+        // let expected_list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+        // println!("{:?}", casted_list_array);
+
+    }
+
+    #[test]
+    fn test_ndims_list_casting_v2() {
+        let data = vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+        ];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        // 2d list
+        let to_type = DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        )));
+
+        let casted_list_array = cast(&list_array, &to_type).unwrap();
+
+        println!("{:?}", casted_list_array);
+
     }
 
     #[test]
