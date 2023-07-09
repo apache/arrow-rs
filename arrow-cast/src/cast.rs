@@ -49,7 +49,9 @@ use crate::parse::{
 use arrow_array::{
     builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *,
 };
-use arrow_buffer::{i256, ArrowNativeType, Buffer, MutableBuffer, ScalarBuffer};
+use arrow_buffer::{
+    i256, ArrowNativeType, Buffer, MutableBuffer, OffsetBuffer, ScalarBuffer,
+};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
@@ -3680,34 +3682,21 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
     Ok(list_array)
 }
 
-fn build_list_array_with_data_type<OffsetSize: OffsetSizeTrait>(
+/// Wraps a list array with another list array, using the specified `OffsetSize`.
+/// This function converts a dynamic array reference to a typed list array, creates a new list array
+/// with the same elements as the original array, and wraps it with another list array.
+fn wrap_list_array_with_another_one<OffsetSize: OffsetSizeTrait>(
     array: &dyn Array,
-    data_type: &DataType,
 ) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_list::<OffsetSize>();
+    let array_data_type = array.data_type();
+    let field = Arc::new(Field::new("item", array_data_type.clone(), true));
     let array_len = array.len();
-    let data = array.to_data();
-
-    let builder = if std::mem::size_of::<OffsetSize>() == std::mem::size_of::<i32>() {
-        data.clone()
-            .into_builder()
-            .len(1)
-            .buffers(vec![Buffer::from_slice_ref([0, array_len as i32])])
-            .data_type(data_type.clone())
-            .child_data(vec![data])
-    } else {
-        data.clone()
-            .into_builder()
-            .len(1)
-            .buffers(vec![Buffer::from_slice_ref([0, array_len as i64])])
-            .data_type(data_type.clone())
-            .child_data(vec![data])
-    };
-
-    // Safety
-    // Data was valid before
-    let array_data = unsafe { builder.build_unchecked() };
-    let list = GenericListArray::<OffsetSize>::from(array_data);
-    Ok(Arc::new(list) as ArrayRef)
+    let offsets = OffsetBuffer::<OffsetSize>::from_lengths([array_len]);
+    let values = Arc::new(array.clone()) as ArrayRef;
+    let new_list_array =
+        GenericListArray::<OffsetSize>::new(field, offsets, values, None);
+    Ok(Arc::new(new_list_array))
 }
 
 /// Helper function that casts an Generic list container
@@ -3726,7 +3715,7 @@ fn cast_list<OffsetSize: OffsetSizeTrait>(
                 cast_options,
             )?;
 
-            build_list_array_with_data_type::<OffsetSize>(array.as_ref(), to_type)
+            wrap_list_array_with_another_one::<OffsetSize>(array.as_ref())
         }
         _ => cast_list_inner::<OffsetSize>(array, to, to_type, cast_options),
     }
@@ -8154,16 +8143,14 @@ mod tests {
 
         // Verify 1d to 2d
         let casted_list_array = cast(&list_array, &to_2d_list).unwrap();
-        let expected_list_array =
-            build_list_array_with_data_type::<i32>(&list_array, &to_2d_list)?;
+        let expected_list_array = wrap_list_array_with_another_one::<i32>(&list_array)?;
         assert_eq!(&expected_list_array, &casted_list_array);
 
         // Verify 1d to 3d
         let casted_list_array = cast(&list_array, &to_3d_list).unwrap();
-        let list_array_2d =
-            build_list_array_with_data_type::<i32>(&list_array, &to_2d_list)?;
+        let list_array_2d = wrap_list_array_with_another_one::<i32>(&list_array)?;
         let expected_list_array =
-            build_list_array_with_data_type::<i32>(&list_array_2d, &to_3d_list)?;
+            wrap_list_array_with_another_one::<i32>(&list_array_2d)?;
         assert_eq!(&expected_list_array, &casted_list_array);
 
         // Verify 2d to 3d
@@ -8192,8 +8179,7 @@ mod tests {
 
         // Verify 1d to 2d
         let casted_list_array = cast(&list_array, &to_2d_list).unwrap();
-        let expected_list_array =
-            build_list_array_with_data_type::<i64>(&list_array, &to_2d_list)?;
+        let expected_list_array = wrap_list_array_with_another_one::<i64>(&list_array)?;
         assert_eq!(&expected_list_array, &casted_list_array);
         Ok(())
     }
@@ -8216,8 +8202,7 @@ mod tests {
 
         // Verify 1d to 2d
         let casted_list_array = cast(&list_array, &to_2d_list).unwrap();
-        let expected_list_array =
-            build_list_array_with_data_type::<i32>(&list_array, &to_2d_list)?;
+        let expected_list_array = wrap_list_array_with_another_one::<i32>(&list_array)?;
         assert_eq!(&expected_list_array, &casted_list_array);
         Ok(())
     }
