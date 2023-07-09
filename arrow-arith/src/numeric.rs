@@ -93,7 +93,7 @@ macro_rules! neg_wrapping {
 /// Perform `!array`, returning an error on overflow
 ///
 /// Note: negation of unsigned arrays is not supported and will return in an error,
-/// for wrapping unsigned negation consider using [`neg_wrapping`]
+/// for wrapping unsigned negation consider using [`neg_wrapping()`]
 pub fn neg(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     use DataType::*;
     use IntervalUnit::*;
