@@ -420,6 +420,18 @@ impl DataType {
         }
     }
 
+    /// Return the base type of a nested type (List, FixedSizeList, LargeList).
+    pub fn get_list_base_type(&self) -> &DataType {
+        use DataType::*;
+
+        match self {
+            List(field) | FixedSizeList(field, _) | LargeList(field) => {
+                DataType::get_list_base_type(field.data_type())
+            }
+            _ => self,
+        }
+    }
+
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
     pub fn equals_datatype(&self, other: &DataType) -> bool {
