@@ -3685,12 +3685,17 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
 /// Wraps a list array with another list array, using the specified `OffsetSize`.
 /// This function converts a dynamic array reference to a typed list array, creates a new list array
 /// with the same elements as the original array, and wraps it with another list array.
+///
+/// # Panics
+/// This function panics if the conversion from a higher-dimensional list array to a lower-dimensional list array is attempted.
+/// Only conversions from a lower-dimensional list array to a higher-dimensional list array are allowed.
 fn wrap_list_array_with_another_one<OffsetSize: OffsetSizeTrait>(
     array: &dyn Array,
+    // TODO: Remove this argument
+    to: &Field,
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_list::<OffsetSize>();
-    let array_data_type = array.data_type();
-    let field = Arc::new(Field::new("item", array_data_type.clone(), true));
+    let field = Arc::new(to.clone());
     let array_len = array.len();
     let offsets = OffsetBuffer::<OffsetSize>::from_lengths([array_len]);
     let values = Arc::new(array.clone()) as ArrayRef;
@@ -3715,7 +3720,7 @@ fn cast_list<OffsetSize: OffsetSizeTrait>(
                 cast_options,
             )?;
 
-            wrap_list_array_with_another_one::<OffsetSize>(array.as_ref())
+            wrap_list_array_with_another_one::<OffsetSize>(array.as_ref(), to)
         }
         _ => cast_list_inner::<OffsetSize>(array, to, to_type, cast_options),
     }
@@ -8126,31 +8131,86 @@ mod tests {
     }
 
     #[test]
+    fn test_wrap_list_array_with_another_one() -> Result<(), ArrowError> {
+        // Verify 1d to 2d
+        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+        let to = Field::new("item", list_array.data_type().clone(), true);
+        let array = Arc::new(list_array.clone()) as ArrayRef;
+        let array_2d = wrap_list_array_with_another_one::<i32>(&array, &to)?;
+        let list_array_2d = array_2d.as_list::<i32>();
+        let actual_list_array = list_array_2d.values().as_list::<i32>();
+        assert_eq!(&list_array, actual_list_array);
+        // Verify 2d to 3d
+        let to = Field::new("item", array_2d.data_type().clone(), true);
+        let array_3d = wrap_list_array_with_another_one::<i32>(&array_2d, &to)?;
+        let list_array_3d = array_3d.as_list::<i32>();
+        let actual_list_array_2d = list_array_3d.values().as_list::<i32>();
+        assert_eq!(list_array_2d, actual_list_array_2d);
+
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_wrap_list_array_with_another_one_error() {
+        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+        let to = Field::new("item", list_array.data_type().clone(), true);
+        let array = Arc::new(list_array.clone()) as ArrayRef;
+        let array_2d = wrap_list_array_with_another_one::<i32>(&array, &to).unwrap();
+
+        // Verify 2d to 1d should panic
+        let to = Field::new("item", list_array.data_type().clone(), true);
+        let list = wrap_list_array_with_another_one::<i32>(&array_2d, &to);
+        assert!(list.is_err());
+        list.unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot cast list to non-list data types")]
+    fn test_high_dim_list_to_low_dim_list() {
+        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+        let array = Arc::new(list_array.clone()) as ArrayRef;
+        let list_array_2d = wrap_list_array_with_another_one::<i32>(
+            &array,
+            &Field::new("item", list_array.data_type().clone(), true),
+        )
+        .unwrap();
+        let to_1d_list =
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        cast(&list_array_2d, &to_1d_list).unwrap();
+    }
+
+    #[test]
     fn test_list_casting() -> Result<(), ArrowError> {
         let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
         let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
 
         // 2d list
-        let to_2d_list = DataType::List(Arc::new(Field::new(
-            "item",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-            true,
-        )));
+        let to_2d_list_field =
+            Field::new_list("item", Field::new("item", DataType::Int32, true), true);
+
+        let to_2d_list = DataType::List(Arc::new(to_2d_list_field.clone()));
 
         // 3d list
-        let to_3d_list =
-            DataType::List(Arc::new(Field::new("item", to_2d_list.clone(), true)));
+        let to_3d_list_field = Field::new_list("item", to_2d_list_field.clone(), true);
+
+        let to_3d_list = DataType::List(Arc::new(to_3d_list_field.clone()));
 
         // Verify 1d to 2d
         let casted_list_array = cast(&list_array, &to_2d_list).unwrap();
-        let expected_list_array = wrap_list_array_with_another_one::<i32>(&list_array)?;
+        let expected_list_array =
+            wrap_list_array_with_another_one::<i32>(&list_array, &to_2d_list_field)?;
         assert_eq!(&expected_list_array, &casted_list_array);
 
         // Verify 1d to 3d
         let casted_list_array = cast(&list_array, &to_3d_list).unwrap();
-        let list_array_2d = wrap_list_array_with_another_one::<i32>(&list_array)?;
+        let list_array_2d =
+            wrap_list_array_with_another_one::<i32>(&list_array, &to_2d_list_field)?;
         let expected_list_array =
-            wrap_list_array_with_another_one::<i32>(&list_array_2d)?;
+            wrap_list_array_with_another_one::<i32>(&list_array_2d, &to_3d_list_field)?;
         assert_eq!(&expected_list_array, &casted_list_array);
 
         // Verify 2d to 3d
@@ -8171,15 +8231,17 @@ mod tests {
         let list_array = LargeListArray::from_iter_primitive::<Int32Type, _, _>(data);
 
         // 2d list
-        let to_2d_list = DataType::LargeList(Arc::new(Field::new(
+        let to_2d_list_field = Field::new_large_list(
             "item",
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true))),
+            Field::new("item", DataType::Int32, true),
             true,
-        )));
+        );
+        let to_2d_list = DataType::LargeList(Arc::new(to_2d_list_field.clone()));
 
         // Verify 1d to 2d
         let casted_list_array = cast(&list_array, &to_2d_list).unwrap();
-        let expected_list_array = wrap_list_array_with_another_one::<i64>(&list_array)?;
+        let expected_list_array =
+            wrap_list_array_with_another_one::<i64>(&list_array, &to_2d_list_field)?;
         assert_eq!(&expected_list_array, &casted_list_array);
         Ok(())
     }
@@ -8194,15 +8256,15 @@ mod tests {
         let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
 
         // 2d list
-        let to_2d_list = DataType::List(Arc::new(Field::new(
-            "item",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-            true,
-        )));
+        let to_2d_list_field =
+            Field::new_list("item", Field::new("item", DataType::Int32, true), true);
+
+        let to_2d_list = DataType::List(Arc::new(to_2d_list_field.clone()));
 
         // Verify 1d to 2d
         let casted_list_array = cast(&list_array, &to_2d_list).unwrap();
-        let expected_list_array = wrap_list_array_with_another_one::<i32>(&list_array)?;
+        let expected_list_array =
+            wrap_list_array_with_another_one::<i32>(&list_array, &to_2d_list_field)?;
         assert_eq!(&expected_list_array, &casted_list_array);
         Ok(())
     }
