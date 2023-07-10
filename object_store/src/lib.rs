@@ -270,6 +270,7 @@ use std::fmt::{Debug, Formatter};
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
+use std::sync::Arc;
 use tokio::io::AsyncWrite;
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp", feature = "http"))]
@@ -640,6 +641,7 @@ macro_rules! as_ref_impl {
     };
 }
 
+as_ref_impl!(Arc<dyn ObjectStore>);
 as_ref_impl!(Box<dyn ObjectStore>);
 
 /// Result of a list call that includes objects, prefixes (directories) and a
