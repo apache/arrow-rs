@@ -143,7 +143,11 @@ pub fn neg(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 .as_primitive::<IntervalMonthDayNanoType>()
                 .try_unary::<_, IntervalMonthDayNanoType, ArrowError>(|x| {
                 let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(x);
-                Ok(IntervalMonthDayNanoType::make_value(months, days, nanos))
+                Ok(IntervalMonthDayNanoType::make_value(
+                    months.neg_checked()?,
+                    days.neg_checked()?,
+                    nanos.neg_checked()?,
+                ))
             })?;
             Ok(Arc::new(a))
         }
@@ -825,10 +829,7 @@ mod tests {
             err,
             "Compute error: Overflow happened on: -9223372036854775808"
         );
-    }
 
-    #[test]
-    fn test_neg_decimal() {
         let a = Decimal128Array::from(vec![1, 3, -44, 2, 4])
             .with_precision_and_scale(9, 6)
             .unwrap();
@@ -856,6 +857,51 @@ mod tests {
                 i256::from_i128(-342),
                 i256::from_i128(4949),
                 i256::from_i128(-3),
+            ]
+        );
+
+        let a = IntervalYearMonthArray::from(vec![
+            IntervalYearMonthType::make_value(2, 4),
+            IntervalYearMonthType::make_value(2, -4),
+            IntervalYearMonthType::make_value(-3, -5),
+        ]);
+        let r = neg(&a).unwrap();
+        assert_eq!(
+            r.as_primitive::<IntervalYearMonthType>().values(),
+            &[
+                IntervalYearMonthType::make_value(-2, -4),
+                IntervalYearMonthType::make_value(-2, 4),
+                IntervalYearMonthType::make_value(3, 5),
+            ]
+        );
+
+        let a = IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(2, 4),
+            IntervalDayTimeType::make_value(2, -4),
+            IntervalDayTimeType::make_value(-3, -5),
+        ]);
+        let r = neg(&a).unwrap();
+        assert_eq!(
+            r.as_primitive::<IntervalDayTimeType>().values(),
+            &[
+                IntervalDayTimeType::make_value(-2, -4),
+                IntervalDayTimeType::make_value(-2, 4),
+                IntervalDayTimeType::make_value(3, 5),
+            ]
+        );
+
+        let a = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(2, 4, 5953394),
+            IntervalMonthDayNanoType::make_value(2, -4, -45839),
+            IntervalMonthDayNanoType::make_value(-3, -5, 6944),
+        ]);
+        let r = neg(&a).unwrap();
+        assert_eq!(
+            r.as_primitive::<IntervalMonthDayNanoType>().values(),
+            &[
+                IntervalMonthDayNanoType::make_value(-2, -4, -5953394),
+                IntervalMonthDayNanoType::make_value(-2, 4, 45839),
+                IntervalMonthDayNanoType::make_value(3, 5, -6944),
             ]
         );
     }
