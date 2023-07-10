@@ -742,6 +742,11 @@ mod tests {
         let b = Int16Array::from(vec![0]);
         let err = div(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
+
+        let a = Int16Array::from(vec![21]);
+        let b = Int16Array::from(vec![0]);
+        let err = rem(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
     }
 
     #[test]
@@ -1056,6 +1061,24 @@ mod tests {
         assert_eq!(result.as_primitive::<T>().values(), &[1004, 4389, -4187]);
         let result = sub(&a, &b).unwrap();
         assert_eq!(result.as_primitive::<T>().values(), &[996, 4399, -3701]);
+
+        let err = mul(&a, &b).unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid duration arithmetic operation"),
+            "{err}"
+        );
+
+        let err = div(&a, &b).unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid duration arithmetic operation"),
+            "{err}"
+        );
+
+        let err = rem(&a, &b).unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid duration arithmetic operation"),
+            "{err}"
+        );
 
         let a = PrimitiveArray::<T>::new(vec![i64::MAX].into(), None);
         let b = PrimitiveArray::<T>::new(vec![1].into(), None);
