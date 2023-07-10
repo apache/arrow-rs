@@ -18,6 +18,7 @@
 //! Defines numeric arithmetic kernels on [`PrimitiveArray`], such as [`add`]
 
 use std::cmp::Ordering;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
@@ -180,6 +181,18 @@ enum Op {
     Rem,
 }
 
+impl std::fmt::Display for Op {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Op::AddWrapping | Op::Add => write!(f, "+"),
+            Op::SubWrapping | Op::Sub => write!(f, "-"),
+            Op::MulWrapping | Op::Mul => write!(f, "*"),
+            Op::Div => write!(f, "/"),
+            Op::Rem => write!(f, "%"),
+        }
+    }
+}
+
 impl Op {
     fn commutative(&self) -> bool {
         matches!(self, Self::Add | Self::AddWrapping)
@@ -229,7 +242,7 @@ fn arithmetic_op(
                 arithmetic_op(op, rhs, lhs)
             }
             _ => Err(ArrowError::InvalidArgumentError(
-              format!("Invalid arithmetic operation: {l_t} {op:?} {r_t}")
+              format!("Invalid arithmetic operation: {l_t} {op} {r_t}")
             ))
         }
     }
@@ -433,7 +446,7 @@ fn timestamp_op<T: TimestampOp>(
         }
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Invalid timestamp arithmetic operation: {} {op:?} {}",
+                "Invalid timestamp arithmetic operation: {} {op} {}",
                 l.data_type(),
                 r.data_type()
             )))
@@ -555,7 +568,7 @@ fn interval_op<T: IntervalOp>(
         Op::Add | Op::AddWrapping => Ok(try_op_ref!(T, l, l_s, r, r_s, T::add(l, r))),
         Op::Sub | Op::SubWrapping => Ok(try_op_ref!(T, l, l_s, r, r_s, T::sub(l, r))),
         _ => Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid interval arithmetic operation: {} {op:?} {}",
+            "Invalid interval arithmetic operation: {} {op} {}",
             l.data_type(),
             r.data_type()
         ))),
@@ -575,7 +588,7 @@ fn duration_op<T: ArrowPrimitiveType>(
         Op::Add | Op::AddWrapping => Ok(try_op_ref!(T, l, l_s, r, r_s, l.add_checked(r))),
         Op::Sub | Op::SubWrapping => Ok(try_op_ref!(T, l, l_s, r, r_s, l.sub_checked(r))),
         _ => Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid duration arithmetic operation: {} {op:?} {}",
+            "Invalid duration arithmetic operation: {} {op} {}",
             l.data_type(),
             r.data_type()
         ))),
@@ -593,7 +606,6 @@ fn date_op<T: DateOp>(
     use DataType::*;
     use IntervalUnit::*;
 
-    // Note: interval arithmetic should account for timezones (#4457)
     let l = l.as_primitive::<T>();
     match (op, r.data_type()) {
         (Op::Add | Op::AddWrapping, Interval(YearMonth)) => {
@@ -624,7 +636,7 @@ fn date_op<T: DateOp>(
         }
 
         _ => Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid date arithmetic operation: {} {op:?} {}",
+            "Invalid date arithmetic operation: {} {op} {}",
             l.data_type(),
             r.data_type()
         ))),
@@ -661,8 +673,8 @@ fn decimal_op<T: DecimalType>(
                     .saturating_add(1)
                     .min(T::MAX_PRECISION);
 
-            let l_mul = T::Native::usize_as(10).pow_wrapping((result_scale - s1) as _);
-            let r_mul = T::Native::usize_as(10).pow_wrapping((result_scale - s2) as _);
+            let l_mul = T::Native::usize_as(10).pow_checked((result_scale - s1) as _)?;
+            let r_mul = T::Native::usize_as(10).pow_checked((result_scale - s2) as _)?;
 
             match op {
                 Op::Add | Op::AddWrapping => {
@@ -694,7 +706,7 @@ fn decimal_op<T: DecimalType>(
                 // SQL standard says that if the resulting scale of a multiply operation goes
                 // beyond the maximum, rounding is not acceptable and thus an error occurs
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "Output scale of {} {op:?} {} would exceed max scale of {}",
+                    "Output scale of {} {op} {} would exceed max scale of {}",
                     l.data_type(),
                     r.data_type(),
                     T::MAX_SCALE
@@ -717,13 +729,13 @@ fn decimal_op<T: DecimalType>(
 
             let (l_mul, r_mul) = match mul_pow.cmp(&0) {
                 Ordering::Greater => (
-                    T::Native::usize_as(10).pow_wrapping(mul_pow as _),
+                    T::Native::usize_as(10).pow_checked(mul_pow as _)?,
                     T::Native::ONE,
                 ),
                 Ordering::Equal => (T::Native::ONE, T::Native::ONE),
                 Ordering::Less => (
                     T::Native::ONE,
-                    T::Native::usize_as(10).pow_wrapping(mul_pow.neg_wrapping() as _),
+                    T::Native::usize_as(10).pow_checked(mul_pow.neg_wrapping() as _)?,
                 ),
             };
 
@@ -765,7 +777,9 @@ fn decimal_op<T: DecimalType>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::temporal_conversions::{as_date, as_datetime};
     use arrow_buffer::{i256, ScalarBuffer};
+    use chrono::{DateTime, NaiveDate};
 
     fn test_neg_primitive<T: ArrowPrimitiveType>(
         input: &[T::Native],
@@ -904,5 +918,508 @@ mod tests {
                 IntervalMonthDayNanoType::make_value(3, 5, -6944),
             ]
         );
+    }
+
+    #[test]
+    fn test_integer() {
+        let a = Int32Array::from(vec![4, 3, 5, -6, 100]);
+        let b = Int32Array::from(vec![6, 2, 5, -7, 3]);
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &Int32Array::from(vec![10, 5, 10, -13, 103])
+        );
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(result.as_ref(), &Int32Array::from(vec![-2, 1, 0, 1, 97]));
+        let result = div(&a, &b).unwrap();
+        assert_eq!(result.as_ref(), &Int32Array::from(vec![0, 1, 1, 0, 33]));
+        let result = mul(&a, &b).unwrap();
+        assert_eq!(result.as_ref(), &Int32Array::from(vec![24, 6, 25, 42, 300]));
+        let result = rem(&a, &b).unwrap();
+        assert_eq!(result.as_ref(), &Int32Array::from(vec![4, 1, 0, -6, 1]));
+
+        let a = Int8Array::from(vec![Some(2), None, Some(45)]);
+        let b = Int8Array::from(vec![Some(5), Some(3), None]);
+        let result = add(&a, &b).unwrap();
+        assert_eq!(result.as_ref(), &Int8Array::from(vec![Some(7), None, None]));
+
+        let a = UInt8Array::from(vec![56, 5, 3]);
+        let b = UInt8Array::from(vec![200, 2, 5]);
+        let err = add(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Compute error: Overflow happened on: 56 + 200");
+        let result = add_wrapping(&a, &b).unwrap();
+        assert_eq!(result.as_ref(), &UInt8Array::from(vec![0, 7, 8]));
+
+        let a = UInt8Array::from(vec![34, 5, 3]);
+        let b = UInt8Array::from(vec![200, 2, 5]);
+        let err = sub(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Compute error: Overflow happened on: 34 - 200");
+        let result = sub_wrapping(&a, &b).unwrap();
+        assert_eq!(result.as_ref(), &UInt8Array::from(vec![90, 3, 254]));
+
+        let a = UInt8Array::from(vec![34, 5, 3]);
+        let b = UInt8Array::from(vec![200, 2, 5]);
+        let err = mul(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Compute error: Overflow happened on: 34 * 200");
+        let result = mul_wrapping(&a, &b).unwrap();
+        assert_eq!(result.as_ref(), &UInt8Array::from(vec![144, 10, 15]));
+
+        let a = Int16Array::from(vec![i16::MIN]);
+        let b = Int16Array::from(vec![-1]);
+        let err = div(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Compute error: Overflow happened on: -32768 / -1");
+
+        let a = Int16Array::from(vec![21]);
+        let b = Int16Array::from(vec![0]);
+        let err = div(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
+
+        let a = Int16Array::from(vec![21]);
+        let b = Int16Array::from(vec![0]);
+        let err = rem(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
+    }
+
+    #[test]
+    fn test_float() {
+        let a = Float32Array::from(vec![1., f32::MAX, 6., -4., -1., 0.]);
+        let b = Float32Array::from(vec![1., f32::MAX, f32::MAX, -3., 45., 0.]);
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &Float32Array::from(vec![2., f32::INFINITY, f32::MAX, -7., 44.0, 0.])
+        );
+
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &Float32Array::from(vec![0., 0., f32::MIN, -1., -46., 0.])
+        );
+
+        let result = mul(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &Float32Array::from(vec![1., f32::INFINITY, f32::INFINITY, 12., -45., 0.])
+        );
+
+        let result = div(&a, &b).unwrap();
+        let r = result.as_primitive::<Float32Type>();
+        assert_eq!(r.value(0), 1.);
+        assert_eq!(r.value(1), 1.);
+        assert!(r.value(2) < f32::EPSILON);
+        assert_eq!(r.value(3), -4. / -3.);
+        assert!(r.value(5).is_nan());
+
+        let result = rem(&a, &b).unwrap();
+        let r = result.as_primitive::<Float32Type>();
+        assert_eq!(&r.values()[..5], &[0., 0., 6., -1., -1.]);
+        assert!(r.value(5).is_nan());
+    }
+
+    #[test]
+    fn test_decimal() {
+        // 0.015 7.842 -0.577 0.334 -0.078 0.003
+        let a = Decimal128Array::from(vec![15, 0, -577, 334, -78, 3])
+            .with_precision_and_scale(12, 3)
+            .unwrap();
+
+        // 5.4 0 -35.6 0.3 0.6 7.45
+        let b = Decimal128Array::from(vec![54, 34, -356, 3, 6, 745])
+            .with_precision_and_scale(12, 1)
+            .unwrap();
+
+        let result = add(&a, &b).unwrap();
+        assert_eq!(result.data_type(), &DataType::Decimal128(15, 3));
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().values(),
+            &[5415, 3400, -36177, 634, 522, 74503]
+        );
+
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(result.data_type(), &DataType::Decimal128(15, 3));
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().values(),
+            &[-5385, -3400, 35023, 34, -678, -74497]
+        );
+
+        let result = mul(&a, &b).unwrap();
+        assert_eq!(result.data_type(), &DataType::Decimal128(25, 4));
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().values(),
+            &[810, 0, 205412, 1002, -468, 2235]
+        );
+
+        let result = div(&a, &b).unwrap();
+        assert_eq!(result.data_type(), &DataType::Decimal128(17, 7));
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().values(),
+            &[27777, 0, 162078, 11133333, -1300000, 402]
+        );
+
+        let result = rem(&a, &b).unwrap();
+        assert_eq!(result.data_type(), &DataType::Decimal128(12, 3));
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().values(),
+            &[15, 0, -577, 34, -78, 3]
+        );
+
+        let a = Decimal128Array::from(vec![1])
+            .with_precision_and_scale(3, 3)
+            .unwrap();
+        let b = Decimal128Array::from(vec![1])
+            .with_precision_and_scale(37, 37)
+            .unwrap();
+        let err = mul(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Invalid argument error: Output scale of Decimal128(3, 3) * Decimal128(37, 37) would exceed max scale of 38");
+
+        let a = Decimal128Array::from(vec![1])
+            .with_precision_and_scale(3, -2)
+            .unwrap();
+        let err = add(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Compute error: Overflow happened on: 10 ^ 39");
+
+        let a = Decimal128Array::from(vec![10])
+            .with_precision_and_scale(3, -1)
+            .unwrap();
+        let err = add(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Compute error: Overflow happened on: 10 * 100000000000000000000000000000000000000");
+
+        let b = Decimal128Array::from(vec![0])
+            .with_precision_and_scale(1, 1)
+            .unwrap();
+        let err = div(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
+        let err = rem(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
+    }
+
+    fn test_timestamp_impl<T: TimestampOp>() {
+        let a = PrimitiveArray::<T>::new(vec![2000000, 434030324, 53943340].into(), None);
+        let b = PrimitiveArray::<T>::new(vec![329593, 59349, 694994].into(), None);
+
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(
+            result.as_primitive::<T::Duration>().values(),
+            &[1670407, 433970975, 53248346]
+        );
+
+        let r2 = add(&b, &result.as_ref()).unwrap();
+        assert_eq!(r2.as_ref(), &a);
+
+        let r3 = add(&result.as_ref(), &b).unwrap();
+        assert_eq!(r3.as_ref(), &a);
+
+        let format_array = |x: &dyn Array| -> Vec<String> {
+            x.as_primitive::<T>()
+                .values()
+                .into_iter()
+                .map(|x| as_datetime::<T>(*x).unwrap().to_string())
+                .collect()
+        };
+
+        let values = vec![
+            "1970-01-01T00:00:00Z",
+            "2010-04-01T04:00:20Z",
+            "1960-01-30T04:23:20Z",
+        ]
+        .into_iter()
+        .map(|x| {
+            T::make_value(DateTime::parse_from_rfc3339(x).unwrap().naive_utc()).unwrap()
+        })
+        .collect();
+
+        let a = PrimitiveArray::<T>::new(values, None);
+        let b = IntervalYearMonthArray::from(vec![
+            IntervalYearMonthType::make_value(5, 34),
+            IntervalYearMonthType::make_value(-2, 4),
+            IntervalYearMonthType::make_value(7, -4),
+        ]);
+        let r4 = add(&a, &b).unwrap();
+        assert_eq!(
+            &format_array(r4.as_ref()),
+            &[
+                "1977-11-01 00:00:00".to_string(),
+                "2008-08-01 04:00:20".to_string(),
+                "1966-09-30 04:23:20".to_string()
+            ]
+        );
+
+        let r5 = sub(&r4, &b).unwrap();
+        assert_eq!(r5.as_ref(), &a);
+
+        let b = IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(5, 454000),
+            IntervalDayTimeType::make_value(-34, 0),
+            IntervalDayTimeType::make_value(7, -4000),
+        ]);
+        let r6 = add(&a, &b).unwrap();
+        assert_eq!(
+            &format_array(r6.as_ref()),
+            &[
+                "1970-01-06 00:07:34".to_string(),
+                "2010-02-26 04:00:20".to_string(),
+                "1960-02-06 04:23:16".to_string()
+            ]
+        );
+
+        let r7 = sub(&r6, &b).unwrap();
+        assert_eq!(r7.as_ref(), &a);
+
+        let b = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(344, 34, -43_000_000_000),
+            IntervalMonthDayNanoType::make_value(-593, -33, 13_000_000_000),
+            IntervalMonthDayNanoType::make_value(5, 2, 493_000_000_000),
+        ]);
+        let r8 = add(&a, &b).unwrap();
+        assert_eq!(
+            &format_array(r8.as_ref()),
+            &[
+                "1998-10-04 23:59:17".to_string(),
+                "1960-09-29 04:00:33".to_string(),
+                "1960-07-02 04:31:33".to_string()
+            ]
+        );
+
+        let r9 = sub(&r8, &b).unwrap();
+        // Note: subtraction is not the inverse of addition for intervals
+        assert_eq!(
+            &format_array(r9.as_ref()),
+            &[
+                "1970-01-02 00:00:00".to_string(),
+                "2010-04-02 04:00:20".to_string(),
+                "1960-01-31 04:23:20".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_timestamp() {
+        test_timestamp_impl::<TimestampSecondType>();
+        test_timestamp_impl::<TimestampMillisecondType>();
+        test_timestamp_impl::<TimestampMicrosecondType>();
+        test_timestamp_impl::<TimestampNanosecondType>();
+    }
+
+    #[test]
+    fn test_interval() {
+        let a = IntervalYearMonthArray::from(vec![
+            IntervalYearMonthType::make_value(32, 4),
+            IntervalYearMonthType::make_value(32, 4),
+        ]);
+        let b = IntervalYearMonthArray::from(vec![
+            IntervalYearMonthType::make_value(-4, 6),
+            IntervalYearMonthType::make_value(-3, 23),
+        ]);
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &IntervalYearMonthArray::from(vec![
+                IntervalYearMonthType::make_value(28, 10),
+                IntervalYearMonthType::make_value(29, 27)
+            ])
+        );
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &IntervalYearMonthArray::from(vec![
+                IntervalYearMonthType::make_value(36, -2),
+                IntervalYearMonthType::make_value(35, -19)
+            ])
+        );
+
+        let a = IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(32, 4),
+            IntervalDayTimeType::make_value(32, 4),
+        ]);
+        let b = IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(-4, 6),
+            IntervalDayTimeType::make_value(-3, 23),
+        ]);
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &IntervalDayTimeArray::from(vec![
+                IntervalDayTimeType::make_value(28, 10),
+                IntervalDayTimeType::make_value(29, 27)
+            ])
+        );
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &IntervalDayTimeArray::from(vec![
+                IntervalDayTimeType::make_value(36, -2),
+                IntervalDayTimeType::make_value(35, -19)
+            ])
+        );
+        let a = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(32, 4, 4000000000000),
+            IntervalMonthDayNanoType::make_value(32, 4, 45463000000000000),
+        ]);
+        let b = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(-4, 6, 46000000000000),
+            IntervalMonthDayNanoType::make_value(-3, 23, 3564000000000000),
+        ]);
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &IntervalMonthDayNanoArray::from(vec![
+                IntervalMonthDayNanoType::make_value(28, 10, 50000000000000),
+                IntervalMonthDayNanoType::make_value(29, 27, 49027000000000000)
+            ])
+        );
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &IntervalMonthDayNanoArray::from(vec![
+                IntervalMonthDayNanoType::make_value(36, -2, -42000000000000),
+                IntervalMonthDayNanoType::make_value(35, -19, 41899000000000000)
+            ])
+        );
+        let a = IntervalMonthDayNanoArray::from(vec![i64::MAX as i128]);
+        let b = IntervalMonthDayNanoArray::from(vec![1]);
+        let err = add(&a, &b).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Compute error: Overflow happened on: 9223372036854775807 + 1"
+        );
+    }
+
+    fn test_duration_impl<T: ArrowPrimitiveType<Native = i64>>() {
+        let a = PrimitiveArray::<T>::new(vec![1000, 4394, -3944].into(), None);
+        let b = PrimitiveArray::<T>::new(vec![4, -5, -243].into(), None);
+
+        let result = add(&a, &b).unwrap();
+        assert_eq!(result.as_primitive::<T>().values(), &[1004, 4389, -4187]);
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(result.as_primitive::<T>().values(), &[996, 4399, -3701]);
+
+        let err = mul(&a, &b).unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid duration arithmetic operation"),
+            "{err}"
+        );
+
+        let err = div(&a, &b).unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid duration arithmetic operation"),
+            "{err}"
+        );
+
+        let err = rem(&a, &b).unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid duration arithmetic operation"),
+            "{err}"
+        );
+
+        let a = PrimitiveArray::<T>::new(vec![i64::MAX].into(), None);
+        let b = PrimitiveArray::<T>::new(vec![1].into(), None);
+        let err = add(&a, &b).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Compute error: Overflow happened on: 9223372036854775807 + 1"
+        );
+    }
+
+    #[test]
+    fn test_duration() {
+        test_duration_impl::<DurationSecondType>();
+        test_duration_impl::<DurationMillisecondType>();
+        test_duration_impl::<DurationMicrosecondType>();
+        test_duration_impl::<DurationNanosecondType>();
+    }
+
+    fn test_date_impl<T: ArrowPrimitiveType, F>(f: F)
+    where
+        F: Fn(NaiveDate) -> T::Native,
+        T::Native: TryInto<i64>,
+    {
+        let a = PrimitiveArray::<T>::new(
+            vec![
+                f(NaiveDate::from_ymd_opt(1979, 1, 30).unwrap()),
+                f(NaiveDate::from_ymd_opt(2010, 4, 3).unwrap()),
+                f(NaiveDate::from_ymd_opt(2008, 2, 29).unwrap()),
+            ]
+            .into(),
+            None,
+        );
+
+        let b = IntervalYearMonthArray::from(vec![
+            IntervalYearMonthType::make_value(34, 2),
+            IntervalYearMonthType::make_value(3, -3),
+            IntervalYearMonthType::make_value(-12, 4),
+        ]);
+
+        let format_array = |x: &dyn Array| -> Vec<String> {
+            x.as_primitive::<T>()
+                .values()
+                .into_iter()
+                .map(|x| {
+                    as_date::<T>((*x).try_into().ok().unwrap())
+                        .unwrap()
+                        .to_string()
+                })
+                .collect()
+        };
+
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            &format_array(result.as_ref()),
+            &[
+                "2013-03-30".to_string(),
+                "2013-01-03".to_string(),
+                "1996-06-29".to_string(),
+            ]
+        );
+        let result = sub(&result, &b).unwrap();
+        assert_eq!(result.as_ref(), &a);
+
+        let b = IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(34, 2),
+            IntervalDayTimeType::make_value(3, -3),
+            IntervalDayTimeType::make_value(-12, 4),
+        ]);
+
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            &format_array(result.as_ref()),
+            &[
+                "1979-03-05".to_string(),
+                "2010-04-06".to_string(),
+                "2008-02-17".to_string(),
+            ]
+        );
+        let result = sub(&result, &b).unwrap();
+        assert_eq!(result.as_ref(), &a);
+
+        let b = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(34, 2, -34353534),
+            IntervalMonthDayNanoType::make_value(3, -3, 2443),
+            IntervalMonthDayNanoType::make_value(-12, 4, 2323242423232),
+        ]);
+
+        let result = add(&a, &b).unwrap();
+        assert_eq!(
+            &format_array(result.as_ref()),
+            &[
+                "1981-12-02".to_string(),
+                "2010-06-30".to_string(),
+                "2007-03-04".to_string(),
+            ]
+        );
+        let result = sub(&result, &b).unwrap();
+        assert_eq!(
+            &format_array(result.as_ref()),
+            &[
+                "1979-01-31".to_string(),
+                "2010-04-02".to_string(),
+                "2008-02-29".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_date() {
+        test_date_impl::<Date32Type, _>(Date32Type::from_naive_date);
+        test_date_impl::<Date64Type, _>(Date64Type::from_naive_date);
     }
 }
