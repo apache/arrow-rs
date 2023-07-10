@@ -287,14 +287,18 @@ impl InMemory {
         Self::default()
     }
 
-    /// Creates a clone of the store
-    pub async fn clone(&self) -> Self {
+    /// Creates a fork of the store, with the current content copied into the
+    /// new store.
+    pub fn fork(&self) -> Self {
         let storage = self.storage.read();
-        let storage = storage.clone();
+        let storage = Arc::new(RwLock::new(storage.clone()));
+        Self { storage }
+    }
 
-        Self {
-            storage: Arc::new(RwLock::new(storage)),
-        }
+    /// Creates a clone of the store
+    #[deprecated(note = "Use fork() instead")]
+    pub async fn clone(&self) -> Self {
+        self.fork()
     }
 
     async fn entry(&self, location: &Path) -> Result<(Bytes, DateTime<Utc>)> {

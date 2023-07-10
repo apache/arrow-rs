@@ -841,9 +841,13 @@ pub fn eq_dyn_binary_scalar(
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => eq_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::FixedSizeBinary(_) => {
+            let left = left.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+            compare_op_scalar(left, |a| a == right)
+        }
         DataType::LargeBinary => eq_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
-            "eq_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+            "eq_dyn_binary_scalar only supports Binary / FixedSizeBinary / LargeBinary arrays".to_string(),
         )),
     }
 }
@@ -857,8 +861,12 @@ pub fn neq_dyn_binary_scalar(
     match left.data_type() {
         DataType::Binary => neq_binary_scalar(left.as_binary::<i32>(), right),
         DataType::LargeBinary => neq_binary_scalar(left.as_binary::<i64>(), right),
+        DataType::FixedSizeBinary(_) => {
+            let left = left.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+            compare_op_scalar(left, |a| a != right)
+        }
         _ => Err(ArrowError::ComputeError(
-            "neq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
+            "neq_dyn_binary_scalar only supports Binary / FixedSizeBinary / LargeBinary arrays"
                 .to_string(),
         )),
     }
@@ -4276,6 +4284,15 @@ mod tests {
             eq_dyn_binary_scalar(&large_array, scalar).unwrap(),
             expected
         );
+
+        let fsb_array = FixedSizeBinaryArray::try_from_iter(
+            vec![vec![0u8], vec![0u8], vec![0u8], vec![1u8]].into_iter(),
+        )
+        .unwrap();
+        let scalar = &[1u8];
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]);
+        assert_eq!(eq_dyn_binary_scalar(&fsb_array, scalar).unwrap(), expected);
     }
 
     #[test]
@@ -4293,6 +4310,15 @@ mod tests {
             neq_dyn_binary_scalar(&large_array, scalar).unwrap(),
             expected
         );
+
+        let fsb_array = FixedSizeBinaryArray::try_from_iter(
+            vec![vec![0u8], vec![0u8], vec![0u8], vec![1u8]].into_iter(),
+        )
+        .unwrap();
+        let scalar = &[1u8];
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]);
+        assert_eq!(neq_dyn_binary_scalar(&fsb_array, scalar).unwrap(), expected);
     }
 
     #[test]

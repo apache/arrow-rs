@@ -1001,6 +1001,7 @@ impl IntervalYearMonthType {
     ///
     /// * `years` - The number of years (+/-) represented in this interval
     /// * `months` - The number of months (+/-) represented in this interval
+    #[inline]
     pub fn make_value(
         years: i32,
         months: i32,
@@ -1015,6 +1016,7 @@ impl IntervalYearMonthType {
     /// # Arguments
     ///
     /// * `i` - The IntervalYearMonthType::Native to convert
+    #[inline]
     pub fn to_months(i: <IntervalYearMonthType as ArrowPrimitiveType>::Native) -> i32 {
         i
     }
@@ -1027,6 +1029,7 @@ impl IntervalDayTimeType {
     ///
     /// * `days` - The number of days (+/-) represented in this interval
     /// * `millis` - The number of milliseconds (+/-) represented in this interval
+    #[inline]
     pub fn make_value(
         days: i32,
         millis: i32,
@@ -1053,6 +1056,7 @@ impl IntervalDayTimeType {
     /// # Arguments
     ///
     /// * `i` - The IntervalDayTimeType to convert
+    #[inline]
     pub fn to_parts(
         i: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> (i32, i32) {
@@ -1070,6 +1074,7 @@ impl IntervalMonthDayNanoType {
     /// * `months` - The number of months (+/-) represented in this interval
     /// * `days` - The number of days (+/-) represented in this interval
     /// * `nanos` - The number of nanoseconds (+/-) represented in this interval
+    #[inline]
     pub fn make_value(
         months: i32,
         days: i32,
@@ -1098,6 +1103,7 @@ impl IntervalMonthDayNanoType {
     /// # Arguments
     ///
     /// * `i` - The IntervalMonthDayNanoType to convert
+    #[inline]
     pub fn to_parts(
         i: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> (i32, i32, i64) {

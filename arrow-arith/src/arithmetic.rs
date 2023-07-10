@@ -510,6 +510,7 @@ pub fn subtract_scalar_checked_dyn<T: ArrowNumericType>(
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `negate_checked` instead.
+#[deprecated(note = "Use arrow_arith::numeric::neg_wrapping")]
 pub fn negate<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
@@ -520,6 +521,7 @@ pub fn negate<T: ArrowNumericType>(
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use `negate` instead.
+#[deprecated(note = "Use arrow_arith::numeric::neg")]
 pub fn negate_checked<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
