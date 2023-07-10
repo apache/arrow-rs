@@ -287,16 +287,6 @@ impl InMemory {
         Self::default()
     }
 
-    /// Creates a clone of the store
-    pub fn clone(&self) -> Self {
-        let storage = self.storage.read();
-        let storage = storage.clone();
-
-        Self {
-            storage: Arc::new(RwLock::new(storage)),
-        }
-    }
-
     async fn entry(&self, location: &Path) -> Result<(Bytes, DateTime<Utc>)> {
         let storage = self.storage.read();
         let value = storage
@@ -307,6 +297,18 @@ impl InMemory {
             })?;
 
         Ok(value)
+    }
+}
+
+impl Clone for InMemory {
+    /// Creates a clone of the store
+    fn clone(&self) -> Self {
+        let storage = self.storage.read();
+        let storage = storage.clone();
+
+        Self {
+            storage: Arc::new(RwLock::new(storage)),
+        }
     }
 }
 
