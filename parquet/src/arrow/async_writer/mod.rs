@@ -120,7 +120,8 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
             &mut self.async_writer,
             self.buffer_size,
             false,
-        ).await
+        )
+        .await
     }
 
     /// Append [`KeyValue`] metadata in addition to those in [`WriterProperties`]
