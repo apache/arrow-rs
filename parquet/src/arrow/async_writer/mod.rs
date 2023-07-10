@@ -85,7 +85,8 @@ pub struct AsyncArrowWriter<W> {
 impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
     /// Try to create a new Async Arrow Writer.
     ///
-    /// `buffer_size` determines the initial size of the intermediate buffer.
+    /// `buffer_size` determines the number of bytes to buffer before flushing
+    /// to the underlying [`AsyncWrite`]
     ///
     /// The intermediate buffer will automatically be resized if necessary
     ///
@@ -119,7 +120,6 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
             &mut self.shared_buffer,
             &mut self.async_writer,
             self.buffer_size,
-            false,
         )
         .await
     }
@@ -138,7 +138,7 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         let metadata = self.sync_writer.close()?;
 
         // Force to flush the remaining data.
-        Self::try_flush(&mut self.shared_buffer, &mut self.async_writer, 0, true).await?;
+        Self::try_flush(&mut self.shared_buffer, &mut self.async_writer, 0).await?;
         self.async_writer.shutdown().await?;
 
         Ok(metadata)
@@ -150,10 +150,9 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         shared_buffer: &mut SharedBuffer,
         async_writer: &mut W,
         buffer_size: usize,
-        force: bool,
     ) -> Result<()> {
         let mut buffer = shared_buffer.buffer.try_lock().unwrap();
-        if !force && buffer.len() < buffer_size {
+        if buffer.is_empty() || buffer.len() < buffer_size {
             // no need to flush
             return Ok(());
         }
