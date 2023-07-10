@@ -288,7 +288,7 @@ impl InMemory {
     }
 
     /// Creates a clone of the store
-    pub async fn clone(&self) -> Self {
+    pub fn clone(&self) -> Self {
         let storage = self.storage.read();
         let storage = storage.clone();
 
