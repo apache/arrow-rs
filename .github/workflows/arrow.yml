@@ -175,6 +175,24 @@ jobs:
       - name: Build wasm32-wasi
         run: cargo build -p arrow --no-default-features --features=json,csv,ipc,simd,ffi --target wasm32-wasi
 
+  minimal:
+    name: Check Compilation with Minimal Versions
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: nightly
+      - name: Minimal Versions
+        run: cargo +nightly update -Z minimal-versions
+      - name: Check Compilation
+        run: cargo check
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
