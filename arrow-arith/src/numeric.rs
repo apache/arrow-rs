@@ -90,10 +90,10 @@ macro_rules! neg_wrapping {
     }};
 }
 
-/// Perform `!array`, returning an error on overflow
+/// Negates each element of  `array`, returning an error on overflow
 ///
 /// Note: negation of unsigned arrays is not supported and will return in an error,
-/// for wrapping unsigned negation consider using [`neg_wrapping()`]
+/// for wrapping unsigned negation consider using [`neg_wrapping`][neg_wrapping()]
 pub fn neg(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     use DataType::*;
     use IntervalUnit::*;
@@ -157,7 +157,7 @@ pub fn neg(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     }
 }
 
-/// Perform `!array`, wrapping on overflow for [`DataType::is_integer`]
+/// Negates each element of  `array`, wrapping on overflow for [`DataType::is_integer`]
 pub fn neg_wrapping(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     downcast_integer! {
         array.data_type() => (neg_wrapping, array),
