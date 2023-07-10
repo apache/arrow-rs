@@ -416,6 +416,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn box_test() {
+        let integration: Box<dyn ObjectStore> = Box::new(InMemory::new());
+
+        put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        stream_get(&integration).await;
+    }
+
+    #[tokio::test]
+    async fn arc_test() {
+        let integration: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+
+        put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        stream_get(&integration).await;
+    }
+
+    #[tokio::test]
     async fn unknown_length() {
         let integration = InMemory::new();
 
