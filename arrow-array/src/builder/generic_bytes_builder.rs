@@ -96,7 +96,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
         self.value_builder.append_slice(value.as_ref().as_ref());
-        self.null_buffer_builder.append(true);
+        self.null_buffer_builder.append_non_null();
         self.offsets_builder.append(self.next_offset());
     }
 
@@ -109,11 +109,51 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         };
     }
 
+    /// Appends a value into the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of [`Self::values_slice`] would exceed `T::Offset::MAX`
+    #[inline]
+    pub fn append_slice(&mut self, values: &[impl AsRef<T::Native>]) {
+        for value in values {
+            self.append_value(value);
+        }
+    }
+
+    /// Appends a value into the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `values` and `is_valid` have different lengths
+    /// Panics if the resulting length of [`Self::values_slice`] would exceed `T::Offset::MAX`
+    #[inline]
+    pub fn append_values(&mut self, values: &[impl AsRef<T::Native>], is_valid: &[bool]) {
+        assert_eq!(
+            values.len(),
+            is_valid.len(),
+            "Value and validity lengths must be equal"
+        );
+        for value in values {
+            self.value_builder.append_slice(value.as_ref().as_ref());
+            self.offsets_builder.append(self.next_offset());
+        }
+        self.null_buffer_builder.append_slice(is_valid);
+    }
+
     /// Append a null value into the builder.
     #[inline]
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append(false);
         self.offsets_builder.append(self.next_offset());
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        for _ in 0..n {
+            self.append_null();
+        }
     }
 
     /// Builds the [`GenericByteArray`] and reset this builder.
@@ -148,6 +188,11 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// Returns the current values buffer as a slice
     pub fn values_slice(&self) -> &[u8] {
         self.value_builder.as_slice()
+    }
+
+    /// Returns the current values buffer as a mutable slice
+    pub fn values_slice_mut(&mut self) -> &mut [u8] {
+        self.value_builder.as_slice_mut()
     }
 
     /// Returns the current offsets buffer as a slice
@@ -307,9 +352,7 @@ mod tests {
 
     fn _test_generic_binary_builder_all_nulls<O: OffsetSizeTrait>() {
         let mut builder = GenericBinaryBuilder::<O>::new();
-        builder.append_null();
-        builder.append_null();
-        builder.append_null();
+        builder.append_nulls(3);
         assert_eq!(3, builder.len());
         assert!(!builder.is_empty());
 
@@ -334,18 +377,14 @@ mod tests {
     fn _test_generic_binary_builder_reset<O: OffsetSizeTrait>() {
         let mut builder = GenericBinaryBuilder::<O>::new();
 
-        builder.append_value(b"hello");
-        builder.append_value(b"");
-        builder.append_null();
+        builder.append_values(&[b"hello", b"arrow", b"hello"], &[false, true, true]);
         builder.append_value(b"rust");
         builder.finish();
 
         assert!(builder.is_empty());
 
         builder.append_value(b"parquet");
-        builder.append_null();
-        builder.append_value(b"arrow");
-        builder.append_value(b"");
+        builder.append_values(&[b"hello", b"arrow", b"hello"], &[false, true, true]);
         let array = builder.finish();
 
         assert_eq!(4, array.len());
@@ -353,9 +392,9 @@ mod tests {
         assert_eq!(b"parquet", array.value(0));
         assert!(array.is_null(1));
         assert_eq!(b"arrow", array.value(2));
-        assert_eq!(b"", array.value(1));
+        assert_eq!(b"hello", array.value(1));
         assert_eq!(O::zero(), array.value_offsets()[0]);
-        assert_eq!(O::from_usize(7).unwrap(), array.value_offsets()[2]);
+        assert_eq!(O::from_usize(12).unwrap(), array.value_offsets()[2]);
         assert_eq!(O::from_usize(5).unwrap(), array.value_length(2));
     }
 
@@ -373,20 +412,19 @@ mod tests {
         let mut builder = GenericStringBuilder::<O>::new();
         let owned = "arrow".to_owned();
 
-        builder.append_value("hello");
-        builder.append_value("");
-        builder.append_value(&owned);
-        builder.append_null();
+        builder.append_slice(&["hello", "", &owned]);
+        builder.append_nulls(2);
         builder.append_option(Some("rust"));
         builder.append_option(None::<&str>);
         builder.append_option(None::<String>);
-        assert_eq!(7, builder.len());
+        assert_eq!(8, builder.len());
 
         assert_eq!(
             GenericStringArray::<O>::from(vec![
                 Some("hello"),
                 Some(""),
                 Some("arrow"),
+                None,
                 None,
                 Some("rust"),
                 None,
@@ -409,16 +447,14 @@ mod tests {
     fn _test_generic_string_array_builder_finish<O: OffsetSizeTrait>() {
         let mut builder = GenericStringBuilder::<O>::with_capacity(3, 11);
 
-        builder.append_value("hello");
-        builder.append_value("rust");
+        builder.append_slice(&["hello", "rust"]);
         builder.append_null();
 
         builder.finish();
         assert!(builder.is_empty());
         assert_eq!(&[O::zero()], builder.offsets_slice());
 
-        builder.append_value("arrow");
-        builder.append_value("parquet");
+        builder.append_slice(&["arrow", "parquet"]);
         let arr = builder.finish();
         // array should not have null buffer because there is not `null` value.
         assert!(arr.nulls().is_none());
@@ -438,16 +474,14 @@ mod tests {
     fn _test_generic_string_array_builder_finish_cloned<O: OffsetSizeTrait>() {
         let mut builder = GenericStringBuilder::<O>::with_capacity(3, 11);
 
-        builder.append_value("hello");
-        builder.append_value("rust");
+        builder.append_slice(&["hello", "rust"]);
         builder.append_null();
 
         let mut arr = builder.finish_cloned();
         assert!(!builder.is_empty());
         assert_eq!(3, arr.len());
 
-        builder.append_value("arrow");
-        builder.append_value("parquet");
+        builder.append_slice(&["arrow", "parquet"]);
         arr = builder.finish();
 
         assert!(arr.nulls().is_some());

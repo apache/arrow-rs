@@ -214,6 +214,11 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         &self.value_data
     }
 
+    /// Returns a new generic byte array builder
+    pub fn builder(item_capacity: usize, data_capacity: usize) -> GenericByteBuilder<T> {
+        GenericByteBuilder::<T>::with_capacity(item_capacity, data_capacity)
+    }
+
     /// Returns the raw value data
     pub fn value_data(&self) -> &[u8] {
         self.value_data.as_slice()
@@ -579,5 +584,18 @@ mod tests {
         );
 
         BinaryArray::new(offsets, non_ascii_data, None);
+    }
+
+    #[test]
+    fn test_builder_with_null_fmt_debug() {
+        let mut builder = StringArray::builder(3, 5);
+        builder.append_slice(&["Let", "How"]);
+        builder.append_null();
+        builder.append_slice(&["Get", "Log"]);
+        let arr = builder.finish();
+        assert_eq!(
+            "StringArray\n[\n  \"Let\",\n  \"How\",\n  null,\n  \"Get\",\n  \"Log\",\n]",
+            format!("{arr:?}")
+        );
     }
 }
