@@ -137,7 +137,7 @@ impl BooleanBuffer {
     /// Returns the boolean value at index `i`.
     ///
     /// # Safety
-    /// This doesn't check bounds, the caller must ensure that index < self.len()
+    /// This doesn't check bounds, the caller must ensure that `index < self.len()`
     #[inline]
     pub unsafe fn value_unchecked(&self, i: usize) -> bool {
         unsafe { bit_util::get_bit_raw(self.buffer.as_ptr(), i + self.offset) }
@@ -184,7 +184,7 @@ impl BooleanBuffer {
         &self.buffer
     }
 
-    /// Returns the inner [`Buffer`], consuming self
+    /// Returns the inner [`Buffer`], consuming `self`
     pub fn into_inner(self) -> Buffer {
         self.buffer
     }

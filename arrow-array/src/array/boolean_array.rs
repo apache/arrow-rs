@@ -246,6 +246,62 @@ impl BooleanArray {
         });
         Self::new(values, nulls)
     }
+
+    /// Returns `BooleanBuilder` of this boolean array for mutating its values if the underlying
+    /// data buffer is not shared by others.
+    pub fn into_builder(self) -> Result<BooleanBuilder, Self> {
+        let len = self.len();
+        let data = self.into_data();
+        let null_bit_buffer = data.nulls().map(|b| b.inner().sliced());
+
+        let buffer = data.buffers()[0].slice_with_length(data.offset(), (len + 7) / 8);
+
+        drop(data);
+
+        let try_mutable_null_buffer = match null_bit_buffer {
+            None => Ok(None),
+            Some(null_buffer) => {
+                // Null buffer exists, tries to make it mutable
+                null_buffer.into_mutable().map(Some)
+            }
+        };
+
+        let try_mutable_buffers = match try_mutable_null_buffer {
+            Ok(mutable_null_buffer) => {
+                // Got mutable null buffer, tries to get mutable value buffer
+                let try_mutable_buffer = buffer.into_mutable();
+
+                // try_mutable_buffer.map(...).map_err(...) doesn't work as the compiler complains
+                // mutable_null_buffer is moved into map closure.
+                match try_mutable_buffer {
+                    Ok(mutable_buffer) => Ok(BooleanBuilder::new_from_buffer(
+                        mutable_buffer,
+                        mutable_null_buffer,
+                    )),
+                    Err(buffer) => Err((buffer, mutable_null_buffer.map(|b| b.into()))),
+                }
+            }
+            Err(mutable_null_buffer) => {
+                // Unable to get mutable null buffer
+                Err((buffer, Some(mutable_null_buffer)))
+            }
+        };
+
+        match try_mutable_buffers {
+            Ok(builder) => Ok(builder),
+            Err((buffer, null_bit_buffer)) => {
+                let builder = ArrayData::builder(DataType::Boolean)
+                    .len(len)
+                    .add_buffer(buffer)
+                    .null_bit_buffer(null_bit_buffer);
+
+                let array_data = unsafe { builder.build_unchecked() };
+                let array = BooleanArray::from(array_data);
+
+                Err(array)
+            }
+        }
+    }
 }
 
 impl Array for BooleanArray {
@@ -428,6 +484,7 @@ impl<Ptr: std::borrow::Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cast::downcast_array;
     use arrow_buffer::Buffer;
     use rand::{thread_rng, Rng};
 
@@ -603,5 +660,75 @@ mod tests {
             let expected_false = d.iter().filter(|x| matches!(x, Some(false))).count();
             assert_eq!(b.false_count(), expected_false);
         }
+    }
+
+    #[test]
+    fn test_into_builder() {
+        let array: BooleanArray = vec![true, true, false, true]
+            .into_iter()
+            .map(Some)
+            .collect();
+
+        let boxed: ArrayRef = Arc::new(array);
+        let col: BooleanArray = downcast_array(&boxed);
+        drop(boxed);
+
+        let mut builder = col.into_builder().unwrap();
+
+        let slice = builder.values_slice_mut();
+        assert_eq!(slice, &[11u8]);
+
+        slice[0] = 9u8;
+
+        let expected: BooleanArray = vec![
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+        ]
+        .into_iter()
+        .collect();
+
+        let new_array = builder.finish();
+        assert_eq!(expected, new_array);
+    }
+
+    #[test]
+    fn test_into_builder_cloned_array() {
+        let array: BooleanArray = vec![true, false, true].into_iter().map(Some).collect();
+
+        let boxed: ArrayRef = Arc::new(array);
+
+        let col: BooleanArray = BooleanArray::from(boxed.to_data());
+        let err = col.into_builder();
+
+        match err {
+            Ok(_) => panic!("Should not get builder from cloned array"),
+            Err(returned) => {
+                let expected: BooleanArray =
+                    vec![true, false, true].into_iter().map(Some).collect();
+                assert_eq!(expected, returned)
+            }
+        }
+    }
+
+    #[test]
+    fn test_into_builder_on_sliced_array() {
+        let array: BooleanArray =
+            vec![true, false, true, false, true, true, false, false, true]
+                .into_iter()
+                .map(Some)
+                .collect();
+        let slice = array.slice(1, 2);
+        let col: BooleanArray = downcast_array(&slice);
+
+        drop(slice);
+
+        col.into_builder()
+            .expect_err("Should not build builder from sliced array");
     }
 }

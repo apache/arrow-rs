@@ -17,8 +17,8 @@
 
 use crate::builder::{ArrayBuilder, BooleanBufferBuilder};
 use crate::{ArrayRef, BooleanArray};
-use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
+use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -78,6 +78,27 @@ impl BooleanBuilder {
         Self {
             values_builder: BooleanBufferBuilder::new(capacity),
             null_buffer_builder: NullBufferBuilder::new(capacity),
+        }
+    }
+
+    /// Creates a new boolean array builder from buffers
+    pub fn new_from_buffer(
+        values_buffer: MutableBuffer,
+        null_buffer: Option<MutableBuffer>,
+    ) -> Self {
+        let values_buffer_len = values_buffer.len();
+        let values_builder =
+            BooleanBufferBuilder::new_from_buffer(values_buffer, 8 * values_buffer_len);
+
+        let null_buffer_builder = null_buffer
+            .map(|buffer| {
+                NullBufferBuilder::new_from_buffer(buffer, values_builder.len())
+            })
+            .unwrap_or_else(|| NullBufferBuilder::new_with_len(values_builder.len()));
+
+        Self {
+            values_builder,
+            null_buffer_builder,
         }
     }
 
@@ -168,6 +189,26 @@ impl BooleanBuilder {
 
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
+    }
+
+    /// Returns the current values buffer as a slice
+    pub fn values_slice(&self) -> &[u8] {
+        self.values_builder.as_slice()
+    }
+
+    /// Returns the current values buffer as a mutable slice
+    pub fn values_slice_mut(&mut self) -> &mut [u8] {
+        self.values_builder.as_slice_mut()
+    }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
+
+    /// Returns the current null buffer as a mutable slice
+    pub fn validity_slice_mut(&mut self) -> Option<&mut [u8]> {
+        self.null_buffer_builder.as_slice_mut()
     }
 }
 
