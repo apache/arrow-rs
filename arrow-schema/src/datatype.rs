@@ -432,6 +432,17 @@ impl DataType {
         }
     }
 
+    pub fn get_list_field(&self) -> Option<FieldRef> {
+        use DataType::*;
+
+        match self {
+            List(field) | FixedSizeList(field, _) | LargeList(field) => {
+                Some(field.clone())
+            }
+            _ => None,
+        }
+    }
+
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
     pub fn equals_datatype(&self, other: &DataType) -> bool {
