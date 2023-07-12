@@ -606,8 +606,34 @@ fn date_op<T: DateOp>(
     use DataType::*;
     use IntervalUnit::*;
 
+    const NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
+
+    let r_t = r.data_type();
+    match (T::DATA_TYPE, op, r_t) {
+        (Date32, Op::Sub | Op::SubWrapping, Date32) => {
+            let l = l.as_primitive::<Date32Type>();
+            let r = r.as_primitive::<Date32Type>();
+            return Ok(op_ref!(
+                DurationSecondType,
+                l,
+                l_s,
+                r,
+                r_s,
+                ((l as i64) - (r as i64)) * NUM_SECONDS_IN_DAY
+            ));
+        }
+        (Date64, Op::Sub | Op::SubWrapping, Date64) => {
+            let l = l.as_primitive::<Date64Type>();
+            let r = r.as_primitive::<Date64Type>();
+            let result =
+                try_op_ref!(DurationMillisecondType, l, l_s, r, r_s, l.sub_checked(r));
+            return Ok(result);
+        }
+        _ => {}
+    }
+
     let l = l.as_primitive::<T>();
-    match (op, r.data_type()) {
+    match (op, r_t) {
         (Op::Add | Op::AddWrapping, Interval(YearMonth)) => {
             let r = r.as_primitive::<IntervalYearMonthType>();
             Ok(op_ref!(T, l, l_s, r, r_s, T::add_year_month(l, r)))
@@ -1421,5 +1447,29 @@ mod tests {
     fn test_date() {
         test_date_impl::<Date32Type, _>(Date32Type::from_naive_date);
         test_date_impl::<Date64Type, _>(Date64Type::from_naive_date);
+
+        let a = Date32Array::from(vec![i32::MIN, i32::MAX, 23, 7684]);
+        let b = Date32Array::from(vec![i32::MIN, i32::MIN, -2, 45]);
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(
+            result.as_primitive::<DurationSecondType>().values(),
+            &[0, 371085174288000, 2160000, 660009600]
+        );
+
+        let a = Date64Array::from(vec![4343, 76676, 3434]);
+        let b = Date64Array::from(vec![3, -5, 5]);
+        let result = sub(&a, &b).unwrap();
+        assert_eq!(
+            result.as_primitive::<DurationMillisecondType>().values(),
+            &[4340, 76681, 3429]
+        );
+
+        let a = Date64Array::from(vec![i64::MAX]);
+        let b = Date64Array::from(vec![-1]);
+        let err = sub(&a, &b).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Compute error: Overflow happened on: 9223372036854775807 - -1"
+        );
     }
 }
