@@ -9425,16 +9425,16 @@ mod tests {
     fn test_nested_list() {
         let mut list = ListBuilder::new(Int32Builder::new());
         list.append_value([Some(1), Some(2), Some(3)]);
-        list.append_value([Some(4), Some(5), Some(6)]);
+        list.append_value([Some(4), None, Some(6)]);
         let list = list.finish();
 
         let to_field = Field::new("nested", list.data_type().clone(), false);
         let to = DataType::List(Arc::new(to_field));
         let out = cast(&list, &to).unwrap();
-        let opts = FormatOptions::default();
+        let opts = FormatOptions::default().with_null("null");
         let formatted = ArrayFormatter::try_new(out.as_ref(), &opts).unwrap();
 
         assert_eq!(formatted.value(0).to_string(), "[[1], [2], [3]]");
-        assert_eq!(formatted.value(1).to_string(), "[[4], [5], [6]]");
+        assert_eq!(formatted.value(1).to_string(), "[[4], [null], [6]]");
     }
 }
