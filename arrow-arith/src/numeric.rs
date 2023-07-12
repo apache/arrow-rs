@@ -606,6 +606,8 @@ fn date_op<T: DateOp>(
     use DataType::*;
     use IntervalUnit::*;
 
+    const NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
+
     let r_t = r.data_type();
     match (T::DATA_TYPE, op, r_t) {
         (Date32, Op::Sub | Op::SubWrapping, Date32) => {
@@ -617,7 +619,7 @@ fn date_op<T: DateOp>(
                 l_s,
                 r,
                 r_s,
-                ((l as i64) - (r as i64)) * 86400
+                ((l as i64) - (r as i64)) * NUM_SECONDS_IN_DAY
             ));
         }
         (Date64, Op::Sub | Op::SubWrapping, Date64) => {
