@@ -802,7 +802,11 @@ pub fn cast_with_options(
             ))),
         },
         (List(_), List(ref to)) => {
-            cast_list::<i32>(array, to.clone(), to_type, cast_options)
+            let old_casted = cast_list_inner::<i32>(array, to, to_type, cast_options);
+            println!("old_casted: {:?}", old_casted);
+            let new_casted = cast_list::<i32>(array, to.clone(), to_type, cast_options);
+            println!("new_casted: {:?}", new_casted);
+            new_casted
         }
         (LargeList(_), LargeList(ref to)) => {
             cast_list::<i64>(array, to.clone(), to_type, cast_options)
@@ -3731,9 +3735,9 @@ fn unwrap_nested_list<OffsetSize: OffsetSizeTrait>(
             casted_array.data_type().clone(),
             field.is_nullable(),
         )),
-        offsets.clone(),
+        offsets,
         casted_array,
-        nulls.clone(),
+        nulls,
     );
 
     Ok(Arc::new(casted_list_array))
@@ -3774,6 +3778,29 @@ fn cast_list<OffsetSize: OffsetSizeTrait>(
     } else {
         unwrap_nested_list::<OffsetSize>(array, to_type, cast_options)
     }
+}
+
+/// Helper function that takes an Generic list container and casts the inner datatype.
+fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
+    array: &dyn Array,
+    to: &Field,
+    to_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let data = array.to_data();
+    let underlying_array = make_array(data.child_data()[0].clone());
+    let cast_array =
+        cast_with_options(underlying_array.as_ref(), to.data_type(), cast_options)?;
+    let builder = data
+        .into_builder()
+        .data_type(to_type.clone())
+        .child_data(vec![cast_array.into_data()]);
+
+    // Safety
+    // Data was valid before
+    let array_data = unsafe { builder.build_unchecked() };
+    let list = GenericListArray::<OffsetSize>::from(array_data);
+    Ok(Arc::new(list) as ArrayRef)
 }
 
 /// A specified helper to cast from `GenericBinaryArray` to `GenericStringArray` when they have same
@@ -8363,14 +8390,12 @@ mod tests {
 
         let field = make_ndim_list(2, DataType::Int32).get_list_field().unwrap();
 
-        let nested_list_array = ListArray::new(
+        ListArray::new(
             field,
             OffsetBuffer::from_lengths([2, 3, 1]),
             Arc::new(values_array),
             None,
-        );
-
-        nested_list_array
+        )
     }
 
     #[test]
