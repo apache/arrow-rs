@@ -8307,16 +8307,12 @@ mod tests {
 
         let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
         let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-        let list_array_2d = wrap_list_array_with_another_one::<i32>(
-            &list_array,
-            list2d_field.clone(),
-        )?;
+        let list_array_2d =
+            wrap_list_array_with_another_one::<i32>(&list_array, list2d_field)?;
 
         let casted_list_array = cast(&list_array_2d, &list3d).unwrap();
-        let expected_list_array = wrap_list_array_with_another_one::<i32>(
-            &list_array_2d,
-            list3d_field.clone(),
-        )?;
+        let expected_list_array =
+            wrap_list_array_with_another_one::<i32>(&list_array_2d, list3d_field)?;
         assert_eq!(&expected_list_array, &casted_list_array);
 
         // Verify 3d -> 5d
@@ -8327,14 +8323,10 @@ mod tests {
         let list5d_field = list5d.get_list_field().unwrap();
 
         let casted_list_array = cast(&list_array_3d, &list5d).unwrap();
-        let list_array_4d = wrap_list_array_with_another_one::<i32>(
-            &list_array_3d,
-            list4d_field.clone(),
-        )?;
-        let expected_list_array = wrap_list_array_with_another_one::<i32>(
-            &list_array_4d,
-            list5d_field.clone(),
-        )?;
+        let list_array_4d =
+            wrap_list_array_with_another_one::<i32>(&list_array_3d, list4d_field)?;
+        let expected_list_array =
+            wrap_list_array_with_another_one::<i32>(&list_array_4d, list5d_field)?;
         assert_eq!(&expected_list_array, &casted_list_array);
         Ok(())
     }
@@ -8350,10 +8342,8 @@ mod tests {
 
         // Verify 1d to 2d
         let casted_list_array = cast(&list_array, &list2d).unwrap();
-        let expected_list_array = wrap_list_array_with_another_one::<i64>(
-            &list_array,
-            list2d_field.clone(),
-        )?;
+        let expected_list_array =
+            wrap_list_array_with_another_one::<i64>(&list_array, list2d_field)?;
         assert_eq!(&expected_list_array, &casted_list_array);
         Ok(())
     }
@@ -8373,7 +8363,7 @@ mod tests {
         // Verify 1d to 2d
         let casted_list_array = cast(&list_array, &list2d).unwrap();
         let expected_list_array =
-            wrap_list_array_with_another_one::<i32>(&list_array, list2d_field.clone())?;
+            wrap_list_array_with_another_one::<i32>(&list_array, list2d_field)?;
         assert_eq!(&expected_list_array, &casted_list_array);
         Ok(())
     }
