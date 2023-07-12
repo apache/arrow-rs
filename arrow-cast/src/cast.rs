@@ -49,7 +49,7 @@ use crate::parse::{
 use arrow_array::{
     builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *,
 };
-use arrow_buffer::{i256, ArrowNativeType, Buffer, MutableBuffer, ScalarBuffer};
+use arrow_buffer::{i256, ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
@@ -849,12 +849,8 @@ pub fn cast_with_options(
             }
         }
 
-        (_, List(ref to)) => {
-            cast_primitive_to_list::<i32>(array, to, to_type, cast_options)
-        }
-        (_, LargeList(ref to)) => {
-            cast_primitive_to_list::<i64>(array, to, to_type, cast_options)
-        }
+        (_, List(ref to)) => cast_values_to_list::<i32>(array, to, cast_options),
+        (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
                 array.as_primitive(),
@@ -3645,39 +3641,15 @@ where
 }
 
 /// Helper function that takes a primitive array and casts to a (generic) list array.
-fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
+fn cast_values_to_list<O: OffsetSizeTrait>(
     array: &dyn Array,
-    to: &Field,
-    to_type: &DataType,
+    to: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    // cast primitive to list's primitive
-    let cast_array = cast_with_options(array, to.data_type(), cast_options)?;
-    // create offsets, where if array.len() = 2, we have [0,1,2]
-    // Safety:
-    // Length of range can be trusted.
-    // Note: could not yet create a generic range in stable Rust.
-    let offsets = unsafe {
-        MutableBuffer::from_trusted_len_iter(
-            (0..=array.len()).map(|i| OffsetSize::from(i).expect("integer")),
-        )
-    };
-
-    let list_data = unsafe {
-        ArrayData::new_unchecked(
-            to_type.clone(),
-            array.len(),
-            Some(cast_array.null_count()),
-            cast_array.nulls().map(|b| b.inner().sliced()),
-            0,
-            vec![offsets.into()],
-            vec![cast_array.into_data()],
-        )
-    };
-    let list_array =
-        Arc::new(GenericListArray::<OffsetSize>::from(list_data)) as ArrayRef;
-
-    Ok(list_array)
+    let values = cast_with_options(array, to.data_type(), cast_options)?;
+    let offsets = OffsetBuffer::from_lengths(std::iter::repeat(1).take(values.len()));
+    let list = GenericListArray::<O>::new(to.clone(), offsets, values, None);
+    Ok(Arc::new(list))
 }
 
 /// Helper function that takes an Generic list container and casts the inner datatype.
@@ -5098,7 +5070,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(5, b.len());
-        assert_eq!(1, b.null_count());
+        assert_eq!(0, b.null_count());
         let arr = b.as_list::<i32>();
         assert_eq!(&[0, 1, 2, 3, 4, 5], arr.value_offsets());
         assert_eq!(1, arr.value_length(0));
@@ -5127,7 +5099,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(4, b.len());
-        assert_eq!(1, b.null_count());
+        assert_eq!(0, b.null_count());
         let arr = b.as_list::<i32>();
         assert_eq!(&[0, 1, 2, 3, 4], arr.value_offsets());
         assert_eq!(1, arr.value_length(0));
@@ -9447,5 +9419,22 @@ mod tests {
         assert_eq!("1900-01-03", string_array.value(0));
         assert_eq!("1969-12-31", string_array.value(1));
         assert_eq!("1989-12-31", string_array.value(2));
+    }
+
+    #[test]
+    fn test_nested_list() {
+        let mut list = ListBuilder::new(Int32Builder::new());
+        list.append_value([Some(1), Some(2), Some(3)]);
+        list.append_value([Some(4), None, Some(6)]);
+        let list = list.finish();
+
+        let to_field = Field::new("nested", list.data_type().clone(), false);
+        let to = DataType::List(Arc::new(to_field));
+        let out = cast(&list, &to).unwrap();
+        let opts = FormatOptions::default().with_null("null");
+        let formatted = ArrayFormatter::try_new(out.as_ref(), &opts).unwrap();
+
+        assert_eq!(formatted.value(0).to_string(), "[[1], [2], [3]]");
+        assert_eq!(formatted.value(1).to_string(), "[[4], [null], [6]]");
     }
 }
