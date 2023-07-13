@@ -43,8 +43,8 @@ use url::Url;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId,
+    ObjectMeta, ObjectStore, Result, RetryConfig,
 };
 
 mod client;
@@ -228,6 +228,12 @@ impl HttpBuilder {
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
+        self
+    }
+
+    /// Set individual client configuration without overriding the entire config
+    pub fn with_config(mut self, key: ClientConfigKey, value: impl Into<String>) -> Self {
+        self.client_options = self.client_options.with_config(key, value);
         self
     }
 
