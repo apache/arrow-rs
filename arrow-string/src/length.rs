@@ -731,7 +731,7 @@ mod tests {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(9)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8]))
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8]))
             .build()
             .unwrap();
         let list_data_type = DataType::FixedSizeList(
@@ -739,9 +739,9 @@ mod tests {
             3,
         );
         let nulls = NullBuffer::from(vec![true, false, true]);
-        let list_data = ArrayData::builder(list_data_type.clone())
+        let list_data = ArrayData::builder(list_data_type)
             .len(3)
-            .add_child_data(value_data.clone())
+            .add_child_data(value_data)
             .nulls(Some(nulls))
             .build()
             .unwrap();
@@ -752,7 +752,7 @@ mod tests {
 
         assert_eq!(lengths.len(), 3);
         assert_eq!(lengths.value(0), 3);
-        assert_eq!(lengths.is_null(1), true);
+        assert!(lengths.is_null(1));
         assert_eq!(lengths.value(2), 3);
     }
 }
