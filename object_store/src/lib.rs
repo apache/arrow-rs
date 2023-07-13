@@ -274,7 +274,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWrite;
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp", feature = "http"))]
-pub use client::ClientOptions;
+pub use client::{ClientConfigKey, ClientOptions};
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
