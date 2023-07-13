@@ -211,7 +211,7 @@ impl AmazonS3 {
 #[async_trait]
 impl ObjectStore for AmazonS3 {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.client.put_request(location, Some(bytes), &()).await?;
+        self.client.put_request(location, bytes, &()).await?;
         Ok(())
     }
 
@@ -321,7 +321,7 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
             .client
             .put_request(
                 &self.location,
-                Some(buf.into()),
+                buf.into(),
                 &[("partNumber", &part), ("uploadId", &self.upload_id)],
             )
             .await?;

@@ -35,7 +35,10 @@ use bytes::{Buf, Bytes};
 use itertools::Itertools;
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
-use reqwest::{header::CONTENT_TYPE, Client as ReqwestClient, Method, Response};
+use reqwest::{
+    header::{CONTENT_LENGTH, CONTENT_TYPE},
+    Client as ReqwestClient, Method, Response,
+};
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
@@ -236,7 +239,7 @@ impl S3Client {
     pub async fn put_request<T: Serialize + ?Sized + Sync>(
         &self,
         path: &Path,
-        bytes: Option<Bytes>,
+        bytes: Bytes,
         query: &T,
     ) -> Result<Response> {
         let credential = self.get_credential().await?;
@@ -244,17 +247,19 @@ impl S3Client {
         let mut builder = self.client.request(Method::PUT, url);
         let mut payload_sha256 = None;
 
-        if let Some(bytes) = bytes {
-            if let Some(checksum) = self.config().checksum {
-                let digest = checksum.digest(&bytes);
-                builder = builder
-                    .header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
-                if checksum == Checksum::SHA256 {
-                    payload_sha256 = Some(digest);
-                }
+        if let Some(checksum) = self.config().checksum {
+            let digest = checksum.digest(&bytes);
+            builder =
+                builder.header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
+            if checksum == Checksum::SHA256 {
+                payload_sha256 = Some(digest);
             }
-            builder = builder.body(bytes);
         }
+
+        builder = match bytes.is_empty() {
+            true => builder.header(CONTENT_LENGTH, 0), // Handle empty uploads (#4514)
+            false => builder.body(bytes),
+        };
 
         if let Some(value) = self.config().client_options.get_content_type(path) {
             builder = builder.header(CONTENT_TYPE, value);
