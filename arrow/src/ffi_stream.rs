@@ -194,7 +194,7 @@ impl ExportedArrayStream {
     }
 
     pub fn get_schema(&mut self, out: *mut FFI_ArrowSchema) -> i32 {
-        let mut private_data = self.get_private_data();
+        let private_data = self.get_private_data();
         let reader = &private_data.batch_reader;
 
         let schema = FFI_ArrowSchema::try_from(reader.schema().as_ref());
@@ -213,7 +213,7 @@ impl ExportedArrayStream {
     }
 
     pub fn get_next(&mut self, out: *mut FFI_ArrowArray) -> i32 {
-        let mut private_data = self.get_private_data();
+        let private_data = self.get_private_data();
         let reader = &mut private_data.batch_reader;
 
         match reader.next() {
