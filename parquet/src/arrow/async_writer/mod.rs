@@ -158,7 +158,7 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         }
 
         async_writer
-            .write(buffer.as_slice())
+            .write_all(buffer.as_slice())
             .await
             .map_err(|e| ParquetError::External(Box::new(e)))?;
 
@@ -207,7 +207,7 @@ impl Write for SharedBuffer {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{ArrayRef, Int64Array, RecordBatchReader};
+    use arrow_array::{ArrayRef, BinaryArray, Int64Array, RecordBatchReader};
     use bytes::Bytes;
     use tokio::pin;
 
@@ -373,5 +373,33 @@ mod tests {
             }
             async_writer.close().await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn test_async_writer_file() {
+        let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
+        let col2 = Arc::new(BinaryArray::from_iter_values(vec![
+            vec![0; 500000],
+            vec![0; 500000],
+            vec![0; 500000],
+        ])) as ArrayRef;
+        let to_write =
+            RecordBatch::try_from_iter([("col", col), ("col2", col2)]).unwrap();
+
+        let temp = tempfile::tempfile().unwrap();
+
+        let file = tokio::fs::File::from_std(temp.try_clone().unwrap());
+        let mut writer =
+            AsyncArrowWriter::try_new(file, to_write.schema(), 0, None).unwrap();
+        writer.write(&to_write).await.unwrap();
+        writer.close().await.unwrap();
+
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(temp)
+            .unwrap()
+            .build()
+            .unwrap();
+        let read = reader.next().unwrap().unwrap();
+
+        assert_eq!(to_write, read);
     }
 }
