@@ -33,7 +33,7 @@ fn parse_nanos<const N: usize, const O: u8>(digits: &[u8]) -> u32 {
         * 10_u32.pow((9 - N) as _)
 }
 
-/// Helper for parsing timestamps
+/// Helper for parsing RFC3339 timestamps
 struct TimestampParser {
     /// The timestamp bytes to parse minus `b'0'`
     ///
@@ -579,10 +579,64 @@ const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
+fn parse_date(string: &str) -> Option<NaiveDate> {
+    if string.len() > 10 {
+        return None;
+    }
+    let mut digits = [0; 10];
+    let mut mask = 0;
+
+    // Treating all bytes the same way, helps LLVM vectorise this correctly
+    for (idx, (o, i)) in digits.iter_mut().zip(string.bytes()).enumerate() {
+        *o = i.wrapping_sub(b'0');
+        mask |= ((*o < 10) as u16) << idx
+    }
+
+    const HYPHEN: u8 = b'-'.wrapping_sub(b'0');
+
+    if digits[4] != HYPHEN {
+        return None;
+    }
+
+    let (month, day) = match mask {
+        0b1101101111 => {
+            if digits[7] != HYPHEN {
+                return None;
+            }
+            (digits[5] * 10 + digits[6], digits[8] * 10 + digits[9])
+        }
+        0b101101111 => {
+            if digits[7] != HYPHEN {
+                return None;
+            }
+            (digits[5] * 10 + digits[6], digits[8])
+        }
+        0b110101111 => {
+            if digits[6] != HYPHEN {
+                return None;
+            }
+            (digits[5], digits[7] * 10 + digits[8])
+        }
+        0b10101111 => {
+            if digits[6] != HYPHEN {
+                return None;
+            }
+            (digits[5], digits[7])
+        }
+        _ => return None,
+    };
+
+    let year = digits[0] as u16 * 1000
+        + digits[1] as u16 * 100
+        + digits[2] as u16 * 10
+        + digits[3] as u16;
+
+    NaiveDate::from_ymd_opt(year as _, month as _, day as _)
+}
+
 impl Parser for Date32Type {
     fn parse(string: &str) -> Option<i32> {
-        let parser = TimestampParser::new(string.as_bytes());
-        let date = parser.date()?;
+        let date = parse_date(string)?;
         Some(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
     }
 
@@ -594,8 +648,13 @@ impl Parser for Date32Type {
 
 impl Parser for Date64Type {
     fn parse(string: &str) -> Option<i64> {
-        let date_time = string_to_datetime(&Utc, string).ok()?;
-        Some(date_time.timestamp_millis())
+        if string.len() < 10 {
+            let date = parse_date(string)?;
+            Some(NaiveDateTime::new(date, NaiveTime::default()).timestamp_millis())
+        } else {
+            let date_time = string_to_datetime(&Utc, string).ok()?;
+            Some(date_time.timestamp_millis())
+        }
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i64> {
@@ -1198,6 +1257,7 @@ fn parse_interval_components(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::temporal_conversions::date32_to_datetime;
     use arrow_array::timezone::Tz;
     use arrow_buffer::i256;
 
@@ -1465,6 +1525,23 @@ mod tests {
         let date = string_to_datetime(&local, "2020-09-08 13:42:29").unwrap();
         assert_eq!(dt, date.naive_local());
         assert_ne!(dt, date.naive_utc());
+    }
+
+    #[test]
+    fn parse_date32() {
+        let cases = [
+            "2020-09-08",
+            "2020-9-8",
+            "2020-09-8",
+            "2020-9-08",
+            "2020-12-1",
+            "1690-2-5",
+        ];
+        for case in cases {
+            let v = date32_to_datetime(Date32Type::parse(case).unwrap()).unwrap();
+            let expected: NaiveDate = case.parse().unwrap();
+            assert_eq!(v.date(), expected);
+        }
     }
 
     #[test]

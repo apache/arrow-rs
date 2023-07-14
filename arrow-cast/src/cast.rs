@@ -7420,7 +7420,7 @@ mod tests {
 
         let a = StringArray::from(vec![
             "2000-01-01",          // valid date with leading 0s
-            "2000-2-2",            // invalid date without leading 0s
+            "2000-2-2",            // valid date without leading 0s
             "2000-00-00",          // invalid month and day
             "2000-01-01T12:00:00", // date + time is invalid
             "2000",                // just a year is invalid
@@ -7438,12 +7438,17 @@ mod tests {
         assert!(c.is_valid(0)); // "2000-01-01"
         assert_eq!(date_value, c.value(0));
 
-        assert!(!c.is_valid(1)); // "2000-2-2"
+        let date_value = since(
+            NaiveDate::from_ymd_opt(2000, 2, 2).unwrap(),
+            from_ymd(1970, 1, 1).unwrap(),
+        )
+        .num_days() as i32;
+        assert!(c.is_valid(1)); // "2000-2-2"
+        assert_eq!(date_value, c.value(1));
 
         // test invalid inputs
         assert!(!c.is_valid(2)); // "2000-00-00"
-        assert!(c.is_valid(3)); // "2000-01-01T12:00:00"
-        assert_eq!(date_value, c.value(3));
+        assert!(!c.is_valid(3)); // "2000-01-01T12:00:00"
         assert!(!c.is_valid(4)); // "2000"
     }
 
