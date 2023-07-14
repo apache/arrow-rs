@@ -1542,6 +1542,19 @@ mod tests {
             let expected: NaiveDate = case.parse().unwrap();
             assert_eq!(v.date(), expected);
         }
+
+        let err_cases = [
+            "",
+            "80-01-01",
+            "342",
+            "Foo",
+            "2020-09-08-03",
+            "2020--04-03",
+            "2020--",
+        ];
+        for case in err_cases {
+            assert_eq!(Date32Type::parse(case), None);
+        }
     }
 
     #[test]
