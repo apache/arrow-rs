@@ -1258,6 +1258,15 @@ mod tests {
         }
 
         delete_fixtures(storage).await;
+
+        let path = Path::from("empty");
+        storage.put(&path, Bytes::new()).await.unwrap();
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.size, 0);
+        let data = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(data.len(), 0);
+
+        storage.delete(&path).await.unwrap();
     }
 
     pub(crate) async fn get_opts(storage: &dyn ObjectStore) {
