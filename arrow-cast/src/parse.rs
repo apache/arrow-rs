@@ -648,7 +648,7 @@ impl Parser for Date32Type {
 
 impl Parser for Date64Type {
     fn parse(string: &str) -> Option<i64> {
-        if string.len() < 10 {
+        if string.len() <= 10 {
             let date = parse_date(string)?;
             Some(NaiveDateTime::new(date, NaiveTime::default()).timestamp_millis())
         } else {
