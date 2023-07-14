@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{RowConverter, Rows, SortField};
+use crate::{IRows, RowConverter, SortField};
 use arrow_array::builder::BufferBuilder;
 use arrow_array::{Array, GenericListArray, OffsetSizeTrait};
 use arrow_data::ArrayDataBuilder;
@@ -24,7 +24,7 @@ use std::ops::Range;
 
 pub fn compute_lengths<O: OffsetSizeTrait>(
     lengths: &mut [usize],
-    rows: &Rows,
+    rows: &dyn IRows,
     array: &GenericListArray<O>,
 ) {
     let offsets = array.value_offsets().windows(2);
@@ -40,7 +40,7 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
         });
 }
 
-fn encoded_len(rows: &Rows, range: Option<Range<usize>>) -> usize {
+fn encoded_len(rows: &dyn IRows, range: Option<Range<usize>>) -> usize {
     match range {
         None => 1,
         Some(range) if range.start == range.end => 1,
@@ -59,7 +59,7 @@ fn encoded_len(rows: &Rows, range: Option<Range<usize>>) -> usize {
 pub fn encode<O: OffsetSizeTrait>(
     data: &mut [u8],
     offsets: &mut [usize],
-    rows: &Rows,
+    rows: &dyn IRows,
     opts: SortOptions,
     array: &GenericListArray<O>,
 ) {
@@ -82,7 +82,7 @@ pub fn encode<O: OffsetSizeTrait>(
 fn encode_one(
     out: &mut [u8],
     temporary: &mut Vec<u8>,
-    rows: &Rows,
+    rows: &dyn IRows,
     range: Option<Range<usize>>,
     opts: SortOptions,
 ) -> usize {

@@ -17,7 +17,7 @@
 
 use crate::fixed::{FixedLengthEncoding, FromSlice};
 use crate::interner::{Interned, OrderPreservingInterner};
-use crate::{null_sentinel, Row, Rows};
+use crate::{null_sentinel, IRows, Row};
 use arrow_array::builder::*;
 use arrow_array::cast::*;
 use arrow_array::types::*;
@@ -61,7 +61,7 @@ pub fn encode_dictionary_values<K: ArrowDictionaryKeyType>(
     data: &mut [u8],
     offsets: &mut [usize],
     column: &DictionaryArray<K>,
-    values: &Rows,
+    values: &dyn IRows,
     null: &Row<'_>,
 ) {
     for (offset, k) in offsets.iter_mut().skip(1).zip(column.keys()) {

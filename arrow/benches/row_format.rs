@@ -59,7 +59,7 @@ fn do_bench(
     });
 
     c.bench_function(&format!("convert_rows {name}"), |b| {
-        b.iter(|| black_box(converter.convert_rows(&rows).unwrap()));
+        b.iter(|| black_box(converter.convert_rows(rows.as_ref()).unwrap()));
     });
 }
 
