@@ -420,6 +420,8 @@ pub struct RowConverter {
     fields: Arc<[SortField]>,
     /// State for codecs
     codecs: Vec<Codec>,
+    /// optional pre-allocated target `Rows`, to save allocations
+    target: Option<Rows>,
 }
 
 #[derive(Debug)]
@@ -651,6 +653,7 @@ impl RowConverter {
         Ok(Self {
             fields: fields.into(),
             codecs,
+            target: None,
         })
     }
 
@@ -670,6 +673,15 @@ impl RowConverter {
             }
             _ => false,
         }
+    }
+
+    /// Provide the row converter with a pre-existing `Rows` which
+    /// will be re-used on the next call to [`Self::convert_columns`].
+    ///
+    /// This is used to minimize re-allocations when the same
+    /// RowConverter is used to convert rows over and over again.
+    pub fn set_target(&mut self, rows: Rows) {
+        self.target = Some(rows);
     }
 
     /// Convert [`ArrayRef`] columns into [`Rows`]
@@ -709,7 +721,8 @@ impl RowConverter {
             // Don't need to validate UTF-8 as came from arrow array
             validate_utf8: false,
         };
-        let mut rows = new_empty_rows(columns, &encoders, config);
+        // reuse target
+        let mut rows = initialize_rows(self.target.take(), columns, &encoders, config);
 
         for ((column, field), encoder) in
             columns.iter().zip(self.fields.iter()).zip(encoders)
@@ -1115,8 +1128,14 @@ fn null_sentinel(options: SortOptions) -> u8 {
     }
 }
 
-/// Computes the length of each encoded [`Rows`] and returns an empty [`Rows`]
-fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) -> Rows {
+/// Initializes an optional pre-existing `rows` with the appropriate
+/// length of each encoded [`Rows`], returning the new Rows
+fn initialize_rows(
+    rows: Option<Rows>,
+    cols: &[ArrayRef],
+    encoders: &[Encoder],
+    config: RowConfig,
+) -> Rows {
     use fixed::FixedLengthEncoding;
 
     let num_rows = cols.first().map(|x| x.len()).unwrap_or(0);
@@ -1203,8 +1222,22 @@ fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) ->
         }
     }
 
-    let mut offsets = Vec::with_capacity(num_rows + 1);
-    offsets.push(0);
+    //  Prepare or reuse target Rows
+    let mut rows = match rows {
+        Some(mut rows) => {
+            rows.config = config;
+            rows
+        }
+        None => Rows {
+            buffer: vec![],
+            offsets: vec![],
+            config,
+        },
+    };
+
+    rows.offsets.clear();
+    rows.offsets.reserve(num_rows + 1);
+    rows.offsets.push(0);
 
     // We initialize the offsets shifted down by one row index.
     //
@@ -1223,17 +1256,13 @@ fn new_empty_rows(cols: &[ArrayRef], encoders: &[Encoder], config: RowConfig) ->
     // as identifying the offsets of the written rows
     let mut cur_offset = 0_usize;
     for l in lengths {
-        offsets.push(cur_offset);
+        rows.offsets.push(cur_offset);
         cur_offset = cur_offset.checked_add(l).expect("overflow");
     }
 
-    let buffer = vec![0_u8; cur_offset];
-
-    Rows {
-        buffer,
-        offsets,
-        config,
-    }
+    rows.buffer.clear();
+    rows.buffer.resize(cur_offset, 0);
+    rows
 }
 
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
