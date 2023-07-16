@@ -94,22 +94,13 @@ where
     T::Native: OffsetSizeTrait,
 {
     let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
-    let null_bit_buffer = array.nulls().map(|b| b.inner().sliced());
     let length_list = array.len();
     let buffer = Buffer::from_vec(vec![length; length_list]);
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            T::DATA_TYPE,
-            length_list,
-            None,
-            null_bit_buffer,
-            0,
-            vec![buffer],
-            vec![],
-        )
-    };
-    make_array(data)
+    let data: PrimitiveArray<T> =
+        PrimitiveArray::new(buffer.into(), array.nulls().cloned());
+
+    make_array(data.into())
 }
 
 fn length_binary<O, T>(array: &dyn Array) -> ArrayRef
