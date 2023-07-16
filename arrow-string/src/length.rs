@@ -170,7 +170,7 @@ where
 /// For list array, length is the number of elements in each list.
 /// For string array and binary array, length is the number of bytes of each value.
 ///
-/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray and BinaryArray/LargeBinaryArray,
+/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray, BinaryArray/LargeBinaryArray, and FixedSizeListArray,
 ///   or DictionaryArray with above Arrays as values
 /// * length of null is null.
 pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
