@@ -91,7 +91,6 @@ where
 fn length_list_fixed_size<T>(array: &dyn Array, length: i32) -> ArrayRef
 where
     T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
 {
     let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
     let length_list = array.len();
