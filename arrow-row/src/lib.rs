@@ -975,6 +975,8 @@ pub trait IRows: Debug + Send {
     /// Get a [`Row`]
     fn row(&self, row: usize) -> Row<'_>;
 
+    fn row_data(&self, row: usize) -> &[u8];
+
     fn num_rows(&self) -> usize;
 
     fn iter(&self) -> RowsIter<'_>;
@@ -1017,12 +1019,16 @@ impl IRows for Rows {
     }
 
     fn row(&self, row: usize) -> Row<'_> {
-        let end = self.offsets[row + 1];
-        let start = self.offsets[row];
         Row {
-            data: &self.buffer[start..end],
+            data: self.row_data(row),
             config: &self.config,
         }
+    }
+
+    fn row_data(&self, row: usize) -> &[u8] {
+        let end = self.offsets[row + 1];
+        let start = self.offsets[row];
+        &self.buffer[start..end]
     }
 
     fn num_rows(&self) -> usize {
@@ -1075,13 +1081,16 @@ impl IRows for FixedWidthRows {
     }
 
     fn row(&self, row: usize) -> Row<'_> {
-        let start = self.width * row;
-        let end = start + self.width;
-
         Row {
-            data: &self.buffer[start..end],
+            data: self.row_data(row),
             config: &self.config,
         }
+    }
+
+    fn row_data(&self, row: usize) -> &[u8] {
+        let start = self.width * row;
+        let end = start + self.width;
+        &self.buffer[start..end]
     }
 
     fn num_rows(&self) -> usize {
