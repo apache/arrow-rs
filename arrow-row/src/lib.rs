@@ -899,11 +899,23 @@ impl Rows {
         self.offsets.push(self.buffer.len())
     }
 
+    #[inline(always)]
     pub fn row(&self, row: usize) -> Row<'_> {
         let end = self.offsets[row + 1];
         let start = self.offsets[row];
         Row {
             data: &self.buffer[start..end],
+            config: &self.config,
+        }
+    }
+
+    /// Gets a Row, without bounds checking
+    #[inline(always)]
+    pub unsafe fn row_unchecked(&self, row: usize) -> Row<'_> {
+        let end = self.offsets.get_unchecked(row + 1);
+        let start = self.offsets.get_unchecked(row);
+        Row {
+            data: &self.buffer.get_unchecked(*start..*end),
             config: &self.config,
         }
     }
@@ -1010,7 +1022,7 @@ impl<'a> Row<'a> {
 // Manually derive these as don't wish to include `fields`
 
 impl<'a> PartialEq for Row<'a> {
-    #[inline]
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.data.eq(other.data)
     }
@@ -1019,28 +1031,28 @@ impl<'a> PartialEq for Row<'a> {
 impl<'a> Eq for Row<'a> {}
 
 impl<'a> PartialOrd for Row<'a> {
-    #[inline]
+    #[inline(always)]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.data.partial_cmp(other.data)
     }
 }
 
 impl<'a> Ord for Row<'a> {
-    #[inline]
+    #[inline(always)]
     fn cmp(&self, other: &Self) -> Ordering {
         self.data.cmp(other.data)
     }
 }
 
 impl<'a> Hash for Row<'a> {
-    #[inline]
+    #[inline(always)]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.data.hash(state)
     }
 }
 
 impl<'a> AsRef<[u8]> for Row<'a> {
-    #[inline]
+    #[inline(always)]
     fn as_ref(&self) -> &[u8] {
         self.data
     }
@@ -1070,7 +1082,7 @@ impl OwnedRow {
 // Manually derive these as don't wish to include `fields`. Also we just want to use the same `Row` implementations here.
 
 impl PartialEq for OwnedRow {
-    #[inline]
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.row().eq(&other.row())
     }
@@ -1079,35 +1091,35 @@ impl PartialEq for OwnedRow {
 impl Eq for OwnedRow {}
 
 impl PartialOrd for OwnedRow {
-    #[inline]
+    #[inline(always)]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.row().partial_cmp(&other.row())
     }
 }
 
 impl Ord for OwnedRow {
-    #[inline]
+    #[inline(always)]
     fn cmp(&self, other: &Self) -> Ordering {
         self.row().cmp(&other.row())
     }
 }
 
 impl Hash for OwnedRow {
-    #[inline]
+    #[inline(always)]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.row().hash(state)
     }
 }
 
 impl AsRef<[u8]> for OwnedRow {
-    #[inline]
+    #[inline(always)]
     fn as_ref(&self) -> &[u8] {
         &self.data
     }
 }
 
 /// Returns the null sentinel, negated if `invert` is true
-#[inline]
+#[inline(always)]
 fn null_sentinel(options: SortOptions) -> u8 {
     match options.nulls_first {
         true => 0,
