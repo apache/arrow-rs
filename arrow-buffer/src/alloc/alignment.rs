@@ -117,3 +117,7 @@ pub const ALIGNMENT: usize = 1 << 7;
 /// Cache and allocation multiple alignment size
 #[cfg(target_arch = "aarch64")]
 pub const ALIGNMENT: usize = 1 << 6;
+
+/// Cache and allocation multiple alignment size
+#[cfg(target_arch = "loongarch64")]
+pub const ALIGNMENT: usize = 1 << 6;
