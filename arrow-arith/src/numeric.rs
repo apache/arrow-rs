@@ -346,21 +346,15 @@ fn float_op<T: ArrowPrimitiveType>(
 trait TimestampOp: ArrowTimestampType {
     type Duration: ArrowPrimitiveType<Native = i64>;
 
-    fn add_year_month(timestamp: i64, delta: i32, tz: &Tz) -> Result<i64, ArrowError>;
+    fn add_year_month(timestamp: i64, delta: i32, tz: Tz) -> Result<i64, ArrowError>;
     fn add_day_time(timestamp: i64, delta: i64) -> Result<i64, ArrowError>;
-    fn add_month_day_nano(
-        timestamp: i64,
-        delta: i128,
-        tz: &Tz,
-    ) -> Result<i64, ArrowError>;
+    fn add_month_day_nano(timestamp: i64, delta: i128, tz: Tz)
+        -> Result<i64, ArrowError>;
 
-    fn sub_year_month(timestamp: i64, delta: i32, tz: &Tz) -> Result<i64, ArrowError>;
+    fn sub_year_month(timestamp: i64, delta: i32, tz: Tz) -> Result<i64, ArrowError>;
     fn sub_day_time(timestamp: i64, delta: i64) -> Result<i64, ArrowError>;
-    fn sub_month_day_nano(
-        timestamp: i64,
-        delta: i128,
-        tz: &Tz,
-    ) -> Result<i64, ArrowError>;
+    fn sub_month_day_nano(timestamp: i64, delta: i128, tz: Tz)
+        -> Result<i64, ArrowError>;
 }
 
 macro_rules! timestamp {
@@ -368,7 +362,7 @@ macro_rules! timestamp {
         impl TimestampOp for $t {
             type Duration = $d;
 
-            fn add_year_month(left: i64, right: i32, tz: &Tz) -> Result<i64, ArrowError> {
+            fn add_year_month(left: i64, right: i32, tz: Tz) -> Result<i64, ArrowError> {
                 Self::add_year_months(left, right, tz)
             }
 
@@ -379,12 +373,12 @@ macro_rules! timestamp {
             fn add_month_day_nano(
                 left: i64,
                 right: i128,
-                tz: &Tz,
+                tz: Tz,
             ) -> Result<i64, ArrowError> {
                 Self::add_month_day_nano(left, right, tz)
             }
 
-            fn sub_year_month(left: i64, right: i32, tz: &Tz) -> Result<i64, ArrowError> {
+            fn sub_year_month(left: i64, right: i32, tz: Tz) -> Result<i64, ArrowError> {
                 Self::subtract_year_months(left, right, tz)
             }
 
@@ -395,7 +389,7 @@ macro_rules! timestamp {
             fn sub_month_day_nano(
                 left: i64,
                 right: i128,
-                tz: &Tz,
+                tz: Tz,
             ) -> Result<i64, ArrowError> {
                 Self::subtract_month_day_nano(left, right, tz)
             }
@@ -439,11 +433,11 @@ fn timestamp_op<T: TimestampOp>(
 
         (Op::Add | Op::AddWrapping, Interval(YearMonth)) => {
             let r = r.as_primitive::<IntervalYearMonthType>();
-            try_op!(l, l_s, r, r_s, T::add_year_month(l, r, &l_tz))
+            try_op!(l, l_s, r, r_s, T::add_year_month(l, r, l_tz))
         }
         (Op::Sub | Op::SubWrapping, Interval(YearMonth)) => {
             let r = r.as_primitive::<IntervalYearMonthType>();
-            try_op!(l, l_s, r, r_s, T::sub_year_month(l, r, &l_tz))
+            try_op!(l, l_s, r, r_s, T::sub_year_month(l, r, l_tz))
         }
 
         (Op::Add | Op::AddWrapping, Interval(DayTime)) => {
@@ -457,11 +451,11 @@ fn timestamp_op<T: TimestampOp>(
 
         (Op::Add | Op::AddWrapping, Interval(MonthDayNano)) => {
             let r = r.as_primitive::<IntervalMonthDayNanoType>();
-            try_op!(l, l_s, r, r_s, T::add_month_day_nano(l, r, &l_tz))
+            try_op!(l, l_s, r, r_s, T::add_month_day_nano(l, r, l_tz))
         }
         (Op::Sub | Op::SubWrapping, Interval(MonthDayNano)) => {
             let r = r.as_primitive::<IntervalMonthDayNanoType>();
-            try_op!(l, l_s, r, r_s, T::sub_month_day_nano(l, r, &l_tz))
+            try_op!(l, l_s, r, r_s, T::sub_month_day_nano(l, r, l_tz))
         }
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
