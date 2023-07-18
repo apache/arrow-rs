@@ -1494,29 +1494,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_timezone_interval() {
-        use arrow_array::timezone::Tz;
-
-        let tz_str = "-01:00";
-        let tz: Tz = tz_str.parse().unwrap();
-
-        let array =
-            TimestampNanosecondArray::from(vec![2419200000000000, 2419200000000000])
-                .with_timezone(tz_str);
-
-        let value = array.value_as_datetime_with_tz(0, tz).unwrap();
-        assert_eq!(value.to_rfc3339(), "1970-01-28T23:00:00-01:00");
-
-        // Add 1 month
-        let interval = IntervalYearMonthArray::from(vec![1, 2]);
-        let date = add(&array, &interval).unwrap();
-        let output = date.as_primitive::<TimestampNanosecondType>();
-
-        let value = output.value_as_datetime_with_tz(0, tz).unwrap();
-        assert_eq!(value.to_rfc3339(), "1970-02-28T23:00:00-01:00");
-    }
-
     fn test_timestamp_with_timezone_impl<T: TimestampOp>(tz_str: &str) {
         let tz: Tz = tz_str.parse().unwrap();
 
