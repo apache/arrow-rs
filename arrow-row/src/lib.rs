@@ -775,6 +775,9 @@ impl RowConverter {
             cur_offset = cur_offset.checked_add(l).expect("overflow");
         }
 
+        // Note this will not zero out any trailing data in `rows.buffer`,
+        // e.g. resulting from a call to `Rows::clear`, relying instead on the
+        // encoders not assuming a zero-initialized buffer
         rows.buffer.resize(cur_offset, 0);
 
         for ((column, field), encoder) in
@@ -2417,6 +2420,26 @@ mod tests {
                 actual.to_data().validate_full().unwrap();
                 dictionary_eq(preserve, actual, expected)
             }
+        }
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut converter =
+            RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
+        let mut rows = converter.empty_rows(3, 128);
+
+        let arrays = [
+            Int32Array::from(vec![None, Some(2), Some(4)]),
+            Int32Array::from(vec![Some(2), None, Some(4)]),
+        ];
+
+        for array in arrays {
+            rows.clear();
+            let array = Arc::new(array) as ArrayRef;
+            converter.append(&mut rows, &[array.clone()]).unwrap();
+            let back = converter.convert_rows(&rows).unwrap();
+            assert_eq!(&back[0], &array);
         }
     }
 }
