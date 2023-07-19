@@ -197,11 +197,6 @@ impl ArrayBuilder for BooleanBuilder {
         self.values_builder.len()
     }
 
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.values_builder.is_empty()
-    }
-
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())

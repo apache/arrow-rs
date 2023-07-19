@@ -133,11 +133,6 @@ impl ArrayBuilder for NullBuilder {
         self.len
     }
 
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
