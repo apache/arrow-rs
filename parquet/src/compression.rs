@@ -272,6 +272,7 @@ pub use gzip_codec::*;
 
 /// Represents a valid gzip compression level.
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GzipLevel(u32);
 
 impl Default for GzipLevel {
@@ -356,6 +357,7 @@ pub use brotli_codec::*;
 
 /// Represents a valid brotli compression level.
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BrotliLevel(u32);
 
 impl Default for BrotliLevel {
@@ -489,6 +491,7 @@ pub use zstd_codec::*;
 
 /// Represents a valid zstd compression level.
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ZstdLevel(i32);
 
 impl CompressionLevel<i32> for ZstdLevel {

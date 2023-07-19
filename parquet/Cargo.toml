@@ -100,6 +100,8 @@ experimental = []
 async = ["futures", "tokio"]
 # Enable object_store integration
 object_store = ["dep:object_store", "async"]
+# Enable serde of ParquetMetaData
+serde = ["dep:serde", "bytes/serde", "serde/rc", "serde/std"]
 
 [[example]]
 name = "read_parquet"

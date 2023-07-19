@@ -42,6 +42,7 @@ pub type ColumnDescPtr = Arc<ColumnDescriptor>;
 /// Note that the top-level schema type is represented using `GroupType` whose
 /// repetition is `None`.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Type {
     PrimitiveType {
         basic_info: BasicTypeInfo,
@@ -607,6 +608,7 @@ impl<'a> GroupTypeBuilder<'a> {
 /// Basic type info. This contains information such as the name of the type,
 /// the repetition level, the logical type and the kind of the type (group, primitive).
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BasicTypeInfo {
     name: String,
     repetition: Option<Repetition>,
@@ -662,6 +664,7 @@ impl BasicTypeInfo {
 
 /// Represents a path in a nested schema
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ColumnPath {
     parts: Vec<String>,
 }
@@ -739,6 +742,7 @@ impl AsRef<[String]> for ColumnPath {
 /// This encapsulates information such as definition and repetition levels and is used to
 /// re-assemble nested data.
 #[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ColumnDescriptor {
     // The "leaf" primitive type of this column
     primitive_type: TypePtr,
@@ -861,6 +865,7 @@ impl ColumnDescriptor {
 /// A schema descriptor. This encapsulates the top-level schemas for all the columns,
 /// as well as all descriptors for all the primitive columns.
 #[derive(PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SchemaDescriptor {
     // The top-level schema (the "message" type).
     // This must be a `GroupType` where each field is a root column type in the schema.

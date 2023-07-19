@@ -33,6 +33,7 @@ use crate::util::{bit_util::FromBytes, memory::ByteBufferPtr};
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
 #[derive(Clone, Copy, Debug, PartialOrd, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Int96 {
     value: [u32; 3],
 }
@@ -102,6 +103,7 @@ impl fmt::Display for Int96 {
 /// Rust representation for BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY Parquet physical types.
 /// Value is backed by a byte buffer.
 #[derive(Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ByteArray {
     data: Option<ByteBufferPtr>,
 }
@@ -263,6 +265,7 @@ impl fmt::Display for ByteArray {
 /// level logical types, removing the data-hazard from all decoding and encoding paths.
 #[repr(transparent)]
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FixedLenByteArray(ByteArray);
 
 impl PartialEq for FixedLenByteArray {

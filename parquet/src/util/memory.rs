@@ -32,6 +32,7 @@ use std::{
 ///
 /// TODO: Remove and replace with [`bytes::Bytes`]
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ByteBufferPtr {
     data: Bytes,
 }

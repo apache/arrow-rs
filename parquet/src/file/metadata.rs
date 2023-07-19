@@ -74,6 +74,7 @@ pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
 
 /// Global Parquet metadata.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ParquetMetaData {
     file_metadata: FileMetaData,
     row_groups: Vec<RowGroupMetaData>,
@@ -174,6 +175,7 @@ pub type FileMetaDataPtr = Arc<FileMetaData>;
 
 /// Metadata for a Parquet file.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FileMetaData {
     version: i32,
     num_rows: i64,
@@ -271,6 +273,7 @@ pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
 
 /// Metadata for a row group.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RowGroupMetaData {
     columns: Vec<ColumnChunkMetaData>,
     num_rows: i64,
@@ -427,6 +430,7 @@ impl RowGroupMetaDataBuilder {
 
 /// Metadata for a column chunk.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ColumnChunkMetaData {
     column_descr: ColumnDescPtr,
     encodings: Vec<Encoding>,

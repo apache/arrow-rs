@@ -34,6 +34,7 @@ use std::fmt::Debug;
 ///
 /// [Column Index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PageIndex<T> {
     /// The minimum value, It is None when all values are null
     pub min: Option<T>,
@@ -56,6 +57,7 @@ impl<T> PageIndex<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[allow(non_camel_case_types)]
 /// Typed statistics for a data page in a column chunk. This structure
 /// is obtained from decoding the [ColumnIndex] in the parquet file
@@ -105,6 +107,7 @@ impl Index {
 
 /// Stores the [`PageIndex`] for each page of a column
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NativeIndex<T: ParquetValueType> {
     /// The indexes, one item per page
     pub indexes: Vec<PageIndex<T>>,

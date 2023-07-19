@@ -25,6 +25,7 @@ use crate::format::{
 
 /// PageEncodingStats for a column chunk and data page.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PageEncodingStats {
     /// the page type (data/dic/...)
     pub page_type: PageType,

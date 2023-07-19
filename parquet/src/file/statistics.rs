@@ -267,6 +267,7 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
 
 /// Statistics for a column chunk and data page.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Statistics {
     Boolean(ValueStatistics<bool>),
     Int32(ValueStatistics<i32>),
@@ -415,6 +416,7 @@ pub type TypedStatistics<T> = ValueStatistics<<T as DataType>::T>;
 
 /// Statistics for a particular `ParquetValueType`
 #[derive(Clone, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ValueStatistics<T> {
     min: Option<T>,
     max: Option<T>,

@@ -519,6 +519,7 @@ impl From<&CompressionCodec> for i32 {
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PageType(pub i32);
 
 impl PageType {
@@ -578,6 +579,7 @@ impl From<&PageType> for i32 {
 /// Enum to annotate whether lists of min/max elements inside ColumnIndex
 /// are ordered and if so, in which direction.
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoundaryOrder(pub i32);
 
 impl BoundaryOrder {
@@ -1207,6 +1209,7 @@ impl TSerializable for DecimalType {
 
 /// Time units for logical types
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MilliSeconds {
 }
 
@@ -1255,6 +1258,7 @@ impl Default for MilliSeconds {
 //
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MicroSeconds {
 }
 
@@ -1303,6 +1307,7 @@ impl Default for MicroSeconds {
 //
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NanoSeconds {
 }
 
@@ -1351,6 +1356,7 @@ impl Default for NanoSeconds {
 //
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TimeUnit {
   MILLIS(MilliSeconds),
   MICROS(MicroSeconds),
@@ -3244,6 +3250,7 @@ impl TSerializable for PageHeader {
 
 /// Wrapper struct to store key values
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct KeyValue {
   pub key: String,
   pub value: Option<String>,
@@ -3314,6 +3321,7 @@ impl TSerializable for KeyValue {
 
 /// Wrapper struct to specify sort order
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SortingColumn {
   /// The column index (in this row group) *
   pub column_idx: i32,
@@ -4434,6 +4442,7 @@ impl TSerializable for ColumnOrder {
 //
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PageLocation {
   /// Offset of the page in the file *
   pub offset: i64,
