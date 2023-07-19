@@ -17,8 +17,8 @@
 
 //! Defines kernel for length of string arrays and binary arrays
 
-use arrow_array::types::*;
 use arrow_array::*;
+use arrow_array::{cast::AsArray, types::*};
 use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
@@ -88,18 +88,12 @@ where
     unary_offsets!(array, T::DATA_TYPE, |x| x)
 }
 
-fn length_list_fixed_size<T>(array: &dyn Array, length: i32) -> ArrayRef
-where
-    T: ArrowPrimitiveType,
-{
-    let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+fn length_list_fixed_size(array: &dyn Array, length: i32) -> ArrayRef {
+    let array = array.as_fixed_size_list();
     let length_list = array.len();
     let buffer = Buffer::from_vec(vec![length; length_list]);
-
-    let data: PrimitiveArray<T> =
-        PrimitiveArray::new(buffer.into(), array.nulls().cloned());
-
-    make_array(data.into())
+    let data = Int32Array::new(buffer.into(), array.nulls().cloned());
+    Arc::new(data)
 }
 
 fn length_binary<O, T>(array: &dyn Array) -> ArrayRef
@@ -186,9 +180,7 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::LargeUtf8 => Ok(length_string::<i64, Int64Type>(array)),
         DataType::Binary => Ok(length_binary::<i32, Int32Type>(array)),
         DataType::LargeBinary => Ok(length_binary::<i64, Int64Type>(array)),
-        DataType::FixedSizeList(_, len) => {
-            Ok(length_list_fixed_size::<Int32Type>(array, *len))
-        }
+        DataType::FixedSizeList(_, len) => Ok(length_list_fixed_size(array, *len)),
         other => Err(ArrowError::ComputeError(format!(
             "length not supported for {other:?}"
         ))),
