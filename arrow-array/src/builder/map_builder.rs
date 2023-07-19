@@ -214,10 +214,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
         self.null_buffer_builder.len()
     }
 
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
     }
