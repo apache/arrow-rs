@@ -17,7 +17,7 @@
 
 //! Zero-sized types used to parameterize generic array implementations
 
-use crate::delta::{shift_days, shift_months};
+use crate::delta::{shift_months, shift_days_datetime, shift_months_datetime};
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
@@ -357,13 +357,13 @@ fn add_year_months<T: ArrowTimestampType>(
     delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     tz: Tz,
 ) -> Result<<T as ArrowPrimitiveType>::Native, ArrowError> {
-    let prior =
-        as_datetime_with_timezone::<T>(timestamp, tz).ok_or_else(|| {
-            ArrowError::ComputeError("Timestamp out of range".to_string())
-        })?;
     let months = IntervalYearMonthType::to_months(delta);
-    let posterior = shift_months(prior, months).naive_utc();
-    T::make_value(posterior)
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = shift_months_datetime(res, months)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = res.naive_utc();
+    T::make_value(res)
         .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))
 }
 
@@ -373,15 +373,13 @@ fn add_day_time<T: ArrowTimestampType>(
     tz: Tz,
 ) -> Result<<T as ArrowPrimitiveType>::Native, ArrowError> {
     let (days, ms) = IntervalDayTimeType::to_parts(delta);
-    let res = as_datetime_with_timezone::<T>(timestamp, tz).ok_or_else(|| {
-        ArrowError::ComputeError("Timestamp out of range".to_string())
-    })?;
-    let res = shift_days(res, days);
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = shift_days_datetime(res, days)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
     let res = res
         .checked_add_signed(Duration::milliseconds(ms as i64))
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Timestamp out of range".to_string())
-        })?;
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
     let res = res.naive_utc();
     T::make_value(res)
         .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))
@@ -393,16 +391,15 @@ fn add_month_day_nano<T: ArrowTimestampType>(
     tz: Tz,
 ) -> Result<<T as ArrowPrimitiveType>::Native, ArrowError> {
     let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-    let res = as_datetime_with_timezone::<T>(timestamp, tz).ok_or_else(|| {
-        ArrowError::ComputeError("Timestamp out of range".to_string())
-    })?;
-    let res = shift_months(res, months);
-    let res = shift_days(res, days);
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = shift_months_datetime(res, months)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = shift_days_datetime(res, days)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
     let res = res
         .checked_add_signed(Duration::nanoseconds(nanos))
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Timestamp out of range".to_string())
-        })?;
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
     let res = res.naive_utc();
     T::make_value(res)
         .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))
@@ -523,8 +520,7 @@ impl TimestampMicrosecondType {
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
         tz: Tz,
-    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError>
-    {
+    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError> {
         add_day_time::<Self>(timestamp, delta, tz)
     }
 
@@ -542,7 +538,6 @@ impl TimestampMicrosecondType {
         add_month_day_nano::<Self>(timestamp, delta, tz)
     }
 
-
     /// Subtracts the given IntervalYearMonthType to an arrow TimestampMicrosecondType
     ///
     /// # Arguments
@@ -553,8 +548,7 @@ impl TimestampMicrosecondType {
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
         tz: Tz,
-    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError>
-    {
+    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError> {
         Self::add_year_months(timestamp, -delta, tz)
     }
 
@@ -568,8 +562,7 @@ impl TimestampMicrosecondType {
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
         tz: Tz,
-    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError>
-    {
+    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError> {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let delta = IntervalDayTimeType::make_value(-days, -ms);
         Self::add_day_time(timestamp, delta, tz)
@@ -585,8 +578,7 @@ impl TimestampMicrosecondType {
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
         tz: Tz,
-    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError>
-    {
+    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let delta = IntervalMonthDayNanoType::make_value(-months, -days, -nanos);
         Self::add_month_day_nano(timestamp, delta, tz)
@@ -618,8 +610,7 @@ impl TimestampMillisecondType {
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
         tz: Tz,
-    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError>
-    {
+    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError> {
         add_day_time::<Self>(timestamp, delta, tz)
     }
 
@@ -637,7 +628,6 @@ impl TimestampMillisecondType {
         add_month_day_nano::<Self>(timestamp, delta, tz)
     }
 
-
     /// Subtracts the given IntervalYearMonthType to an arrow TimestampMillisecondType
     ///
     /// # Arguments
@@ -648,8 +638,7 @@ impl TimestampMillisecondType {
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
         tz: Tz,
-    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError>
-    {
+    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError> {
         Self::add_year_months(timestamp, -delta, tz)
     }
 
@@ -663,8 +652,7 @@ impl TimestampMillisecondType {
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
         tz: Tz,
-    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError>
-    {
+    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError> {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let delta = IntervalDayTimeType::make_value(-days, -ms);
         Self::add_day_time(timestamp, delta, tz)
@@ -680,8 +668,7 @@ impl TimestampMillisecondType {
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
         tz: Tz,
-    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError>
-    {
+    ) -> Result<<Self as ArrowPrimitiveType>::Native, ArrowError> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let delta = IntervalMonthDayNanoType::make_value(-months, -days, -nanos);
         Self::add_month_day_nano(timestamp, delta, tz)

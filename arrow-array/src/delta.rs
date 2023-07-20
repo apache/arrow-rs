@@ -23,7 +23,7 @@
 // Copied from chronoutil crate
 
 //! Contains utility functions for shifting Date objects.
-use chrono::{Datelike, Days, Months};
+use chrono::{Datelike, Days, Months, TimeZone, DateTime};
 use std::cmp::Ordering;
 
 /// Shift a date by the given number of months.
@@ -38,14 +38,26 @@ where
     }
 }
 
-pub(crate) fn shift_days<D>(date: D, days: i32) -> D
-where
-    D: Datelike + std::ops::Add<Days, Output = D> + std::ops::Sub<Days, Output = D>,
-{
+/// Shift a date by the given number of months.
+pub(crate) fn shift_months_datetime<Tz: TimeZone>(
+    dt: DateTime<Tz>,
+    months: i32,
+) -> Option<DateTime<Tz>> {
+    match months.cmp(&0) {
+        Ordering::Equal => Some(dt),
+        Ordering::Greater => dt.checked_add_months(Months::new(months as u32)),
+        Ordering::Less => dt.checked_sub_months(Months::new(-months as u32)),
+    }
+}
+
+pub(crate) fn shift_days_datetime<Tz: TimeZone>(
+    dt: DateTime<Tz>,
+    days: i32,
+) -> Option<DateTime<Tz>> {
     match days.cmp(&0) {
-        Ordering::Equal => date,
-        Ordering::Greater => date + Days::new(days as u64),
-        Ordering::Less => date - Days::new(-days as u64),
+        Ordering::Equal => Some(dt),
+        Ordering::Greater => dt.checked_add_days(Days::new(days as u64)),
+        Ordering::Less => dt.checked_sub_days(Days::new(-days as u64)),
     }
 }
 
