@@ -23,22 +23,29 @@
 // Copied from chronoutil crate
 
 //! Contains utility functions for shifting Date objects.
-use chrono::{Datelike, Months};
+use chrono::{Datelike, Days, Months};
 use std::cmp::Ordering;
 
 /// Shift a date by the given number of months.
-pub(crate) fn shift_months<
-    D: Datelike
-        + std::ops::Add<chrono::Months, Output = D>
-        + std::ops::Sub<chrono::Months, Output = D>,
->(
-    date: D,
-    months: i32,
-) -> D {
+pub(crate) fn shift_months<D>(date: D, months: i32) -> D
+where
+    D: Datelike + std::ops::Add<Months, Output = D> + std::ops::Sub<Months, Output = D>,
+{
     match months.cmp(&0) {
         Ordering::Equal => date,
         Ordering::Greater => date + Months::new(months as u32),
         Ordering::Less => date - Months::new(-months as u32),
+    }
+}
+
+pub(crate) fn shift_days<D>(date: D, days: i32) -> D
+where
+    D: Datelike + std::ops::Add<Days, Output = D> + std::ops::Sub<Days, Output = D>,
+{
+    match days.cmp(&0) {
+        Ordering::Equal => date,
+        Ordering::Greater => date + Days::new(days as u64),
+        Ordering::Less => date - Days::new(-days as u64),
     }
 }
 
