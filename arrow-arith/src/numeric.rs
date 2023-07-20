@@ -1511,6 +1511,9 @@ mod tests {
             tz.with_ymd_and_hms(1960, 1, 30, 4, 23, 20)
                 .unwrap()
                 .naive_utc(),
+            tz.with_ymd_and_hms(2023, 3, 25, 14, 0, 0)
+                .unwrap()
+                .naive_utc(),
         ]
         .into_iter()
         .map(|x| T::make_value(x).unwrap())
@@ -1524,6 +1527,7 @@ mod tests {
             IntervalYearMonthType::make_value(5, 34),
             IntervalYearMonthType::make_value(-2, 4),
             IntervalYearMonthType::make_value(7, -4),
+            IntervalYearMonthType::make_value(0, 1),
         ]);
         let r1 = add(&a, &b).unwrap();
         assert_eq!(
@@ -1532,7 +1536,8 @@ mod tests {
                 tz.with_ymd_and_hms(1970, 2, 28, 23, 0, 0).unwrap(),
                 tz.with_ymd_and_hms(1977, 11, 1, 0, 0, 0).unwrap(),
                 tz.with_ymd_and_hms(2008, 8, 1, 4, 0, 20).unwrap(),
-                tz.with_ymd_and_hms(1966, 9, 30, 4, 23, 20).unwrap()
+                tz.with_ymd_and_hms(1966, 9, 30, 4, 23, 20).unwrap(),
+                tz.with_ymd_and_hms(2023, 4, 25, 14, 0, 0).unwrap(),
             ]
         );
 
@@ -1545,6 +1550,7 @@ mod tests {
             IntervalDayTimeType::make_value(5, 454000),
             IntervalDayTimeType::make_value(-34, 0),
             IntervalDayTimeType::make_value(7, -4000),
+            IntervalDayTimeType::make_value(1, 0),
         ]);
         let r3 = add(&a, &b).unwrap();
         assert_eq!(
@@ -1554,6 +1560,7 @@ mod tests {
                 tz.with_ymd_and_hms(1970, 1, 6, 0, 7, 34).unwrap(),
                 tz.with_ymd_and_hms(2010, 2, 26, 4, 0, 20).unwrap(),
                 tz.with_ymd_and_hms(1960, 2, 6, 4, 23, 16).unwrap(),
+                tz.with_ymd_and_hms(2023, 3, 26, 14, 0, 0).unwrap(),
             ]
         );
 
@@ -1566,6 +1573,7 @@ mod tests {
             IntervalMonthDayNanoType::make_value(344, 34, -43_000_000_000),
             IntervalMonthDayNanoType::make_value(-593, -33, 13_000_000_000),
             IntervalMonthDayNanoType::make_value(5, 2, 493_000_000_000),
+            IntervalMonthDayNanoType::make_value(1, 0, 0),
         ]);
         let r5 = add(&a, &b).unwrap();
         assert_eq!(
@@ -1574,7 +1582,8 @@ mod tests {
                 tz.with_ymd_and_hms(1970, 2, 28, 23, 0, 0).unwrap(),
                 tz.with_ymd_and_hms(1998, 10, 4, 23, 59, 17).unwrap(),
                 tz.with_ymd_and_hms(1960, 9, 29, 4, 0, 33).unwrap(),
-                tz.with_ymd_and_hms(1960, 7, 2, 4, 31, 33).unwrap()
+                tz.with_ymd_and_hms(1960, 7, 2, 4, 31, 33).unwrap(),
+                tz.with_ymd_and_hms(2023, 4, 25, 14, 0, 0).unwrap(),
             ]
         );
 
@@ -1585,7 +1594,8 @@ mod tests {
                 tz.with_ymd_and_hms(1970, 1, 28, 23, 0, 0).unwrap(),
                 tz.with_ymd_and_hms(1970, 1, 2, 0, 0, 0).unwrap(),
                 tz.with_ymd_and_hms(2010, 4, 2, 4, 0, 20).unwrap(),
-                tz.with_ymd_and_hms(1960, 1, 31, 4, 23, 20).unwrap()
+                tz.with_ymd_and_hms(1960, 1, 31, 4, 23, 20).unwrap(),
+                tz.with_ymd_and_hms(2023, 3, 25, 14, 0, 0).unwrap(),
             ]
         );
     }
