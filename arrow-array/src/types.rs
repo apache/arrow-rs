@@ -412,6 +412,7 @@ impl TimestampSecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_year_months(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -426,6 +427,7 @@ impl TimestampSecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_day_time(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -440,6 +442,7 @@ impl TimestampSecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_month_day_nano(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -454,6 +457,7 @@ impl TimestampSecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_year_months(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -468,6 +472,7 @@ impl TimestampSecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_day_time(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -484,6 +489,7 @@ impl TimestampSecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_month_day_nano(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -502,6 +508,7 @@ impl TimestampMicrosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_year_months(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -516,6 +523,7 @@ impl TimestampMicrosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_day_time(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -530,6 +538,7 @@ impl TimestampMicrosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_month_day_nano(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -544,6 +553,7 @@ impl TimestampMicrosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_year_months(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -558,6 +568,7 @@ impl TimestampMicrosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_day_time(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -574,6 +585,7 @@ impl TimestampMicrosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_month_day_nano(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -592,6 +604,7 @@ impl TimestampMillisecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_year_months(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -606,6 +619,7 @@ impl TimestampMillisecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_day_time(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -620,6 +634,7 @@ impl TimestampMillisecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_month_day_nano(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -634,6 +649,7 @@ impl TimestampMillisecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_year_months(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -648,6 +664,7 @@ impl TimestampMillisecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_day_time(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -664,6 +681,7 @@ impl TimestampMillisecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_month_day_nano(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -682,6 +700,7 @@ impl TimestampNanosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_year_months(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -696,6 +715,7 @@ impl TimestampNanosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_day_time(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -710,6 +730,7 @@ impl TimestampNanosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn add_month_day_nano(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -724,6 +745,7 @@ impl TimestampNanosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_year_months(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -738,6 +760,7 @@ impl TimestampNanosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_day_time(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -754,6 +777,7 @@ impl TimestampNanosecondType {
     ///
     /// * `timestamp` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
     pub fn subtract_month_day_nano(
         timestamp: <Self as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
