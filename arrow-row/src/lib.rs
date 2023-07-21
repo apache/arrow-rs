@@ -21,7 +21,7 @@
 //! using [`memcmp`] under the hood, or used in [non-comparison sorts] such as [radix sort].
 //! This makes the row format ideal for implementing efficient multi-column sorting,
 //! grouping, aggregation, windowing and more, as described in more detail
-//! [here](https://arrow.apache.org/blog/2022/11/07/multi-column-sorts-in-arrow-rust-part-1/).
+//! [in this blog post](https://arrow.apache.org/blog/2022/11/07/multi-column-sorts-in-arrow-rust-part-1/).
 //!
 //! For example, given three input [`Array`], [`RowConverter`] creates byte
 //! sequences that [compare] the same as when using [`lexsort`].
