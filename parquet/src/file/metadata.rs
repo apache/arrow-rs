@@ -230,7 +230,9 @@ impl FileMetaData {
         self.key_value_metadata.as_ref()
     }
 
-    /// Returns Parquet ['Type`] that describes schema in this file.
+    /// Returns Parquet [`Type`] that describes schema in this file.
+    ///
+    /// [`Type`]: crate::schema::types::Type
     pub fn schema(&self) -> &SchemaType {
         self.schema_descr.root_schema()
     }
