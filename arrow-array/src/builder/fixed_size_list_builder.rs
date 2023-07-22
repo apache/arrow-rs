@@ -73,7 +73,11 @@ impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
     /// Creates a new [`FixedSizeListBuilder`] from a given values array builder
     /// `value_length` is the number of values within each array
     pub fn new(values_builder: T, value_length: i32) -> Self {
-        let capacity = values_builder.len();
+        let capacity = values_builder
+            .len()
+            .checked_div(value_length as _)
+            .unwrap_or_default();
+
         Self::with_capacity(values_builder, value_length, capacity)
     }
 
