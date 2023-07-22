@@ -273,8 +273,8 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `sum_checked` instead.
-// #[cfg(not(feature = "simd"))]
-pub fn sum_test<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
+#[cfg(not(feature = "simd"))]
+pub fn sum<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -286,6 +286,7 @@ where
     }
 
     let data: &[T::Native] = array.values();
+    // TODO choose lanes based on T::Native. Extract from simd module
     const LANES: usize = 16;
     let mut chunk_acc = [T::default_value(); LANES];
     let mut rem_acc = T::default_value();
@@ -318,7 +319,6 @@ where
             Some(sum)
         }
         Some(nulls) => {
-            // let mut sum = T::default_value();
             // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
             let data_chunks = data.chunks_exact(64);
             let remainder = data_chunks.remainder();
@@ -327,43 +327,21 @@ where
             let remainder_bits = bit_chunks.remainder_bits();
 
             data_chunks.zip(bit_chunks).for_each(|(chunk, mut mask)| {
-                // index_mask has value 1 << i in the loop
-                let mut index_mask = 1;
                 // split chunks further into slices corresponding to the vector length
                 // the compiler is able to unroll this inner loop and remove bounds checks
                 // since the outer chunk size (64) is always a multiple of the number of lanes
                 chunk.chunks_exact(LANES).for_each(|chunk| {
                     let mut chunk: [T::Native; LANES] = chunk.try_into().unwrap();
-                    let mut set_zero = [false; LANES];
-                    // let mut zeros = [T::default_value(); LANES];
-
-                    // blend
-                    // fn generic_bit_blend<T>(mask: T, y: T, n: T) -> T
-                    // where
-                    //     T: Copy + BitXor<Output = T> + BitAnd<Output = T>,
-                    // {
-                    //     n ^ ((n ^ y) & mask)
-                    // }
-                    // for i in 0..LANES {
-                    //     generic_bit_blend(mask, y, n)
-                    // }
 
                     for i in 0..LANES {
-                        set_zero[i] = mask & index_mask == 0;
-                        index_mask <<= 1;
-                    }
-
-                    // mask_select
-                    for i in 0..LANES {
-                        if set_zero[i] {
+                        if mask & (1 << i) == 0 {
                             chunk[i] = T::default_value();
                         }
-                    }
-
-                    // by now chunk[i] will be 0 if null, or else the value
-                    for i in 0..LANES {
                         chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
                     }
+
+                    // skip the shift and avoid overflow for u8 type, which uses 64 lanes.
+                    mask >>= LANES % 64;
                 })
             });
 
