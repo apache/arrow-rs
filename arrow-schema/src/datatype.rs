@@ -18,7 +18,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{FieldRef, Fields, UnionFields, Field};
+use crate::{Field, FieldRef, Fields, UnionFields};
 
 /// The set of datatypes that are supported by this implementation of Apache Arrow.
 ///
@@ -579,7 +579,7 @@ impl DataType {
 
     /// Create a List DataType default name is "item"
     pub fn new_list(data_type: DataType, nullable: bool) -> Self {
-        return DataType::List(Arc::new(Field::new("item", data_type, nullable)));
+        DataType::List(Arc::new(Field::new("item", data_type, nullable)))
     }
 }
 
