@@ -213,7 +213,8 @@ where
     }
 
     /// Read up to `max_records` whole records, returning the number of complete
-    /// records, non-null values and levels decoded. Records will not be partially read
+    /// records, non-null values and levels decoded. All levels for a given record
+    /// will be read, i.e. the next repetition level, if any, will be 0
     ///
     /// If the max definition level is 0, `def_levels` will be ignored and the number of records,
     /// non-null values and levels decoded will all be equal, otherwise `def_levels` will be
