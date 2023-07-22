@@ -990,7 +990,7 @@ mod tests {
 
         assert_json_eq(
             &buf,
-            r#"{"duration_sec":"PT120S","duration_msec":"PT0.120S","duration_usec":"PT0.000120S","duration_nsec":"PT0.000000120S","name":"a"}
+            r#"{"duration_sec":"120 secs","duration_msec":"120 millis","duration_usec":"120 micros","duration_nsec":"120 nanos","name":"a"}
 {"name":"b"}
 "#,
         );
