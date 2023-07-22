@@ -273,8 +273,8 @@ where
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use `sum_checked` instead.
-#[cfg(not(feature = "simd"))]
-pub fn sum<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
+// #[cfg(not(feature = "simd"))]
+pub fn sum_test<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T: ArrowNumericType,
     T::Native: ArrowNativeTypeOp,
@@ -286,41 +286,81 @@ where
     }
 
     let data: &[T::Native] = array.values();
+    const LANES: usize = 16;
+    let mut chunk_acc = [T::default_value(); LANES];
+    let mut rem_acc = T::default_value();
 
     match array.nulls() {
         None => {
-            let sum = data.iter().fold(T::default_value(), |accumulator, value| {
-                accumulator.add_wrapping(*value)
+            let data_chunks = data.chunks_exact(64);
+            let remainder = data_chunks.remainder();
+
+            data_chunks.for_each(|chunk| {
+                chunk.chunks_exact(LANES).for_each(|chunk| {
+                    let chunk: [T::Native; LANES] = chunk.try_into().unwrap();
+
+                    for i in 0..LANES {
+                        chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
+                    }
+                })
             });
+
+            remainder.iter().copied().for_each(|value| {
+                rem_acc = rem_acc.add_wrapping(value);
+            });
+
+            let mut reduced = T::default_value();
+            for i in 0..LANES {
+                reduced = reduced.add_wrapping(chunk_acc[i]);
+            }
+            let sum = reduced.add_wrapping(rem_acc);
 
             Some(sum)
         }
         Some(nulls) => {
-            let mut sum = T::default_value();
+            // let mut sum = T::default_value();
+            // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
             let data_chunks = data.chunks_exact(64);
             let remainder = data_chunks.remainder();
 
             let bit_chunks = nulls.inner().bit_chunks();
-            data_chunks
-                .zip(bit_chunks.iter())
-                .for_each(|(chunk, mask)| {
-                    // index_mask has value 1 << i in the loop
-                    let mut index_mask = 1;
-                    chunk.iter().for_each(|value| {
-                        if (mask & index_mask) != 0 {
-                            sum = sum.add_wrapping(*value);
+            let remainder_bits = bit_chunks.remainder_bits();
+
+            data_chunks.zip(bit_chunks).for_each(|(chunk, mut mask)| {
+                // index_mask has value 1 << i in the loop
+                let mut index_mask = 1;
+                // split chunks further into slices corresponding to the vector length
+                // the compiler is able to unroll this inner loop and remove bounds checks
+                // since the outer chunk size (64) is always a multiple of the number of lanes
+                chunk.chunks_exact(LANES).for_each(|chunk| {
+                    let mut chunk: [T::Native; LANES] = chunk.try_into().unwrap();
+
+                    // mask_select
+                    for i in 0..LANES {
+                        if mask & index_mask == 0 {
+                            chunk[i] = T::default_value();
                         }
                         index_mask <<= 1;
-                    });
-                });
+                    }
 
-            let remainder_bits = bit_chunks.remainder_bits();
+                    // by now blended[i] will be 0 if null, or else the value
+                    for i in 0..LANES {
+                        chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
+                    }
+                })
+            });
 
             remainder.iter().enumerate().for_each(|(i, value)| {
                 if remainder_bits & (1 << i) != 0 {
-                    sum = sum.add_wrapping(*value);
+                    rem_acc = rem_acc.add_wrapping(*value);
                 }
             });
+
+            let mut reduced = T::default_value();
+            for i in 0..LANES {
+                reduced = reduced.add_wrapping(chunk_acc[i]);
+            }
+            let sum = reduced.add_wrapping(rem_acc);
 
             Some(sum)
         }

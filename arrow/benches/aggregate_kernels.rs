@@ -29,6 +29,10 @@ fn bench_sum(arr_a: &Float32Array) {
     criterion::black_box(sum(arr_a).unwrap());
 }
 
+fn bench_sum_test(arr_a: &Float32Array) {
+    criterion::black_box(sum_test(arr_a).unwrap());
+}
+
 fn bench_min(arr_a: &Float32Array) {
     criterion::black_box(min(arr_a).unwrap());
 }
@@ -45,12 +49,14 @@ fn add_benchmark(c: &mut Criterion) {
     let arr_a = create_primitive_array::<Float32Type>(512, 0.0);
 
     c.bench_function("sum 512", |b| b.iter(|| bench_sum(&arr_a)));
+    c.bench_function("sum test 512", |b| b.iter(|| bench_sum_test(&arr_a)));
     c.bench_function("min 512", |b| b.iter(|| bench_min(&arr_a)));
     c.bench_function("max 512", |b| b.iter(|| bench_max(&arr_a)));
 
     let arr_a = create_primitive_array::<Float32Type>(512, 0.5);
 
     c.bench_function("sum nulls 512", |b| b.iter(|| bench_sum(&arr_a)));
+    c.bench_function("sum nulls test 512", |b| b.iter(|| bench_sum_test(&arr_a)));
     c.bench_function("min nulls 512", |b| b.iter(|| bench_min(&arr_a)));
     c.bench_function("max nulls 512", |b| b.iter(|| bench_max(&arr_a)));
 
