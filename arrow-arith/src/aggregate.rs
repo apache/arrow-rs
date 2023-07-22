@@ -334,16 +334,33 @@ where
                 // since the outer chunk size (64) is always a multiple of the number of lanes
                 chunk.chunks_exact(LANES).for_each(|chunk| {
                     let mut chunk: [T::Native; LANES] = chunk.try_into().unwrap();
+                    let mut set_zero = [false; LANES];
+                    // let mut zeros = [T::default_value(); LANES];
 
-                    // mask_select
+                    // blend
+                    // fn generic_bit_blend<T>(mask: T, y: T, n: T) -> T
+                    // where
+                    //     T: Copy + BitXor<Output = T> + BitAnd<Output = T>,
+                    // {
+                    //     n ^ ((n ^ y) & mask)
+                    // }
+                    // for i in 0..LANES {
+                    //     generic_bit_blend(mask, y, n)
+                    // }
+
                     for i in 0..LANES {
-                        if mask & index_mask == 0 {
-                            chunk[i] = T::default_value();
-                        }
+                        set_zero[i] = mask & index_mask == 0;
                         index_mask <<= 1;
                     }
 
-                    // by now blended[i] will be 0 if null, or else the value
+                    // mask_select
+                    for i in 0..LANES {
+                        if set_zero[i] {
+                            chunk[i] = T::default_value();
+                        }
+                    }
+
+                    // by now chunk[i] will be 0 if null, or else the value
                     for i in 0..LANES {
                         chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
                     }
