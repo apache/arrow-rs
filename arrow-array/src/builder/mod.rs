@@ -237,7 +237,9 @@ pub trait ArrayBuilder: Any + Send {
     fn len(&self) -> usize;
 
     /// Returns whether number of array slots is zero
-    fn is_empty(&self) -> bool;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Builds the array
     fn finish(&mut self) -> ArrayRef;

@@ -212,7 +212,7 @@ where
         Ok((values, levels))
     }
 
-    /// Read up to `num_records` whole records, returning the number of complete
+    /// Read up to `max_records` whole records, returning the number of complete
     /// records, non-null values and levels decoded. Records will not be partially read
     ///
     /// If the max definition level is 0, `def_levels` will be ignored and the number of records,

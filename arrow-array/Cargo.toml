@@ -46,8 +46,7 @@ arrow-schema = { workspace = true }
 arrow-data = { workspace = true }
 chrono = { version = "0.4.24", default-features = false, features = ["clock"] }
 chrono-tz = { version = "0.8", optional = true }
-num = { version = "0.4", default-features = false, features = ["std"] }
-num-complex = "0.4.2"
+num = { version = "0.4.1", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 hashbrown = { version = "0.14", default-features = false }
 packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
