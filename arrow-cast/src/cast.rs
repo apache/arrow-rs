@@ -463,7 +463,7 @@ fn cast_month_day_none_to_duration<D: ArrowTemporalType<Native = i64>>(
     if cast_options.safe {
         let iter = array
             .iter()
-            .map(|v| v.and_then(|v| (v >> 64 == 0).then(|| (v as i64) / scale)));
+            .map(|v| v.and_then(|v| (v >> 64 == 0).then_some((v as i64) / scale)));
         Ok(Arc::new(unsafe {
             PrimitiveArray::<D>::from_trusted_len_iter(iter)
         }))
