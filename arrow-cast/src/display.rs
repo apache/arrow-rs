@@ -533,25 +533,29 @@ temporal_display!(time32ms_to_time, time_format, Time32MillisecondType);
 temporal_display!(time64us_to_time, time_format, Time64MicrosecondType);
 temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
 
+fn format_duration<const SCALE: u32>(f: &mut dyn Write, v: i64) -> std::fmt::Result {
+    let v_abs = v.unsigned_abs();
+    if v.is_negative() {
+        write!(f, "-")?;
+    }
+    let secs = v_abs / 10_u64.pow(SCALE);
+    let subsec_nanos = (v_abs % 10_u64.pow(SCALE)) * 10_u64.pow(9 - SCALE);
+    if subsec_nanos == 0 {
+        write!(f, "{secs} secs")
+    } else if subsec_nanos % 1_000_000 == 0 {
+        write!(f, "{secs}.{:03} secs", subsec_nanos / 1_000_000)
+    } else if subsec_nanos % 1_000 == 0 {
+        write!(f, "{secs}.{:06} secs", subsec_nanos / 1_000)
+    } else {
+        write!(f, "{secs}.{:09} secs", subsec_nanos)
+    }
+}
+
 macro_rules! duration_display {
-    ($t:ty, 0) => {
-        impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
-            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-                write!(f, concat!("{} secs"), self.value(idx))?;
-                Ok(())
-            }
-        }
-    };
     ($t:ty, $scale:expr) => {
         impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-                let v = self.value(idx);
-                let secs = (v / 10_i64.pow($scale)).abs();
-                let frac = (v % 10_i64.pow($scale)).abs();
-                match v < 0 {
-                    true => write!(f, concat!("-{}.{:0", $scale, "} secs"), secs, frac)?,
-                    false => write!(f, concat!("{}.{:0", $scale, "} secs"), secs, frac)?,
-                }
+                format_duration::<$scale>(f, self.value(idx))?;
                 Ok(())
             }
         }
@@ -914,22 +918,22 @@ mod tests {
         assert_eq!(array_value_to_string(&a, 0).unwrap(), "0.000000001 secs");
         assert_eq!(array_value_to_string(&a, 1).unwrap(), "");
         assert_eq!(array_value_to_string(&a, 2).unwrap(), "-0.000000001 secs");
-        assert_eq!(array_value_to_string(&a, 3).unwrap(), "1.000000000 secs");
-        assert_eq!(array_value_to_string(&a, 4).unwrap(), "-1.000000000 secs");
+        assert_eq!(array_value_to_string(&a, 3).unwrap(), "1 secs");
+        assert_eq!(array_value_to_string(&a, 4).unwrap(), "-1 secs");
 
         let a = DurationMicrosecondArray::from(values.clone());
         assert_eq!(array_value_to_string(&a, 0).unwrap(), "0.000001 secs");
         assert_eq!(array_value_to_string(&a, 1).unwrap(), "");
         assert_eq!(array_value_to_string(&a, 2).unwrap(), "-0.000001 secs");
-        assert_eq!(array_value_to_string(&a, 3).unwrap(), "1000.000000 secs");
-        assert_eq!(array_value_to_string(&a, 4).unwrap(), "-1000.000000 secs");
+        assert_eq!(array_value_to_string(&a, 3).unwrap(), "1000 secs");
+        assert_eq!(array_value_to_string(&a, 4).unwrap(), "-1000 secs");
 
         let a = DurationMillisecondArray::from(values.clone());
         assert_eq!(array_value_to_string(&a, 0).unwrap(), "0.001 secs");
         assert_eq!(array_value_to_string(&a, 1).unwrap(), "");
         assert_eq!(array_value_to_string(&a, 2).unwrap(), "-0.001 secs");
-        assert_eq!(array_value_to_string(&a, 3).unwrap(), "1000000.000 secs");
-        assert_eq!(array_value_to_string(&a, 4).unwrap(), "-1000000.000 secs");
+        assert_eq!(array_value_to_string(&a, 3).unwrap(), "1000000 secs");
+        assert_eq!(array_value_to_string(&a, 4).unwrap(), "-1000000 secs");
 
         let a = DurationSecondArray::from(values);
         assert_eq!(array_value_to_string(&a, 0).unwrap(), "1 secs");
