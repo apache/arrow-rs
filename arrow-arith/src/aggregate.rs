@@ -311,8 +311,8 @@ where
             });
 
             let mut reduced = T::default_value();
-            for i in 0..LANES {
-                reduced = reduced.add_wrapping(chunk_acc[i]);
+            for v in chunk_acc {
+                reduced = reduced.add_wrapping(v);
             }
             let sum = reduced.add_wrapping(rem_acc);
 
@@ -352,8 +352,8 @@ where
             });
 
             let mut reduced = T::default_value();
-            for i in 0..LANES {
-                reduced = reduced.add_wrapping(chunk_acc[i]);
+            for v in chunk_acc {
+                reduced = reduced.add_wrapping(v);
             }
             let sum = reduced.add_wrapping(rem_acc);
 
