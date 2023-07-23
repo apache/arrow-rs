@@ -33,9 +33,7 @@ pub struct FlightServiceImpl {}
 
 #[tonic::async_trait]
 impl FlightService for FlightServiceImpl {
-    type HandshakeStream = Pin<
-        Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + Sync + 'static>,
-    >;
+    type HandshakeStream = BoxStream<'static, Result<HandshakeResponse, Status>>;
     type ListFlightsStream = BoxStream<'static, Result<FlightInfo, Status>>;
     type DoGetStream = BoxStream<'static, Result<FlightData, Status>>;
     type DoPutStream = BoxStream<'static, Result<PutResult, Status>>;
