@@ -534,20 +534,34 @@ temporal_display!(time64us_to_time, time_format, Time64MicrosecondType);
 temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
 
 macro_rules! duration_display {
-    ($unit:expr, $t:ty) => {
+    ($t:ty, 0) => {
         impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-                write!(f, concat!("{} ", $unit), self.value(idx))?;
+                write!(f, concat!("{} secs"), self.value(idx))?;
+                Ok(())
+            }
+        }
+    };
+    ($t:ty, $scale:expr) => {
+        impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
+            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+                let v = self.value(idx);
+                let secs = (v / 10_i64.pow($scale)).abs();
+                let frac = (v % 10_i64.pow($scale)).abs();
+                match v < 0 {
+                    true => write!(f, concat!("-{}.{:0", $scale, "} secs"), secs, frac)?,
+                    false => write!(f, concat!("{}.{:0", $scale, "} secs"), secs, frac)?,
+                }
                 Ok(())
             }
         }
     };
 }
 
-duration_display!("secs", DurationSecondType);
-duration_display!("millis", DurationMillisecondType);
-duration_display!("micros", DurationMicrosecondType);
-duration_display!("nanos", DurationNanosecondType);
+duration_display!(DurationSecondType, 0);
+duration_display!(DurationMillisecondType, 3);
+duration_display!(DurationMicrosecondType, 6);
+duration_display!(DurationNanosecondType, 9);
 
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -889,20 +903,39 @@ mod tests {
 
     #[test]
     fn test_array_value_to_string_duration() {
-        let ns_array = DurationNanosecondArray::from(vec![Some(1), None]);
-        assert_eq!(array_value_to_string(&ns_array, 0).unwrap(), "1 nanos");
-        assert_eq!(array_value_to_string(&ns_array, 1).unwrap(), "");
+        let values = vec![
+            Some(1),
+            None,
+            Some(-1),
+            Some(1_000_000_000),
+            Some(-1_000_000_000),
+        ];
+        let a = DurationNanosecondArray::from(values.clone());
+        assert_eq!(array_value_to_string(&a, 0).unwrap(), "0.000000001 secs");
+        assert_eq!(array_value_to_string(&a, 1).unwrap(), "");
+        assert_eq!(array_value_to_string(&a, 2).unwrap(), "-0.000000001 secs");
+        assert_eq!(array_value_to_string(&a, 3).unwrap(), "1.000000000 secs");
+        assert_eq!(array_value_to_string(&a, 4).unwrap(), "-1.000000000 secs");
 
-        let us_array = DurationMicrosecondArray::from(vec![Some(1), None]);
-        assert_eq!(array_value_to_string(&us_array, 0).unwrap(), "1 micros");
-        assert_eq!(array_value_to_string(&us_array, 1).unwrap(), "");
+        let a = DurationMicrosecondArray::from(values.clone());
+        assert_eq!(array_value_to_string(&a, 0).unwrap(), "0.000001 secs");
+        assert_eq!(array_value_to_string(&a, 1).unwrap(), "");
+        assert_eq!(array_value_to_string(&a, 2).unwrap(), "-0.000001 secs");
+        assert_eq!(array_value_to_string(&a, 3).unwrap(), "1000.000000 secs");
+        assert_eq!(array_value_to_string(&a, 4).unwrap(), "-1000.000000 secs");
 
-        let ms_array = DurationMillisecondArray::from(vec![Some(1), None]);
-        assert_eq!(array_value_to_string(&ms_array, 0).unwrap(), "1 millis");
-        assert_eq!(array_value_to_string(&ms_array, 1).unwrap(), "");
+        let a = DurationMillisecondArray::from(values.clone());
+        assert_eq!(array_value_to_string(&a, 0).unwrap(), "0.001 secs");
+        assert_eq!(array_value_to_string(&a, 1).unwrap(), "");
+        assert_eq!(array_value_to_string(&a, 2).unwrap(), "-0.001 secs");
+        assert_eq!(array_value_to_string(&a, 3).unwrap(), "1000000.000 secs");
+        assert_eq!(array_value_to_string(&a, 4).unwrap(), "-1000000.000 secs");
 
-        let s_array = DurationSecondArray::from(vec![Some(1), None]);
-        assert_eq!(array_value_to_string(&s_array, 0).unwrap(), "1 secs");
-        assert_eq!(array_value_to_string(&s_array, 1).unwrap(), "");
+        let a = DurationSecondArray::from(values);
+        assert_eq!(array_value_to_string(&a, 0).unwrap(), "1 secs");
+        assert_eq!(array_value_to_string(&a, 1).unwrap(), "");
+        assert_eq!(array_value_to_string(&a, 2).unwrap(), "-1 secs");
+        assert_eq!(array_value_to_string(&a, 3).unwrap(), "1000000000 secs");
+        assert_eq!(array_value_to_string(&a, 4).unwrap(), "-1000000000 secs");
     }
 }
