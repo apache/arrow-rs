@@ -1630,4 +1630,64 @@ mod tests {
             test_timestamp_with_timezone_impl::<TimestampNanosecondType>(timezone);
         }
     }
+
+    fn test_interval_overflow_impl<T: TimestampOp>(tz_str: &str) {
+        let tz: Tz = tz_str.parse().unwrap();
+
+        let values = vec![tz
+            .with_ymd_and_hms(1970, 1, 1, 1, 0, 0)
+            .unwrap()
+            .naive_utc()]
+        .into_iter()
+        .map(|x| T::make_value(x).unwrap())
+        .collect();
+
+        let a = PrimitiveArray::<T>::new(values, None).with_timezone(tz_str);
+
+        // IntervalYearMonth
+        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(
+            0,
+            i32::MIN,
+        )]);
+        let res = sub(&a, &b);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Compute error: Interval out of range"
+        );
+
+        // IntervalDayTime
+        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(
+            0,
+            i32::MIN,
+        )]);
+        let res = sub(&a, &b);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Compute error: Interval out of range"
+        );
+
+        // IntervalMonthDayNano
+        let b =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+                i32::MIN,
+                0,
+                0,
+            )]);
+        let res = sub(&a, &b);
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Compute error: Interval out of range"
+        );
+    }
+
+    #[test]
+    fn test_interval_overflow() {
+        let timezones = ["+00:00", "+01:00", "-01:00", "+03:30"];
+        for timezone in timezones {
+            test_interval_overflow_impl::<TimestampSecondType>(timezone);
+            test_interval_overflow_impl::<TimestampMillisecondType>(timezone);
+            test_interval_overflow_impl::<TimestampMicrosecondType>(timezone);
+            test_interval_overflow_impl::<TimestampNanosecondType>(timezone);
+        }
+    }
 }
