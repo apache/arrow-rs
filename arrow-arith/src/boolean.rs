@@ -25,7 +25,7 @@
 use arrow_array::*;
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 
 /// Logical 'and' boolean values with Kleene logic
 ///
@@ -312,7 +312,14 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
 /// ```
 pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
     let values = match input.nulls() {
-        None => BooleanBuffer::new_unset(input.len()),
+        // NullArray has no nulls buffer yet all values are null
+        None => {
+            if input.data_type().equals_datatype(&DataType::Null) {
+                BooleanBuffer::new_set(input.len())
+            } else {
+                BooleanBuffer::new_unset(input.len())
+            }
+        }
         Some(nulls) => !nulls.inner(),
     };
 
@@ -332,7 +339,14 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
 /// ```
 pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
     let values = match input.nulls() {
-        None => BooleanBuffer::new_set(input.len()),
+        None => {
+            // NullArray has no nulls buffer yet all values are null
+            if input.data_type().equals_datatype(&DataType::Null) {
+                BooleanBuffer::new_unset(input.len())
+            } else {
+                BooleanBuffer::new_set(input.len())
+            }
+        }
         Some(n) => n.inner().clone(),
     };
     Ok(BooleanArray::new(values, None))
@@ -867,6 +881,30 @@ mod tests {
         let res = is_not_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![true, false, true, false]);
+
+        assert_eq!(expected, res);
+        assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_null_array_is_null() {
+        let a = NullArray::new(3);
+
+        let res = is_null(&a).unwrap();
+
+        let expected = BooleanArray::from(vec![true, true, true]);
+
+        assert_eq!(expected, res);
+        assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_null_array_is_not_null() {
+        let a = NullArray::new(3);
+
+        let res = is_not_null(&a).unwrap();
+
+        let expected = BooleanArray::from(vec![false, false, false]);
 
         assert_eq!(expected, res);
         assert!(res.nulls().is_none());
