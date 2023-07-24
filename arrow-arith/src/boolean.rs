@@ -313,13 +313,10 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
 pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
     let values = match input.nulls() {
         // NullArray has no nulls buffer yet all values are null
-        None => {
-            if input.data_type().equals_datatype(&DataType::Null) {
-                BooleanBuffer::new_set(input.len())
-            } else {
-                BooleanBuffer::new_unset(input.len())
-            }
+        None if input.data_type() == &DataType::Null => {
+            BooleanBuffer::new_set(input.len())
         }
+        None => BooleanBuffer::new_unset(input.len()),
         Some(nulls) => !nulls.inner(),
     };
 
@@ -339,14 +336,11 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
 /// ```
 pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
     let values = match input.nulls() {
-        None => {
-            // NullArray has no nulls buffer yet all values are null
-            if input.data_type().equals_datatype(&DataType::Null) {
-                BooleanBuffer::new_unset(input.len())
-            } else {
-                BooleanBuffer::new_set(input.len())
-            }
+        // NullArray has no nulls buffer yet all values are null
+        None if input.data_type() == &DataType::Null => {
+            BooleanBuffer::new_unset(input.len())
         }
+        None => BooleanBuffer::new_set(input.len()),
         Some(n) => n.inner().clone(),
     };
     Ok(BooleanArray::new(values, None))
