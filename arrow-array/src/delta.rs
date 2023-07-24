@@ -23,7 +23,7 @@
 // Copied from chronoutil crate
 
 //! Contains utility functions for shifting Date objects.
-use chrono::{Datelike, Days, Months, TimeZone, DateTime};
+use chrono::{DateTime, Datelike, Days, Months, TimeZone};
 use std::cmp::Ordering;
 
 /// Shift a date by the given number of months.
@@ -34,11 +34,13 @@ where
     match months.cmp(&0) {
         Ordering::Equal => date,
         Ordering::Greater => date + Months::new(months as u32),
-        Ordering::Less => date - Months::new(-months as u32),
+        Ordering::Less => date - Months::new(-months as u32), // TODO(alexandreyc): can overflow
     }
 }
 
-/// Shift a date by the given number of months.
+/// Shift a datetime by the given number of months.
+///
+/// Returns `None` when it will result in overflow.
 pub(crate) fn shift_months_datetime<Tz: TimeZone>(
     dt: DateTime<Tz>,
     months: i32,
@@ -46,10 +48,15 @@ pub(crate) fn shift_months_datetime<Tz: TimeZone>(
     match months.cmp(&0) {
         Ordering::Equal => Some(dt),
         Ordering::Greater => dt.checked_add_months(Months::new(months as u32)),
-        Ordering::Less => dt.checked_sub_months(Months::new(-months as u32)),
+        Ordering::Less => {
+            dt.checked_sub_months(Months::new(months.checked_neg().map(|x| x as u32)?))
+        }
     }
 }
 
+/// Shift a datetime by the given number of days.
+///
+/// Returns `None` when it will result in overflow.
 pub(crate) fn shift_days_datetime<Tz: TimeZone>(
     dt: DateTime<Tz>,
     days: i32,
@@ -57,7 +64,9 @@ pub(crate) fn shift_days_datetime<Tz: TimeZone>(
     match days.cmp(&0) {
         Ordering::Equal => Some(dt),
         Ordering::Greater => dt.checked_add_days(Days::new(days as u64)),
-        Ordering::Less => dt.checked_sub_days(Days::new(-days as u64)),
+        Ordering::Less => {
+            dt.checked_sub_days(Days::new(days.checked_neg().map(|x| x as u64)?))
+        }
     }
 }
 
