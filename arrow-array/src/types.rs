@@ -17,7 +17,10 @@
 
 //! Zero-sized types used to parameterize generic array implementations
 
-use crate::delta::{shift_days_datetime, shift_months, shift_months_datetime};
+use crate::delta::{
+    add_days_datetime, add_months_datetime, shift_months, sub_days_datetime,
+    sub_months_datetime,
+};
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
@@ -360,7 +363,7 @@ fn add_year_months<T: ArrowTimestampType>(
     let months = IntervalYearMonthType::to_months(delta);
     let res = as_datetime_with_timezone::<T>(timestamp, tz)
         .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
-    let res = shift_months_datetime(res, months)
+    let res = add_months_datetime(res, months)
         .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
     let res = res.naive_utc();
     T::make_value(res)
@@ -375,7 +378,7 @@ fn add_day_time<T: ArrowTimestampType>(
     let (days, ms) = IntervalDayTimeType::to_parts(delta);
     let res = as_datetime_with_timezone::<T>(timestamp, tz)
         .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
-    let res = shift_days_datetime(res, days)
+    let res = add_days_datetime(res, days)
         .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
     let res = res
         .checked_add_signed(Duration::milliseconds(ms as i64))
@@ -393,9 +396,9 @@ fn add_month_day_nano<T: ArrowTimestampType>(
     let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
     let res = as_datetime_with_timezone::<T>(timestamp, tz)
         .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
-    let res = shift_months_datetime(res, months)
+    let res = add_months_datetime(res, months)
         .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
-    let res = shift_days_datetime(res, days)
+    let res = add_days_datetime(res, days)
         .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
     let res = res
         .checked_add_signed(Duration::nanoseconds(nanos))
@@ -410,10 +413,14 @@ fn subtract_year_months<T: ArrowTimestampType>(
     delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     tz: Tz,
 ) -> Result<<T as ArrowPrimitiveType>::Native, ArrowError> {
-    let delta = delta
-        .checked_neg()
-        .ok_or_else(|| ArrowError::ComputeError("Interval out of range".to_string()))?;
-    add_year_months::<T>(timestamp, delta, tz)
+    let months = IntervalYearMonthType::to_months(delta);
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = sub_months_datetime(res, months)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = res.naive_utc();
+    T::make_value(res)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))
 }
 
 fn subtract_day_time<T: ArrowTimestampType>(
@@ -422,14 +429,16 @@ fn subtract_day_time<T: ArrowTimestampType>(
     tz: Tz,
 ) -> Result<<T as ArrowPrimitiveType>::Native, ArrowError> {
     let (days, ms) = IntervalDayTimeType::to_parts(delta);
-    let days = days
-        .checked_neg()
-        .ok_or_else(|| ArrowError::ComputeError("Interval out of range".to_string()))?;
-    let ms = ms
-        .checked_neg()
-        .ok_or_else(|| ArrowError::ComputeError("Interval out of range".to_string()))?;
-    let delta = IntervalDayTimeType::make_value(days, ms);
-    add_day_time::<T>(timestamp, delta, tz)
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = sub_days_datetime(res, days)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = res
+        .checked_sub_signed(Duration::milliseconds(ms as i64))
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = res.naive_utc();
+    T::make_value(res)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))
 }
 
 fn subtract_month_day_nano<T: ArrowTimestampType>(
@@ -438,17 +447,18 @@ fn subtract_month_day_nano<T: ArrowTimestampType>(
     tz: Tz,
 ) -> Result<<T as ArrowPrimitiveType>::Native, ArrowError> {
     let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-    let months = months
-        .checked_neg()
-        .ok_or_else(|| ArrowError::ComputeError("Interval out of range".to_string()))?;
-    let days = days
-        .checked_neg()
-        .ok_or_else(|| ArrowError::ComputeError("Interval out of range".to_string()))?;
-    let nanos = nanos
-        .checked_neg()
-        .ok_or_else(|| ArrowError::ComputeError("Interval out of range".to_string()))?;
-    let delta = IntervalMonthDayNanoType::make_value(months, days, nanos);
-    add_month_day_nano::<T>(timestamp, delta, tz)
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = sub_months_datetime(res, months)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = sub_days_datetime(res, days)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = res
+        .checked_sub_signed(Duration::nanoseconds(nanos))
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))?;
+    let res = res.naive_utc();
+    T::make_value(res)
+        .ok_or_else(|| ArrowError::ComputeError("Timestamp out of range".to_string()))
 }
 
 impl TimestampSecondType {
