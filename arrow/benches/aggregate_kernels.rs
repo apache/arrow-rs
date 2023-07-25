@@ -17,6 +17,8 @@
 
 #[macro_use]
 extern crate criterion;
+use arrow_array::types::{TimestampMillisecondType, UInt8Type};
+use arrow_array::ArrowNumericType;
 use criterion::Criterion;
 
 extern crate arrow;
@@ -24,16 +26,18 @@ extern crate arrow;
 use arrow::compute::kernels::aggregate::*;
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
 
-fn bench_sum(arr_a: &Float32Array) {
+fn bench_sum<T: ArrowNumericType>(arr_a: &PrimitiveArray<T>) {
     criterion::black_box(sum(arr_a).unwrap());
 }
 
-fn bench_min(arr_a: &Float32Array) {
+fn bench_min<T: ArrowNumericType>(arr_a: &PrimitiveArray<T>) {
     criterion::black_box(min(arr_a).unwrap());
 }
 
-fn bench_max(arr_a: &Float32Array) {
+fn bench_max<T: ArrowNumericType>(arr_a: &PrimitiveArray<T>) {
     criterion::black_box(max(arr_a).unwrap());
 }
 
@@ -41,18 +45,37 @@ fn bench_min_string(arr_a: &StringArray) {
     criterion::black_box(min_string(arr_a).unwrap());
 }
 
+fn sum_min_max_bench<T>(
+    c: &mut Criterion,
+    size: usize,
+    null_density: f32,
+    description: &str,
+) where
+    T: ArrowNumericType,
+    Standard: Distribution<T::Native>,
+{
+    let arr_a = create_primitive_array::<T>(size, null_density);
+
+    c.bench_function(&format!("sum {size} {description}"), |b| {
+        b.iter(|| bench_sum(&arr_a))
+    });
+    c.bench_function(&format!("min {size} {description}"), |b| {
+        b.iter(|| bench_min(&arr_a))
+    });
+    c.bench_function(&format!("max {size} {description}"), |b| {
+        b.iter(|| bench_max(&arr_a))
+    });
+}
+
 fn add_benchmark(c: &mut Criterion) {
-    let arr_a = create_primitive_array::<Float32Type>(512, 0.0);
+    sum_min_max_bench::<UInt8Type>(c, 512, 0.0, "u8 no nulls");
+    sum_min_max_bench::<UInt8Type>(c, 512, 0.5, "u8 50% nulls");
 
-    c.bench_function("sum 512", |b| b.iter(|| bench_sum(&arr_a)));
-    c.bench_function("min 512", |b| b.iter(|| bench_min(&arr_a)));
-    c.bench_function("max 512", |b| b.iter(|| bench_max(&arr_a)));
+    sum_min_max_bench::<TimestampMillisecondType>(c, 512, 0.0, "ts_millis no nulls");
+    sum_min_max_bench::<TimestampMillisecondType>(c, 512, 0.5, "ts_millis 50% nulls");
 
-    let arr_a = create_primitive_array::<Float32Type>(512, 0.5);
-
-    c.bench_function("sum nulls 512", |b| b.iter(|| bench_sum(&arr_a)));
-    c.bench_function("min nulls 512", |b| b.iter(|| bench_min(&arr_a)));
-    c.bench_function("max nulls 512", |b| b.iter(|| bench_max(&arr_a)));
+    sum_min_max_bench::<Float32Type>(c, 512, 0.0, "f32 no nulls");
+    sum_min_max_bench::<Float32Type>(c, 512, 0.5, "f32 50% nulls");
 
     let arr_b = create_string_array::<i32>(512, 0.0);
     c.bench_function("min string 512", |b| b.iter(|| bench_min_string(&arr_b)));
