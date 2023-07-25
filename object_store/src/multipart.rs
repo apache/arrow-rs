@@ -47,7 +47,7 @@ pub struct UploadPart {
     pub content_id: String,
 }
 
-pub(crate) struct CloudMultiPartUpload<T>
+pub struct CloudMultiPartUpload<T>
 where
     T: CloudMultiPartUploadImpl,
 {
