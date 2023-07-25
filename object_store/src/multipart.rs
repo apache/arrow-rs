@@ -56,6 +56,7 @@ pub struct UploadPart {
 }
 
 /// Struct that manages and controls multipart uploads to a cloud storage service.
+#[derive(Debug)]
 pub struct CloudMultiPartUpload<T>
 where
     T: CloudMultiPartUploadImpl,
