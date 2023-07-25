@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Cloud Multi-Part Upload
+//!
+//! This crate provides an asynchronous interface for multipart file uploads to cloud storage services.
+//! It's designed to offer efficient, non-blocking operations,
+//! especially useful when dealing with large files or high-throughput systems.
+
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, Future, StreamExt};
 use std::{io, pin::Pin, sync::Arc, task::Poll};
@@ -42,11 +48,13 @@ pub trait CloudMultiPartUploadImpl: 'static {
     async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error>;
 }
 
+/// Represents a part of a file that has been successfully uploaded in a multipart upload process.
 #[derive(Debug, Clone)]
 pub struct UploadPart {
     pub content_id: String,
 }
 
+/// Struct that manages and controls multipart uploads to a cloud storage service.
 pub struct CloudMultiPartUpload<T>
 where
     T: CloudMultiPartUploadImpl,
