@@ -113,10 +113,13 @@ where
 
 /// A subtype of primitive type that represents numeric values.
 #[cfg(not(feature = "simd"))]
-pub trait ArrowNumericType: ArrowPrimitiveType {}
+pub trait ArrowNumericType: ArrowPrimitiveType {
+    /// The number of SIMD lanes available
+    fn lanes() -> usize;
+}
 
 macro_rules! make_numeric_type {
-    ($impl_ty:ty, $native_ty:ty, $simd_ty:ident, $simd_mask_ty:ident) => {
+    ($impl_ty:ty, $native_ty:ty, $simd_ty:ident, $simd_mask_ty:ident, $lanes:expr) => {
         #[cfg(feature = "simd")]
         impl ArrowNumericType for $impl_ty {
             type Simd = $simd_ty;
@@ -125,7 +128,7 @@ macro_rules! make_numeric_type {
 
             #[inline]
             fn lanes() -> usize {
-                Self::Simd::lanes()
+                $lanes
             }
 
             #[inline]
@@ -336,42 +339,52 @@ macro_rules! make_numeric_type {
         }
 
         #[cfg(not(feature = "simd"))]
-        impl ArrowNumericType for $impl_ty {}
+        impl ArrowNumericType for $impl_ty {
+            #[inline]
+            fn lanes() -> usize {
+                $lanes
+            }
+        }
     };
 }
 
-make_numeric_type!(Int8Type, i8, i8x64, m8x64);
-make_numeric_type!(Int16Type, i16, i16x32, m16x32);
-make_numeric_type!(Int32Type, i32, i32x16, m32x16);
-make_numeric_type!(Int64Type, i64, i64x8, m64x8);
-make_numeric_type!(UInt8Type, u8, u8x64, m8x64);
-make_numeric_type!(UInt16Type, u16, u16x32, m16x32);
-make_numeric_type!(UInt32Type, u32, u32x16, m32x16);
-make_numeric_type!(UInt64Type, u64, u64x8, m64x8);
-make_numeric_type!(Float32Type, f32, f32x16, m32x16);
-make_numeric_type!(Float64Type, f64, f64x8, m64x8);
+make_numeric_type!(Int8Type, i8, i8x64, m8x64, 64);
+make_numeric_type!(Int16Type, i16, i16x32, m16x32, 32);
+make_numeric_type!(Int32Type, i32, i32x16, m32x16, 16);
+make_numeric_type!(Int64Type, i64, i64x8, m64x8, 8);
+make_numeric_type!(UInt8Type, u8, u8x64, m8x64, 64);
+make_numeric_type!(UInt16Type, u16, u16x32, m16x32, 32);
+make_numeric_type!(UInt32Type, u32, u32x16, m32x16, 16);
+make_numeric_type!(UInt64Type, u64, u64x8, m64x8, 8);
+make_numeric_type!(Float32Type, f32, f32x16, m32x16, 16);
+make_numeric_type!(Float64Type, f64, f64x8, m64x8, 8);
 
-make_numeric_type!(TimestampSecondType, i64, i64x8, m64x8);
-make_numeric_type!(TimestampMillisecondType, i64, i64x8, m64x8);
-make_numeric_type!(TimestampMicrosecondType, i64, i64x8, m64x8);
-make_numeric_type!(TimestampNanosecondType, i64, i64x8, m64x8);
-make_numeric_type!(Date32Type, i32, i32x16, m32x16);
-make_numeric_type!(Date64Type, i64, i64x8, m64x8);
-make_numeric_type!(Time32SecondType, i32, i32x16, m32x16);
-make_numeric_type!(Time32MillisecondType, i32, i32x16, m32x16);
-make_numeric_type!(Time64MicrosecondType, i64, i64x8, m64x8);
-make_numeric_type!(Time64NanosecondType, i64, i64x8, m64x8);
-make_numeric_type!(IntervalYearMonthType, i32, i32x16, m32x16);
-make_numeric_type!(IntervalDayTimeType, i64, i64x8, m64x8);
-make_numeric_type!(IntervalMonthDayNanoType, i128, i128x4, m128x4);
-make_numeric_type!(DurationSecondType, i64, i64x8, m64x8);
-make_numeric_type!(DurationMillisecondType, i64, i64x8, m64x8);
-make_numeric_type!(DurationMicrosecondType, i64, i64x8, m64x8);
-make_numeric_type!(DurationNanosecondType, i64, i64x8, m64x8);
-make_numeric_type!(Decimal128Type, i128, i128x4, m128x4);
+make_numeric_type!(TimestampSecondType, i64, i64x8, m64x8, 8);
+make_numeric_type!(TimestampMillisecondType, i64, i64x8, m64x8, 8);
+make_numeric_type!(TimestampMicrosecondType, i64, i64x8, m64x8, 8);
+make_numeric_type!(TimestampNanosecondType, i64, i64x8, m64x8, 8);
+make_numeric_type!(Date32Type, i32, i32x16, m32x16, 16);
+make_numeric_type!(Date64Type, i64, i64x8, m64x8, 8);
+make_numeric_type!(Time32SecondType, i32, i32x16, m32x16, 16);
+make_numeric_type!(Time32MillisecondType, i32, i32x16, m32x16, 16);
+make_numeric_type!(Time64MicrosecondType, i64, i64x8, m64x8, 8);
+make_numeric_type!(Time64NanosecondType, i64, i64x8, m64x8, 8);
+make_numeric_type!(IntervalYearMonthType, i32, i32x16, m32x16, 16);
+make_numeric_type!(IntervalDayTimeType, i64, i64x8, m64x8, 8);
+make_numeric_type!(IntervalMonthDayNanoType, i128, i128x4, m128x4, 4);
+make_numeric_type!(DurationSecondType, i64, i64x8, m64x8, 8);
+make_numeric_type!(DurationMillisecondType, i64, i64x8, m64x8, 8);
+make_numeric_type!(DurationMicrosecondType, i64, i64x8, m64x8, 8);
+make_numeric_type!(DurationNanosecondType, i64, i64x8, m64x8, 8);
+make_numeric_type!(Decimal128Type, i128, i128x4, m128x4, 4);
 
 #[cfg(not(feature = "simd"))]
-impl ArrowNumericType for Float16Type {}
+impl ArrowNumericType for Float16Type {
+    #[inline]
+    fn lanes() -> usize {
+        Float32Type::lanes()
+    }
+}
 
 #[cfg(feature = "simd")]
 impl ArrowNumericType for Float16Type {
@@ -467,7 +480,12 @@ impl ArrowNumericType for Float16Type {
 }
 
 #[cfg(not(feature = "simd"))]
-impl ArrowNumericType for Decimal256Type {}
+impl ArrowNumericType for Decimal256Type {
+    #[inline]
+    fn lanes() -> usize {
+        1
+    }
+}
 
 #[cfg(feature = "simd")]
 impl ArrowNumericType for Decimal256Type {

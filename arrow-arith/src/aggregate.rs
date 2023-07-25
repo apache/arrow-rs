@@ -285,80 +285,95 @@ where
         return None;
     }
 
-    let data: &[T::Native] = array.values();
-    // TODO choose lanes based on T::Native. Extract from simd module
-    const LANES: usize = 16;
-    let mut chunk_acc = [T::default_value(); LANES];
-    let mut rem_acc = T::default_value();
+    pub fn sum_impl<T, const LANES: usize>(array: &PrimitiveArray<T>) -> Option<T::Native>
+    where
+        T: ArrowNumericType,
+        T::Native: ArrowNativeTypeOp,
+    {
+        let data: &[T::Native] = array.values();
+        let mut chunk_acc = [T::default_value(); LANES];
+        let mut rem_acc = T::default_value();
 
-    match array.nulls() {
-        None => {
-            let data_chunks = data.chunks_exact(64);
-            let remainder = data_chunks.remainder();
+        match array.nulls() {
+            None => {
+                let data_chunks = data.chunks_exact(64);
+                let remainder = data_chunks.remainder();
 
-            data_chunks.for_each(|chunk| {
-                chunk.chunks_exact(LANES).for_each(|chunk| {
-                    let chunk: [T::Native; LANES] = chunk.try_into().unwrap();
+                data_chunks.for_each(|chunk| {
+                    chunk.chunks_exact(LANES).for_each(|chunk| {
+                        let chunk: [T::Native; LANES] = chunk.try_into().unwrap();
 
-                    for i in 0..LANES {
-                        chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
-                    }
-                })
-            });
-
-            remainder.iter().copied().for_each(|value| {
-                rem_acc = rem_acc.add_wrapping(value);
-            });
-
-            let mut reduced = T::default_value();
-            for v in chunk_acc {
-                reduced = reduced.add_wrapping(v);
-            }
-            let sum = reduced.add_wrapping(rem_acc);
-
-            Some(sum)
-        }
-        Some(nulls) => {
-            // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
-            let data_chunks = data.chunks_exact(64);
-            let remainder = data_chunks.remainder();
-
-            let bit_chunks = nulls.inner().bit_chunks();
-            let remainder_bits = bit_chunks.remainder_bits();
-
-            data_chunks.zip(bit_chunks).for_each(|(chunk, mut mask)| {
-                // split chunks further into slices corresponding to the vector length
-                // the compiler is able to unroll this inner loop and remove bounds checks
-                // since the outer chunk size (64) is always a multiple of the number of lanes
-                chunk.chunks_exact(LANES).for_each(|chunk| {
-                    let mut chunk: [T::Native; LANES] = chunk.try_into().unwrap();
-
-                    for i in 0..LANES {
-                        if mask & (1 << i) == 0 {
-                            chunk[i] = T::default_value();
+                        for i in 0..LANES {
+                            chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
                         }
-                        chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
-                    }
+                    })
+                });
 
-                    // skip the shift and avoid overflow for u8 type, which uses 64 lanes.
-                    mask >>= LANES % 64;
-                })
-            });
+                remainder.iter().copied().for_each(|value| {
+                    rem_acc = rem_acc.add_wrapping(value);
+                });
 
-            remainder.iter().enumerate().for_each(|(i, value)| {
-                if remainder_bits & (1 << i) != 0 {
-                    rem_acc = rem_acc.add_wrapping(*value);
+                let mut reduced = T::default_value();
+                for v in chunk_acc {
+                    reduced = reduced.add_wrapping(v);
                 }
-            });
+                let sum = reduced.add_wrapping(rem_acc);
 
-            let mut reduced = T::default_value();
-            for v in chunk_acc {
-                reduced = reduced.add_wrapping(v);
+                Some(sum)
             }
-            let sum = reduced.add_wrapping(rem_acc);
+            Some(nulls) => {
+                // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
+                let data_chunks = data.chunks_exact(64);
+                let remainder = data_chunks.remainder();
 
-            Some(sum)
+                let bit_chunks = nulls.inner().bit_chunks();
+                let remainder_bits = bit_chunks.remainder_bits();
+
+                data_chunks.zip(bit_chunks).for_each(|(chunk, mut mask)| {
+                    // split chunks further into slices corresponding to the vector length
+                    // the compiler is able to unroll this inner loop and remove bounds checks
+                    // since the outer chunk size (64) is always a multiple of the number of lanes
+                    chunk.chunks_exact(LANES).for_each(|chunk| {
+                        let mut chunk: [T::Native; LANES] = chunk.try_into().unwrap();
+
+                        for i in 0..LANES {
+                            if mask & (1 << i) == 0 {
+                                chunk[i] = T::default_value();
+                            }
+                            chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
+                        }
+
+                        // skip the shift and avoid overflow for u8 type, which uses 64 lanes.
+                        mask >>= LANES % 64;
+                    })
+                });
+
+                remainder.iter().enumerate().for_each(|(i, value)| {
+                    if remainder_bits & (1 << i) != 0 {
+                        rem_acc = rem_acc.add_wrapping(*value);
+                    }
+                });
+
+                let mut reduced = T::default_value();
+                for v in chunk_acc {
+                    reduced = reduced.add_wrapping(v);
+                }
+                let sum = reduced.add_wrapping(rem_acc);
+
+                Some(sum)
+            }
         }
+    }
+
+    match T::lanes() {
+        1 => sum_impl::<T, 1>(array),
+        2 => sum_impl::<T, 2>(array),
+        4 => sum_impl::<T, 4>(array),
+        8 => sum_impl::<T, 8>(array),
+        16 => sum_impl::<T, 16>(array),
+        32 => sum_impl::<T, 32>(array),
+        64 => sum_impl::<T, 64>(array),
+        unhandled => unreachable!("Unhandled number of lanes: {unhandled}"),
     }
 }
 
