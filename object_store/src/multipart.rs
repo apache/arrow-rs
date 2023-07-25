@@ -56,7 +56,6 @@ pub struct UploadPart {
 }
 
 /// Struct that manages and controls multipart uploads to a cloud storage service.
-#[derive(Debug)]
 pub struct CloudMultiPartUpload<T>
 where
     T: CloudMultiPartUploadImpl,
@@ -267,5 +266,18 @@ where
         });
 
         Pin::new(completion_task).poll(cx)
+    }
+}
+
+impl<T: CloudMultiPartUploadImpl> std::fmt::Debug for CloudMultiPartUpload<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CloudMultiPartUpload")
+            .field("completed_parts", &self.completed_parts)
+            .field("tasks", &self.tasks)
+            .field("max_concurrency", &self.max_concurrency)
+            .field("current_buffer", &self.current_buffer)
+            .field("part_size", &self.part_size)
+            .field("current_part_idx", &self.current_part_idx)
+            .finish()
     }
 }
