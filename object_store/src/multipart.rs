@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Cloud Multi-Part Upload
+//! Cloud Multipart Upload
 //!
 //! This crate provides an asynchronous interface for multipart file uploads to cloud storage services.
 //! It's designed to offer efficient, non-blocking operations,
