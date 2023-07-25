@@ -51,6 +51,7 @@ pub trait CloudMultiPartUploadImpl: 'static {
 /// Represents a part of a file that has been successfully uploaded in a multipart upload process.
 #[derive(Debug, Clone)]
 pub struct UploadPart {
+    /// Id of this part
     pub content_id: String,
 }
 
@@ -83,6 +84,7 @@ impl<T> CloudMultiPartUpload<T>
 where
     T: CloudMultiPartUploadImpl,
 {
+    /// Create a new multipart upload with the implementation and the given maximum concurrency
     pub fn new(inner: T, max_concurrency: usize) -> Self {
         Self {
             inner: Arc::new(inner),
@@ -111,6 +113,7 @@ where
         to_copy
     }
 
+    /// Poll current tasks
     pub fn poll_tasks(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
