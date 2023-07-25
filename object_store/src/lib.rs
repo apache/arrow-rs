@@ -250,8 +250,8 @@ pub use client::{backoff::BackoffConfig, retry::RetryConfig, CredentialProvider}
 #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
 mod config;
 
-#[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
-mod multipart;
+#[cfg(feature = "cloud")]
+pub mod multipart;
 mod parse;
 mod util;
 

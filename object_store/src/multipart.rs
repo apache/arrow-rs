@@ -28,7 +28,7 @@ type BoxedTryFuture<T> = Pin<Box<dyn Future<Output = Result<T, io::Error>> + Sen
 /// and used in combination with [`CloudMultiPartUpload`] to provide
 /// multipart upload support
 #[async_trait]
-pub(crate) trait CloudMultiPartUploadImpl: 'static {
+pub trait CloudMultiPartUploadImpl: 'static {
     /// Upload a single part
     async fn put_multipart_part(
         &self,
@@ -43,7 +43,7 @@ pub(crate) trait CloudMultiPartUploadImpl: 'static {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct UploadPart {
+pub struct UploadPart {
     pub content_id: String,
 }
 
