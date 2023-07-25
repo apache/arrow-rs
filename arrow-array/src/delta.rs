@@ -23,7 +23,7 @@
 // Copied from chronoutil crate
 
 //! Contains utility functions for shifting Date objects.
-use chrono::{DateTime, Datelike, Days, Months, TimeZone};
+use chrono::{Datelike, Months};
 use std::cmp::Ordering;
 
 /// Shift a date by the given number of months.
@@ -35,62 +35,6 @@ where
         Ordering::Equal => date,
         Ordering::Greater => date + Months::new(months as u32),
         Ordering::Less => date - Months::new(months.unsigned_abs()),
-    }
-}
-
-/// Add the given number of months to the given datetime.
-///
-/// Returns `None` when it will result in overflow.
-pub(crate) fn add_months_datetime<Tz: TimeZone>(
-    dt: DateTime<Tz>,
-    months: i32,
-) -> Option<DateTime<Tz>> {
-    match months.cmp(&0) {
-        Ordering::Equal => Some(dt),
-        Ordering::Greater => dt.checked_add_months(Months::new(months as u32)),
-        Ordering::Less => dt.checked_sub_months(Months::new(months.unsigned_abs())),
-    }
-}
-
-/// Add the given number of days to the given datetime.
-///
-/// Returns `None` when it will result in overflow.
-pub(crate) fn add_days_datetime<Tz: TimeZone>(
-    dt: DateTime<Tz>,
-    days: i32,
-) -> Option<DateTime<Tz>> {
-    match days.cmp(&0) {
-        Ordering::Equal => Some(dt),
-        Ordering::Greater => dt.checked_add_days(Days::new(days as u64)),
-        Ordering::Less => dt.checked_sub_days(Days::new(days.unsigned_abs() as u64)),
-    }
-}
-
-/// Substract the given number of months to the given datetime.
-///
-/// Returns `None` when it will result in overflow.
-pub(crate) fn sub_months_datetime<Tz: TimeZone>(
-    dt: DateTime<Tz>,
-    months: i32,
-) -> Option<DateTime<Tz>> {
-    match months.cmp(&0) {
-        Ordering::Equal => Some(dt),
-        Ordering::Greater => dt.checked_sub_months(Months::new(months as u32)),
-        Ordering::Less => dt.checked_add_months(Months::new(months.unsigned_abs())),
-    }
-}
-
-/// Substract the given number of days to the given datetime.
-///
-/// Returns `None` when it will result in overflow.
-pub(crate) fn sub_days_datetime<Tz: TimeZone>(
-    dt: DateTime<Tz>,
-    days: i32,
-) -> Option<DateTime<Tz>> {
-    match days.cmp(&0) {
-        Ordering::Equal => Some(dt),
-        Ordering::Greater => dt.checked_sub_days(Days::new(days as u64)),
-        Ordering::Less => dt.checked_add_days(Days::new(days.unsigned_abs() as u64)),
     }
 }
 
