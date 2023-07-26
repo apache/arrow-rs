@@ -853,11 +853,9 @@ fn decimal_op<T: DecimalType>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::temporal_conversions::{
-        as_date, as_datetime, as_datetime_with_timezone,
-    };
+    use arrow_array::temporal_conversions::{as_date, as_datetime};
     use arrow_buffer::{i256, ScalarBuffer};
-    use chrono::{DateTime, NaiveDate, TimeZone};
+    use chrono::{DateTime, NaiveDate};
 
     fn test_neg_primitive<T: ArrowPrimitiveType>(
         input: &[T::Native],
