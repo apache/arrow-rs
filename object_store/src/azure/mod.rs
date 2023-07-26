@@ -28,7 +28,7 @@
 //! after 7 days.
 use self::client::{BlockId, BlockList};
 use crate::{
-    multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
+    multipart::{PartId, PutPart, WriteMultiPart},
     path::Path,
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Result, RetryConfig,
@@ -42,7 +42,6 @@ use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::fmt::{Debug, Formatter};
-use std::io;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
@@ -186,7 +185,7 @@ impl ObjectStore for MicrosoftAzure {
             client: Arc::clone(&self.client),
             location: location.to_owned(),
         };
-        Ok((String::new(), Box::new(CloudMultiPartUpload::new(inner, 8))))
+        Ok((String::new(), Box::new(WriteMultiPart::new(inner, 8))))
     }
 
     async fn abort_multipart(
@@ -243,12 +242,8 @@ struct AzureMultiPartUpload {
 }
 
 #[async_trait]
-impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
-    async fn put_multipart_part(
-        &self,
-        buf: Vec<u8>,
-        part_idx: usize,
-    ) -> Result<UploadPart, io::Error> {
+impl PutPart for AzureMultiPartUpload {
+    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
         let content_id = format!("{part_idx:20}");
         let block_id: BlockId = content_id.clone().into();
 
@@ -264,10 +259,10 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
             )
             .await?;
 
-        Ok(UploadPart { content_id })
+        Ok(PartId { content_id })
     }
 
-    async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error> {
+    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
         let blocks = completed_parts
             .into_iter()
             .map(|part| BlockId::from(part.content_id))
