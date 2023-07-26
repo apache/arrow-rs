@@ -300,3 +300,7 @@ required-features = ["chrono-tz", "prettyprint"]
 [[test]]
 name = "timezone"
 required-features = ["chrono-tz"]
+
+[[test]]
+name = "arithmetic"
+required-features = ["chrono-tz"]
