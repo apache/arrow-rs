@@ -726,7 +726,9 @@ impl MicrosoftAzureBuilder {
                 // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
                 if parsed.username().is_empty() {
                     self.container_name = Some(validate(host)?);
-                } else if let Some(a) = host.strip_suffix(".dfs.core.windows.net") {
+                } else if let Some(a) = host.strip_suffix(".dfs.core.windows.net") 
+                                .or_else(|| host.strip_suffix(".dfs.fabric.microsoft.com"))
+                {
                     self.container_name = Some(validate(parsed.username())?);
                     self.account_name = Some(validate(a)?);
                 } else {
@@ -735,7 +737,12 @@ impl MicrosoftAzureBuilder {
             }
             "https" => match host.split_once('.') {
                 Some((a, "dfs.core.windows.net"))
-                | Some((a, "blob.core.windows.net")) => {
+                | Some((a, "blob.core.windows.net"))              
+                => {
+                    self.account_name = Some(validate(a)?);
+                }
+                Some((a, "dfs.fabric.microsoft.com"))
+                | Some((a, "blob.fabric.microsoft.com")) =>{
                     self.account_name = Some(validate(a)?);
                 }
                 _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
@@ -889,7 +896,17 @@ impl MicrosoftAzureBuilder {
             self.parse_url(&url)?;
         }
 
-        let container = self.container_name.ok_or(Error::MissingContainerName {})?;
+        let use_ok_or = match &self.account_name {
+            Some(account_name) => !account_name.contains("onelake"),
+            None => true,
+        };
+
+        let container = if use_ok_or {
+            self.container_name.ok_or(Error::MissingContainerName {})?
+        } else {
+            self.container_name.unwrap_or_default()
+        };
+
         let static_creds = |credential: AzureCredential| -> AzureCredentialProvider {
             Arc::new(StaticCredentialProvider::new(credential))
         };
@@ -911,7 +928,13 @@ impl MicrosoftAzureBuilder {
             (true, url, credential, account_name)
         } else {
             let account_name = self.account_name.ok_or(Error::MissingAccount {})?;
-            let account_url = format!("https://{}.blob.core.windows.net", &account_name);
+            let account_url = if account_name.contains("onelake") {
+                format!("https://{}.blob.fabric.microsoft.com", &account_name)
+            } else {
+                format!("https://{}.blob.core.windows.net", &account_name)
+            };
+
+
             let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
 
@@ -1167,6 +1190,14 @@ mod tests {
             .parse_url("https://account.blob.core.windows.net/")
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
+
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("https://daily-onelake.dfs.fabric.microsoft.com/86bc63cf-5086-42e0-b16d-6bc580d1dc87/17d3977c-d46e-4bae-8fed-ff467e674aed/Files/SampleCustomerList.csv")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("daily-onelake".to_string()));
+        assert_eq!(builder.container_name, Some("86bc63cf-5086-42e0-b16d-6bc580d1dc87".to_string()));
+
 
         let err_cases = [
             "mailto://account.blob.core.windows.net/",
