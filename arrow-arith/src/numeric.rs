@@ -22,13 +22,11 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::temporal_conversions::as_datetime_with_timezone;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
-use chrono::{DateTime, Days, Duration, Months, TimeZone};
 
 use crate::arity::{binary, try_binary};
 
@@ -344,201 +342,50 @@ fn float_op<T: ArrowPrimitiveType>(
     Ok(Arc::new(array))
 }
 
-/// Add the given number of months to the given datetime.
-///
-/// Returns `None` when it will result in overflow.
-fn add_months_datetime<Tz: TimeZone>(
-    dt: DateTime<Tz>,
-    months: i32,
-) -> Option<DateTime<Tz>> {
-    match months.cmp(&0) {
-        Ordering::Equal => Some(dt),
-        Ordering::Greater => dt.checked_add_months(Months::new(months as u32)),
-        Ordering::Less => dt.checked_sub_months(Months::new(months.unsigned_abs())),
-    }
-}
-
-/// Add the given number of days to the given datetime.
-///
-/// Returns `None` when it will result in overflow.
-fn add_days_datetime<Tz: TimeZone>(dt: DateTime<Tz>, days: i32) -> Option<DateTime<Tz>> {
-    match days.cmp(&0) {
-        Ordering::Equal => Some(dt),
-        Ordering::Greater => dt.checked_add_days(Days::new(days as u64)),
-        Ordering::Less => dt.checked_sub_days(Days::new(days.unsigned_abs() as u64)),
-    }
-}
-
-/// Substract the given number of months to the given datetime.
-///
-/// Returns `None` when it will result in overflow.
-fn sub_months_datetime<Tz: TimeZone>(
-    dt: DateTime<Tz>,
-    months: i32,
-) -> Option<DateTime<Tz>> {
-    match months.cmp(&0) {
-        Ordering::Equal => Some(dt),
-        Ordering::Greater => dt.checked_sub_months(Months::new(months as u32)),
-        Ordering::Less => dt.checked_add_months(Months::new(months.unsigned_abs())),
-    }
-}
-
-/// Substract the given number of days to the given datetime.
-///
-/// Returns `None` when it will result in overflow.
-fn sub_days_datetime<Tz: TimeZone>(dt: DateTime<Tz>, days: i32) -> Option<DateTime<Tz>> {
-    match days.cmp(&0) {
-        Ordering::Equal => Some(dt),
-        Ordering::Greater => dt.checked_sub_days(Days::new(days as u64)),
-        Ordering::Less => dt.checked_add_days(Days::new(days.unsigned_abs() as u64)),
-    }
-}
-
 /// Arithmetic trait for timestamp arrays
-pub trait TimestampOp: ArrowTimestampType + Sized {
+trait TimestampOp: ArrowTimestampType {
     type Duration: ArrowPrimitiveType<Native = i64>;
 
-    /// Adds the given [`IntervalYearMonthType`] to the given timestamp.
-    ///
-    /// Returns `None` when it will result in overflow.
-    ///
-    /// # Arguments
-    ///
-    /// * `timestamp` - The timestamp on which to perform the operation
-    /// * `delta` - The interval to add
-    /// * `tz` - The timezone in which to interpret `timestamp`
-    fn add_year_month(
-        timestamp: <Self as ArrowPrimitiveType>::Native,
-        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
-        tz: Tz,
-    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
-        let months = IntervalYearMonthType::to_months(delta);
-        let res = as_datetime_with_timezone::<Self>(timestamp, tz)?;
-        let res = add_months_datetime(res, months)?;
-        let res = res.naive_utc();
-        Self::make_value(res)
-    }
+    fn add_year_month(timestamp: i64, delta: i32, tz: Tz) -> Option<i64>;
+    fn add_day_time(timestamp: i64, delta: i64, tz: Tz) -> Option<i64>;
+    fn add_month_day_nano(timestamp: i64, delta: i128, tz: Tz) -> Option<i64>;
 
-    /// Adds the given [`IntervalDayTimeType`] to the given timestamp.
-    ///
-    /// Returns `None` when it will result in overflow.
-    ///
-    /// # Arguments
-    ///
-    /// * `timestamp` - The timestamp on which to perform the operation
-    /// * `delta` - The interval to add
-    /// * `tz` - The timezone in which to interpret `timestamp`
-    fn add_day_time(
-        timestamp: <Self as ArrowPrimitiveType>::Native,
-        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
-        tz: Tz,
-    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
-        let (days, ms) = IntervalDayTimeType::to_parts(delta);
-        let res = as_datetime_with_timezone::<Self>(timestamp, tz)?;
-        let res = add_days_datetime(res, days)?;
-        let res = res.checked_add_signed(Duration::milliseconds(ms as i64))?;
-        let res = res.naive_utc();
-        Self::make_value(res)
-    }
-
-    /// Adds the given [`IntervalMonthDayNanoType`] to the given timestamp.
-    ///
-    /// Returns `None` when it will result in overflow.
-    ///
-    /// # Arguments
-    ///
-    /// * `timestamp` - The timestamp on which to perform the operation
-    /// * `delta` - The interval to add
-    /// * `tz` - The timezone in which to interpret `timestamp`
-    fn add_month_day_nano(
-        timestamp: <Self as ArrowPrimitiveType>::Native,
-        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
-        tz: Tz,
-    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
-        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-        let res = as_datetime_with_timezone::<Self>(timestamp, tz)?;
-        let res = add_months_datetime(res, months)?;
-        let res = add_days_datetime(res, days)?;
-        let res = res.checked_add_signed(Duration::nanoseconds(nanos))?;
-        let res = res.naive_utc();
-        Self::make_value(res)
-    }
-
-    /// Subtracts the given [`IntervalYearMonthType`] from the given timestamp.
-    ///
-    /// Returns `None` when it will result in overflow.
-    ///
-    /// # Arguments
-    ///
-    /// * `timestamp` - The timestamp on which to perform the operation
-    /// * `delta` - The interval to subtract
-    /// * `tz` - The timezone in which to interpret `timestamp`
-    fn sub_year_month(
-        timestamp: <Self as ArrowPrimitiveType>::Native,
-        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
-        tz: Tz,
-    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
-        let months = IntervalYearMonthType::to_months(delta);
-        let res = as_datetime_with_timezone::<Self>(timestamp, tz)?;
-        let res = sub_months_datetime(res, months)?;
-        let res = res.naive_utc();
-        Self::make_value(res)
-    }
-
-    /// Subtracts the given [`IntervalDayTimeType`] from the given timestamp.
-    ///
-    /// Returns `None` when it will result in overflow.
-    ///
-    /// # Arguments
-    ///
-    /// * `timestamp` - The timestamp on which to perform the operation
-    /// * `delta` - The interval to subtract
-    /// * `tz` - The timezone in which to interpret `timestamp`
-    fn sub_day_time(
-        timestamp: <Self as ArrowPrimitiveType>::Native,
-        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
-        tz: Tz,
-    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
-        let (days, ms) = IntervalDayTimeType::to_parts(delta);
-        let res = as_datetime_with_timezone::<Self>(timestamp, tz)?;
-        let res = sub_days_datetime(res, days)?;
-        let res = res.checked_sub_signed(Duration::milliseconds(ms as i64))?;
-        let res = res.naive_utc();
-        Self::make_value(res)
-    }
-
-    /// Subtracts the given [`IntervalMonthDayNanoType`] from the given timestamp.
-    ///
-    /// Returns `None` when it will result in overflow.
-    ///
-    /// # Arguments
-    ///
-    /// * `timestamp` - The timestamp on which to perform the operation
-    /// * `delta` - The interval to subtract
-    /// * `tz` - The timezone in which to interpret `timestamp`
-    fn sub_month_day_nano(
-        timestamp: <Self as ArrowPrimitiveType>::Native,
-        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
-        tz: Tz,
-    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
-        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-        let res = as_datetime_with_timezone::<Self>(timestamp, tz)?;
-        let res = sub_months_datetime(res, months)?;
-        let res = sub_days_datetime(res, days)?;
-        let res = res.checked_sub_signed(Duration::nanoseconds(nanos))?;
-        let res = res.naive_utc();
-        Self::make_value(res)
-    }
+    fn sub_year_month(timestamp: i64, delta: i32, tz: Tz) -> Option<i64>;
+    fn sub_day_time(timestamp: i64, delta: i64, tz: Tz) -> Option<i64>;
+    fn sub_month_day_nano(timestamp: i64, delta: i128, tz: Tz) -> Option<i64>;
 }
 
 macro_rules! timestamp {
     ($t:ty, $d:ty) => {
         impl TimestampOp for $t {
             type Duration = $d;
+
+            fn add_year_month(left: i64, right: i32, tz: Tz) -> Option<i64> {
+                Self::add_year_months(left, right, tz)
+            }
+
+            fn add_day_time(left: i64, right: i64, tz: Tz) -> Option<i64> {
+                Self::add_day_time(left, right, tz)
+            }
+
+            fn add_month_day_nano(left: i64, right: i128, tz: Tz) -> Option<i64> {
+                Self::add_month_day_nano(left, right, tz)
+            }
+
+            fn sub_year_month(left: i64, right: i32, tz: Tz) -> Option<i64> {
+                Self::subtract_year_months(left, right, tz)
+            }
+
+            fn sub_day_time(left: i64, right: i64, tz: Tz) -> Option<i64> {
+                Self::subtract_day_time(left, right, tz)
+            }
+
+            fn sub_month_day_nano(left: i64, right: i128, tz: Tz) -> Option<i64> {
+                Self::subtract_month_day_nano(left, right, tz)
+            }
         }
     };
 }
-
 timestamp!(TimestampSecondType, DurationSecondType);
 timestamp!(TimestampMillisecondType, DurationMillisecondType);
 timestamp!(TimestampMicrosecondType, DurationMicrosecondType);
