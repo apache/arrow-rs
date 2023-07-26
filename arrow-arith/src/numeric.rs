@@ -22,6 +22,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
+use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
@@ -345,13 +346,13 @@ fn float_op<T: ArrowPrimitiveType>(
 trait TimestampOp: ArrowTimestampType {
     type Duration: ArrowPrimitiveType<Native = i64>;
 
-    fn add_year_month(timestamp: i64, delta: i32) -> Result<i64, ArrowError>;
-    fn add_day_time(timestamp: i64, delta: i64) -> Result<i64, ArrowError>;
-    fn add_month_day_nano(timestamp: i64, delta: i128) -> Result<i64, ArrowError>;
+    fn add_year_month(timestamp: i64, delta: i32, tz: Tz) -> Option<i64>;
+    fn add_day_time(timestamp: i64, delta: i64, tz: Tz) -> Option<i64>;
+    fn add_month_day_nano(timestamp: i64, delta: i128, tz: Tz) -> Option<i64>;
 
-    fn sub_year_month(timestamp: i64, delta: i32) -> Result<i64, ArrowError>;
-    fn sub_day_time(timestamp: i64, delta: i64) -> Result<i64, ArrowError>;
-    fn sub_month_day_nano(timestamp: i64, delta: i128) -> Result<i64, ArrowError>;
+    fn sub_year_month(timestamp: i64, delta: i32, tz: Tz) -> Option<i64>;
+    fn sub_day_time(timestamp: i64, delta: i64, tz: Tz) -> Option<i64>;
+    fn sub_month_day_nano(timestamp: i64, delta: i128, tz: Tz) -> Option<i64>;
 }
 
 macro_rules! timestamp {
@@ -359,28 +360,28 @@ macro_rules! timestamp {
         impl TimestampOp for $t {
             type Duration = $d;
 
-            fn add_year_month(left: i64, right: i32) -> Result<i64, ArrowError> {
-                Self::add_year_months(left, right)
+            fn add_year_month(left: i64, right: i32, tz: Tz) -> Option<i64> {
+                Self::add_year_months(left, right, tz)
             }
 
-            fn add_day_time(left: i64, right: i64) -> Result<i64, ArrowError> {
-                Self::add_day_time(left, right)
+            fn add_day_time(left: i64, right: i64, tz: Tz) -> Option<i64> {
+                Self::add_day_time(left, right, tz)
             }
 
-            fn add_month_day_nano(left: i64, right: i128) -> Result<i64, ArrowError> {
-                Self::add_month_day_nano(left, right)
+            fn add_month_day_nano(left: i64, right: i128, tz: Tz) -> Option<i64> {
+                Self::add_month_day_nano(left, right, tz)
             }
 
-            fn sub_year_month(left: i64, right: i32) -> Result<i64, ArrowError> {
-                Self::subtract_year_months(left, right)
+            fn sub_year_month(left: i64, right: i32, tz: Tz) -> Option<i64> {
+                Self::subtract_year_months(left, right, tz)
             }
 
-            fn sub_day_time(left: i64, right: i64) -> Result<i64, ArrowError> {
-                Self::subtract_day_time(left, right)
+            fn sub_day_time(left: i64, right: i64, tz: Tz) -> Option<i64> {
+                Self::subtract_day_time(left, right, tz)
             }
 
-            fn sub_month_day_nano(left: i64, right: i128) -> Result<i64, ArrowError> {
-                Self::subtract_month_day_nano(left, right)
+            fn sub_month_day_nano(left: i64, right: i128, tz: Tz) -> Option<i64> {
+                Self::subtract_month_day_nano(left, right, tz)
             }
         }
     };
@@ -401,8 +402,9 @@ fn timestamp_op<T: TimestampOp>(
     use DataType::*;
     use IntervalUnit::*;
 
-    // Note: interval arithmetic should account for timezones (#4457)
     let l = l.as_primitive::<T>();
+    let l_tz: Tz = l.timezone().unwrap_or("+00:00").parse()?;
+
     let array: PrimitiveArray<T> = match (op, r.data_type()) {
         (Op::Sub | Op::SubWrapping, Timestamp(unit, _)) if unit == &T::UNIT => {
             let r = r.as_primitive::<T>();
@@ -420,29 +422,77 @@ fn timestamp_op<T: TimestampOp>(
 
         (Op::Add | Op::AddWrapping, Interval(YearMonth)) => {
             let r = r.as_primitive::<IntervalYearMonthType>();
-            try_op!(l, l_s, r, r_s, T::add_year_month(l, r))
+            try_op!(
+                l,
+                l_s,
+                r,
+                r_s,
+                T::add_year_month(l, r, l_tz).ok_or(ArrowError::ComputeError(
+                    "Timestamp out of range".to_string()
+                ))
+            )
         }
         (Op::Sub | Op::SubWrapping, Interval(YearMonth)) => {
             let r = r.as_primitive::<IntervalYearMonthType>();
-            try_op!(l, l_s, r, r_s, T::sub_year_month(l, r))
+            try_op!(
+                l,
+                l_s,
+                r,
+                r_s,
+                T::sub_year_month(l, r, l_tz).ok_or(ArrowError::ComputeError(
+                    "Timestamp out of range".to_string()
+                ))
+            )
         }
 
         (Op::Add | Op::AddWrapping, Interval(DayTime)) => {
             let r = r.as_primitive::<IntervalDayTimeType>();
-            try_op!(l, l_s, r, r_s, T::add_day_time(l, r))
+            try_op!(
+                l,
+                l_s,
+                r,
+                r_s,
+                T::add_day_time(l, r, l_tz).ok_or(ArrowError::ComputeError(
+                    "Timestamp out of range".to_string()
+                ))
+            )
         }
         (Op::Sub | Op::SubWrapping, Interval(DayTime)) => {
             let r = r.as_primitive::<IntervalDayTimeType>();
-            try_op!(l, l_s, r, r_s, T::sub_day_time(l, r))
+            try_op!(
+                l,
+                l_s,
+                r,
+                r_s,
+                T::sub_day_time(l, r, l_tz).ok_or(ArrowError::ComputeError(
+                    "Timestamp out of range".to_string()
+                ))
+            )
         }
 
         (Op::Add | Op::AddWrapping, Interval(MonthDayNano)) => {
             let r = r.as_primitive::<IntervalMonthDayNanoType>();
-            try_op!(l, l_s, r, r_s, T::add_month_day_nano(l, r))
+            try_op!(
+                l,
+                l_s,
+                r,
+                r_s,
+                T::add_month_day_nano(l, r, l_tz).ok_or(ArrowError::ComputeError(
+                    "Timestamp out of range".to_string()
+                ))
+            )
         }
         (Op::Sub | Op::SubWrapping, Interval(MonthDayNano)) => {
             let r = r.as_primitive::<IntervalMonthDayNanoType>();
-            try_op!(l, l_s, r, r_s, T::sub_month_day_nano(l, r))
+            try_op!(
+                l,
+                l_s,
+                r,
+                r_s,
+                T::sub_month_day_nano(l, r, l_tz).ok_or(ArrowError::ComputeError(
+                    "Timestamp out of range".to_string()
+                ))
+            )
         }
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -803,9 +853,11 @@ fn decimal_op<T: DecimalType>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::temporal_conversions::{as_date, as_datetime};
+    use arrow_array::temporal_conversions::{
+        as_date, as_datetime, as_datetime_with_timezone,
+    };
     use arrow_buffer::{i256, ScalarBuffer};
-    use chrono::{DateTime, NaiveDate};
+    use chrono::{DateTime, NaiveDate, TimeZone};
 
     fn test_neg_primitive<T: ArrowPrimitiveType>(
         input: &[T::Native],
@@ -1471,5 +1523,149 @@ mod tests {
             err,
             "Compute error: Overflow happened on: 9223372036854775807 - -1"
         );
+    }
+
+    fn test_timestamp_with_timezone_impl<T: TimestampOp>(tz_str: &str) {
+        let tz: Tz = tz_str.parse().unwrap();
+
+        let transform_array = |x: &dyn Array| -> Vec<DateTime<_>> {
+            x.as_primitive::<T>()
+                .values()
+                .into_iter()
+                .map(|x| as_datetime_with_timezone::<T>(*x, tz).unwrap())
+                .collect()
+        };
+
+        let values = vec![
+            tz.with_ymd_and_hms(1970, 1, 28, 23, 0, 0)
+                .unwrap()
+                .naive_utc(),
+            tz.with_ymd_and_hms(1970, 1, 1, 0, 0, 0)
+                .unwrap()
+                .naive_utc(),
+            tz.with_ymd_and_hms(2010, 4, 1, 4, 0, 20)
+                .unwrap()
+                .naive_utc(),
+            tz.with_ymd_and_hms(1960, 1, 30, 4, 23, 20)
+                .unwrap()
+                .naive_utc(),
+            tz.with_ymd_and_hms(2023, 3, 25, 14, 0, 0)
+                .unwrap()
+                .naive_utc(),
+        ]
+        .into_iter()
+        .map(|x| T::make_value(x).unwrap())
+        .collect();
+
+        let a = PrimitiveArray::<T>::new(values, None).with_timezone(tz_str);
+
+        // IntervalYearMonth
+        let b = IntervalYearMonthArray::from(vec![
+            IntervalYearMonthType::make_value(0, 1),
+            IntervalYearMonthType::make_value(5, 34),
+            IntervalYearMonthType::make_value(-2, 4),
+            IntervalYearMonthType::make_value(7, -4),
+            IntervalYearMonthType::make_value(0, 1),
+        ]);
+        let r1 = add(&a, &b).unwrap();
+        assert_eq!(
+            &transform_array(r1.as_ref()),
+            &[
+                tz.with_ymd_and_hms(1970, 2, 28, 23, 0, 0).unwrap(),
+                tz.with_ymd_and_hms(1977, 11, 1, 0, 0, 0).unwrap(),
+                tz.with_ymd_and_hms(2008, 8, 1, 4, 0, 20).unwrap(),
+                tz.with_ymd_and_hms(1966, 9, 30, 4, 23, 20).unwrap(),
+                tz.with_ymd_and_hms(2023, 4, 25, 14, 0, 0).unwrap(),
+            ]
+        );
+
+        let r2 = sub(&r1, &b).unwrap();
+        assert_eq!(r2.as_ref(), &a);
+
+        // IntervalDayTime
+        let b = IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(0, 0),
+            IntervalDayTimeType::make_value(5, 454000),
+            IntervalDayTimeType::make_value(-34, 0),
+            IntervalDayTimeType::make_value(7, -4000),
+            IntervalDayTimeType::make_value(1, 0),
+        ]);
+        let r3 = add(&a, &b).unwrap();
+        assert_eq!(
+            &transform_array(r3.as_ref()),
+            &[
+                tz.with_ymd_and_hms(1970, 1, 28, 23, 0, 0).unwrap(),
+                tz.with_ymd_and_hms(1970, 1, 6, 0, 7, 34).unwrap(),
+                tz.with_ymd_and_hms(2010, 2, 26, 4, 0, 20).unwrap(),
+                tz.with_ymd_and_hms(1960, 2, 6, 4, 23, 16).unwrap(),
+                tz.with_ymd_and_hms(2023, 3, 26, 14, 0, 0).unwrap(),
+            ]
+        );
+
+        let r4 = sub(&r3, &b).unwrap();
+        assert_eq!(r4.as_ref(), &a);
+
+        // IntervalMonthDayNano
+        let b = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(1, 0, 0),
+            IntervalMonthDayNanoType::make_value(344, 34, -43_000_000_000),
+            IntervalMonthDayNanoType::make_value(-593, -33, 13_000_000_000),
+            IntervalMonthDayNanoType::make_value(5, 2, 493_000_000_000),
+            IntervalMonthDayNanoType::make_value(1, 0, 0),
+        ]);
+        let r5 = add(&a, &b).unwrap();
+        assert_eq!(
+            &transform_array(r5.as_ref()),
+            &[
+                tz.with_ymd_and_hms(1970, 2, 28, 23, 0, 0).unwrap(),
+                tz.with_ymd_and_hms(1998, 10, 4, 23, 59, 17).unwrap(),
+                tz.with_ymd_and_hms(1960, 9, 29, 4, 0, 33).unwrap(),
+                tz.with_ymd_and_hms(1960, 7, 2, 4, 31, 33).unwrap(),
+                tz.with_ymd_and_hms(2023, 4, 25, 14, 0, 0).unwrap(),
+            ]
+        );
+
+        let r6 = sub(&r5, &b).unwrap();
+        assert_eq!(
+            &transform_array(r6.as_ref()),
+            &[
+                tz.with_ymd_and_hms(1970, 1, 28, 23, 0, 0).unwrap(),
+                tz.with_ymd_and_hms(1970, 1, 2, 0, 0, 0).unwrap(),
+                tz.with_ymd_and_hms(2010, 4, 2, 4, 0, 20).unwrap(),
+                tz.with_ymd_and_hms(1960, 1, 31, 4, 23, 20).unwrap(),
+                tz.with_ymd_and_hms(2023, 3, 25, 14, 0, 0).unwrap(),
+            ]
+        );
+    }
+
+    #[cfg(not(feature = "chrono-tz"))]
+    #[test]
+    fn test_timestamp_with_timezone() {
+        let timezones = ["+00:00", "+01:00", "-01:00", "+03:30"];
+        for timezone in timezones {
+            test_timestamp_with_timezone_impl::<TimestampSecondType>(timezone);
+            test_timestamp_with_timezone_impl::<TimestampMillisecondType>(timezone);
+            test_timestamp_with_timezone_impl::<TimestampMicrosecondType>(timezone);
+            test_timestamp_with_timezone_impl::<TimestampNanosecondType>(timezone);
+        }
+    }
+
+    #[cfg(feature = "chrono-tz")]
+    #[test]
+    fn test_timestamp_with_timezone() {
+        let timezones = [
+            "Europe/Paris",
+            "Europe/London",
+            "Africa/Bamako",
+            "America/Dominica",
+            "Asia/Seoul",
+            "Asia/Shanghai",
+        ];
+        for timezone in timezones {
+            test_timestamp_with_timezone_impl::<TimestampSecondType>(timezone);
+            test_timestamp_with_timezone_impl::<TimestampMillisecondType>(timezone);
+            test_timestamp_with_timezone_impl::<TimestampMicrosecondType>(timezone);
+            test_timestamp_with_timezone_impl::<TimestampNanosecondType>(timezone);
+        }
     }
 }

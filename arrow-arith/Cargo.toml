@@ -46,3 +46,4 @@ num = { version = "0.4", default-features = false, features = ["std"] }
 
 [features]
 simd = ["arrow-array/simd"]
+chrono-tz = ["arrow-array/chrono-tz"]
