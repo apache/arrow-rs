@@ -253,7 +253,7 @@ impl<T: PutPart> AsyncWrite for WriteMultiPart<T> {
 
 impl<T: PutPart> std::fmt::Debug for WriteMultiPart<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CloudMultiPartUpload")
+        f.debug_struct("WriteMultiPart")
             .field("completed_parts", &self.completed_parts)
             .field("tasks", &self.tasks)
             .field("max_concurrency", &self.max_concurrency)
