@@ -23,7 +23,7 @@ use crate::client::list::ListClient;
 use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
-use crate::multipart::UploadPart;
+use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::{
     ClientOptions, GetOptions, ListResult, MultipartId, Path, Result, RetryConfig,
@@ -479,7 +479,7 @@ impl S3Client {
         &self,
         location: &Path,
         upload_id: &str,
-        parts: Vec<UploadPart>,
+        parts: Vec<PartId>,
     ) -> Result<()> {
         let parts = parts
             .into_iter()

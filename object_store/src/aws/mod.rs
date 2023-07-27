@@ -56,7 +56,7 @@ use crate::client::{
     TokenCredentialProvider,
 };
 use crate::config::ConfigValue;
-use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
+use crate::multipart::{PartId, PutPart, WriteMultiPart};
 use crate::{
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Path, Result, RetryConfig,
@@ -227,7 +227,7 @@ impl ObjectStore for AmazonS3 {
             client: Arc::clone(&self.client),
         };
 
-        Ok((id, Box::new(CloudMultiPartUpload::new(upload, 8))))
+        Ok((id, Box::new(WriteMultiPart::new(upload, 8))))
     }
 
     async fn abort_multipart(
@@ -308,12 +308,8 @@ struct S3MultiPartUpload {
 }
 
 #[async_trait]
-impl CloudMultiPartUploadImpl for S3MultiPartUpload {
-    async fn put_multipart_part(
-        &self,
-        buf: Vec<u8>,
-        part_idx: usize,
-    ) -> Result<UploadPart, std::io::Error> {
+impl PutPart for S3MultiPartUpload {
+    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
         use reqwest::header::ETAG;
         let part = (part_idx + 1).to_string();
 
@@ -326,26 +322,16 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
             )
             .await?;
 
-        let etag = response
-            .headers()
-            .get(ETAG)
-            .context(MissingEtagSnafu)
-            .map_err(crate::Error::from)?;
+        let etag = response.headers().get(ETAG).context(MissingEtagSnafu)?;
 
-        let etag = etag
-            .to_str()
-            .context(BadHeaderSnafu)
-            .map_err(crate::Error::from)?;
+        let etag = etag.to_str().context(BadHeaderSnafu)?;
 
-        Ok(UploadPart {
+        Ok(PartId {
             content_id: etag.to_string(),
         })
     }
 
-    async fn complete(
-        &self,
-        completed_parts: Vec<UploadPart>,
-    ) -> Result<(), std::io::Error> {
+    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
         self.client
             .complete_multipart(&self.location, &self.upload_id, completed_parts)
             .await?;
