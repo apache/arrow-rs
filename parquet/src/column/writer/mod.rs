@@ -500,12 +500,23 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let metadata = self.write_column_metadata()?;
         self.page_writer.close()?;
 
-        let column_index = if self.column_index_builder.valid() {
-            Some(self.column_index_builder.build_to_thrift())
+        // previous
+        let (column_index, offset_index) = if self.column_index_builder.valid() {
+            // build the column and offset index
+            let column_index = self.column_index_builder.build_to_thrift();
+            let offset_index = self.offset_index_builder.build_to_thrift();
+            (Some(column_index), Some(offset_index))
         } else {
-            None
+            (None, None)
         };
-        let offset_index = Some(self.offset_index_builder.build_to_thrift());
+
+        // modified
+        // let column_index = if self.column_index_builder.valid() {
+        //     Some(self.column_index_builder.build_to_thrift())
+        // } else {
+        //     None
+        // };
+        // let offset_index = Some(self.offset_index_builder.build_to_thrift());
 
         Ok(ColumnCloseResult {
             bytes_written: self.column_metrics.total_bytes_written,

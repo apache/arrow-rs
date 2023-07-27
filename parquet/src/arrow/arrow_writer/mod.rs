@@ -1651,6 +1651,38 @@ mod tests {
     }
 
     #[test]
+    fn check_page_offset_index() {
+        let values = Arc::new(
+            [Some(f64::NAN), Some(f64::NAN), Some(f64::NAN)]
+                .iter()
+                .cycle()
+                .copied()
+                .take(200_000)
+                .collect::<Float64Array>(),
+        );
+        let schema =
+            Schema::new(vec![Field::new("col", values.data_type().clone(), true)]);
+        let expected_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
+        let file = tempfile::tempfile().unwrap();
+
+        let mut writer = ArrowWriter::try_new(
+            file.try_clone().unwrap(),
+            expected_batch.schema(),
+            None,
+        )
+        .expect("Unable to write file");
+        writer.write(&expected_batch).unwrap();
+        let file_meta_data = writer.close().unwrap();
+        for row_group in file_meta_data.row_groups {
+            for column in row_group.columns {
+                assert!(column.offset_index_offset.is_some());
+                assert!(column.offset_index_length.is_some());
+            }
+        }
+    }
+
+    #[test]
     fn i8_single_column() {
         required_and_optional::<Int8Array, _>(0..SMALL_SIZE as i8);
     }
