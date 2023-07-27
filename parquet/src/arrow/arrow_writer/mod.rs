@@ -1651,7 +1651,7 @@ mod tests {
     }
 
     #[test]
-    fn check_page_offset_index() {
+    fn check_page_offset_index_with_nan() {
         let values = Arc::new(
             [Some(f64::NAN), Some(f64::NAN), Some(f64::NAN)]
                 .iter()
@@ -1676,10 +1676,25 @@ mod tests {
         let file_meta_data = writer.close().unwrap();
         for row_group in file_meta_data.row_groups {
             for column in row_group.columns {
-                assert!(column.offset_index_offset.is_some());
-                assert!(column.offset_index_length.is_some());
+                // Note: Both offset_index_offset and offset_index_length are none.
+                assert!(column.offset_index_offset.is_none());
+                assert!(column.offset_index_length.is_none());
             }
         }
+
+        let file_reader = SerializedFileReader::new_with_options(
+            file,
+            ReadOptionsBuilder::new()
+                .with_reader_properties(
+                    ReaderProperties::builder()
+                        .set_read_bloom_filter(true)
+                        .build(),
+                )
+                .with_page_index()
+                .build(),
+        )
+        .unwrap();
+        file_reader.metadata();
     }
 
     #[test]
