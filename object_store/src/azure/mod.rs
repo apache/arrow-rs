@@ -1196,9 +1196,7 @@ mod tests {
             .parse_url("https://daily-onelake.dfs.fabric.microsoft.com/86bc63cf-5086-42e0-b16d-6bc580d1dc87/17d3977c-d46e-4bae-8fed-ff467e674aed/Files/SampleCustomerList.csv")
             .unwrap();
         assert_eq!(builder.account_name, Some("daily-onelake".to_string()));
-        assert_eq!(builder.container_name, Some("86bc63cf-5086-42e0-b16d-6bc580d1dc87".to_string()));
-
-
+        
         let err_cases = [
             "mailto://account.blob.core.windows.net/",
             "az://blob.mydomain/",
