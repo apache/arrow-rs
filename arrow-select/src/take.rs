@@ -331,52 +331,50 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     let data_len = indices.len();
 
     let bytes_offset = (data_len + 1) * std::mem::size_of::<T::Offset>();
-    let mut offsets_buffer = MutableBuffer::new(bytes_offset);
+    let mut offsets = MutableBuffer::new(bytes_offset);
+    offsets.push(T::Offset::default());
 
     let mut values = MutableBuffer::new(0);
-    offsets_buffer.push(T::Offset::usize_as(values.len()));
 
     let nulls;
     let take = indices.values().iter().map(|x| x.as_usize());
     if array.null_count() == 0 && indices.null_count() == 0 {
-        for index in take {
+        offsets.extend(take.map(|index| {
             let s: &[u8] = array.value(index).as_ref();
             values.extend_from_slice(s);
-            offsets_buffer.push(T::Offset::usize_as(values.len()));
-        }
+            T::Offset::usize_as(values.len())
+        }));
         nulls = None
     } else if indices.null_count() == 0 {
         let num_bytes = bit_util::ceil(data_len, 8);
 
         let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
         let null_slice = null_buf.as_slice_mut();
-
-        for (i, index) in take.enumerate() {
+        offsets.extend(take.enumerate().map(|(i, index)| {
             if array.is_valid(index) {
                 let s: &[u8] = array.value(index).as_ref();
                 values.extend_from_slice(s.as_ref());
             } else {
                 bit_util::unset_bit(null_slice, i);
             }
-            offsets_buffer.push(T::Offset::usize_as(values.len()));
-        }
+            T::Offset::usize_as(values.len())
+        }));
         nulls = Some(null_buf.into());
     } else if array.null_count() == 0 {
-        for (i, index) in take.enumerate() {
+        offsets.extend(take.enumerate().map(|(i, index)| {
             if indices.is_valid(i) {
                 let s: &[u8] = array.value(index).as_ref();
                 values.extend_from_slice(s);
             }
-            offsets_buffer.push(T::Offset::usize_as(values.len()));
-        }
+            T::Offset::usize_as(values.len())
+        }));
         nulls = indices.nulls().map(|b| b.inner().sliced());
     } else {
         let num_bytes = bit_util::ceil(data_len, 8);
 
         let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
         let null_slice = null_buf.as_slice_mut();
-
-        for (i, index) in take.enumerate() {
+        offsets.extend(take.enumerate().map(|(i, index)| {
             if indices.is_valid(i) && array.is_valid(index) {
                 let s: &[u8] = array.value(index).as_ref();
                 values.extend_from_slice(s);
@@ -384,9 +382,8 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                 // set null bit
                 bit_util::unset_bit(null_slice, i);
             }
-            offsets_buffer.push(T::Offset::usize_as(values.len()));
-        }
-
+            T::Offset::usize_as(values.len())
+        }));
         nulls = Some(null_buf.into())
     }
 
@@ -394,7 +391,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 
     let array_data = ArrayData::builder(T::DATA_TYPE)
         .len(data_len)
-        .add_buffer(offsets_buffer.into())
+        .add_buffer(offsets.into())
         .add_buffer(values.into())
         .null_bit_buffer(nulls);
 
