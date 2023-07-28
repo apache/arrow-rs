@@ -337,10 +337,9 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     let mut values = MutableBuffer::new(0);
 
     let nulls;
-    let take = indices.values().iter().map(|x| x.as_usize());
     if array.null_count() == 0 && indices.null_count() == 0 {
-        offsets.extend(take.map(|index| {
-            let s: &[u8] = array.value(index).as_ref();
+        offsets.extend(indices.values().iter().map(|index| {
+            let s: &[u8] = array.value(index.as_usize()).as_ref();
             values.extend_from_slice(s);
             T::Offset::usize_as(values.len())
         }));
@@ -350,7 +349,8 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 
         let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
         let null_slice = null_buf.as_slice_mut();
-        offsets.extend(take.enumerate().map(|(i, index)| {
+        offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
+            let index = index.as_usize();
             if array.is_valid(index) {
                 let s: &[u8] = array.value(index).as_ref();
                 values.extend_from_slice(s.as_ref());
@@ -361,9 +361,9 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         }));
         nulls = Some(null_buf.into());
     } else if array.null_count() == 0 {
-        offsets.extend(take.enumerate().map(|(i, index)| {
+        offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
             if indices.is_valid(i) {
-                let s: &[u8] = array.value(index).as_ref();
+                let s: &[u8] = array.value(index.as_usize()).as_ref();
                 values.extend_from_slice(s);
             }
             T::Offset::usize_as(values.len())
@@ -374,7 +374,8 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 
         let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
         let null_slice = null_buf.as_slice_mut();
-        offsets.extend(take.enumerate().map(|(i, index)| {
+        offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
+            let index = index.as_usize();
             if indices.is_valid(i) && array.is_valid(index) {
                 let s: &[u8] = array.value(index).as_ref();
                 values.extend_from_slice(s);
