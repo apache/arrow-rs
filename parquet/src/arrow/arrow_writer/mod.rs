@@ -1652,49 +1652,23 @@ mod tests {
 
     #[test]
     fn check_page_offset_index_with_nan() {
-        let values = Arc::new(
-            [Some(f64::NAN), Some(f64::NAN), Some(f64::NAN)]
-                .iter()
-                .cycle()
-                .copied()
-                .take(200_000)
-                .collect::<Float64Array>(),
-        );
-        let schema =
-            Schema::new(vec![Field::new("col", values.data_type().clone(), true)]);
-        let expected_batch =
-            RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
-        let file = tempfile::tempfile().unwrap();
+        let values = Arc::new(Float64Array::from(vec![f64::NAN; 10]));
+        let schema = Schema::new(vec![Field::new("col", DataType::Float64, true)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
 
-        let mut writer = ArrowWriter::try_new(
-            file.try_clone().unwrap(),
-            expected_batch.schema(),
-            None,
-        )
-        .expect("Unable to write file");
-        writer.write(&expected_batch).unwrap();
+        let mut out = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut out, batch.schema(), None)
+            .expect("Unable to write file");
+        writer.write(&batch).unwrap();
         let file_meta_data = writer.close().unwrap();
         for row_group in file_meta_data.row_groups {
             for column in row_group.columns {
-                // Note: Both offset_index_offset and offset_index_length are none.
-                assert!(column.offset_index_offset.is_none());
-                assert!(column.offset_index_length.is_none());
+                assert!(column.offset_index_offset.is_some());
+                assert!(column.offset_index_length.is_some());
+                assert!(column.column_index_offset.is_none());
+                assert!(column.column_index_length.is_none());
             }
         }
-
-        let file_reader = SerializedFileReader::new_with_options(
-            file,
-            ReadOptionsBuilder::new()
-                .with_reader_properties(
-                    ReaderProperties::builder()
-                        .set_read_bloom_filter(true)
-                        .build(),
-                )
-                .with_page_index()
-                .build(),
-        )
-        .unwrap();
-        file_reader.metadata();
     }
 
     #[test]
