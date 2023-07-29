@@ -29,8 +29,8 @@ use std::sync::Arc;
 
 use crate::equal;
 
-mod buffers;
-pub use buffers::*;
+/// A collection of [`Buffer`]
+pub type Buffers<'a> = &'a [Buffer];
 
 #[inline]
 pub(crate) fn contains_nulls(
@@ -345,10 +345,9 @@ impl ArrayData {
         &self.data_type
     }
 
-    /// Returns the [`Buffers`] storing data for this [`ArrayData`]
-    pub fn buffers(&self) -> Buffers<'_> {
-        // In future ArrayData won't store data contiguously as `Vec<Buffer>` (#1799)
-        Buffers::from_slice(&self.buffers)
+    /// Returns the [`Buffer`] storing data for this [`ArrayData`]
+    pub fn buffers(&self) -> &[Buffer] {
+        &self.buffers
     }
 
     /// Returns a slice of children [`ArrayData`]. This will be non
