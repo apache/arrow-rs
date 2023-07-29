@@ -30,6 +30,7 @@ use std::sync::Arc;
 use crate::equal;
 
 /// A collection of [`Buffer`]
+#[doc(hidden)]
 pub type Buffers<'a> = &'a [Buffer];
 
 #[inline]
