@@ -182,6 +182,41 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         }
     }
 
+    /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
+    pub fn from_iter_values<Ptr, I>(iter: I) -> Self
+    where
+        Ptr: AsRef<T::Native>,
+        I: IntoIterator<Item = Ptr>,
+    {
+        let iter = iter.into_iter();
+        let (_, data_len) = iter.size_hint();
+        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+
+        let mut offsets =
+            MutableBuffer::new((data_len + 1) * std::mem::size_of::<T::Offset>());
+        offsets.push(T::Offset::usize_as(0));
+
+        let mut values = MutableBuffer::new(0);
+        for s in iter {
+            let s: &[u8] = s.as_ref().as_ref();
+            values.extend_from_slice(s);
+            offsets.push(T::Offset::usize_as(values.len()));
+        }
+
+        T::Offset::from_usize(values.len()).expect("offset overflow");
+        let offsets = Buffer::from(offsets);
+
+        // Safety: valid by construction
+        let value_offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+
+        Self {
+            data_type: T::DATA_TYPE,
+            value_data: values.into(),
+            value_offsets,
+            nulls: None,
+        }
+    }
+
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (OffsetBuffer<T::Offset>, Buffer, Option<NullBuffer>) {
         (self.value_offsets, self.value_data, self.nulls)
