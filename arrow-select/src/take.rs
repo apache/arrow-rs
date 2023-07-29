@@ -375,6 +375,8 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
         let null_slice = null_buf.as_slice_mut();
         offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
+            // check index is valid before using index. The value in
+            // NULL index slots may not be within bounds of array
             let index = index.as_usize();
             if indices.is_valid(i) && array.is_valid(index) {
                 let s: &[u8] = array.value(index).as_ref();
@@ -1911,6 +1913,7 @@ mod tests {
 
     #[test]
     fn test_take_null_indices() {
+        // Build indices with values that are out of bounds, but masked by null mask
         let indices = Int32Array::new(
             vec![1, 2, 400, 400].into(),
             Some(NullBuffer::from(vec![true, true, false, false])),
