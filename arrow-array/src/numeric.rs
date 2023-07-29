@@ -128,7 +128,7 @@ macro_rules! make_numeric_type {
 
             #[inline]
             fn lanes() -> usize {
-                $lanes
+                Self::Simd::lanes()
             }
 
             #[inline]
