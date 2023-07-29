@@ -72,6 +72,7 @@ fn find_boundaries(col: &SortColumn) -> Result<BooleanBuffer, ArrowError> {
     let v2 = v.slice(1, slice_len);
 
     let array_ne = neq_dyn(v1.as_ref(), v2.as_ref())?;
+    // Set if values have different non-NULL values
     let values_ne = match array_ne.nulls().filter(|n| n.null_count() > 0) {
         Some(n) => n.inner() & array_ne.values(),
         None => array_ne.values().clone(),
@@ -81,6 +82,7 @@ fn find_boundaries(col: &SortColumn) -> Result<BooleanBuffer, ArrowError> {
         Some(n) => {
             let n1 = n.inner().slice(0, slice_len);
             let n2 = n.inner().slice(1, slice_len);
+            // Set if values_ne or the nullability has changed
             &(&n1 ^ &n2) | &values_ne
         }
         None => values_ne,
