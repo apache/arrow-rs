@@ -56,6 +56,8 @@ pub struct FormatOptions<'a> {
     timestamp_tz_format: TimeFormat<'a>,
     /// Time format for time arrays
     time_format: TimeFormat<'a>,
+    /// Format durations as ISO8601
+    iso8601_duration_format: bool,
 }
 
 impl<'a> Default for FormatOptions<'a> {
@@ -74,6 +76,7 @@ impl<'a> FormatOptions<'a> {
             timestamp_format: None,
             timestamp_tz_format: None,
             time_format: None,
+            iso8601_duration_format: true,
         }
     }
 
@@ -130,6 +133,19 @@ impl<'a> FormatOptions<'a> {
     pub const fn with_time_format(self, time_format: Option<&'a str>) -> Self {
         Self {
             time_format,
+            ..self
+        }
+    }
+
+    /// If true formats durations as ISO8601, otherwise prints a human readable format
+    ///
+    /// * ISO 8601 - "P198DT72932.972880S"
+    /// * Human Readable - "198 days 16 hours 34 mins 15.407810000 secs"
+    ///
+    /// Defaults to true
+    pub const fn with_iso8601_duration_format(self, iso8601: bool) -> Self {
+        Self {
+            iso8601_duration_format: iso8601,
             ..self
         }
     }
@@ -541,20 +557,82 @@ temporal_display!(time64us_to_time, time_format, Time64MicrosecondType);
 temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
 
 macro_rules! duration_display {
-    ($convert:ident, $t:ty) => {
-        impl<'a> DisplayIndex for &'a PrimitiveArray<$t> {
-            fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-                write!(f, "{}", $convert(self.value(idx)))?;
+    ($convert:ident, $t:ty, $scale:tt) => {
+        impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
+            type State = bool;
+
+            fn prepare(
+                &self,
+                options: &FormatOptions<'a>,
+            ) -> Result<Self::State, ArrowError> {
+                Ok(options.iso8601_duration_format)
+            }
+
+            fn write(
+                &self,
+                fmt: &Self::State,
+                idx: usize,
+                f: &mut dyn Write,
+            ) -> FormatResult {
+                let v = self.value(idx);
+                match fmt {
+                    true => write!(f, "{}", $convert(v))?,
+                    false => duration_fmt!(f, v, $scale)?,
+                }
                 Ok(())
             }
         }
     };
 }
 
-duration_display!(duration_s_to_duration, DurationSecondType);
-duration_display!(duration_ms_to_duration, DurationMillisecondType);
-duration_display!(duration_us_to_duration, DurationMicrosecondType);
-duration_display!(duration_ns_to_duration, DurationNanosecondType);
+macro_rules! duration_fmt {
+    ($f:ident, $v:expr, 0) => {{
+        let secs = $v;
+        let mins = secs / 60;
+        let hours = mins / 60;
+        let days = hours / 24;
+
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
+        write!($f, "{days} days {hours} hours {mins} mins {secs} secs")
+    }};
+    ($f:ident, $v:expr, $scale:tt) => {{
+        let subsec = $v;
+        let secs = subsec / 10_i64.pow($scale);
+        let mins = secs / 60;
+        let hours = mins / 60;
+        let days = hours / 24;
+
+        let subsec = subsec - (secs * 10_i64.pow($scale));
+        let secs = secs - (mins * 60);
+        let mins = mins - (hours * 60);
+        match subsec.is_negative() {
+            true => {
+                write!(
+                    $f,
+                    concat!("{} days {} hours {} mins -{}.{:0", $scale, "} secs"),
+                    days,
+                    hours,
+                    mins,
+                    secs.abs(),
+                    subsec.abs()
+                )
+            }
+            false => {
+                write!(
+                    $f,
+                    concat!("{} days {} hours {} mins {}.{:0", $scale, "} secs"),
+                    days, hours, mins, secs, subsec
+                )
+            }
+        }
+    }};
+}
+
+duration_display!(duration_s_to_duration, DurationSecondType, 0);
+duration_display!(duration_ms_to_duration, DurationMillisecondType, 3);
+duration_display!(duration_us_to_duration, DurationMicrosecondType, 6);
+duration_display!(duration_ns_to_duration, DurationNanosecondType, 9);
 
 impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -903,25 +981,113 @@ mod tests {
         );
     }
 
+    fn format_array(array: &dyn Array, fmt: &FormatOptions) -> Vec<String> {
+        let fmt = ArrayFormatter::try_new(array, fmt).unwrap();
+        (0..array.len()).map(|x| fmt.value(x).to_string()).collect()
+    }
+
     #[test]
     fn test_array_value_to_string_duration() {
-        let ns_array = DurationNanosecondArray::from(vec![Some(1), None]);
+        let iso_fmt = FormatOptions::new().with_iso8601_duration_format(true);
+        let h_fmt = FormatOptions::new().with_iso8601_duration_format(false);
+
+        let array = DurationNanosecondArray::from(vec![
+            1,
+            -1,
+            1000,
+            -1000,
+            (45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000_000 + 123456789,
+            -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000_000 - 123456789,
+        ]);
+        let iso = format_array(&array, &iso_fmt);
+        let non_iso = format_array(&array, &h_fmt);
+
+        assert_eq!(iso[0], "PT0.000000001S");
+        assert_eq!(non_iso[0], "0 days 0 hours 0 mins 0.000000001 secs");
+        assert_eq!(iso[1], "-PT0.000000001S");
+        assert_eq!(non_iso[1], "0 days 0 hours 0 mins -0.000000001 secs");
+        assert_eq!(iso[2], "PT0.000001S");
+        assert_eq!(non_iso[2], "0 days 0 hours 0 mins 0.000001000 secs");
+        assert_eq!(iso[3], "-PT0.000001S");
+        assert_eq!(non_iso[3], "0 days 0 hours 0 mins -0.000001000 secs");
+        assert_eq!(iso[4], "P45DT50554.123456789S");
+        assert_eq!(non_iso[4], "45 days 1094 hours 2 mins 34.123456789 secs");
+        assert_eq!(iso[5], "-P45DT50554.123456789S");
         assert_eq!(
-            array_value_to_string(&ns_array, 0).unwrap(),
-            "PT0.000000001S"
+            non_iso[5],
+            "-45 days -1094 hours -2 mins -34.123456789 secs"
         );
-        assert_eq!(array_value_to_string(&ns_array, 1).unwrap(), "");
 
-        let us_array = DurationMicrosecondArray::from(vec![Some(1), None]);
-        assert_eq!(array_value_to_string(&us_array, 0).unwrap(), "PT0.000001S");
-        assert_eq!(array_value_to_string(&us_array, 1).unwrap(), "");
+        let array = DurationMicrosecondArray::from(vec![
+            1,
+            -1,
+            1000,
+            -1000,
+            (45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000 + 123456,
+            -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000 - 123456,
+        ]);
+        let iso = format_array(&array, &iso_fmt);
+        let non_iso = format_array(&array, &h_fmt);
 
-        let ms_array = DurationMillisecondArray::from(vec![Some(1), None]);
-        assert_eq!(array_value_to_string(&ms_array, 0).unwrap(), "PT0.001S");
-        assert_eq!(array_value_to_string(&ms_array, 1).unwrap(), "");
+        assert_eq!(iso[0], "PT0.000001S");
+        assert_eq!(non_iso[0], "0 days 0 hours 0 mins 0.000001 secs");
+        assert_eq!(iso[1], "-PT0.000001S");
+        assert_eq!(non_iso[1], "0 days 0 hours 0 mins -0.000001 secs");
+        assert_eq!(iso[2], "PT0.001S");
+        assert_eq!(non_iso[2], "0 days 0 hours 0 mins 0.001000 secs");
+        assert_eq!(iso[3], "-PT0.001S");
+        assert_eq!(non_iso[3], "0 days 0 hours 0 mins -0.001000 secs");
+        assert_eq!(iso[4], "P45DT50554.123456S");
+        assert_eq!(non_iso[4], "45 days 1094 hours 2 mins 34.123456 secs");
+        assert_eq!(iso[5], "-P45DT50554.123456S");
+        assert_eq!(non_iso[5], "-45 days -1094 hours -2 mins -34.123456 secs");
 
-        let s_array = DurationSecondArray::from(vec![Some(1), None]);
-        assert_eq!(array_value_to_string(&s_array, 0).unwrap(), "PT1S");
-        assert_eq!(array_value_to_string(&s_array, 1).unwrap(), "");
+        let array = DurationMillisecondArray::from(vec![
+            1,
+            -1,
+            1000,
+            -1000,
+            (45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000 + 123,
+            -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000 - 123,
+        ]);
+        let iso = format_array(&array, &iso_fmt);
+        let non_iso = format_array(&array, &h_fmt);
+
+        assert_eq!(iso[0], "PT0.001S");
+        assert_eq!(non_iso[0], "0 days 0 hours 0 mins 0.001 secs");
+        assert_eq!(iso[1], "-PT0.001S");
+        assert_eq!(non_iso[1], "0 days 0 hours 0 mins -0.001 secs");
+        assert_eq!(iso[2], "PT1S");
+        assert_eq!(non_iso[2], "0 days 0 hours 0 mins 1.000 secs");
+        assert_eq!(iso[3], "-PT1S");
+        assert_eq!(non_iso[3], "0 days 0 hours 0 mins -1.000 secs");
+        assert_eq!(iso[4], "P45DT50554.123S");
+        assert_eq!(non_iso[4], "45 days 1094 hours 2 mins 34.123 secs");
+        assert_eq!(iso[5], "-P45DT50554.123S");
+        assert_eq!(non_iso[5], "-45 days -1094 hours -2 mins -34.123 secs");
+
+        let array = DurationSecondArray::from(vec![
+            1,
+            -1,
+            1000,
+            -1000,
+            45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34,
+            -45 * 60 * 60 * 24 - 14 * 60 * 60 - 2 * 60 - 34,
+        ]);
+        let iso = format_array(&array, &iso_fmt);
+        let non_iso = format_array(&array, &h_fmt);
+
+        assert_eq!(iso[0], "PT1S");
+        assert_eq!(non_iso[0], "0 days 0 hours 0 mins 1 secs");
+        assert_eq!(iso[1], "-PT1S");
+        assert_eq!(non_iso[1], "0 days 0 hours 0 mins -1 secs");
+        assert_eq!(iso[2], "PT1000S");
+        assert_eq!(non_iso[2], "0 days 0 hours 16 mins 40 secs");
+        assert_eq!(iso[3], "-PT1000S");
+        assert_eq!(non_iso[3], "0 days 0 hours -16 mins -40 secs");
+        assert_eq!(iso[4], "P45DT50554S");
+        assert_eq!(non_iso[4], "45 days 1094 hours 2 mins 34 secs");
+        assert_eq!(iso[5], "-P45DT50554S");
+        assert_eq!(non_iso[5], "-45 days -1094 hours -2 mins -34 secs");
     }
 }
