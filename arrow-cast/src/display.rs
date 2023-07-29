@@ -60,6 +60,12 @@ pub struct FormatOptions<'a> {
 
 impl<'a> Default for FormatOptions<'a> {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a> FormatOptions<'a> {
+    pub const fn new() -> Self {
         Self {
             safe: true,
             null: "",
@@ -70,12 +76,10 @@ impl<'a> Default for FormatOptions<'a> {
             time_format: None,
         }
     }
-}
 
-impl<'a> FormatOptions<'a> {
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]
-    pub fn with_display_error(mut self, safe: bool) -> Self {
+    pub const fn with_display_error(mut self, safe: bool) -> Self {
         self.safe = safe;
         self
     }
@@ -83,12 +87,12 @@ impl<'a> FormatOptions<'a> {
     /// Overrides the string used to represent a null
     ///
     /// Defaults to `""`
-    pub fn with_null(self, null: &'a str) -> Self {
+    pub const fn with_null(self, null: &'a str) -> Self {
         Self { null, ..self }
     }
 
     /// Overrides the format used for [`DataType::Date32`] columns
-    pub fn with_date_format(self, date_format: Option<&'a str>) -> Self {
+    pub const fn with_date_format(self, date_format: Option<&'a str>) -> Self {
         Self {
             date_format,
             ..self
@@ -96,7 +100,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Date64`] columns
-    pub fn with_datetime_format(self, datetime_format: Option<&'a str>) -> Self {
+    pub const fn with_datetime_format(self, datetime_format: Option<&'a str>) -> Self {
         Self {
             datetime_format,
             ..self
@@ -104,7 +108,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Timestamp`] columns without a timezone
-    pub fn with_timestamp_format(self, timestamp_format: Option<&'a str>) -> Self {
+    pub const fn with_timestamp_format(self, timestamp_format: Option<&'a str>) -> Self {
         Self {
             timestamp_format,
             ..self
@@ -112,7 +116,10 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Timestamp`] columns with a timezone
-    pub fn with_timestamp_tz_format(self, timestamp_tz_format: Option<&'a str>) -> Self {
+    pub const fn with_timestamp_tz_format(
+        self,
+        timestamp_tz_format: Option<&'a str>,
+    ) -> Self {
         Self {
             timestamp_tz_format,
             ..self
@@ -120,7 +127,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Time32`] and [`DataType::Time64`] columns
-    pub fn with_time_format(self, time_format: Option<&'a str>) -> Self {
+    pub const fn with_time_format(self, time_format: Option<&'a str>) -> Self {
         Self {
             time_format,
             ..self
@@ -865,6 +872,15 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_CONST_OPTIONS: FormatOptions<'static> = FormatOptions::new()
+        .with_date_format(Some("foo"))
+        .with_timestamp_format(Some("404"));
+
+    #[test]
+    fn test_const_options() {
+        assert_eq!(TEST_CONST_OPTIONS.date_format, Some("foo"));
+    }
 
     #[test]
     fn test_map_arry_to_string() {
