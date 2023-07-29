@@ -26,6 +26,7 @@ use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
 use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
+use arrow_data::view::{validate_binary_view, validate_string_view};
 use arrow_schema::{
     ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
@@ -1378,6 +1379,10 @@ pub(crate) mod bytes {
             std::str::from_utf8_unchecked(b)
         }
     }
+
+    pub trait ByteViewTypeSealed {}
+    impl ByteViewTypeSealed for BinaryViewType {}
+    impl ByteViewTypeSealed for StringViewType {}
 }
 
 /// A trait over the variable-size byte array types
@@ -1489,6 +1494,49 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
 pub type BinaryType = GenericBinaryType<i32>;
 /// An arrow binary array with i64 offsets
 pub type LargeBinaryType = GenericBinaryType<i64>;
+
+/// A trait over the variable-size byte view array types
+pub trait ByteViewType: 'static + Send + Sync + bytes::ByteViewTypeSealed {
+    /// Type for representing its equivalent rust type i.e
+    /// Utf8Array will have native type has &str
+    /// BinaryArray will have type as [u8]
+    type Native: bytes::ByteArrayNativeType + AsRef<Self::Native> + AsRef<[u8]> + ?Sized;
+
+    /// Datatype of array elements
+    const DATA_TYPE: DataType;
+
+    /// "Binary" or "String", for use in error messages
+    const PREFIX: &'static str;
+
+    /// Verifies that the provided buffers are valid for this array type
+    fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError>;
+}
+
+/// [`ByteViewType`] for string arrays
+pub struct StringViewType {}
+
+impl ByteViewType for StringViewType {
+    type Native = str;
+    const DATA_TYPE: DataType = DataType::Utf8View;
+    const PREFIX: &'static str = "String";
+
+    fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError> {
+        validate_string_view(views, buffers)
+    }
+}
+
+/// [`ByteViewType`] for binary arrays
+pub struct BinaryViewType {}
+
+impl ByteViewType for BinaryViewType {
+    type Native = [u8];
+    const DATA_TYPE: DataType = DataType::BinaryView;
+    const PREFIX: &'static str = "Binary";
+
+    fn validate(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError> {
+        validate_binary_view(views, buffers)
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -94,7 +94,7 @@ pub struct GenericByteArray<T: ByteArrayType> {
 impl<T: ByteArrayType> Clone for GenericByteArray<T> {
     fn clone(&self) -> Self {
         Self {
-            data_type: self.data_type.clone(),
+            data_type: T::DATA_TYPE,
             value_offsets: self.value_offsets.clone(),
             value_data: self.value_data.clone(),
             nulls: self.nulls.clone(),

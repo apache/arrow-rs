@@ -560,6 +560,12 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         DataType::RunEndEncoded(_, _) => Err(arrow_err!(
             "Converting RunEndEncodedType to parquet not supported",
         )),
+        DataType::BinaryView => {
+            Err(arrow_err!("Converting BinaryView to parquet not supported"))
+        }
+        DataType::Utf8View => {
+            Err(arrow_err!("Converting Utf8View to parquet not supported"))
+        }
     }
 }
 

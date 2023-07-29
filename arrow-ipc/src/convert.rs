@@ -787,6 +787,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&children[..])),
             }
         }
+        BinaryView | Utf8View => unimplemented!(),
     }
 }
 

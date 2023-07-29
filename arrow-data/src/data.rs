@@ -28,6 +28,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::equal;
+use crate::view::{validate_binary_view, validate_string_view};
 
 /// A collection of [`Buffer`]
 #[doc(hidden)]
@@ -111,6 +112,10 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             buffer.push(0i64);
             [buffer, MutableBuffer::new(capacity * mem::size_of::<u8>())]
         }
+        DataType::Utf8View | DataType::BinaryView => [
+            MutableBuffer::new(capacity * mem::size_of::<u128>()),
+            empty_buffer,
+        ],
         DataType::List(_) | DataType::Map(_, _) => {
             // offset buffer always starts with a zero
             let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
@@ -147,30 +152,6 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
                 }
             }
         }
-    }
-}
-
-/// Maps 2 [`MutableBuffer`]s into a vector of [Buffer]s whose size depends on `data_type`.
-#[inline]
-pub(crate) fn into_buffers(
-    data_type: &DataType,
-    buffer1: MutableBuffer,
-    buffer2: MutableBuffer,
-) -> Vec<Buffer> {
-    match data_type {
-        DataType::Null | DataType::Struct(_) | DataType::FixedSizeList(_, _) => vec![],
-        DataType::Utf8
-        | DataType::Binary
-        | DataType::LargeUtf8
-        | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
-        DataType::Union(_, mode) => {
-            match mode {
-                // Based on Union's DataTypeLayout
-                UnionMode::Sparse => vec![buffer1.into()],
-                UnionMode::Dense => vec![buffer1.into(), buffer2.into()],
-            }
-        }
-        _ => vec![buffer1.into()],
     }
 }
 
@@ -740,7 +721,7 @@ impl ArrayData {
             )));
         }
 
-        if self.buffers.len() != layout.buffers.len() {
+        if self.buffers.len() < layout.buffers.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Expected {} buffers in array of type {:?}, got {}",
                 layout.buffers.len(),
@@ -1243,6 +1224,14 @@ impl ArrayData {
             DataType::LargeBinary => {
                 self.validate_offsets_full::<i64>(self.buffers[1].len())
             }
+            DataType::BinaryView => {
+                let views = self.typed_buffer::<u128>(0, self.len)?;
+                validate_binary_view(views, &self.buffers[1..])
+            }
+            DataType::Utf8View => {
+                let views = self.typed_buffer::<u128>(0, self.len)?;
+                validate_string_view(views, &self.buffers[1..])
+            }
             DataType::List(_) | DataType::Map(_, _) => {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i32>(child.len)
@@ -1516,6 +1505,9 @@ impl ArrayData {
 
 /// Return the expected [`DataTypeLayout`] Arrays of this data
 /// type are expected to have
+///
+/// For types with a variadic number of buffers, such as [`DataType::Utf8View`],
+/// this only returns the required buffers
 pub fn layout(data_type: &DataType) -> DataTypeLayout {
     // based on C/C++ implementation in
     // https://github.com/apache/arrow/blob/661c7d749150905a63dd3b52e0a04dac39030d95/cpp/src/arrow/type.h (and .cc)
@@ -1564,8 +1556,10 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         }
         DataType::Binary => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeBinary => DataTypeLayout::new_binary::<i64>(),
+        DataType::BinaryView => DataTypeLayout::new_fixed_width::<u128>(),
         DataType::Utf8 => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeUtf8 => DataTypeLayout::new_binary::<i64>(),
+        DataType::Utf8View => DataTypeLayout::new_fixed_width::<u128>(),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),
@@ -1853,7 +1847,7 @@ impl From<ArrayData> for ArrayDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::{Field, UnionFields};
+    use arrow_schema::Field;
 
     // See arrow/tests/array_data_validation.rs for test of array validation
 
@@ -2099,23 +2093,6 @@ mod tests {
         assert!(contains_nulls(Some(&buffer), 0, 3));
         assert!(!contains_nulls(Some(&buffer), 3, 2));
         assert!(!contains_nulls(Some(&buffer), 0, 0));
-    }
-
-    #[test]
-    fn test_into_buffers() {
-        let data_types = vec![
-            DataType::Union(UnionFields::empty(), UnionMode::Dense),
-            DataType::Union(UnionFields::empty(), UnionMode::Sparse),
-        ];
-
-        for data_type in data_types {
-            let buffers = new_buffers(&data_type, 0);
-            let [buffer1, buffer2] = buffers;
-            let buffers = into_buffers(&data_type, buffer1, buffer2);
-
-            let layout = layout(&data_type);
-            assert_eq!(buffers.len(), layout.buffers.len());
-        }
     }
 
     #[test]

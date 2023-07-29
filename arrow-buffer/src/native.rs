@@ -149,6 +149,7 @@ native_integer!(u8);
 native_integer!(u16);
 native_integer!(u32);
 native_integer!(u64);
+native_integer!(u128);
 
 macro_rules! native_float {
     ($t:ty, $s:ident, $as_usize: expr, $i:ident, $usize_as: expr) => {
