@@ -181,26 +181,7 @@ pub fn using_chrono_tz_and_utc_naive_date_time(
 /// the range of [0, 23]. If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn hour_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let hour_values = hour_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&hour_values)))
-                }
-                dt => return_compute_error_with!("hour does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   hour(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("hour does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "hour", |t| t.hour() as i32)
 }
 
 /// Extracts the hours of a given temporal primitive array as an array of integers within
