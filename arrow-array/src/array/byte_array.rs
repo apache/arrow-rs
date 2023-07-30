@@ -159,7 +159,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// # Safety
     ///
     /// Safe if [`Self::try_new`] would not error
-    pub fn new_unchecked(
+    pub unsafe fn new_unchecked(
         offsets: OffsetBuffer<T::Offset>,
         values: Buffer,
         nulls: Option<NullBuffer>,
