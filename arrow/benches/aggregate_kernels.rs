@@ -17,7 +17,9 @@
 
 #[macro_use]
 extern crate criterion;
-use arrow_array::types::{TimestampMillisecondType, UInt8Type};
+use arrow_array::types::{
+    Float64Type, TimestampMillisecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+};
 use arrow_array::ArrowNumericType;
 use criterion::Criterion;
 
@@ -71,11 +73,23 @@ fn add_benchmark(c: &mut Criterion) {
     sum_min_max_bench::<UInt8Type>(c, 512, 0.0, "u8 no nulls");
     sum_min_max_bench::<UInt8Type>(c, 512, 0.5, "u8 50% nulls");
 
+    sum_min_max_bench::<UInt16Type>(c, 512, 0.0, "u16 no nulls");
+    sum_min_max_bench::<UInt16Type>(c, 512, 0.5, "u16 50% nulls");
+
+    sum_min_max_bench::<UInt32Type>(c, 512, 0.0, "u32 no nulls");
+    sum_min_max_bench::<UInt32Type>(c, 512, 0.5, "u32 50% nulls");
+
+    sum_min_max_bench::<UInt64Type>(c, 512, 0.0, "u64 no nulls");
+    sum_min_max_bench::<UInt64Type>(c, 512, 0.5, "u64 50% nulls");
+
     sum_min_max_bench::<TimestampMillisecondType>(c, 512, 0.0, "ts_millis no nulls");
     sum_min_max_bench::<TimestampMillisecondType>(c, 512, 0.5, "ts_millis 50% nulls");
 
     sum_min_max_bench::<Float32Type>(c, 512, 0.0, "f32 no nulls");
     sum_min_max_bench::<Float32Type>(c, 512, 0.5, "f32 50% nulls");
+
+    sum_min_max_bench::<Float64Type>(c, 512, 0.0, "f64 no nulls");
+    sum_min_max_bench::<Float64Type>(c, 512, 0.5, "f64 50% nulls");
 
     let arr_b = create_string_array::<i32>(512, 0.0);
     c.bench_function("min string 512", |b| b.iter(|| bench_min_string(&arr_b)));

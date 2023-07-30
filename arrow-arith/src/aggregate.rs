@@ -285,7 +285,56 @@ where
         return None;
     }
 
-    pub fn sum_impl<T, const LANES: usize>(array: &PrimitiveArray<T>) -> Option<T::Native>
+    pub fn sum_impl_integer<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
+    where
+        T: ArrowNumericType,
+        T::Native: ArrowNativeTypeOp,
+    {
+        let data: &[T::Native] = array.values();
+
+        match array.nulls() {
+            None => {
+                let sum = data.iter().fold(T::default_value(), |accumulator, value| {
+                    accumulator.add_wrapping(*value)
+                });
+
+                Some(sum)
+            }
+            Some(nulls) => {
+                let mut sum = T::default_value();
+                let data_chunks = data.chunks_exact(64);
+                let remainder = data_chunks.remainder();
+
+                let bit_chunks = nulls.inner().bit_chunks();
+                data_chunks
+                    .zip(bit_chunks.iter())
+                    .for_each(|(chunk, mask)| {
+                        // index_mask has value 1 << i in the loop
+                        let mut index_mask = 1;
+                        chunk.iter().for_each(|value| {
+                            if (mask & index_mask) != 0 {
+                                sum = sum.add_wrapping(*value);
+                            }
+                            index_mask <<= 1;
+                        });
+                    });
+
+                let remainder_bits = bit_chunks.remainder_bits();
+
+                remainder.iter().enumerate().for_each(|(i, value)| {
+                    if remainder_bits & (1 << i) != 0 {
+                        sum = sum.add_wrapping(*value);
+                    }
+                });
+
+                Some(sum)
+            }
+        }
+    }
+
+    pub fn sum_impl_floating<T, const LANES: usize>(
+        array: &PrimitiveArray<T>,
+    ) -> Option<T::Native>
     where
         T: ArrowNumericType,
         T::Native: ArrowNativeTypeOp,
@@ -296,17 +345,15 @@ where
 
         match array.nulls() {
             None => {
-                let data_chunks = data.chunks_exact(64);
+                let data_chunks = data.chunks_exact(LANES);
                 let remainder = data_chunks.remainder();
 
                 data_chunks.for_each(|chunk| {
-                    chunk.chunks_exact(LANES).for_each(|chunk| {
-                        let chunk: [T::Native; LANES] = chunk.try_into().unwrap();
+                    let chunk: [T::Native; LANES] = chunk.try_into().unwrap();
 
-                        for i in 0..LANES {
-                            chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
-                        }
-                    })
+                    for i in 0..LANES {
+                        chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
+                    }
                 });
 
                 remainder.iter().copied().for_each(|value| {
@@ -365,15 +412,53 @@ where
         }
     }
 
-    match T::lanes() {
-        1 => sum_impl::<T, 1>(array),
-        2 => sum_impl::<T, 2>(array),
-        4 => sum_impl::<T, 4>(array),
-        8 => sum_impl::<T, 8>(array),
-        16 => sum_impl::<T, 16>(array),
-        32 => sum_impl::<T, 32>(array),
-        64 => sum_impl::<T, 64>(array),
-        unhandled => unreachable!("Unhandled number of lanes: {unhandled}"),
+    match T::DATA_TYPE {
+        DataType::Timestamp(_, _)
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Duration(_)
+        | DataType::Interval(_)
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => sum_impl_integer(array),
+        DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => match T::lanes() {
+            1 => sum_impl_floating::<T, 1>(array),
+            2 => sum_impl_floating::<T, 2>(array),
+            4 => sum_impl_floating::<T, 4>(array),
+            8 => sum_impl_floating::<T, 8>(array),
+            16 => sum_impl_floating::<T, 16>(array),
+            32 => sum_impl_floating::<T, 32>(array),
+            64 => sum_impl_floating::<T, 64>(array),
+            unhandled => unreachable!("Unhandled number of lanes: {unhandled}"),
+        },
+        DataType::Null
+        | DataType::Boolean
+        | DataType::Binary
+        | DataType::FixedSizeBinary(_)
+        | DataType::LargeBinary
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::List(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::LargeList(_)
+        | DataType::Struct(_)
+        | DataType::Union(_, _)
+        | DataType::Dictionary(_, _)
+        | DataType::Map(_, _)
+        | DataType::RunEndEncoded(_, _) => {
+            unreachable!("Unsupported data type: {:?}", T::DATA_TYPE)
+        }
     }
 }
 
