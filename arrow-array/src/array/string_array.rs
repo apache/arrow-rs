@@ -154,7 +154,7 @@ pub type StringArray = GenericStringArray<i32>;
 /// let arr: LargeStringArray = std::iter::repeat(Some("foo")).take(10).collect();
 /// ```
 ///
-/// Constructon and Access
+/// Construction and Access
 ///
 /// ```
 /// use arrow_array::LargeStringArray;
