@@ -17,8 +17,6 @@
 
 //! Computation kernels on Arrow Arrays
 
-pub mod limit;
-
 pub use arrow_arith::{
     aggregate, arithmetic, arity, bitwise, boolean, numeric, temporal,
 };
