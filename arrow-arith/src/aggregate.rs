@@ -390,8 +390,7 @@ where
                             chunk_acc[i] = chunk_acc[i].add_wrapping(chunk[i]);
                         }
 
-                        // skip the shift and avoid overflow for u8 type, which uses 64 lanes.
-                        mask >>= LANES % 64;
+                        mask >>= LANES;
                     })
                 });
 
