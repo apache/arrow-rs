@@ -285,7 +285,7 @@ where
         return None;
     }
 
-    pub fn sum_impl_integer<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
+    fn sum_impl_integer<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
     where
         T: ArrowNumericType,
         T::Native: ArrowNativeTypeOp,
@@ -332,7 +332,7 @@ where
         }
     }
 
-    pub fn sum_impl_floating<T, const LANES: usize>(
+    fn sum_impl_floating<T, const LANES: usize>(
         array: &PrimitiveArray<T>,
     ) -> Option<T::Native>
     where
