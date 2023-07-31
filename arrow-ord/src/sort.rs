@@ -468,7 +468,7 @@ fn sort_boolean(
             .map(|index| (index, values.value(index as usize)))
             .collect::<Vec<(u32, bool)>>();
 
-        sort_valids(descending, &mut valids, &mut null_indices, len, cmp);
+        sort_valids(descending, &mut valids, len, cmp);
         valids
     } else {
         // when limit is not present, we have a better way than sorting: we can just partition
@@ -594,7 +594,7 @@ where
 // sort is instantiated a lot so we only compile this inner version for each native type
 fn sort_primitive_inner<T, F>(
     value_len: usize,
-    null_indices: Vec<u32>,
+    nulls: Vec<u32>,
     cmp: F,
     options: &SortOptions,
     limit: Option<usize>,
@@ -605,8 +605,6 @@ where
     T: PartialOrd,
     F: Fn(T, T) -> Ordering,
 {
-    let mut nulls = null_indices;
-
     let valids_len = valids.len();
     let nulls_len = nulls.len();
     let mut len = value_len;
@@ -615,7 +613,7 @@ where
         len = limit.min(len);
     }
 
-    sort_valids(options.descending, &mut valids, &mut nulls, len, cmp);
+    sort_valids(options.descending, &mut valids, len, cmp);
 
     // collect results directly into a buffer instead of a vec to avoid another aligned allocation
     let result_capacity = len * std::mem::size_of::<u32>();
@@ -925,7 +923,7 @@ where
         len = limit.min(len);
     }
 
-    sort_valids(descending, &mut valids, &mut nulls, len, cmp);
+    sort_valids(descending, &mut valids, len, cmp);
     // collect the order of valid tuplies
     let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
 
@@ -1043,7 +1041,7 @@ where
         len = limit.min(len);
     }
 
-    sort_valids(descending, &mut valids, &mut null_indices, len, cmp);
+    sort_valids(descending, &mut valids, len, cmp);
 
     let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
     if options.nulls_first {
@@ -1271,10 +1269,9 @@ impl LexicographicalComparator<'_> {
     }
 }
 
-fn sort_valids<T, U>(
+fn sort_valids<T>(
     descending: bool,
     valids: &mut [(u32, T)],
-    nulls: &mut [U],
     len: usize,
     mut cmp: impl FnMut(T, T) -> Ordering,
 ) where
@@ -1285,8 +1282,6 @@ fn sort_valids<T, U>(
         sort_unstable_by(valids, len.min(valids_len), |a, b| cmp(a.1, b.1));
     } else {
         sort_unstable_by(valids, len.min(valids_len), |a, b| cmp(a.1, b.1).reverse());
-        // reverse to keep a stable ordering
-        nulls.reverse();
     }
 }
 
@@ -1797,7 +1792,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0], // [2, 4, 1, 3, 5, 0]
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Int16Type>(
@@ -1807,7 +1802,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Int32Type>(
@@ -1817,7 +1812,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Int64Type>(
@@ -1827,7 +1822,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Float16Type>(
@@ -1844,7 +1839,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Float32Type>(
@@ -1861,7 +1856,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Float64Type>(
@@ -1871,7 +1866,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         // descending, nulls first
@@ -1882,7 +1877,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
+            vec![0, 5, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
         );
 
         test_sort_to_indices_primitive_arrays::<Int16Type>(
@@ -1892,7 +1887,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
+            vec![0, 5, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
         );
 
         test_sort_to_indices_primitive_arrays::<Int32Type>(
@@ -1902,7 +1897,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Int64Type>(
@@ -1912,7 +1907,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Float16Type>(
@@ -1929,7 +1924,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Float32Type>(
@@ -1939,7 +1934,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Float64Type>(
@@ -1949,7 +1944,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         // valid values less than limit with extra nulls
@@ -2048,7 +2043,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![5, 0, 2],
+            vec![0, 5, 2],
         );
 
         // valid values less than limit with extra nulls
@@ -2111,7 +2106,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![1, 5, 3, 2, 4, 6, 0],
+            vec![1, 5, 3, 2, 4, 0, 6],
         );
         // decimal null_first and descending
         test_sort_to_indices_decimal128_array(
@@ -2121,7 +2116,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![6, 0, 1, 5, 3, 2, 4],
+            vec![0, 6, 1, 5, 3, 2, 4],
         );
         // decimal null_first
         test_sort_to_indices_decimal128_array(
@@ -2158,7 +2153,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![6, 0, 1],
+            vec![0, 6, 1],
         );
         // limit null_first
         test_sort_to_indices_decimal128_array(
@@ -2195,7 +2190,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![1, 5, 3, 2, 4, 6, 0],
+            vec![1, 5, 3, 2, 4, 0, 6],
         );
         // decimal null_first and descending
         test_sort_to_indices_decimal256_array(
@@ -2208,7 +2203,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![6, 0, 1, 5, 3, 2, 4],
+            vec![0, 6, 1, 5, 3, 2, 4],
         );
         // decimal null_first
         test_sort_to_indices_decimal256_array(
@@ -2257,7 +2252,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![6, 0, 1],
+            vec![0, 6, 1],
         );
         // limit null_first
         test_sort_to_indices_decimal256_array(
@@ -2979,7 +2974,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 4, 1, 5, 3, 0],
+            vec![2, 4, 1, 5, 0, 3],
         );
 
         test_sort_to_indices_string_arrays(
@@ -3013,7 +3008,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![3, 0, 2, 4, 1, 5],
+            vec![0, 3, 2, 4, 1, 5],
         );
 
         test_sort_to_indices_string_arrays(
@@ -3030,7 +3025,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![3, 0, 2],
+            vec![0, 3, 2],
         );
 
         // valid values less than limit with extra nulls
