@@ -127,8 +127,7 @@ impl OffsetSizeTrait for i64 {
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow::{array::{ListBuilder, StringBuilder, ArrayRef, StringArray, Array},
-/// # util::pretty::pretty_format_columns};
+/// # use arrow_array::{builder::ListBuilder, builder::StringBuilder, ArrayRef, StringArray, Array};
 /// #
 /// let values_builder = StringBuilder::new();
 /// let mut builder = ListBuilder::new(values_builder);
