@@ -347,7 +347,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         let end_pos = self.buf.bytes_written();
 
         // Write footer
-        let metadata_len = (end_pos - start_pos) as i32;
+        let metadata_len = (end_pos - start_pos) as u32;
 
         self.buf.write_all(&metadata_len.to_le_bytes())?;
         self.buf.write_all(&PARQUET_MAGIC)?;
