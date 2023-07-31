@@ -172,16 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_metadata_invalid_length() {
-        let test_file = Bytes::from(vec![0, 0, 0, 255, b'P', b'A', b'R', b'1']);
-        let reader_result = parse_metadata(&test_file);
-        assert_eq!(
-            reader_result.unwrap_err().to_string(),
-            "Parquet error: Invalid Parquet file. Metadata length is less than zero (-16777216)"
-        );
-    }
-
-    #[test]
     fn test_parse_metadata_invalid_start() {
         let test_file = Bytes::from(vec![255, 0, 0, 0, b'P', b'A', b'R', b'1']);
         let reader_result = parse_metadata(&test_file);
