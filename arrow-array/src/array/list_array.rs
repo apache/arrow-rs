@@ -123,7 +123,7 @@ impl OffsetSizeTrait for i64 {
 ///
 /// # Example of constructing a [`ListArray`]
 ///
-/// Here is code that constructs the [`ListArray`' in the example above
+/// Here is code that constructs the [`ListArray`] in the example above
 ///
 /// ```
 /// # use std::sync::Arc;
