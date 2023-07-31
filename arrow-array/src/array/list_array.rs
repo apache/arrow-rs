@@ -54,11 +54,130 @@ impl OffsetSizeTrait for i64 {
     const PREFIX: &'static str = "Large";
 }
 
-/// An array of [variable length arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout)
+/// An array of [variable length lists], similar to JSON arrays
+/// (e.g. `["A", "B", "C"]`).
 ///
-/// See [`ListArray`] and [`LargeListArray`]`
+/// Lists are represented using `offsets` into a `values` child
+/// array. Offsets are stored in two adjacent entries of an
+/// [`OffsetBuffer`].
 ///
-/// See [`GenericListBuilder`](crate::builder::GenericListBuilder) for how to construct a [`GenericListArray`]
+/// Arrow defines [`ListArray`] with `i32` offsets and
+/// [`LargeListArray`]` with `i64` offsets.
+///
+/// Use [`GenericListBuilder`](crate::builder::GenericListBuilder) to
+/// construct a [`GenericListArray`].
+///
+/// # Representation
+///
+/// A [`ListArray`] can represent a list of values of any other
+/// supported Arrow type. Each element of the `ListArray` itself is a
+/// a list which mayb be empty, may contain NULL and non-null values,
+/// or may itself be NULL.
+///
+/// For example, this `ListArray` stores lists of strings:
+///
+/// ```text
+/// ┌─────────────┐
+/// │   [A,B,C]   │
+/// ├─────────────┤
+/// │ [] (empty)  │
+/// ├─────────────┤
+/// │    NULL     │
+/// ├─────────────┤
+/// │     [D]     │
+/// ├─────────────┤
+/// │  [NULL, F]  │
+/// └─────────────┘
+/// ```
+///
+/// The `values` of this `ListArray`s are stored in a child
+/// [`StringArray`] and the offsets are stored in an [`OffsetBuffer`]
+/// as shown in the following diagram. The logical values and offsets
+/// are shown on the left, and the actual `ListArray` encoding on the right
+///
+/// ```text
+///                                         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///                                                                 ┌ ─ ─ ─ ─ ─ ─ ┐    │
+///  ┌─────────────┐  ┌───────┐             │     ┌───┐   ┌───┐       ┌───┐ ┌───┐
+///  │   [A,B,C]   │  │ (0,3) │                   │ 1 │   │ 0 │     │ │ 1 │ │ A │ │ 0  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │ [] (empty)  │  │ (3,3) │                   │ 1 │   │ 3 │     │ │ 1 │ │ B │ │ 1  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │    NULL     │  │ (3,4) │                   │ 0 │   │ 4 │     │ │ 1 │ │ C │ │ 2  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │     [D]     │  │ (4,5) │                   │ 1 │   │ 5 │     │ │ 1 │ │ ? │ │ 3  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │  [NULL, F]  │  │ (5,7) │                   │ 1 │   │ 5 │     │ │ 0 │ │ D │ │ 4  │
+///  └─────────────┘  └───────┘             │     └───┘   ├───┤       ├───┤ ├───┤
+///                                                       │ 7 │     │ │ 1 │ │ ? │ │ 5  │
+///                                         │  Validity   └───┘       ├───┤ ├───┤
+///     Logical       Logical                  (nulls)   Offsets    │ │ 1 │ │ F │ │ 6  │
+///      Values       Offsets               │                         └───┘ └───┘
+///                                                                 │    Values   │    │
+///                 (offsets[i],            │   ListArray               (Array)
+///                offsets[i+1])                                    └ ─ ─ ─ ─ ─ ─ ┘    │
+///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///
+///
+/// ```
+///
+/// # Example of constructing a [`ListArray`]
+///
+/// Here is code that constructs the [`ListArray`' in the example above
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::{array::{ListBuilder, StringBuilder, ArrayRef, StringArray, Array},
+/// # util::pretty::pretty_format_columns};
+/// #
+/// let values_builder = StringBuilder::new();
+/// let mut builder = ListBuilder::new(values_builder);
+///
+/// // [A, B, C]
+/// builder.values().append_value("A");
+/// builder.values().append_value("B");
+/// builder.values().append_value("C");
+/// builder.append(true);
+///
+/// // [ ] (empty list)
+/// builder.append(true);
+///
+/// // Null
+/// builder.values().append_value("?"); // irrelevant
+/// builder.append(false);
+///
+/// // [D]
+/// builder.values().append_value("D");
+/// builder.append(true);
+///
+/// // [NULL, F]
+/// builder.values().append_null();
+/// builder.values().append_value("F");
+/// builder.append(true);
+///
+/// // Build the array
+/// let array = builder.finish();
+///
+/// // Values is a string array
+/// // "A", "B" "C", "?", "D", NULL, "F"
+/// assert_eq!(
+///   array.values().as_ref(),
+///   &StringArray::from(vec![
+///     Some("A"), Some("B"), Some("C"),
+///     Some("?"), Some("D"), None,
+///     Some("F")
+///   ]) as &dyn Array
+/// );
+///
+/// // Offsets are indexes into the values array
+/// assert_eq!(
+///   array.value_offsets(),
+///   &[0, 3, 3, 4, 5, 7]
+/// );
+/// ```
+///
+/// [`StringArray`]: crate::array::StringArray
+/// [variable length lists]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout
 pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
