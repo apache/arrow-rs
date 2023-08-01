@@ -356,6 +356,7 @@ fn sort_fixed_size_list(
     Ok(sort_impl(options, &mut valids, &null_indices, limit, Ord::cmp).into())
 }
 
+#[inline(never)]
 fn sort_impl<T>(
     options: SortOptions,
     valids: &mut [(u32, T)],
