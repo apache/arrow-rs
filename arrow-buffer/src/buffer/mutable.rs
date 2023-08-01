@@ -643,6 +643,12 @@ impl MutableBuffer {
     }
 }
 
+impl Default for MutableBuffer {
+    fn default() -> Self {
+        Self::with_capacity(0)
+    }
+}
+
 impl std::ops::Deref for MutableBuffer {
     type Target = [u8];
 
