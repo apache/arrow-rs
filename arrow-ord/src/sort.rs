@@ -357,16 +357,13 @@ fn sort_fixed_size_list(
 }
 
 #[inline(never)]
-fn sort_impl<T>(
+fn sort_impl<T: ?Sized + Copy>(
     options: SortOptions,
     valids: &mut [(u32, T)],
     nulls: &[u32],
     limit: Option<usize>,
     mut cmp: impl FnMut(T, T) -> Ordering,
-) -> Vec<u32>
-where
-    T: ?Sized + Copy,
-{
+) -> Vec<u32> {
     let v_limit = match (limit, options.nulls_first) {
         (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
         _ => valids.len(),
@@ -397,21 +394,11 @@ where
 
 /// Computes the rank for a set of child values
 fn child_rank(values: &dyn Array, options: SortOptions) -> Result<Vec<u32>, ArrowError> {
-    let value_null_first = if options.descending {
-        // When sorting values in descending order, we take inverse of of null ordering
-        // when sorting the values. Because if `nulls_first` is true, null must be in front
-        // of non-null value. As we take the sorted order of value array to sort the parent,
-        // these null values will be treated as smallest ones and be sorted to the end
-        // of sorted result. So we set `nulls_first` to false when value array to make them
-        // as largest ones, then null values will be put at the beginning
-        // of sorted parent result.
-        !options.nulls_first
-    } else {
-        options.nulls_first
-    };
+    // If parent sort order is descending we need to invert the value of nulls_first so that
+    // when the parent is sorted based on the produced ranks, nulls are still ordered correctly
     let value_options = Some(SortOptions {
         descending: false,
-        nulls_first: value_null_first,
+        nulls_first: options.nulls_first != options.descending,
     });
 
     let sorted_value_indices = sort_to_indices(values, value_options, None)?;
