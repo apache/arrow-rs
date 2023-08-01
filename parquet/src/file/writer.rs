@@ -1684,9 +1684,10 @@ mod tests {
         assert_eq!(metadata.row_groups.len(), 1);
         let row_group = &metadata.row_groups[0];
         assert_eq!(row_group.columns.len(), 2);
+        // Column "a" has both offset and column index, as requested
         assert!(row_group.columns[0].offset_index_offset.is_some());
         assert!(row_group.columns[0].column_index_offset.is_some());
-        // Should only have offset index
+        // Column "b" should only have offset index
         assert!(row_group.columns[1].offset_index_offset.is_some());
         assert!(row_group.columns[1].column_index_offset.is_none());
 
