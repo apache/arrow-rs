@@ -31,6 +31,7 @@ use crate::equal;
 
 /// A collection of [`Buffer`]
 #[doc(hidden)]
+#[deprecated(note = "Use [Buffer]")]
 pub type Buffers<'a> = &'a [Buffer];
 
 #[inline]
