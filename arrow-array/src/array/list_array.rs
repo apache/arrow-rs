@@ -70,8 +70,8 @@ impl OffsetSizeTrait for i64 {
 /// # Representation
 ///
 /// A [`ListArray`] can represent a list of values of any other
-/// supported Arrow type. Each element of the `ListArray` itself is a
-/// a list which mayb be empty, may contain NULL and non-null values,
+/// supported Arrow type. Each element of the `ListArray` itself is
+/// a list which may be empty, may contain NULL and non-null values,
 /// or may itself be NULL.
 ///
 /// For example, this `ListArray` stores lists of strings:
