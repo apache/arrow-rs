@@ -26,8 +26,8 @@ use std::ops::Range;
 /// partition the input such that each partition has equal values
 /// across sort columns.
 ///
-/// Note that the columns *MUST* be pre-sorted otherwise the result is
-/// undefined.
+/// Returns an error if no columns are specified or all columns do not
+/// have the same number of rows.
 ///
 /// Returns an iterator with `k` items where `k` is cardinality of the
 /// sort values: Consecutive values will be connected: `(a, b)` and `(b,
