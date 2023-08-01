@@ -777,6 +777,19 @@ mod tests {
     }
 
     #[test]
+    fn test_mutable_default() {
+        let buf = MutableBuffer::default();
+        assert_eq!(0, buf.capacity());
+        assert_eq!(0, buf.len());
+        assert!(buf.is_empty());
+
+        let mut buf = MutableBuffer::default();
+        buf.extend_from_slice(b"hello");
+        assert_eq!(5, buf.len());
+        assert_eq!(b"hello", buf.as_slice());
+    }
+
+    #[test]
     fn test_mutable_extend_from_slice() {
         let mut buf = MutableBuffer::new(100);
         buf.extend_from_slice(b"hello");
