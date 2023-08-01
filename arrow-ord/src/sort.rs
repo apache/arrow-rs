@@ -390,28 +390,15 @@ pub fn sort_to_indices(
                 descending: false,
                 nulls_first: value_null_first,
             });
-            downcast_dictionary_array!(
-                values => match values.values().data_type() {
-                    dt if DataType::is_primitive(dt) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = sorted_rank(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Utf8 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = sorted_rank(&sorted_value_indices);
-                        sort_string_dictionary::<_>(values, &value_indices_map, v, n, &options, limit)
-                    },
-                    t => return Err(ArrowError::ComputeError(format!(
-                        "Unsupported dictionary value type {t}"
-                    ))),
-                },
-                t => return Err(ArrowError::ComputeError(format!(
-                    "Unsupported datatype {t}"
-                ))),
-            )
+            downcast_dictionary_array! {
+                values => {
+                    let dict_values = values.values();
+                    let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                    let rank = sorted_rank(&sorted_value_indices);
+                    sort_dictionary(values, &rank, v, n, options, limit)
+                }
+                _ => unreachable!(),
+            }
         }
         DataType::Binary | DataType::FixedSizeBinary(_) => {
             sort_binary::<i32>(values, v, n, &options, limit)
@@ -468,7 +455,7 @@ fn sort_boolean(
             .map(|index| (index, values.value(index as usize)))
             .collect::<Vec<(u32, bool)>>();
 
-        sort_valids(descending, &mut valids, &mut null_indices, len, cmp);
+        sort_valids(descending, &mut valids, len, cmp);
         valids
     } else {
         // when limit is not present, we have a better way than sorting: we can just partition
@@ -563,28 +550,23 @@ fn sorted_rank(sorted_value_indices: &UInt32Array) -> Vec<u32> {
     out
 }
 
-/// Sort dictionary encoded primitive values
-fn sort_primitive_dictionary<K, F>(
-    values: &DictionaryArray<K>,
-    value_indices_map: &[u32],
+/// Sort dictionary given the sorted rank of each key
+fn sort_dictionary<K: ArrowDictionaryKeyType>(
+    dict: &DictionaryArray<K>,
+    rank: &[u32],
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
     options: SortOptions,
     limit: Option<usize>,
-    cmp: F,
-) -> UInt32Array
-where
-    K: ArrowDictionaryKeyType,
-    F: Fn(u32, u32) -> Ordering,
-{
-    let keys: &PrimitiveArray<K> = values.keys();
+) -> UInt32Array {
+    let keys: &PrimitiveArray<K> = dict.keys();
 
     // create tuples that are used for sorting
     let valids = value_indices
         .into_iter()
         .map(|index| {
             let key: K::Native = keys.value(index as usize);
-            (index, value_indices_map[key.as_usize()])
+            (index, rank[key.as_usize()])
         })
         .collect::<Vec<(u32, u32)>>();
 
@@ -594,7 +576,7 @@ where
 // sort is instantiated a lot so we only compile this inner version for each native type
 fn sort_primitive_inner<T, F>(
     value_len: usize,
-    null_indices: Vec<u32>,
+    nulls: Vec<u32>,
     cmp: F,
     options: &SortOptions,
     limit: Option<usize>,
@@ -605,8 +587,6 @@ where
     T: PartialOrd,
     F: Fn(T, T) -> Ordering,
 {
-    let mut nulls = null_indices;
-
     let valids_len = valids.len();
     let nulls_len = nulls.len();
     let mut len = value_len;
@@ -615,7 +595,7 @@ where
         len = limit.min(len);
     }
 
-    sort_valids(options.descending, &mut valids, &mut nulls, len, cmp);
+    sort_valids(options.descending, &mut valids, len, cmp);
 
     // collect results directly into a buffer instead of a vec to avoid another aligned allocation
     let result_capacity = len * std::mem::size_of::<u32>();
@@ -877,29 +857,6 @@ fn sort_string<Offset: OffsetSizeTrait>(
     )
 }
 
-/// Sort dictionary encoded strings
-fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
-    values: &DictionaryArray<T>,
-    value_indices_map: &[u32],
-    value_indices: Vec<u32>,
-    null_indices: Vec<u32>,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array {
-    let keys: &PrimitiveArray<T> = values.keys();
-
-    // create tuples that are used for sorting
-    let valids = value_indices
-        .into_iter()
-        .map(|index| {
-            let key: T::Native = keys.value(index as usize);
-            (index, value_indices_map[key.as_usize()])
-        })
-        .collect::<Vec<(u32, u32)>>();
-
-    sort_primitive_inner::<_, _>(keys.len(), null_indices, cmp, options, limit, valids)
-}
-
 /// shared implementation between dictionary encoded and plain string arrays
 #[inline]
 fn sort_string_helper<'a, A: Array, F>(
@@ -925,7 +882,7 @@ where
         len = limit.min(len);
     }
 
-    sort_valids(descending, &mut valids, &mut nulls, len, cmp);
+    sort_valids(descending, &mut valids, len, cmp);
     // collect the order of valid tuplies
     let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
 
@@ -1043,7 +1000,7 @@ where
         len = limit.min(len);
     }
 
-    sort_valids(descending, &mut valids, &mut null_indices, len, cmp);
+    sort_valids(descending, &mut valids, len, cmp);
 
     let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
     if options.nulls_first {
@@ -1271,10 +1228,9 @@ impl LexicographicalComparator<'_> {
     }
 }
 
-fn sort_valids<T, U>(
+fn sort_valids<T>(
     descending: bool,
     valids: &mut [(u32, T)],
-    nulls: &mut [U],
     len: usize,
     mut cmp: impl FnMut(T, T) -> Ordering,
 ) where
@@ -1285,8 +1241,6 @@ fn sort_valids<T, U>(
         sort_unstable_by(valids, len.min(valids_len), |a, b| cmp(a.1, b.1));
     } else {
         sort_unstable_by(valids, len.min(valids_len), |a, b| cmp(a.1, b.1).reverse());
-        // reverse to keep a stable ordering
-        nulls.reverse();
     }
 }
 
@@ -1797,7 +1751,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0], // [2, 4, 1, 3, 5, 0]
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Int16Type>(
@@ -1807,7 +1761,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Int32Type>(
@@ -1817,7 +1771,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Int64Type>(
@@ -1827,7 +1781,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Float16Type>(
@@ -1844,7 +1798,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Float32Type>(
@@ -1861,7 +1815,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         test_sort_to_indices_primitive_arrays::<Float64Type>(
@@ -1871,7 +1825,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 1, 4, 3, 5, 0],
+            vec![2, 1, 4, 3, 0, 5],
         );
 
         // descending, nulls first
@@ -1882,7 +1836,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
+            vec![0, 5, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
         );
 
         test_sort_to_indices_primitive_arrays::<Int16Type>(
@@ -1892,7 +1846,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
+            vec![0, 5, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
         );
 
         test_sort_to_indices_primitive_arrays::<Int32Type>(
@@ -1902,7 +1856,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Int64Type>(
@@ -1912,7 +1866,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Float16Type>(
@@ -1929,7 +1883,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Float32Type>(
@@ -1939,7 +1893,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         test_sort_to_indices_primitive_arrays::<Float64Type>(
@@ -1949,7 +1903,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![5, 0, 2, 1, 4, 3],
+            vec![0, 5, 2, 1, 4, 3],
         );
 
         // valid values less than limit with extra nulls
@@ -2048,7 +2002,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![5, 0, 2],
+            vec![0, 5, 2],
         );
 
         // valid values less than limit with extra nulls
@@ -2111,7 +2065,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![1, 5, 3, 2, 4, 6, 0],
+            vec![1, 5, 3, 2, 4, 0, 6],
         );
         // decimal null_first and descending
         test_sort_to_indices_decimal128_array(
@@ -2121,7 +2075,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![6, 0, 1, 5, 3, 2, 4],
+            vec![0, 6, 1, 5, 3, 2, 4],
         );
         // decimal null_first
         test_sort_to_indices_decimal128_array(
@@ -2158,7 +2112,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![6, 0, 1],
+            vec![0, 6, 1],
         );
         // limit null_first
         test_sort_to_indices_decimal128_array(
@@ -2195,7 +2149,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![1, 5, 3, 2, 4, 6, 0],
+            vec![1, 5, 3, 2, 4, 0, 6],
         );
         // decimal null_first and descending
         test_sort_to_indices_decimal256_array(
@@ -2208,7 +2162,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![6, 0, 1, 5, 3, 2, 4],
+            vec![0, 6, 1, 5, 3, 2, 4],
         );
         // decimal null_first
         test_sort_to_indices_decimal256_array(
@@ -2257,7 +2211,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![6, 0, 1],
+            vec![0, 6, 1],
         );
         // limit null_first
         test_sort_to_indices_decimal256_array(
@@ -2979,7 +2933,7 @@ mod tests {
                 nulls_first: false,
             }),
             None,
-            vec![2, 4, 1, 5, 3, 0],
+            vec![2, 4, 1, 5, 0, 3],
         );
 
         test_sort_to_indices_string_arrays(
@@ -3013,7 +2967,7 @@ mod tests {
                 nulls_first: true,
             }),
             None,
-            vec![3, 0, 2, 4, 1, 5],
+            vec![0, 3, 2, 4, 1, 5],
         );
 
         test_sort_to_indices_string_arrays(
@@ -3030,7 +2984,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![3, 0, 2],
+            vec![0, 3, 2],
         );
 
         // valid values less than limit with extra nulls

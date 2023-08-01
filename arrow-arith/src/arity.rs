@@ -18,7 +18,6 @@
 //! Defines kernels suitable to perform operations to primitive arrays.
 
 use arrow_array::builder::BufferBuilder;
-use arrow_array::iterator::ArrayIter;
 use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
 use arrow_buffer::buffer::NullBuffer;
@@ -423,76 +422,6 @@ where
         };
     }
     Ok(Ok(builder.finish()))
-}
-
-#[inline(never)]
-fn try_binary_opt_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
-    len: usize,
-    a: A,
-    b: B,
-    op: F,
-) -> Result<PrimitiveArray<O>, ArrowError>
-where
-    O: ArrowPrimitiveType,
-    F: Fn(A::Item, B::Item) -> Option<O::Native>,
-{
-    let mut buffer = Vec::with_capacity(10);
-    for idx in 0..len {
-        unsafe {
-            buffer.push(op(a.value_unchecked(idx), b.value_unchecked(idx)));
-        };
-    }
-    Ok(buffer.iter().collect())
-}
-
-/// Applies the provided binary operation across `a` and `b`, collecting the optional results
-/// into a [`PrimitiveArray`]. If any index is null in either `a` or `b`, the corresponding
-/// index in the result will also be null. The binary operation could return `None` which
-/// results in a new null in the collected [`PrimitiveArray`].
-///
-/// The function is only evaluated for non-null indices
-///
-/// # Error
-///
-/// This function gives error if the arrays have different lengths
-pub(crate) fn binary_opt<A: ArrayAccessor + Array, B: ArrayAccessor + Array, F, O>(
-    a: A,
-    b: B,
-    op: F,
-) -> Result<PrimitiveArray<O>, ArrowError>
-where
-    O: ArrowPrimitiveType,
-    F: Fn(A::Item, B::Item) -> Option<O::Native>,
-{
-    if a.len() != b.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform binary operation on arrays of different length".to_string(),
-        ));
-    }
-
-    if a.is_empty() {
-        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
-    }
-
-    if a.null_count() == 0 && b.null_count() == 0 {
-        return try_binary_opt_no_nulls(a.len(), a, b, op);
-    }
-
-    let iter_a = ArrayIter::new(a);
-    let iter_b = ArrayIter::new(b);
-
-    let values = iter_a
-        .into_iter()
-        .zip(iter_b.into_iter())
-        .map(|(item_a, item_b)| {
-            if let (Some(a), Some(b)) = (item_a, item_b) {
-                op(a, b)
-            } else {
-                None
-            }
-        });
-
-    Ok(values.collect())
 }
 
 #[cfg(test)]
