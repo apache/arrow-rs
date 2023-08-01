@@ -26,7 +26,60 @@ use arrow_schema::{ArrowError, DataType, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
-/// An array of [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout)
+/// An array of [fixed length lists], similar to JSON arrays
+/// (e.g. `["A", "B"]`).
+///
+/// Lists are represented using a `values` child
+/// array where each list has a fixed size of `value_length`.
+///
+/// Use [`FixedSizeListBuilder`](crate::builder::FixedSizeListBuilder) to
+/// construct a [`FixedSizeListArray`].
+///
+/// # Representation
+///
+/// A [`FixedSizeListArray`] can represent a list of values of any other
+/// supported Arrow type. Each element of the `FixedSizeListArray` itself is
+/// a list which may contain NULL and non-null values,
+/// or may itself be NULL.
+///
+/// For example, this `FixedSizeListArray` stores lists of strings:
+///
+/// ```text
+/// ┌─────────────┐
+/// │    [A,B]    │
+/// ├─────────────┤
+/// │    NULL     │
+/// ├─────────────┤
+/// │   [C,NULL]  │
+/// └─────────────┘
+/// ```
+///
+/// The `values` of this `FixedSizeListArray`s are stored in a child
+/// [`StringArray`] where logical null values take up `values_length` slots in the array
+/// as shown in the following diagram. The logical values
+/// are shown on the left, and the actual `FixedSizeListArray` encoding on the right
+///
+/// ```text
+///                                 ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+///                                                         ┌ ─ ─ ─ ─ ─ ─ ─ ─┐    
+///  ┌─────────────┐                │     ┌───┐               ┌───┐ ┌──────┐      │
+///  │   [A,B]     │                      │ 1 │             │ │ 1 │ │  A   │ │ 0  
+///  ├─────────────┤                │     ├───┤               ├───┤ ├──────┤      │
+///  │    NULL     │                      │ 0 │             │ │ 1 │ │  B   │ │ 1  
+///  ├─────────────┤                │     ├───┤               ├───┤ ├──────┤      │
+///  │  [C,NULL]   │                      │ 1 │             │ │ 0 │ │ NULL │ │ 2  
+///  └─────────────┘                │     └───┘               ├───┤ ├──────┤      │
+///                                                         | │ 0 │ │ NULL │ │ 3  
+///  Logical Values                 │   Validity              ├───┤ ├──────┤      │
+///                                     (nulls)             │ │ 1 │ │  C   │ │ 4  
+///                                 │                         ├───┤ ├──────┤      │
+///                                                         │ │ 0 │ │ NULL │ │ 5  
+///                                 │                         └───┘ └──────┘      │
+///                                                         │     Values     │    
+///                                 │   FixedSizeListArray        (Array)         │
+///                                                         └ ─ ─ ─ ─ ─ ─ ─ ─┘    
+///                                 └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+/// ```
 ///
 /// # Example
 ///
@@ -60,6 +113,9 @@ use std::sync::Arc;
 /// assert_eq!( &[3, 4, 5], list1.as_any().downcast_ref::<Int32Array>().unwrap().values());
 /// assert_eq!( &[6, 7, 8], list2.as_any().downcast_ref::<Int32Array>().unwrap().values());
 /// ```
+///
+/// [`StringArray`]: crate::array::StringArray
+/// An array of [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout)
 #[derive(Clone)]
 pub struct FixedSizeListArray {
     data_type: DataType, // Must be DataType::FixedSizeList(value_length)
