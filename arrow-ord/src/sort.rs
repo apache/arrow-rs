@@ -390,28 +390,15 @@ pub fn sort_to_indices(
                 descending: false,
                 nulls_first: value_null_first,
             });
-            downcast_dictionary_array!(
-                values => match values.values().data_type() {
-                    dt if DataType::is_primitive(dt) => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = sorted_rank(&sorted_value_indices);
-                        sort_primitive_dictionary::<_, _>(values, &value_indices_map, v, n, options, limit, cmp)
-                    },
-                    DataType::Utf8 => {
-                        let dict_values = values.values();
-                        let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
-                        let value_indices_map = sorted_rank(&sorted_value_indices);
-                        sort_string_dictionary::<_>(values, &value_indices_map, v, n, &options, limit)
-                    },
-                    t => return Err(ArrowError::ComputeError(format!(
-                        "Unsupported dictionary value type {t}"
-                    ))),
-                },
-                t => return Err(ArrowError::ComputeError(format!(
-                    "Unsupported datatype {t}"
-                ))),
-            )
+            downcast_dictionary_array! {
+                values => {
+                    let dict_values = values.values();
+                    let sorted_value_indices = sort_to_indices(dict_values, value_options, None)?;
+                    let rank = sorted_rank(&sorted_value_indices);
+                    sort_dictionary(values, &rank, v, n, options, limit)
+                }
+                _ => unreachable!(),
+            }
         }
         DataType::Binary | DataType::FixedSizeBinary(_) => {
             sort_binary::<i32>(values, v, n, &options, limit)
@@ -563,28 +550,23 @@ fn sorted_rank(sorted_value_indices: &UInt32Array) -> Vec<u32> {
     out
 }
 
-/// Sort dictionary encoded primitive values
-fn sort_primitive_dictionary<K, F>(
-    values: &DictionaryArray<K>,
-    value_indices_map: &[u32],
+/// Sort dictionary given the sorted rank of each key
+fn sort_dictionary<K: ArrowDictionaryKeyType>(
+    dict: &DictionaryArray<K>,
+    rank: &[u32],
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
     options: SortOptions,
     limit: Option<usize>,
-    cmp: F,
-) -> UInt32Array
-where
-    K: ArrowDictionaryKeyType,
-    F: Fn(u32, u32) -> Ordering,
-{
-    let keys: &PrimitiveArray<K> = values.keys();
+) -> UInt32Array {
+    let keys: &PrimitiveArray<K> = dict.keys();
 
     // create tuples that are used for sorting
     let valids = value_indices
         .into_iter()
         .map(|index| {
             let key: K::Native = keys.value(index as usize);
-            (index, value_indices_map[key.as_usize()])
+            (index, rank[key.as_usize()])
         })
         .collect::<Vec<(u32, u32)>>();
 
@@ -875,29 +857,6 @@ fn sort_string<Offset: OffsetSizeTrait>(
         limit,
         |array, idx| array.value(idx as usize),
     )
-}
-
-/// Sort dictionary encoded strings
-fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
-    values: &DictionaryArray<T>,
-    value_indices_map: &[u32],
-    value_indices: Vec<u32>,
-    null_indices: Vec<u32>,
-    options: &SortOptions,
-    limit: Option<usize>,
-) -> UInt32Array {
-    let keys: &PrimitiveArray<T> = values.keys();
-
-    // create tuples that are used for sorting
-    let valids = value_indices
-        .into_iter()
-        .map(|index| {
-            let key: T::Native = keys.value(index as usize);
-            (index, value_indices_map[key.as_usize()])
-        })
-        .collect::<Vec<(u32, u32)>>();
-
-    sort_primitive_inner::<_, _>(keys.len(), null_indices, cmp, options, limit, valids)
 }
 
 /// shared implementation between dictionary encoded and plain string arrays
