@@ -186,11 +186,6 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
-name = "sort_kernel_primitives"
-harness = false
-required-features = ["test_utils"]
-
-[[bench]]
 name = "partition_kernels"
 harness = false
 required-features = ["test_utils"]

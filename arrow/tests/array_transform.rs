@@ -19,7 +19,7 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, Decimal128Array, DictionaryArray,
     FixedSizeBinaryArray, Int16Array, Int32Array, Int64Array, Int64Builder, ListArray,
     ListBuilder, MapBuilder, NullArray, StringArray, StringBuilder,
-    StringDictionaryBuilder, StructArray, UInt8Array,
+    StringDictionaryBuilder, StructArray, UInt8Array, UnionArray,
 };
 use arrow::datatypes::Int16Type;
 use arrow_buffer::Buffer;
@@ -486,6 +486,63 @@ fn test_struct_many() {
         StructArray::try_from(vec![("f1", expected_string), ("f2", expected_int)])
             .unwrap();
     assert_eq!(array, expected)
+}
+
+#[test]
+fn test_union_dense() {
+    // Input data
+    let strings: ArrayRef = Arc::new(StringArray::from(vec![
+        Some("joe"),
+        Some("mark"),
+        Some("doe"),
+    ]));
+    let ints: ArrayRef = Arc::new(Int32Array::from(vec![
+        Some(1),
+        Some(2),
+        Some(3),
+        Some(4),
+        Some(5),
+    ]));
+    let offsets = Buffer::from_slice_ref([0, 0, 1, 1, 2, 2, 3, 4i32]);
+    let type_ids = Buffer::from_slice_ref([42, 84, 42, 84, 84, 42, 84, 84i8]);
+
+    let array = UnionArray::try_new(
+        &[84, 42],
+        type_ids,
+        Some(offsets),
+        vec![
+            (Field::new("int", DataType::Int32, false), ints),
+            (Field::new("string", DataType::Utf8, false), strings),
+        ],
+    )
+    .unwrap()
+    .into_data();
+    let arrays = vec![&array];
+    let mut mutable = MutableArrayData::new(arrays, false, 0);
+
+    // Slice it by `MutableArrayData`
+    mutable.extend(0, 4, 7);
+    let data = mutable.freeze();
+    let array = UnionArray::from(data);
+
+    // Expected data
+    let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("doe")]));
+    let ints: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(4)]));
+    let offsets = Buffer::from_slice_ref([0, 0, 1i32]);
+    let type_ids = Buffer::from_slice_ref([84, 42, 84i8]);
+
+    let expected = UnionArray::try_new(
+        &[84, 42],
+        type_ids,
+        Some(offsets),
+        vec![
+            (Field::new("int", DataType::Int32, false), ints),
+            (Field::new("string", DataType::Utf8, false), strings),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(array.to_data(), expected.to_data());
 }
 
 #[test]
