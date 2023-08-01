@@ -49,7 +49,7 @@ fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
         .ok_or_else(|| ArrowError::ParseError("Expects an int64".to_string()))
         .map_err(to_py_err)?;
 
-    let array = kernels::arithmetic::add(array, array).map_err(to_py_err)?;
+    let array = kernels::numeric::add(array, array).map_err(to_py_err)?;
 
     // export
     array.to_data().to_pyarrow(py)
