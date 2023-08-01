@@ -67,13 +67,13 @@ use std::sync::Arc;
 ///  ├─────────────┤                │     ├───┤               ├───┤ ├──────┤      │
 ///  │    NULL     │                      │ 0 │             │ │ 1 │ │  B   │ │ 1  
 ///  ├─────────────┤                │     ├───┤               ├───┤ ├──────┤      │
-///  │  [C,NULL]   │                      │ 1 │             │ │ 0 │ │ NULL │ │ 2  
+///  │  [C,NULL]   │                      │ 1 │             │ │ 0 │ │ ???? │ │ 2  
 ///  └─────────────┘                │     └───┘               ├───┤ ├──────┤      │
-///                                                         | │ 0 │ │ NULL │ │ 3  
+///                                                         | │ 0 │ │ ???? │ │ 3  
 ///  Logical Values                 │   Validity              ├───┤ ├──────┤      │
 ///                                     (nulls)             │ │ 1 │ │  C   │ │ 4  
 ///                                 │                         ├───┤ ├──────┤      │
-///                                                         │ │ 0 │ │ NULL │ │ 5  
+///                                                         │ │ 0 │ │ ???? │ │ 5  
 ///                                 │                         └───┘ └──────┘      │
 ///                                                         │     Values     │    
 ///                                 │   FixedSizeListArray        (Array)         │
@@ -115,7 +115,7 @@ use std::sync::Arc;
 /// ```
 ///
 /// [`StringArray`]: crate::array::StringArray
-/// An array of [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout)
+/// [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout)
 #[derive(Clone)]
 pub struct FixedSizeListArray {
     data_type: DataType, // Must be DataType::FixedSizeList(value_length)
