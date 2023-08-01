@@ -30,7 +30,7 @@ use std::ops::Deref;
 ///
 /// This example shows how 5 distinct ranges, are represented using a
 /// 6 entry `OffsetBuffer`. The first entry `(0, 3)` represents the
-/// three offsets `0, 1, 2` entry `(3,3)` represent no offsets
+/// three offsets `0, 1, 2`. The entry `(3,3)` represent no offsets
 /// (e.g. an empty list).
 ///
 /// ```text
@@ -39,9 +39,9 @@ use std::ops::Deref;
 ///   ├───────┤                ├───┤
 ///   │ (3,3) │                │ 3 │
 ///   ├───────┤                ├───┤
-///   │ (3,4) │                │ 4 │
+///   │ (3,4) │                │ 3 │
 ///   ├───────┤                ├───┤
-///   │ (4,5) │                │ 5 │
+///   │ (4,5) │                │ 4 │
 ///   ├───────┤                ├───┤
 ///   │ (5,7) │                │ 5 │
 ///   └───────┘                ├───┤
