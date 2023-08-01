@@ -165,7 +165,7 @@ impl OffsetSizeTrait for i64 {
 ///     Some("A"), Some("B"), Some("C"),
 ///     Some("?"), Some("D"), None,
 ///     Some("F")
-///   ]) as &dyn Array
+///   ])
 /// );
 ///
 /// // Offsets are indexes into the values array
