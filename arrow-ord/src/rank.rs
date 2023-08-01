@@ -50,6 +50,7 @@ pub fn rank(
     Ok(ranks)
 }
 
+#[inline(never)]
 fn primitive_rank<T: ArrowNativeTypeOp>(
     values: &[T],
     nulls: Option<&NullBuffer>,
@@ -66,6 +67,7 @@ fn primitive_rank<T: ArrowNativeTypeOp>(
     rank_impl(values.len(), to_sort, options, T::compare, T::is_eq)
 }
 
+#[inline(never)]
 fn bytes_rank<T: ByteArrayType>(
     array: &GenericByteArray<T>,
     options: SortOptions,
