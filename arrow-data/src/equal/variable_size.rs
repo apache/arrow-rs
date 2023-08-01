@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::{count_nulls, ArrayData};
+use crate::data::{contains_nulls, ArrayData};
 use arrow_buffer::ArrowNativeType;
 use num::Integer;
 
@@ -59,14 +59,9 @@ pub(super) fn variable_sized_equal<T: ArrowNativeType + Integer>(
     let lhs_values = lhs.buffers()[1].as_slice();
     let rhs_values = rhs.buffers()[1].as_slice();
 
-    let lhs_null_count = count_nulls(lhs.nulls(), lhs_start, len);
-    let rhs_null_count = count_nulls(rhs.nulls(), rhs_start, len);
-
-    if lhs_null_count == 0
-        && rhs_null_count == 0
-        && !lhs_values.is_empty()
-        && !rhs_values.is_empty()
-    {
+    // Only checking one null mask here because by the time the control flow reaches
+    // this point, the equality of the two masks would have already been verified.
+    if !contains_nulls(lhs.nulls(), lhs_start, len) {
         offset_value_equal(
             lhs_values,
             rhs_values,
