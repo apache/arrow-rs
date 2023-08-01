@@ -634,9 +634,12 @@ impl ArrayData {
                     let children = f
                         .iter()
                         .enumerate()
-                        .map(|(idx, (_, f))| match idx {
-                            0 => Self::new_null(f.data_type(), len),
-                            _ => Self::new_empty(f.data_type()),
+                        .map(|(idx, (_, f))| {
+                            if idx == 0 || *mode == UnionMode::Sparse {
+                                Self::new_null(f.data_type(), len)
+                            } else {
+                                Self::new_empty(f.data_type())
+                            }
                         })
                         .collect();
 

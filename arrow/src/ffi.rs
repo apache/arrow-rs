@@ -31,10 +31,11 @@
 //! # use std::sync::Arc;
 //! # use arrow::array::{Int32Array, Array, ArrayData, make_array};
 //! # use arrow::error::Result;
-//! # use arrow::compute::kernels::arithmetic;
+//! # use arrow_arith::numeric::add;
 //! # use arrow::ffi::{to_ffi, from_ffi};
 //! # fn main() -> Result<()> {
 //! // create an array natively
+//!
 //! let array = Int32Array::from(vec![Some(1), None, Some(3)]);
 //! let data = array.into_data();
 //!
@@ -46,10 +47,10 @@
 //! let array = Int32Array::from(data);
 //!
 //! // perform some operation
-//! let array = arithmetic::add(&array, &array)?;
+//! let array = add(&array, &array)?;
 //!
 //! // verify
-//! assert_eq!(array, Int32Array::from(vec![Some(2), None, Some(6)]));
+//! assert_eq!(array.as_ref(), &Int32Array::from(vec![Some(2), None, Some(6)]));
 //! #
 //! # Ok(())
 //! # }
@@ -948,10 +949,10 @@ mod tests {
 
         // perform some operation
         let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-        let array = kernels::arithmetic::add(array, array).unwrap();
+        let array = kernels::numeric::add(array, array).unwrap();
 
         // verify
-        assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
+        assert_eq!(array.as_ref(), &Int32Array::from(vec![2, 4, 6]));
         Ok(())
     }
 

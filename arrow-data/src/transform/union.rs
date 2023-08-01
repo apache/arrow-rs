@@ -39,6 +39,9 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend {
 pub(super) fn build_extend_dense(array: &ArrayData) -> Extend {
     let type_ids = array.buffer::<i8>(0);
     let offsets = array.buffer::<i32>(1);
+    let arrow_schema::DataType::Union(src_fields, _) = array.data_type() else {
+        unreachable!();
+    };
 
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
@@ -48,14 +51,18 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend {
                 .extend_from_slice(&type_ids[start..start + len]);
 
             (start..start + len).for_each(|i| {
-                let type_id = type_ids[i] as usize;
+                let type_id = type_ids[i];
+                let child_index = src_fields
+                    .iter()
+                    .position(|(r, _)| r == type_id)
+                    .expect("invalid union type ID");
                 let src_offset = offsets[i] as usize;
-                let child_data = &mut mutable.child_data[type_id];
+                let child_data = &mut mutable.child_data[child_index];
                 let dst_offset = child_data.len();
 
                 // Extend offsets
                 mutable.buffer2.push(dst_offset as i32);
-                mutable.child_data[type_id].extend(index, src_offset, src_offset + 1)
+                mutable.child_data[child_index].extend(index, src_offset, src_offset + 1)
             })
         },
     )
