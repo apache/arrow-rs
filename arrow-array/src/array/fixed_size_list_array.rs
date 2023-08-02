@@ -161,7 +161,7 @@ impl FixedSizeListArray {
             ))
         })?;
 
-        let len = values.len() / s;
+        let len = values.len() / s.max(1);
         if let Some(n) = nulls.as_ref() {
             if n.len() != len {
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -675,6 +675,9 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Size cannot be negative, got -1"
         );
+
+        let list = FixedSizeListArray::new(field.clone(), 0, values.clone(), None);
+        assert_eq!(list.len(), 6);
 
         let nulls = NullBuffer::new_null(2);
         let err = FixedSizeListArray::try_new(field, 2, values.clone(), Some(nulls))
