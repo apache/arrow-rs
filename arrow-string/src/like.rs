@@ -246,8 +246,6 @@ macro_rules! datum_function {
             let left_type = left_array.data_type();
             let right_type = right_array.data_type();
 
-            // TODO(alexandreyc): check if PartialEq for DataType is deep or shallow
-            // i.e. does it check nested subtypes for equality?
             if left_type != right_type {
                 return Err(ArrowError::ComputeError(
                     "Arrays must have the same data type".to_string(),
@@ -916,7 +914,7 @@ mod tests {
         vec![true, true, true, false, false, true, false, false]
     );
 
-    // TODO
+    // OK
     test_dict_utf8!(
         test_utf8_array_like_dict,
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
