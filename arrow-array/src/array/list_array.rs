@@ -123,60 +123,6 @@ impl OffsetSizeTrait for i64 {
 ///
 /// ```
 ///
-/// # Example of constructing a [`ListArray`]
-///
-/// Here is code that constructs the [`ListArray`] in the example above
-///
-/// ```
-/// # use std::sync::Arc;
-/// # use arrow_array::{builder::ListBuilder, builder::StringBuilder, ArrayRef, StringArray, Array};
-/// #
-/// let values_builder = StringBuilder::new();
-/// let mut builder = ListBuilder::new(values_builder);
-///
-/// // [A, B, C]
-/// builder.values().append_value("A");
-/// builder.values().append_value("B");
-/// builder.values().append_value("C");
-/// builder.append(true);
-///
-/// // [ ] (empty list)
-/// builder.append(true);
-///
-/// // Null
-/// builder.values().append_value("?"); // irrelevant
-/// builder.append(false);
-///
-/// // [D]
-/// builder.values().append_value("D");
-/// builder.append(true);
-///
-/// // [NULL, F]
-/// builder.values().append_null();
-/// builder.values().append_value("F");
-/// builder.append(true);
-///
-/// // Build the array
-/// let array = builder.finish();
-///
-/// // Values is a string array
-/// // "A", "B" "C", "?", "D", NULL, "F"
-/// assert_eq!(
-///   array.values().as_ref(),
-///   &StringArray::from(vec![
-///     Some("A"), Some("B"), Some("C"),
-///     Some("?"), Some("D"), None,
-///     Some("F")
-///   ])
-/// );
-///
-/// // Offsets are indexes into the values array
-/// assert_eq!(
-///   array.value_offsets(),
-///   &[0, 3, 3, 4, 5, 7]
-/// );
-/// ```
-///
 /// [`StringArray`]: crate::array::StringArray
 /// [variable length lists]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout
 pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
