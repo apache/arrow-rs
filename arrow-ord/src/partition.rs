@@ -30,7 +30,7 @@ use std::ops::Range;
 /// have the same number of rows.
 ///
 /// Returns an iterator with `k` items where `k` is cardinality of the
-/// sort values: Consecutive values will be connected: `(a, b)` and `(b,
+/// sort values: Consecutive ranges will be contiguous: `(a, b)` and `(b,
 /// c)`, where `start = 0` and `end = n` for the first and last range.
 ///
 /// # Example:
