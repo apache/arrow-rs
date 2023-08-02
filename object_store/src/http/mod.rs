@@ -262,12 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_test() {
-        dotenv::dotenv().ok();
-        let force = std::env::var("TEST_INTEGRATION");
-        if force.is_err() {
-            eprintln!("skipping HTTP integration test - set TEST_INTEGRATION to run");
-            return;
-        }
+        crate::test_util::maybe_skip_integration!();
         let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
         let options = ClientOptions::new().with_allow_http(true);
         let integration = HttpBuilder::new()
