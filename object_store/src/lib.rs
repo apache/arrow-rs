@@ -910,6 +910,16 @@ mod test_util {
     use super::*;
     use futures::TryStreamExt;
 
+    macro_rules! maybe_skip_integration {
+        () => {
+            if std::env::var("TEST_INTEGRATION").is_err() {
+                eprintln!("Skipping integration test - set TEST_INTEGRATION");
+                return;
+            }
+        };
+    }
+    pub(crate) use maybe_skip_integration;
+
     pub async fn flatten_list_stream(
         storage: &DynObjectStore,
         prefix: Option<&Path>,

@@ -1021,107 +1021,18 @@ mod tests {
     use super::*;
     use crate::tests::{
         copy_if_not_exists, get_opts, list_uses_directories_correctly,
-        list_with_delimiter, put_get_delete_list, put_get_delete_list_opts,
-        rename_and_copy, stream_get,
+        list_with_delimiter, put_get_delete_list_opts, rename_and_copy, stream_get,
     };
     use std::collections::HashMap;
-    use std::env;
-
-    // Helper macro to skip tests if TEST_INTEGRATION and the Azure environment
-    // variables are not set.
-    macro_rules! maybe_skip_integration {
-        () => {{
-            dotenv::dotenv().ok();
-
-            let use_emulator = std::env::var("AZURE_USE_EMULATOR").is_ok();
-
-            let mut required_vars = vec!["OBJECT_STORE_BUCKET"];
-            if !use_emulator {
-                required_vars.push("AZURE_STORAGE_ACCOUNT");
-                required_vars.push("AZURE_STORAGE_ACCESS_KEY");
-            }
-            let unset_vars: Vec<_> = required_vars
-                .iter()
-                .filter_map(|&name| match env::var(name) {
-                    Ok(_) => None,
-                    Err(_) => Some(name),
-                })
-                .collect();
-            let unset_var_names = unset_vars.join(", ");
-
-            let force = std::env::var("TEST_INTEGRATION");
-
-            if force.is_ok() && !unset_var_names.is_empty() {
-                panic!(
-                    "TEST_INTEGRATION is set, \
-                        but variable(s) {} need to be set",
-                    unset_var_names
-                )
-            } else if force.is_err() {
-                eprintln!(
-                    "skipping Azure integration test - set {}TEST_INTEGRATION to run",
-                    if unset_var_names.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{} and ", unset_var_names)
-                    }
-                );
-                return;
-            } else {
-                let builder = MicrosoftAzureBuilder::new()
-                    .with_container_name(
-                        env::var("OBJECT_STORE_BUCKET")
-                            .expect("already checked OBJECT_STORE_BUCKET"),
-                    )
-                    .with_use_emulator(use_emulator);
-                if !use_emulator {
-                    builder
-                        .with_account(
-                            env::var("AZURE_STORAGE_ACCOUNT").unwrap_or_default(),
-                        )
-                        .with_access_key(
-                            env::var("AZURE_STORAGE_ACCESS_KEY").unwrap_or_default(),
-                        )
-                } else {
-                    builder
-                }
-            }
-        }};
-    }
 
     #[tokio::test]
     async fn azure_blob_test() {
-        let integration = maybe_skip_integration!().build().unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let container_name = std::env::var("AZURE_CONTAINER_NAME").unwrap(); // (#4629)
+        let config = MicrosoftAzureBuilder::from_env();
+        let integration = config.with_container_name(container_name).build().unwrap();
+
         put_get_delete_list_opts(&integration, false).await;
-        get_opts(&integration).await;
-        list_uses_directories_correctly(&integration).await;
-        list_with_delimiter(&integration).await;
-        rename_and_copy(&integration).await;
-        copy_if_not_exists(&integration).await;
-        stream_get(&integration).await;
-    }
-
-    // test for running integration test against actual blob service with service principal
-    // credentials. To run make sure all environment variables are set and remove the ignore
-    #[tokio::test]
-    #[ignore]
-    async fn azure_blob_test_sp() {
-        dotenv::dotenv().ok();
-        let builder = MicrosoftAzureBuilder::new()
-            .with_account(
-                env::var("AZURE_STORAGE_ACCOUNT")
-                    .expect("must be set AZURE_STORAGE_ACCOUNT"),
-            )
-            .with_container_name(
-                env::var("OBJECT_STORE_BUCKET").expect("must be set OBJECT_STORE_BUCKET"),
-            )
-            .with_access_key(
-                env::var("AZURE_STORAGE_ACCESS_KEY")
-                    .expect("must be set AZURE_STORAGE_CLIENT_ID"),
-            );
-        let integration = builder.build().unwrap();
-
-        put_get_delete_list(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;

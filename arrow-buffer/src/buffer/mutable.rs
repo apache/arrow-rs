@@ -168,7 +168,14 @@ impl MutableBuffer {
     /// `len` of the buffer and so can be used to initialize the memory region from
     /// `len` to `capacity`.
     pub fn set_null_bits(&mut self, start: usize, count: usize) {
-        assert!(start + count <= self.layout.size());
+        assert!(
+            start.saturating_add(count) <= self.layout.size(),
+            "range start index {start} and count {count} out of bounds for \
+            buffer of length {}",
+            self.layout.size(),
+        );
+
+        // Safety: `self.data[start..][..count]` is in-bounds and well-aligned for `u8`
         unsafe {
             std::ptr::write_bytes(self.data.as_ptr().add(start), 0, count);
         }
@@ -643,6 +650,12 @@ impl MutableBuffer {
     }
 }
 
+impl Default for MutableBuffer {
+    fn default() -> Self {
+        Self::with_capacity(0)
+    }
+}
+
 impl std::ops::Deref for MutableBuffer {
     type Target = [u8];
 
@@ -758,6 +771,14 @@ impl std::iter::FromIterator<bool> for MutableBuffer {
     }
 }
 
+impl<T: ArrowNativeType> std::iter::FromIterator<T> for MutableBuffer {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut buffer = Self::default();
+        buffer.extend_from_iter(iter.into_iter());
+        buffer
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -768,6 +789,19 @@ mod tests {
         assert_eq!(64, buf.capacity());
         assert_eq!(0, buf.len());
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_mutable_default() {
+        let buf = MutableBuffer::default();
+        assert_eq!(0, buf.capacity());
+        assert_eq!(0, buf.len());
+        assert!(buf.is_empty());
+
+        let mut buf = MutableBuffer::default();
+        buf.extend_from_slice(b"hello");
+        assert_eq!(5, buf.len());
+        assert_eq!(b"hello", buf.as_slice());
     }
 
     #[test]
@@ -931,5 +965,39 @@ mod tests {
 
         buffer.shrink_to_fit();
         assert!(buffer.capacity() >= 64 && buffer.capacity() < 128);
+    }
+
+    #[test]
+    fn test_mutable_set_null_bits() {
+        let mut buffer = MutableBuffer::new(8).with_bitset(8, true);
+
+        for i in 0..=buffer.capacity() {
+            buffer.set_null_bits(i, 0);
+            assert_eq!(buffer[..8], [255; 8][..]);
+        }
+
+        buffer.set_null_bits(1, 4);
+        assert_eq!(buffer[..8], [255, 0, 0, 0, 0, 255, 255, 255][..]);
+    }
+
+    #[test]
+    #[should_panic = "out of bounds for buffer of length"]
+    fn test_mutable_set_null_bits_oob() {
+        let mut buffer = MutableBuffer::new(64);
+        buffer.set_null_bits(1, buffer.capacity());
+    }
+
+    #[test]
+    #[should_panic = "out of bounds for buffer of length"]
+    fn test_mutable_set_null_bits_oob_by_overflow() {
+        let mut buffer = MutableBuffer::new(0);
+        buffer.set_null_bits(1, usize::MAX);
+    }
+
+    #[test]
+    fn from_iter() {
+        let buffer = [1u16, 2, 3, 4].into_iter().collect::<MutableBuffer>();
+        assert_eq!(buffer.len(), 4 * mem::size_of::<u16>());
+        assert_eq!(buffer.as_slice(), &[1, 0, 2, 0, 3, 0, 4, 0]);
     }
 }

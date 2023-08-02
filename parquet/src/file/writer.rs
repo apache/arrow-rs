@@ -347,7 +347,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         let end_pos = self.buf.bytes_written();
 
         // Write footer
-        let metadata_len = (end_pos - start_pos) as i32;
+        let metadata_len = (end_pos - start_pos) as u32;
 
         self.buf.write_all(&metadata_len.to_le_bytes())?;
         self.buf.write_all(&PARQUET_MAGIC)?;
@@ -742,6 +742,8 @@ mod tests {
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
     use crate::data_type::{BoolType, Int32Type};
+    use crate::file::page_index::index::Index;
+    use crate::file::properties::EnabledStatistics;
     use crate::file::reader::ChunkReader;
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
@@ -1647,5 +1649,63 @@ mod tests {
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
         test_read(reader);
+    }
+
+    #[test]
+    fn test_disabled_statistics() {
+        let message_type = "
+            message test_schema {
+                REQUIRED INT32 a;
+                REQUIRED INT32 b;
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::None)
+            .set_column_statistics_enabled("a".into(), EnabledStatistics::Page)
+            .build();
+        let mut file = Vec::with_capacity(1024);
+        let mut file_writer =
+            SerializedFileWriter::new(&mut file, schema, Arc::new(props)).unwrap();
+
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut a_writer = row_group_writer.next_column().unwrap().unwrap();
+        let col_writer = a_writer.typed::<Int32Type>();
+        col_writer.write_batch(&[1, 2, 3], None, None).unwrap();
+        a_writer.close().unwrap();
+
+        let mut b_writer = row_group_writer.next_column().unwrap().unwrap();
+        let col_writer = b_writer.typed::<Int32Type>();
+        col_writer.write_batch(&[4, 5, 6], None, None).unwrap();
+        b_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+
+        let metadata = file_writer.close().unwrap();
+        assert_eq!(metadata.row_groups.len(), 1);
+        let row_group = &metadata.row_groups[0];
+        assert_eq!(row_group.columns.len(), 2);
+        // Column "a" has both offset and column index, as requested
+        assert!(row_group.columns[0].offset_index_offset.is_some());
+        assert!(row_group.columns[0].column_index_offset.is_some());
+        // Column "b" should only have offset index
+        assert!(row_group.columns[1].offset_index_offset.is_some());
+        assert!(row_group.columns[1].column_index_offset.is_none());
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader =
+            SerializedFileReader::new_with_options(Bytes::from(file), options).unwrap();
+
+        let offset_index = reader.metadata().offset_index().unwrap();
+        assert_eq!(offset_index.len(), 1); // 1 row group
+        assert_eq!(offset_index[0].len(), 2); // 2 columns
+
+        let column_index = reader.metadata().column_index().unwrap();
+        assert_eq!(column_index.len(), 1); // 1 row group
+        assert_eq!(column_index[0].len(), 2); // 2 column
+
+        let a_idx = &column_index[0][0];
+        assert!(matches!(a_idx, Index::INT32(_)), "{a_idx:?}");
+        let b_idx = &column_index[0][1];
+        assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
     }
 }

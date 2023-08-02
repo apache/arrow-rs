@@ -8959,4 +8959,14 @@ mod tests {
         assert_eq!(formatted.value(0).to_string(), "[[1], [2], [3]]");
         assert_eq!(formatted.value(1).to_string(), "[[4], [null], [6]]");
     }
+
+    const CAST_OPTIONS: CastOptions<'static> = CastOptions {
+        safe: true,
+        format_options: FormatOptions::new(),
+    };
+
+    #[test]
+    fn test_const_options() {
+        assert!(CAST_OPTIONS.safe)
+    }
 }

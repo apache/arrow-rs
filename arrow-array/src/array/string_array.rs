@@ -17,8 +17,6 @@
 
 use crate::types::GenericStringType;
 use crate::{GenericBinaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::MutableBuffer;
-use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
 /// A [`GenericByteArray`] for storing `str`
@@ -38,42 +36,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     /// please use the function [`value_length`](#method.value_length) which has O(1) time complexity.
     pub fn num_chars(&self, i: usize) -> usize {
         self.value(i).chars().count()
-    }
-
-    /// Creates a [`GenericStringArray`] based on an iterator of values without nulls
-    pub fn from_iter_values<Ptr, I>(iter: I) -> Self
-    where
-        Ptr: AsRef<str>,
-        I: IntoIterator<Item = Ptr>,
-    {
-        let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
-
-        let mut offsets =
-            MutableBuffer::new((data_len + 1) * std::mem::size_of::<OffsetSize>());
-        let mut values = MutableBuffer::new(0);
-
-        let mut length_so_far = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        for i in iter {
-            let s = i.as_ref();
-            length_so_far += OffsetSize::from_usize(s.len()).unwrap();
-            offsets.push(length_so_far);
-            values.extend_from_slice(s.as_bytes());
-        }
-
-        // iterator size hint may not be correct so compute the actual number of offsets
-        assert!(!offsets.is_empty()); // wrote at least one
-        let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
-
-        let array_data = ArrayData::builder(Self::DATA_TYPE)
-            .len(actual_len)
-            .add_buffer(offsets.into())
-            .add_buffer(values.into());
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
     }
 
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
@@ -192,7 +154,7 @@ pub type StringArray = GenericStringArray<i32>;
 /// let arr: LargeStringArray = std::iter::repeat(Some("foo")).take(10).collect();
 /// ```
 ///
-/// Constructon and Access
+/// Construction and Access
 ///
 /// ```
 /// use arrow_array::LargeStringArray;
@@ -210,6 +172,7 @@ mod tests {
     use crate::types::UInt8Type;
     use crate::Array;
     use arrow_buffer::Buffer;
+    use arrow_data::ArrayData;
     use arrow_schema::Field;
     use std::sync::Arc;
 
