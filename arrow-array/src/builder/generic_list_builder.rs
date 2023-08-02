@@ -30,8 +30,8 @@ use std::sync::Arc;
 ///
 /// # Example
 ///
-/// Here is code that constructs the same [`ListArray`] shown in the
-/// [`GenericListArray`] documentation.
+/// Here is code that constructs a ListArray with the contents:
+/// `[[A,B,C], [], NULL, [D], [NULL, F]]`
 ///
 /// ```
 /// # use std::sync::Arc;
