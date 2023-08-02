@@ -168,7 +168,14 @@ impl MutableBuffer {
     /// `len` of the buffer and so can be used to initialize the memory region from
     /// `len` to `capacity`.
     pub fn set_null_bits(&mut self, start: usize, count: usize) {
-        assert!(start + count <= self.layout.size());
+        assert!(
+            start.saturating_add(count) <= self.layout.size(),
+            "range start index {start} and count {count} out of bounds for \
+            buffer of length {}",
+            self.layout.size(),
+        );
+
+        // Safety: `self.data[start..][..count]` is in-bounds and well-aligned for `u8`
         unsafe {
             std::ptr::write_bytes(self.data.as_ptr().add(start), 0, count);
         }
@@ -931,5 +938,32 @@ mod tests {
 
         buffer.shrink_to_fit();
         assert!(buffer.capacity() >= 64 && buffer.capacity() < 128);
+    }
+
+    #[test]
+    fn test_mutable_set_null_bits() {
+        let mut buffer = MutableBuffer::new(8).with_bitset(8, true);
+
+        for i in 0..=buffer.capacity() {
+            buffer.set_null_bits(i, 0);
+            assert_eq!(buffer[..8], [255; 8][..]);
+        }
+
+        buffer.set_null_bits(1, 4);
+        assert_eq!(buffer[..8], [255, 0, 0, 0, 0, 255, 255, 255][..]);
+    }
+
+    #[test]
+    #[should_panic = "out of bounds for buffer of length"]
+    fn test_mutable_set_null_bits_oob() {
+        let mut buffer = MutableBuffer::new(64);
+        buffer.set_null_bits(1, buffer.capacity());
+    }
+
+    #[test]
+    #[should_panic = "out of bounds for buffer of length"]
+    fn test_mutable_set_null_bits_oob_by_overflow() {
+        let mut buffer = MutableBuffer::new(0);
+        buffer.set_null_bits(1, usize::MAX);
     }
 }
