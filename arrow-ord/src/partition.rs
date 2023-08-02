@@ -17,23 +17,63 @@
 
 //! Defines partition kernel for `ArrayRef`
 
-use crate::comparison::neq_dyn;
-use crate::sort::SortColumn;
-use arrow_array::Array;
-use arrow_buffer::BooleanBuffer;
-use arrow_schema::ArrowError;
 use std::ops::Range;
 
-/// Given a list of already sorted columns, returns [`Range`]es that
-/// partition the input such that each partition has equal values
-/// across sort columns.
+use arrow_array::{Array, ArrayRef};
+use arrow_buffer::BooleanBuffer;
+use arrow_schema::ArrowError;
+
+use crate::comparison::neq_dyn;
+use crate::sort::SortColumn;
+
+/// A computed set of partitions, see [`partition`]
+#[derive(Debug, Clone)]
+pub struct Partitions(Option<BooleanBuffer>);
+
+impl Partitions {
+    /// Returns the range of each partition
+    ///
+    /// Consecutive ranges will be contiguous: i.e [`(a, b)` and `(b, c)`], and
+    /// `start = 0` and `end = self.len()` for the first and last range respectively
+    pub fn ranges(&self) -> Vec<Range<usize>> {
+        let boundaries = match &self.0 {
+            Some(boundaries) => boundaries,
+            None => return vec![],
+        };
+
+        let mut out = vec![];
+        let mut current = 0;
+        for idx in boundaries.set_indices() {
+            let t = current;
+            current = idx + 1;
+            out.push(t..current)
+        }
+        let last = boundaries.len() + 1;
+        if current != last {
+            out.push(current..last)
+        }
+        out
+    }
+
+    /// Returns the number of partitions
+    pub fn len(&self) -> usize {
+        match &self.0 {
+            Some(b) => b.count_set_bits() + 1,
+            None => 0,
+        }
+    }
+
+    /// Returns true if this contains no partitions
+    pub fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+/// Given a list of lexicographically sorted columns, computes the [`Partitions`],
+/// where a partition consists of the set of consecutive rows with equal values
 ///
 /// Returns an error if no columns are specified or all columns do not
 /// have the same number of rows.
-///
-/// Returns an iterator with `k` items where `k` is cardinality of the
-/// sort values: Consecutive values will be connected: `(a, b)` and `(b,
-/// c)`, where `start = 0` and `end = n` for the first and last range.
 ///
 /// # Example:
 ///
@@ -56,8 +96,7 @@ use std::ops::Range;
 ///     │ 3 │    │ 1 │    │ F │        Range: 5..6 (x=3, y=1)
 /// └ ─ ┴───┴ ─ ─└───┘─ ─ ┴───┴ ─ ─ ┘
 ///
-///       x        y        z     lexicographical_partition_ranges
-///                               by (x,y)
+///       x        y        z     partition(&[x, y])
 /// ```
 ///
 /// # Example Code
@@ -66,27 +105,15 @@ use std::ops::Range;
 /// # use std::{sync::Arc, ops::Range};
 /// # use arrow_array::{RecordBatch, Int64Array, StringArray, ArrayRef};
 /// # use arrow_ord::sort::{SortColumn, SortOptions};
-/// # use arrow_ord::partition::lexicographical_partition_ranges;
+/// # use arrow_ord::partition::partition;
 /// let batch = RecordBatch::try_from_iter(vec![
 ///     ("x", Arc::new(Int64Array::from(vec![1, 1, 1, 1, 2, 3])) as ArrayRef),
 ///     ("y", Arc::new(Int64Array::from(vec![1, 2, 2, 2, 1, 1])) as ArrayRef),
 ///     ("z", Arc::new(StringArray::from(vec!["A", "B", "C", "D", "E", "F"])) as ArrayRef),
 /// ]).unwrap();
 ///
-/// // Lexographically partition on (x, y)
-/// let sort_columns = vec![
-///     SortColumn {
-///         values: batch.column(0).clone(),
-///         options: Some(SortOptions::default()),
-///     },
-///     SortColumn {
-///         values: batch.column(1).clone(),
-///         options: Some(SortOptions::default()),
-///  },
-/// ];
-/// let ranges:Vec<Range<usize>> = lexicographical_partition_ranges(&sort_columns)
-///   .unwrap()
-///   .collect();
+/// // Partition on first two columns
+/// let ranges = partition(&batch.columns()[..2]).unwrap().ranges();
 ///
 /// let expected = vec![
 ///     (0..1),
@@ -97,44 +124,37 @@ use std::ops::Range;
 ///
 /// assert_eq!(ranges, expected);
 /// ```
-pub fn lexicographical_partition_ranges(
-    columns: &[SortColumn],
-) -> Result<impl Iterator<Item = Range<usize>> + '_, ArrowError> {
+pub fn partition(columns: &[ArrayRef]) -> Result<Partitions, ArrowError> {
     if columns.is_empty() {
         return Err(ArrowError::InvalidArgumentError(
-            "Sort requires at least one column".to_string(),
+            "Partition requires at least one column".to_string(),
         ));
     }
-    let num_rows = columns[0].values.len();
-    if columns.iter().any(|item| item.values.len() != num_rows) {
-        return Err(ArrowError::ComputeError(
-            "Lexical sort columns have different row counts".to_string(),
+    let num_rows = columns[0].len();
+    if columns.iter().any(|item| item.len() != num_rows) {
+        return Err(ArrowError::InvalidArgumentError(
+            "Partition columns have different row counts".to_string(),
         ));
     };
+
+    match num_rows {
+        0 => return Ok(Partitions(None)),
+        1 => return Ok(Partitions(Some(BooleanBuffer::new_unset(0)))),
+        _ => {}
+    }
 
     let acc = find_boundaries(&columns[0])?;
     let acc = columns
         .iter()
         .skip(1)
-        .try_fold(acc, |acc, c| find_boundaries(c).map(|b| &acc | &b))?;
+        .try_fold(acc, |acc, c| find_boundaries(c.as_ref()).map(|b| &acc | &b))?;
 
-    let mut out = vec![];
-    let mut current = 0;
-    for idx in acc.set_indices() {
-        let t = current;
-        current = idx + 1;
-        out.push(t..current)
-    }
-    if current != num_rows {
-        out.push(current..num_rows)
-    }
-    Ok(out.into_iter())
+    Ok(Partitions(Some(acc)))
 }
 
 /// Returns a mask with bits set whenever the value or nullability changes
-fn find_boundaries(col: &SortColumn) -> Result<BooleanBuffer, ArrowError> {
-    let v = &col.values;
-    let slice_len = v.len().saturating_sub(1);
+fn find_boundaries(v: &dyn Array) -> Result<BooleanBuffer, ArrowError> {
+    let slice_len = v.len() - 1;
     let v1 = v.slice(0, slice_len);
     let v2 = v.slice(1, slice_len);
 
@@ -156,182 +176,157 @@ fn find_boundaries(col: &SortColumn) -> Result<BooleanBuffer, ArrowError> {
     })
 }
 
+/// Given a list of already sorted columns, find partition ranges that would partition
+/// lexicographically equal values across columns.
+///
+/// The returned vec would be of size k where k is cardinality of the sorted values; Consecutive
+/// values will be connected: (a, b) and (b, c), where start = 0 and end = n for the first and last
+/// range.
+#[deprecated(note = "Use partition")]
+pub fn lexicographical_partition_ranges(
+    columns: &[SortColumn],
+) -> Result<impl Iterator<Item = Range<usize>> + '_, ArrowError> {
+    let cols: Vec<_> = columns.iter().map(|x| x.values.clone()).collect();
+    Ok(partition(&cols)?.ranges().into_iter())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::sort::SortOptions;
-    use arrow_array::*;
-    use arrow_schema::DataType;
     use std::sync::Arc;
 
-    #[test]
-    fn test_lexicographical_partition_ranges_empty() {
-        let input = vec![];
-        assert!(
-            lexicographical_partition_ranges(&input).is_err(),
-            "lexicographical_partition_ranges should reject columns with empty rows"
-        );
-    }
+    use arrow_array::*;
+    use arrow_schema::DataType;
+
+    use super::*;
 
     #[test]
-    fn test_lexicographical_partition_ranges_unaligned_rows() {
-        let input = vec![
-            SortColumn {
-                values: Arc::new(Int64Array::from(vec![None, Some(-1)])) as ArrayRef,
-                options: None,
-            },
-            SortColumn {
-                values: Arc::new(StringArray::from(vec![Some("foo")])) as ArrayRef,
-                options: None,
-            },
-        ];
-        assert!(
-            lexicographical_partition_ranges(&input).is_err(),
-            "lexicographical_partition_ranges should reject columns with different row counts"
-        );
-    }
-
-    #[test]
-    fn test_lexicographical_partition_single_column() {
-        let input = vec![SortColumn {
-            values: Arc::new(Int64Array::from(vec![1, 2, 2, 2, 2, 2, 2, 2, 9]))
-                as ArrayRef,
-            options: Some(SortOptions {
-                descending: false,
-                nulls_first: true,
-            }),
-        }];
-        let results = lexicographical_partition_ranges(&input).unwrap();
+    fn test_partition_empty() {
+        let err = partition(&[]).unwrap_err();
         assert_eq!(
-            vec![(0_usize..1_usize), (1_usize..8_usize), (8_usize..9_usize)],
-            results.collect::<Vec<_>>()
+            err.to_string(),
+            "Invalid argument error: Partition requires at least one column"
         );
     }
 
     #[test]
-    fn test_lexicographical_partition_all_equal_values() {
-        let input = vec![SortColumn {
-            values: Arc::new(Int64Array::from_value(1, 1000)) as ArrayRef,
-            options: Some(SortOptions {
-                descending: false,
-                nulls_first: true,
-            }),
-        }];
-
-        let results = lexicographical_partition_ranges(&input).unwrap();
-        assert_eq!(vec![(0_usize..1000_usize)], results.collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn test_lexicographical_partition_all_null_values() {
+    fn test_partition_unaligned_rows() {
         let input = vec![
-            SortColumn {
-                values: new_null_array(&DataType::Int8, 1000),
-                options: Some(SortOptions {
-                    descending: false,
-                    nulls_first: true,
-                }),
-            },
-            SortColumn {
-                values: new_null_array(&DataType::UInt16, 1000),
-                options: Some(SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                }),
-            },
+            Arc::new(Int64Array::from(vec![None, Some(-1)])) as _,
+            Arc::new(StringArray::from(vec![Some("foo")])) as _,
         ];
-        let results = lexicographical_partition_ranges(&input).unwrap();
-        assert_eq!(vec![(0_usize..1000_usize)], results.collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn test_lexicographical_partition_unique_column_1() {
-        let input = vec![
-            SortColumn {
-                values: Arc::new(Int64Array::from(vec![None, Some(-1)])) as ArrayRef,
-                options: Some(SortOptions {
-                    descending: false,
-                    nulls_first: true,
-                }),
-            },
-            SortColumn {
-                values: Arc::new(StringArray::from(vec![Some("foo"), Some("bar")]))
-                    as ArrayRef,
-                options: Some(SortOptions {
-                    descending: true,
-                    nulls_first: true,
-                }),
-            },
-        ];
-        let results = lexicographical_partition_ranges(&input).unwrap();
+        let err = partition(&input).unwrap_err();
         assert_eq!(
-            vec![(0_usize..1_usize), (1_usize..2_usize)],
-            results.collect::<Vec<_>>()
+            err.to_string(),
+            "Invalid argument error: Partition columns have different row counts"
+        )
+    }
+
+    #[test]
+    fn test_partition_small() {
+        let results = partition(&[
+            Arc::new(Int32Array::new(vec![].into(), None)) as _,
+            Arc::new(Int32Array::new(vec![].into(), None)) as _,
+            Arc::new(Int32Array::new(vec![].into(), None)) as _,
+        ])
+        .unwrap();
+        assert_eq!(results.len(), 0);
+        assert!(results.is_empty());
+
+        let results = partition(&[
+            Arc::new(Int32Array::from(vec![1])) as _,
+            Arc::new(Int32Array::from(vec![1])) as _,
+        ])
+        .unwrap();
+        assert_eq!(results.ranges(), &[0..1]);
+    }
+
+    #[test]
+    fn test_partition_single_column() {
+        let a = Int64Array::from(vec![1, 2, 2, 2, 2, 2, 2, 2, 9]);
+        let input = vec![Arc::new(a) as _];
+        assert_eq!(
+            partition(&input).unwrap().ranges(),
+            vec![(0..1), (1..8), (8..9)],
         );
     }
 
     #[test]
-    fn test_lexicographical_partition_unique_column_2() {
+    fn test_partition_all_equal_values() {
+        let a = Int64Array::from_value(1, 1000);
+        let input = vec![Arc::new(a) as _];
+        assert_eq!(partition(&input).unwrap().ranges(), vec![(0..1000)]);
+    }
+
+    #[test]
+    fn test_partition_all_null_values() {
         let input = vec![
-            SortColumn {
-                values: Arc::new(Int64Array::from(vec![None, Some(-1), Some(-1)]))
-                    as ArrayRef,
-                options: Some(SortOptions {
-                    descending: false,
-                    nulls_first: true,
-                }),
-            },
-            SortColumn {
-                values: Arc::new(StringArray::from(vec![
-                    Some("foo"),
-                    Some("bar"),
-                    Some("apple"),
-                ])) as ArrayRef,
-                options: Some(SortOptions {
-                    descending: true,
-                    nulls_first: true,
-                }),
-            },
+            new_null_array(&DataType::Int8, 1000),
+            new_null_array(&DataType::UInt16, 1000),
         ];
-        let results = lexicographical_partition_ranges(&input).unwrap();
+        assert_eq!(partition(&input).unwrap().ranges(), vec![(0..1000)]);
+    }
+
+    #[test]
+    fn test_partition_unique_column_1() {
+        let input = vec![
+            Arc::new(Int64Array::from(vec![None, Some(-1)])) as _,
+            Arc::new(StringArray::from(vec![Some("foo"), Some("bar")])) as _,
+        ];
+        assert_eq!(partition(&input).unwrap().ranges(), vec![(0..1), (1..2)],);
+    }
+
+    #[test]
+    fn test_partition_unique_column_2() {
+        let input = vec![
+            Arc::new(Int64Array::from(vec![None, Some(-1), Some(-1)])) as _,
+            Arc::new(StringArray::from(vec![
+                Some("foo"),
+                Some("bar"),
+                Some("apple"),
+            ])) as _,
+        ];
         assert_eq!(
-            vec![(0_usize..1_usize), (1_usize..2_usize), (2_usize..3_usize),],
-            results.collect::<Vec<_>>()
+            partition(&input).unwrap().ranges(),
+            vec![(0..1), (1..2), (2..3),],
         );
     }
 
     #[test]
-    fn test_lexicographical_partition_non_unique_column_1() {
+    fn test_partition_non_unique_column_1() {
         let input = vec![
-            SortColumn {
-                values: Arc::new(Int64Array::from(vec![
-                    None,
-                    Some(-1),
-                    Some(-1),
-                    Some(1),
-                ])) as ArrayRef,
-                options: Some(SortOptions {
-                    descending: false,
-                    nulls_first: true,
-                }),
-            },
-            SortColumn {
-                values: Arc::new(StringArray::from(vec![
-                    Some("foo"),
-                    Some("bar"),
-                    Some("bar"),
-                    Some("bar"),
-                ])) as ArrayRef,
-                options: Some(SortOptions {
-                    descending: true,
-                    nulls_first: true,
-                }),
-            },
+            Arc::new(Int64Array::from(vec![None, Some(-1), Some(-1), Some(1)])) as _,
+            Arc::new(StringArray::from(vec![
+                Some("foo"),
+                Some("bar"),
+                Some("bar"),
+                Some("bar"),
+            ])) as _,
         ];
-        let results = lexicographical_partition_ranges(&input).unwrap();
         assert_eq!(
-            vec![(0_usize..1_usize), (1_usize..3_usize), (3_usize..4_usize),],
-            results.collect::<Vec<_>>()
+            partition(&input).unwrap().ranges(),
+            vec![(0..1), (1..3), (3..4),],
+        );
+    }
+
+    #[test]
+    fn test_partition_masked_nulls() {
+        let input = vec![
+            Arc::new(Int64Array::new(vec![1; 9].into(), None)) as _,
+            Arc::new(Int64Array::new(
+                vec![1, 1, 2, 2, 2, 3, 3, 3, 3].into(),
+                Some(
+                    vec![false, true, true, true, true, false, false, true, false].into(),
+                ),
+            )) as _,
+            Arc::new(Int64Array::new(
+                vec![1, 1, 2, 2, 2, 2, 2, 3, 7].into(),
+                Some(vec![true, true, true, true, false, true, true, true, false].into()),
+            )) as _,
+        ];
+
+        assert_eq!(
+            partition(&input).unwrap().ranges(),
+            vec![(0..1), (1..2), (2..4), (4..5), (5..7), (7..8), (8..9)],
         );
     }
 }
