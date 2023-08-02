@@ -22,15 +22,79 @@ use arrow_schema::ArrowError;
 use std::cmp::Ordering;
 use std::ops::Range;
 
-/// Given a list of already sorted columns, find partition ranges that would partition
-/// lexicographically equal values across columns.
+/// Given a list of already sorted columns, returns [`Range`]es that
+/// partition the input such that each partition has equal values
+/// across sort columns.
 ///
-/// Here LexicographicalComparator is used in conjunction with binary
-/// search so the columns *MUST* be pre-sorted already.
+/// Returns an error if no columns are specified or all columns do not
+/// have the same number of rows.
 ///
-/// The returned vec would be of size k where k is cardinality of the sorted values; Consecutive
-/// values will be connected: (a, b) and (b, c), where start = 0 and end = n for the first and last
-/// range.
+/// Returns an iterator with `k` items where `k` is cardinality of the
+/// sort values: Consecutive values will be connected: `(a, b)` and `(b,
+/// c)`, where `start = 0` and `end = n` for the first and last range.
+///
+/// # Example:
+///
+/// For example, given columns `x`, `y` and `z`, calling
+/// `lexicographical_partition_ranges(values, (x, y))` will divide the
+/// rows into ranges where the values of `(x, y)` are equal:
+///
+/// ```text
+/// ┌ ─ ┬───┬ ─ ─┌───┐─ ─ ┬───┬ ─ ─ ┐
+///     │ 1 │    │ 1 │    │ A │        Range: 0..1 (x=1, y=1)
+/// ├ ─ ┼───┼ ─ ─├───┤─ ─ ┼───┼ ─ ─ ┤
+///     │ 1 │    │ 2 │    │ B │
+/// │   ├───┤    ├───┤    ├───┤     │
+///     │ 1 │    │ 2 │    │ C │        Range: 1..4 (x=1, y=2)
+/// │   ├───┤    ├───┤    ├───┤     │
+///     │ 1 │    │ 2 │    │ D │
+/// ├ ─ ┼───┼ ─ ─├───┤─ ─ ┼───┼ ─ ─ ┤
+///     │ 2 │    │ 1 │    │ E │        Range: 4..5 (x=2, y=1)
+/// ├ ─ ┼───┼ ─ ─├───┤─ ─ ┼───┼ ─ ─ ┤
+///     │ 3 │    │ 1 │    │ F │        Range: 5..6 (x=3, y=1)
+/// └ ─ ┴───┴ ─ ─└───┘─ ─ ┴───┴ ─ ─ ┘
+///
+///       x        y        z     lexicographical_partition_ranges
+///                               by (x,y)
+/// ```
+///
+/// # Example Code
+///
+/// ```
+/// # use std::{sync::Arc, ops::Range};
+/// # use arrow_array::{RecordBatch, Int64Array, StringArray, ArrayRef};
+/// # use arrow_ord::sort::{SortColumn, SortOptions};
+/// # use arrow_ord::partition::lexicographical_partition_ranges;
+/// let batch = RecordBatch::try_from_iter(vec![
+///     ("x", Arc::new(Int64Array::from(vec![1, 1, 1, 1, 2, 3])) as ArrayRef),
+///     ("y", Arc::new(Int64Array::from(vec![1, 2, 2, 2, 1, 1])) as ArrayRef),
+///     ("z", Arc::new(StringArray::from(vec!["A", "B", "C", "D", "E", "F"])) as ArrayRef),
+/// ]).unwrap();
+///
+/// // Lexographically partition on (x, y)
+/// let sort_columns = vec![
+///     SortColumn {
+///         values: batch.column(0).clone(),
+///         options: Some(SortOptions::default()),
+///     },
+///     SortColumn {
+///         values: batch.column(1).clone(),
+///         options: Some(SortOptions::default()),
+///  },
+/// ];
+/// let ranges:Vec<Range<usize>> = lexicographical_partition_ranges(&sort_columns)
+///   .unwrap()
+///   .collect();
+///
+/// let expected = vec![
+///     (0..1),
+///     (1..4),
+///     (4..5),
+///     (5..6),
+/// ];
+///
+/// assert_eq!(ranges, expected);
+/// ```
 pub fn lexicographical_partition_ranges(
     columns: &[SortColumn],
 ) -> Result<impl Iterator<Item = Range<usize>> + '_, ArrowError> {
