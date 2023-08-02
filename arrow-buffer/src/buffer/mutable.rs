@@ -650,6 +650,12 @@ impl MutableBuffer {
     }
 }
 
+impl Default for MutableBuffer {
+    fn default() -> Self {
+        Self::with_capacity(0)
+    }
+}
+
 impl std::ops::Deref for MutableBuffer {
     type Target = [u8];
 
@@ -775,6 +781,19 @@ mod tests {
         assert_eq!(64, buf.capacity());
         assert_eq!(0, buf.len());
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_mutable_default() {
+        let buf = MutableBuffer::default();
+        assert_eq!(0, buf.capacity());
+        assert_eq!(0, buf.len());
+        assert!(buf.is_empty());
+
+        let mut buf = MutableBuffer::default();
+        buf.extend_from_slice(b"hello");
+        assert_eq!(5, buf.len());
+        assert_eq!(b"hello", buf.as_slice());
     }
 
     #[test]
