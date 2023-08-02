@@ -117,7 +117,7 @@ impl Hash for Field {
 }
 
 impl Field {
-    /// Creates a new field
+    /// Creates a new field with the given name, type, and nullability
     pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
         Field {
             name: name.into(),
@@ -127,6 +127,24 @@ impl Field {
             dict_is_ordered: false,
             metadata: HashMap::default(),
         }
+    }
+
+    /// Creates a new field suitable for [`DataType::List`] and
+    /// [`DataType::LargeList`]
+    ///
+    /// While not required, by convention the inner `Field` of these
+    /// types is named `"item"`
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_schema::{Field, DataType};
+    /// assert_eq!(
+    ///   Field::new("item", DataType::Int32, true),
+    ///   Field::new_list_item(DataType::Int32, true)
+    /// );
+    /// ```
+    pub fn new_list_item(data_type: DataType, nullable: bool) -> Self {
+        Self::new("item", data_type, nullable)
     }
 
     /// Creates a new field that has additional dictionary information
