@@ -62,7 +62,7 @@ impl OffsetSizeTrait for i64 {
 /// [`OffsetBuffer`].
 ///
 /// Arrow defines [`ListArray`] with `i32` offsets and
-/// [`LargeListArray`]` with `i64` offsets.
+/// [`LargeListArray`] with `i64` offsets.
 ///
 /// Use [`GenericListBuilder`](crate::builder::GenericListBuilder) to
 /// construct a [`GenericListArray`].
@@ -74,13 +74,15 @@ impl OffsetSizeTrait for i64 {
 /// a list which may be empty, may contain NULL and non-null values,
 /// or may itself be NULL.
 ///
-/// For example, this `ListArray` stores lists of strings:
+/// For example, the `ListArray` shown in the following diagram stores
+/// lists of strings. Note that `[]` represents an empty (length
+/// 0), but non NULL list.
 ///
 /// ```text
 /// ┌─────────────┐
 /// │   [A,B,C]   │
 /// ├─────────────┤
-/// │ [] (empty)  │
+/// │     []      │
 /// ├─────────────┤
 /// │    NULL     │
 /// ├─────────────┤
@@ -90,10 +92,10 @@ impl OffsetSizeTrait for i64 {
 /// └─────────────┘
 /// ```
 ///
-/// The `values` of this `ListArray`s are stored in a child
-/// [`StringArray`] and the offsets are stored in an [`OffsetBuffer`]
-/// as shown in the following diagram. The logical values and offsets
-/// are shown on the left, and the actual `ListArray` encoding on the right
+/// The `values` are stored in a child [`StringArray`] and the offsets
+/// are stored in an [`OffsetBuffer`] as shown in the following
+/// diagram. The logical values and offsets are shown on the left, and
+/// the actual `ListArray` encoding on the right.
 ///
 /// ```text
 ///                                         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
@@ -101,7 +103,7 @@ impl OffsetSizeTrait for i64 {
 ///  ┌─────────────┐  ┌───────┐             │     ┌───┐   ┌───┐       ┌───┐ ┌───┐
 ///  │   [A,B,C]   │  │ (0,3) │                   │ 1 │   │ 0 │     │ │ 1 │ │ A │ │ 0  │
 ///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
-///  │ [] (empty)  │  │ (3,3) │                   │ 1 │   │ 3 │     │ │ 1 │ │ B │ │ 1  │
+///  │      []     │  │ (3,3) │                   │ 1 │   │ 3 │     │ │ 1 │ │ B │ │ 1  │
 ///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
 ///  │    NULL     │  │ (3,4) │                   │ 0 │   │ 3 │     │ │ 1 │ │ C │ │ 2  │
 ///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
