@@ -71,7 +71,6 @@ aws = ["cloud"]
 http = ["cloud"]
 
 [dev-dependencies] # In alphabetical order
-dotenv = "0.15.0"
 tempfile = "3.1.0"
 futures-test = "0.3"
 rand = "0.8"
