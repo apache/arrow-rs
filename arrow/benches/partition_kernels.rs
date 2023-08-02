@@ -40,15 +40,7 @@ where
 }
 
 fn bench_partition(sorted_columns: &[ArrayRef]) {
-    let columns = sorted_columns
-        .iter()
-        .map(|arr| SortColumn {
-            values: arr.clone(),
-            options: None,
-        })
-        .collect::<Vec<_>>();
-
-    criterion::black_box(partition(&columns).unwrap().ranges());
+    criterion::black_box(partition(sorted_columns).unwrap().ranges());
 }
 
 fn create_sorted_low_cardinality_data(length: usize) -> Vec<ArrayRef> {
