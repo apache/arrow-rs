@@ -1087,8 +1087,9 @@ impl AmazonS3Builder {
 mod tests {
     use super::*;
     use crate::tests::{
-        get_nonexistent_object, get_opts, list_uses_directories_correctly,
-        list_with_delimiter, put_get_delete_list_opts, rename_and_copy, stream_get,
+        copy_if_not_exists, get_nonexistent_object, get_opts,
+        list_uses_directories_correctly, list_with_delimiter, put_get_delete_list_opts,
+        rename_and_copy, stream_get,
     };
     use bytes::Bytes;
     use std::collections::HashMap;
@@ -1331,6 +1332,7 @@ mod tests {
     async fn s3_test() {
         let config = maybe_skip_integration!();
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
+        let test_not_exists = config.copy_if_not_exists.is_some();
         let integration = config.build().unwrap();
 
         // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
@@ -1340,6 +1342,9 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
+        if test_not_exists {
+            copy_if_not_exists(&integration).await;
+        }
 
         // run integration test with unsigned payload enabled
         let config = maybe_skip_integration!().with_unsigned_payload(true);

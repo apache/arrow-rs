@@ -39,7 +39,7 @@ use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
 use reqwest::{
     header::{CONTENT_LENGTH, CONTENT_TYPE},
-    Client as ReqwestClient, Method, Response,
+    Client as ReqwestClient, Method, Response, StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
