@@ -771,6 +771,14 @@ impl std::iter::FromIterator<bool> for MutableBuffer {
     }
 }
 
+impl<T: ArrowNativeType> std::iter::FromIterator<T> for MutableBuffer {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut buffer = Self::default();
+        buffer.extend_from_iter(iter.into_iter());
+        buffer
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -984,5 +992,12 @@ mod tests {
     fn test_mutable_set_null_bits_oob_by_overflow() {
         let mut buffer = MutableBuffer::new(0);
         buffer.set_null_bits(1, usize::MAX);
+    }
+
+    #[test]
+    fn from_iter() {
+        let buffer = [1u16, 2, 3, 4].into_iter().collect::<MutableBuffer>();
+        assert_eq!(buffer.len(), 4 * mem::size_of::<u16>());
+        assert_eq!(buffer.as_slice(), &[1, 0, 2, 0, 3, 0, 4, 0]);
     }
 }
