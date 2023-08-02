@@ -24,8 +24,10 @@
 
 This crate contains the official Native Rust implementation of [Apache Arrow][arrow] in memory format, governed by the Apache Software Foundation.
 
-The [crate documentation](https://docs.rs/arrow/latest/arrow/) contains examples and full API.
+The [API documentation](https://docs.rs/arrow/latest) contains examples and full API.
 There are several [examples](https://github.com/apache/arrow-rs/tree/master/arrow/examples) to start from as well.
+
+The API documentation for most recent, unreleased code is available [here](https://arrow.apache.org/rust/arrow/index.html).
 
 ## Rust Version Compatibility
 
@@ -53,7 +55,6 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `ffi` - bindings for the Arrow C [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 - `pyarrow` - bindings for pyo3 to call arrow-rs from python
 - `dyn_cmp_dict` - enables comparison of dictionary arrays within dyn comparison kernels
-- `dyn_arith_dict` - enables arithmetic on dictionary arrays within dyn arithmetic kernels
 
 ## Arrow Feature Status
 

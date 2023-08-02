@@ -19,7 +19,6 @@
 //! common attributes and operations for Arrow array.
 
 use crate::bit_iterator::BitSliceIterator;
-use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, UnionMode};
@@ -30,8 +29,10 @@ use std::sync::Arc;
 
 use crate::equal;
 
-mod buffers;
-pub use buffers::*;
+/// A collection of [`Buffer`]
+#[doc(hidden)]
+#[deprecated(note = "Use [Buffer]")]
+pub type Buffers<'a> = &'a [Buffer];
 
 #[inline]
 pub(crate) fn contains_nulls(
@@ -346,10 +347,9 @@ impl ArrayData {
         &self.data_type
     }
 
-    /// Returns the [`Buffers`] storing data for this [`ArrayData`]
-    pub fn buffers(&self) -> Buffers<'_> {
-        // In future ArrayData won't store data contiguously as `Vec<Buffer>` (#1799)
-        Buffers::from_slice(&self.buffers)
+    /// Returns the [`Buffer`] storing data for this [`ArrayData`]
+    pub fn buffers(&self) -> &[Buffer] {
+        &self.buffers
     }
 
     /// Returns a slice of children [`ArrayData`]. This will be non
@@ -635,9 +635,12 @@ impl ArrayData {
                     let children = f
                         .iter()
                         .enumerate()
-                        .map(|(idx, (_, f))| match idx {
-                            0 => Self::new_null(f.data_type(), len),
-                            _ => Self::new_empty(f.data_type()),
+                        .map(|(idx, (_, f))| {
+                            if idx == 0 || *mode == UnionMode::Sparse {
+                                Self::new_null(f.data_type(), len)
+                            } else {
+                                Self::new_empty(f.data_type())
+                            }
                         })
                         .collect();
 
@@ -1143,7 +1146,7 @@ impl ArrayData {
         match &self.data_type {
             DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
                 if !f.is_nullable() {
-                    self.validate_non_nullable(None, 0, &self.child_data[0])?
+                    self.validate_non_nullable(None, &self.child_data[0])?
                 }
             }
             DataType::FixedSizeList(field, len) => {
@@ -1152,40 +1155,17 @@ impl ArrayData {
                     match &self.nulls {
                         Some(nulls) => {
                             let element_len = *len as usize;
-                            let mut buffer =
-                                MutableBuffer::new_null(element_len * self.len);
-
-                            // Expand each bit within `null_mask` into `element_len`
-                            // bits, constructing the implicit mask of the child elements
-                            for i in 0..self.len {
-                                if nulls.is_null(i) {
-                                    continue;
-                                }
-                                for j in 0..element_len {
-                                    bit_util::set_bit(
-                                        buffer.as_mut(),
-                                        i * element_len + j,
-                                    )
-                                }
-                            }
-                            let mask = buffer.into();
-                            self.validate_non_nullable(Some(&mask), 0, child)?;
+                            let expanded = nulls.expand(element_len);
+                            self.validate_non_nullable(Some(&expanded), child)?;
                         }
-                        None => self.validate_non_nullable(None, 0, child)?,
+                        None => self.validate_non_nullable(None, child)?,
                     }
                 }
             }
             DataType::Struct(fields) => {
                 for (field, child) in fields.iter().zip(&self.child_data) {
                     if !field.is_nullable() {
-                        match &self.nulls {
-                            Some(n) => self.validate_non_nullable(
-                                Some(n.buffer()),
-                                n.offset(),
-                                child,
-                            )?,
-                            None => self.validate_non_nullable(None, 0, child)?,
-                        }
+                        self.validate_non_nullable(self.nulls(), child)?
                     }
                 }
             }
@@ -1198,12 +1178,11 @@ impl ArrayData {
     /// Verifies that `child` contains no nulls not present in `mask`
     fn validate_non_nullable(
         &self,
-        mask: Option<&Buffer>,
-        offset: usize,
+        mask: Option<&NullBuffer>,
         child: &ArrayData,
     ) -> Result<(), ArrowError> {
         let mask = match mask {
-            Some(mask) => mask.as_ref(),
+            Some(mask) => mask,
             None => return match child.null_count() {
                 0 => Ok(()),
                 _ => Err(ArrowError::InvalidArgumentError(format!(
@@ -1215,23 +1194,13 @@ impl ArrayData {
         };
 
         match child.nulls() {
-            Some(nulls) => {
-                let mask = BitChunks::new(mask, offset, child.len);
-                let nulls = BitChunks::new(nulls.validity(), nulls.offset(), child.len);
-                mask
-                    .iter_padded()
-                    .zip(nulls.iter_padded())
-                    .try_for_each(|(m, c)| {
-                    if (m & !c) != 0 {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "non-nullable child of type {} contains nulls not present in parent",
-                            child.data_type
-                        )))
-                    }
-                    Ok(())
-                })
+            Some(nulls) if !mask.contains(nulls) => {
+                Err(ArrowError::InvalidArgumentError(format!(
+                    "non-nullable child of type {} contains nulls not present in parent",
+                    child.data_type
+                )))
             }
-            None => Ok(()),
+            _ => Ok(()),
         }
     }
 

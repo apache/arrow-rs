@@ -30,8 +30,10 @@ use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::memory::ByteBufferPtr;
-use arrow_array::{Array, ArrayRef, BinaryArray, Decimal128Array, OffsetSizeTrait};
-use arrow_buffer::Buffer;
+use arrow_array::{
+    Array, ArrayRef, BinaryArray, Decimal128Array, Decimal256Array, OffsetSizeTrait,
+};
+use arrow_buffer::{i256, Buffer};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::ops::Range;
@@ -52,7 +54,10 @@ pub fn make_byte_array_reader(
     };
 
     match data_type {
-        ArrowType::Binary | ArrowType::Utf8 | ArrowType::Decimal128(_, _) => {
+        ArrowType::Binary
+        | ArrowType::Utf8
+        | ArrowType::Decimal128(_, _)
+        | ArrowType::Decimal256(_, _) => {
             let reader = GenericRecordReader::new(column_desc);
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
@@ -119,7 +124,7 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
         self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
 
-        let array = match self.data_type {
+        let array: ArrayRef = match self.data_type {
             ArrowType::Decimal128(p, s) => {
                 let array = buffer.into_array(null_buffer, ArrowType::Binary);
                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
@@ -127,6 +132,17 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
                     .iter()
                     .map(|opt| Some(i128::from_be_bytes(sign_extend_be(opt?))))
                     .collect::<Decimal128Array>()
+                    .with_precision_and_scale(p, s)?;
+
+                Arc::new(decimal)
+            }
+            ArrowType::Decimal256(p, s) => {
+                let array = buffer.into_array(null_buffer, ArrowType::Binary);
+                let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+                let decimal = binary
+                    .iter()
+                    .map(|opt| Some(i256::from_be_bytes(sign_extend_be(opt?))))
+                    .collect::<Decimal256Array>()
                     .with_precision_and_scale(p, s)?;
 
                 Arc::new(decimal)

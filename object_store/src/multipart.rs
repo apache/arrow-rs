@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Cloud Multipart Upload
+//!
+//! This crate provides an asynchronous interface for multipart file uploads to cloud storage services.
+//! It's designed to offer efficient, non-blocking operations,
+//! especially useful when dealing with large files or high-throughput systems.
+
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, Future, StreamExt};
 use std::{io, pin::Pin, sync::Arc, task::Poll};
@@ -25,53 +31,50 @@ use crate::Result;
 type BoxedTryFuture<T> = Pin<Box<dyn Future<Output = Result<T, io::Error>> + Send>>;
 
 /// A trait that can be implemented by cloud-based object stores
-/// and used in combination with [`CloudMultiPartUpload`] to provide
+/// and used in combination with [`WriteMultiPart`] to provide
 /// multipart upload support
 #[async_trait]
-pub(crate) trait CloudMultiPartUploadImpl: 'static {
+pub trait PutPart: Send + Sync + 'static {
     /// Upload a single part
-    async fn put_multipart_part(
-        &self,
-        buf: Vec<u8>,
-        part_idx: usize,
-    ) -> Result<UploadPart, io::Error>;
+    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId>;
 
     /// Complete the upload with the provided parts
     ///
     /// `completed_parts` is in order of part number
-    async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error>;
+    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()>;
 }
 
+/// Represents a part of a file that has been successfully uploaded in a multipart upload process.
 #[derive(Debug, Clone)]
-pub(crate) struct UploadPart {
+pub struct PartId {
+    /// Id of this part
     pub content_id: String,
 }
 
-pub(crate) struct CloudMultiPartUpload<T>
-where
-    T: CloudMultiPartUploadImpl,
-{
+/// Wrapper around a [`PutPart`] that implements [`AsyncWrite`]
+pub struct WriteMultiPart<T: PutPart> {
     inner: Arc<T>,
     /// A list of completed parts, in sequential order.
-    completed_parts: Vec<Option<UploadPart>>,
+    completed_parts: Vec<Option<PartId>>,
     /// Part upload tasks currently running
-    tasks: FuturesUnordered<BoxedTryFuture<(usize, UploadPart)>>,
+    tasks: FuturesUnordered<BoxedTryFuture<(usize, PartId)>>,
     /// Maximum number of upload tasks to run concurrently
     max_concurrency: usize,
     /// Buffer that will be sent in next upload.
     current_buffer: Vec<u8>,
-    /// Minimum size of a part in bytes
-    min_part_size: usize,
+    /// Size of each part.
+    ///
+    /// While S3 and Minio support variable part sizes, R2 requires they all be
+    /// exactly the same size.
+    part_size: usize,
     /// Index of current part
     current_part_idx: usize,
     /// The completion task
     completion_task: Option<BoxedTryFuture<()>>,
 }
 
-impl<T> CloudMultiPartUpload<T>
-where
-    T: CloudMultiPartUploadImpl,
-{
+impl<T: PutPart> WriteMultiPart<T> {
+    /// Create a new multipart upload with the implementation and the given maximum concurrency
     pub fn new(inner: T, max_concurrency: usize) -> Self {
         Self {
             inner: Arc::new(inner),
@@ -85,13 +88,23 @@ where
             // Minimum size of 5 MiB
             // https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
             // https://cloud.google.com/storage/quotas#requests
-            min_part_size: 5_242_880,
+            part_size: 10 * 1024 * 1024,
             current_part_idx: 0,
             completion_task: None,
         }
     }
 
-    pub fn poll_tasks(
+    // Add data to the current buffer, returning the number of bytes added
+    fn add_to_buffer(mut self: Pin<&mut Self>, buf: &[u8], offset: usize) -> usize {
+        let remaining_capacity = self.part_size - self.current_buffer.len();
+        let to_copy = std::cmp::min(remaining_capacity, buf.len() - offset);
+        self.current_buffer
+            .extend_from_slice(&buf[offset..offset + to_copy]);
+        to_copy
+    }
+
+    /// Poll current tasks
+    fn poll_tasks(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Result<(), io::Error> {
@@ -107,12 +120,7 @@ where
         }
         Ok(())
     }
-}
 
-impl<T> CloudMultiPartUpload<T>
-where
-    T: CloudMultiPartUploadImpl + Send + Sync,
-{
     // The `poll_flush` function will only flush the in-progress tasks.
     // The `final_flush` method called during `poll_shutdown` will flush
     // the `current_buffer` along with in-progress tasks.
@@ -130,7 +138,7 @@ where
             let inner = Arc::clone(&self.inner);
             let part_idx = self.current_part_idx;
             self.tasks.push(Box::pin(async move {
-                let upload_part = inner.put_multipart_part(out_buffer, part_idx).await?;
+                let upload_part = inner.put_part(out_buffer, part_idx).await?;
                 Ok((part_idx, upload_part))
             }));
         }
@@ -146,10 +154,7 @@ where
     }
 }
 
-impl<T> AsyncWrite for CloudMultiPartUpload<T>
-where
-    T: CloudMultiPartUploadImpl + Send + Sync,
-{
+impl<T: PutPart> AsyncWrite for WriteMultiPart<T> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -158,33 +163,39 @@ where
         // Poll current tasks
         self.as_mut().poll_tasks(cx)?;
 
-        // If adding buf to pending buffer would trigger send, check
-        // whether we have capacity for another task.
-        let enough_to_send =
-            (buf.len() + self.current_buffer.len()) >= self.min_part_size;
-        if enough_to_send && self.tasks.len() < self.max_concurrency {
-            // If we do, copy into the buffer and submit the task, and return ready.
-            self.current_buffer.extend_from_slice(buf);
+        let mut offset = 0;
 
-            let out_buffer = std::mem::take(&mut self.current_buffer);
+        loop {
+            // Fill up current buffer
+            offset += self.as_mut().add_to_buffer(buf, offset);
+
+            // If we don't have a full buffer or we have too many tasks, break
+            if self.current_buffer.len() < self.part_size
+                || self.tasks.len() >= self.max_concurrency
+            {
+                break;
+            }
+
+            let new_buffer = Vec::with_capacity(self.part_size);
+            let out_buffer = std::mem::replace(&mut self.current_buffer, new_buffer);
             let inner = Arc::clone(&self.inner);
             let part_idx = self.current_part_idx;
             self.tasks.push(Box::pin(async move {
-                let upload_part = inner.put_multipart_part(out_buffer, part_idx).await?;
+                let upload_part = inner.put_part(out_buffer, part_idx).await?;
                 Ok((part_idx, upload_part))
             }));
             self.current_part_idx += 1;
 
             // We need to poll immediately after adding to setup waker
             self.as_mut().poll_tasks(cx)?;
+        }
 
-            Poll::Ready(Ok(buf.len()))
-        } else if !enough_to_send {
-            self.current_buffer.extend_from_slice(buf);
-            Poll::Ready(Ok(buf.len()))
-        } else {
-            // Waker registered by call to poll_tasks at beginning
+        // If offset is zero, then we didn't write anything because we didn't
+        // have capacity for more tasks and our buffer is full.
+        if offset == 0 && !buf.is_empty() {
             Poll::Pending
+        } else {
+            Poll::Ready(Ok(offset))
         }
     }
 
@@ -237,5 +248,18 @@ where
         });
 
         Pin::new(completion_task).poll(cx)
+    }
+}
+
+impl<T: PutPart> std::fmt::Debug for WriteMultiPart<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WriteMultiPart")
+            .field("completed_parts", &self.completed_parts)
+            .field("tasks", &self.tasks)
+            .field("max_concurrency", &self.max_concurrency)
+            .field("current_buffer", &self.current_buffer)
+            .field("part_size", &self.part_size)
+            .field("current_part_idx", &self.current_part_idx)
+            .finish()
     }
 }

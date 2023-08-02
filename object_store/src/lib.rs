@@ -245,13 +245,13 @@ pub mod throttle;
 mod client;
 
 #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
-pub use client::{backoff::BackoffConfig, retry::RetryConfig};
+pub use client::{backoff::BackoffConfig, retry::RetryConfig, CredentialProvider};
 
 #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
 mod config;
 
-#[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
-mod multipart;
+#[cfg(feature = "cloud")]
+pub mod multipart;
 mod parse;
 mod util;
 
@@ -270,10 +270,11 @@ use std::fmt::{Debug, Formatter};
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
+use std::sync::Arc;
 use tokio::io::AsyncWrite;
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp", feature = "http"))]
-pub use client::ClientOptions;
+pub use client::{ClientConfigKey, ClientOptions};
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
@@ -359,10 +360,20 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// in the given byte range
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let options = GetOptions {
-            range: Some(range),
+            range: Some(range.clone()),
             ..Default::default()
         };
-        self.get_opts(location, options).await?.bytes().await
+        // Temporary until GetResult::File supports range (#4352)
+        match self.get_opts(location, options).await? {
+            GetResult::Stream(s) => collect_bytes(s, None).await,
+            #[cfg(not(target_arch = "wasm32"))]
+            GetResult::File(mut file, path) => {
+                maybe_spawn_blocking(move || local::read_range(&mut file, &path, range))
+                    .await
+            }
+            #[cfg(target_arch = "wasm32")]
+            _ => unimplemented!("File IO not implemented on wasm32."),
+        }
     }
 
     /// Return the bytes that are stored at the specified location
@@ -385,6 +396,63 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> Result<()>;
+
+    /// Delete all the objects at the specified locations
+    ///
+    /// When supported, this method will use bulk operations that delete more
+    /// than one object per a request. The default implementation will call
+    /// the single object delete method for each location, but with up to 10
+    /// concurrent requests.
+    ///
+    /// The returned stream yields the results of the delete operations in the
+    /// same order as the input locations. However, some errors will be from
+    /// an overall call to a bulk delete operation, and not from a specific
+    /// location.
+    ///
+    /// If the object did not exist, the result may be an error or a success,
+    /// depending on the behavior of the underlying store. For example, local
+    /// filesystems, GCP, and Azure return an error, while S3 and in-memory will
+    /// return Ok. If it is an error, it will be [`Error::NotFound`].
+    ///
+    /// ```
+    /// # use object_store::local::LocalFileSystem;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let root = tempfile::TempDir::new().unwrap();
+    /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+    /// use object_store::{ObjectStore, ObjectMeta};
+    /// use object_store::path::Path;
+    /// use futures::{StreamExt, TryStreamExt};
+    /// use bytes::Bytes;
+    ///
+    /// // Create two objects
+    /// store.put(&Path::from("foo"), Bytes::from("foo")).await?;
+    /// store.put(&Path::from("bar"), Bytes::from("bar")).await?;
+    ///
+    /// // List object
+    /// let locations = store.list(None).await?
+    ///   .map(|meta: Result<ObjectMeta, _>| meta.map(|m| m.location))
+    ///   .boxed();
+    ///
+    /// // Delete them
+    /// store.delete_stream(locations).try_collect::<Vec<Path>>().await?;
+    /// # Ok(())
+    /// # }
+    /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    /// # rt.block_on(example()).unwrap();
+    /// ```
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        locations
+            .map(|location| async {
+                let location = location?;
+                self.delete(&location).await?;
+                Ok(location)
+            })
+            .buffered(10)
+            .boxed()
+    }
 
     /// List all the objects with the given prefix.
     ///
@@ -459,97 +527,122 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 }
 
-#[async_trait]
-impl ObjectStore for Box<dyn ObjectStore> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.as_ref().put(location, bytes).await
-    }
+macro_rules! as_ref_impl {
+    ($type:ty) => {
+        #[async_trait]
+        impl ObjectStore for $type {
+            async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+                self.as_ref().put(location, bytes).await
+            }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        self.as_ref().put_multipart(location).await
-    }
+            async fn put_multipart(
+                &self,
+                location: &Path,
+            ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+                self.as_ref().put_multipart(location).await
+            }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
-        self.as_ref().abort_multipart(location, multipart_id).await
-    }
+            async fn abort_multipart(
+                &self,
+                location: &Path,
+                multipart_id: &MultipartId,
+            ) -> Result<()> {
+                self.as_ref().abort_multipart(location, multipart_id).await
+            }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-        self.as_ref().append(location).await
-    }
+            async fn append(
+                &self,
+                location: &Path,
+            ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+                self.as_ref().append(location).await
+            }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        self.as_ref().get(location).await
-    }
+            async fn get(&self, location: &Path) -> Result<GetResult> {
+                self.as_ref().get(location).await
+            }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        self.as_ref().get_opts(location, options).await
-    }
+            async fn get_opts(
+                &self,
+                location: &Path,
+                options: GetOptions,
+            ) -> Result<GetResult> {
+                self.as_ref().get_opts(location, options).await
+            }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        self.as_ref().get_range(location, range).await
-    }
+            async fn get_range(
+                &self,
+                location: &Path,
+                range: Range<usize>,
+            ) -> Result<Bytes> {
+                self.as_ref().get_range(location, range).await
+            }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
-        self.as_ref().get_ranges(location, ranges).await
-    }
+            async fn get_ranges(
+                &self,
+                location: &Path,
+                ranges: &[Range<usize>],
+            ) -> Result<Vec<Bytes>> {
+                self.as_ref().get_ranges(location, ranges).await
+            }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        self.as_ref().head(location).await
-    }
+            async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+                self.as_ref().head(location).await
+            }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        self.as_ref().delete(location).await
-    }
+            async fn delete(&self, location: &Path) -> Result<()> {
+                self.as_ref().delete(location).await
+            }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        self.as_ref().list(prefix).await
-    }
+            fn delete_stream<'a>(
+                &'a self,
+                locations: BoxStream<'a, Result<Path>>,
+            ) -> BoxStream<'a, Result<Path>> {
+                self.as_ref().delete_stream(locations)
+            }
 
-    async fn list_with_offset(
-        &self,
-        prefix: Option<&Path>,
-        offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        self.as_ref().list_with_offset(prefix, offset).await
-    }
+            async fn list(
+                &self,
+                prefix: Option<&Path>,
+            ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+                self.as_ref().list(prefix).await
+            }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        self.as_ref().list_with_delimiter(prefix).await
-    }
+            async fn list_with_offset(
+                &self,
+                prefix: Option<&Path>,
+                offset: &Path,
+            ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+                self.as_ref().list_with_offset(prefix, offset).await
+            }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.as_ref().copy(from, to).await
-    }
+            async fn list_with_delimiter(
+                &self,
+                prefix: Option<&Path>,
+            ) -> Result<ListResult> {
+                self.as_ref().list_with_delimiter(prefix).await
+            }
 
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-        self.as_ref().rename(from, to).await
-    }
+            async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().copy(from, to).await
+            }
 
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.as_ref().copy_if_not_exists(from, to).await
-    }
+            async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().rename(from, to).await
+            }
 
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.as_ref().rename_if_not_exists(from, to).await
-    }
+            async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().copy_if_not_exists(from, to).await
+            }
+
+            async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().rename_if_not_exists(from, to).await
+            }
+        }
+    };
 }
+
+as_ref_impl!(Arc<dyn ObjectStore>);
+as_ref_impl!(Box<dyn ObjectStore>);
 
 /// Result of a list call that includes objects, prefixes (directories) and a
 /// token for the next set of results. Individual result sets may be limited to
@@ -834,6 +927,8 @@ mod test_util {
 mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
+    use bytes::{BufMut, BytesMut};
+    use itertools::Itertools;
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
@@ -1119,7 +1214,59 @@ mod tests {
             assert_eq!(actual, expected, "{prefix:?} - {offset:?}");
         }
 
+        // Test bulk delete
+        let paths = vec![
+            Path::from("a/a.file"),
+            Path::from("a/a/b.file"),
+            Path::from("aa/a.file"),
+            Path::from("does_not_exist"),
+            Path::from("I'm a < & weird path"),
+            Path::from("ab/a.file"),
+            Path::from("a/😀.file"),
+        ];
+
+        storage.put(&paths[4], "foo".into()).await.unwrap();
+
+        let out_paths = storage
+            .delete_stream(futures::stream::iter(paths.clone()).map(Ok).boxed())
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(out_paths.len(), paths.len());
+
+        let expect_errors = [3];
+
+        for (i, input_path) in paths.iter().enumerate() {
+            let err = storage.head(input_path).await.unwrap_err();
+            assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
+            if expect_errors.contains(&i) {
+                // Some object stores will report NotFound, but others (such as S3) will
+                // report success regardless.
+                match &out_paths[i] {
+                    Err(Error::NotFound { path: out_path, .. }) => {
+                        assert!(out_path.ends_with(&input_path.to_string()));
+                    }
+                    Ok(out_path) => {
+                        assert_eq!(out_path, input_path);
+                    }
+                    _ => panic!("unexpected error"),
+                }
+            } else {
+                assert_eq!(out_paths[i].as_ref().unwrap(), input_path);
+            }
+        }
+
         delete_fixtures(storage).await;
+
+        let path = Path::from("empty");
+        storage.put(&path, Bytes::new()).await.unwrap();
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.size, 0);
+        let data = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(data.len(), 0);
+
+        storage.delete(&path).await.unwrap();
     }
 
     pub(crate) async fn get_opts(storage: &dyn ObjectStore) {
@@ -1201,8 +1348,18 @@ mod tests {
         }
     }
 
+    fn get_random_bytes(len: usize) -> Bytes {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let mut bytes = BytesMut::with_capacity(len);
+        for _ in 0..len {
+            bytes.put_u8(rng.gen());
+        }
+        bytes.freeze()
+    }
+
     fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
-        std::iter::repeat(Bytes::from_iter(std::iter::repeat(b'x').take(chunk_length)))
+        std::iter::repeat(get_random_bytes(chunk_length))
             .take(num_chunks)
             .collect()
     }
@@ -1237,8 +1394,8 @@ mod tests {
         assert_eq!(bytes_expected, bytes_written);
 
         // Can overwrite some storage
-        // Sizes carefully chosen to exactly hit min limit of 5 MiB
-        let data = get_vec_of_bytes(242_880, 22);
+        // Sizes chosen to ensure we write three parts
+        let data = (0..7).map(|_| get_random_bytes(3_200_000)).collect_vec();
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {
@@ -1471,11 +1628,17 @@ mod tests {
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {
-        let paths = flatten_list_stream(storage, None).await.unwrap();
-
-        for f in &paths {
-            storage.delete(f).await.unwrap();
-        }
+        let paths = storage
+            .list(None)
+            .await
+            .unwrap()
+            .map_ok(|meta| meta.location)
+            .boxed();
+        storage
+            .delete_stream(paths)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
     }
 
     /// Test that the returned stream does not borrow the lifetime of Path

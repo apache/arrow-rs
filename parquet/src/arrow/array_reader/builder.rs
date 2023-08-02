@@ -23,8 +23,8 @@ use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::{
     make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader,
-    ListArrayReader, MapArrayReader, NullArrayReader, PrimitiveArrayReader,
-    RowGroupCollection, StructArrayReader,
+    FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
+    PrimitiveArrayReader, RowGroups, StructArrayReader,
 };
 use crate::arrow::schema::{ParquetField, ParquetFieldType};
 use crate::arrow::ProjectionMask;
@@ -39,7 +39,7 @@ use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
 pub fn build_array_reader(
     field: Option<&ParquetField>,
     mask: &ProjectionMask,
-    row_groups: &dyn RowGroupCollection,
+    row_groups: &dyn RowGroups,
 ) -> Result<Box<dyn ArrayReader>> {
     let reader = field
         .and_then(|field| build_reader(field, mask, row_groups).transpose())
@@ -52,7 +52,7 @@ pub fn build_array_reader(
 fn build_reader(
     field: &ParquetField,
     mask: &ProjectionMask,
-    row_groups: &dyn RowGroupCollection,
+    row_groups: &dyn RowGroups,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
     match field.field_type {
         ParquetFieldType::Primitive { .. } => {
@@ -63,6 +63,9 @@ fn build_reader(
             DataType::Struct(_) => build_struct_reader(field, mask, row_groups),
             DataType::List(_) => build_list_reader(field, mask, false, row_groups),
             DataType::LargeList(_) => build_list_reader(field, mask, true, row_groups),
+            DataType::FixedSizeList(_, _) => {
+                build_fixed_size_list_reader(field, mask, row_groups)
+            }
             d => unimplemented!("reading group type {} not implemented", d),
         },
     }
@@ -72,7 +75,7 @@ fn build_reader(
 fn build_map_reader(
     field: &ParquetField,
     mask: &ProjectionMask,
-    row_groups: &dyn RowGroupCollection,
+    row_groups: &dyn RowGroups,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
     let children = field.children().unwrap();
     assert_eq!(children.len(), 2);
@@ -124,7 +127,7 @@ fn build_list_reader(
     field: &ParquetField,
     mask: &ProjectionMask,
     is_large: bool,
-    row_groups: &dyn RowGroupCollection,
+    row_groups: &dyn RowGroups,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
     let children = field.children().unwrap();
     assert_eq!(children.len(), 1);
@@ -166,11 +169,48 @@ fn build_list_reader(
     Ok(reader)
 }
 
+/// Build array reader for fixed-size list type.
+fn build_fixed_size_list_reader(
+    field: &ParquetField,
+    mask: &ProjectionMask,
+    row_groups: &dyn RowGroups,
+) -> Result<Option<Box<dyn ArrayReader>>> {
+    let children = field.children().unwrap();
+    assert_eq!(children.len(), 1);
+
+    let reader = match build_reader(&children[0], mask, row_groups)? {
+        Some(item_reader) => {
+            let item_type = item_reader.get_data_type().clone();
+            let reader = match &field.arrow_type {
+                &DataType::FixedSizeList(ref f, size) => {
+                    let data_type = DataType::FixedSizeList(
+                        Arc::new(f.as_ref().clone().with_data_type(item_type)),
+                        size,
+                    );
+
+                    Box::new(FixedSizeListArrayReader::new(
+                        item_reader,
+                        size as usize,
+                        data_type,
+                        field.def_level,
+                        field.rep_level,
+                        field.nullable,
+                    )) as _
+                }
+                _ => unimplemented!(),
+            };
+            Some(reader)
+        }
+        None => None,
+    };
+    Ok(reader)
+}
+
 /// Creates primitive array reader for each primitive type.
 fn build_primitive_reader(
     field: &ParquetField,
     mask: &ProjectionMask,
-    row_groups: &dyn RowGroupCollection,
+    row_groups: &dyn RowGroups,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
     let (col_idx, primitive_type) = match &field.field_type {
         ParquetFieldType::Primitive {
@@ -261,7 +301,7 @@ fn build_primitive_reader(
 fn build_struct_reader(
     field: &ParquetField,
     mask: &ProjectionMask,
-    row_groups: &dyn RowGroupCollection,
+    row_groups: &dyn RowGroups,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
     let arrow_fields = match &field.arrow_type {
         DataType::Struct(children) => children,
@@ -298,7 +338,7 @@ fn build_struct_reader(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::schema::parquet_to_array_schema_and_fields;
+    use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::util::test_common::file_util::get_test_file;
     use arrow::datatypes::Field;
@@ -312,7 +352,7 @@ mod tests {
 
         let file_metadata = file_reader.metadata().file_metadata();
         let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [0]);
-        let (_, fields) = parquet_to_array_schema_and_fields(
+        let (_, fields) = parquet_to_arrow_schema_and_fields(
             file_metadata.schema_descr(),
             ProjectionMask::all(),
             file_metadata.key_value_metadata(),

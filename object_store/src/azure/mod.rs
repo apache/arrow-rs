@@ -28,7 +28,7 @@
 //! after 7 days.
 use self::client::{BlockId, BlockList};
 use crate::{
-    multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
+    multipart::{PartId, PutPart, WriteMultiPart},
     path::Path,
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Result, RetryConfig,
@@ -37,19 +37,18 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::stream::BoxStream;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::fmt::{Debug, Formatter};
-use std::io;
+use std::str::FromStr;
 use std::sync::Arc;
-use std::{collections::BTreeSet, str::FromStr};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::azure::credential::AzureCredential;
-use crate::client::header::header_meta;
+use crate::client::get::GetClientExt;
+use crate::client::list::ListClientExt;
 use crate::client::{
     ClientConfigKey, CredentialProvider, StaticCredentialProvider,
     TokenCredentialProvider,
@@ -60,7 +59,10 @@ pub use credential::authority_hosts;
 mod client;
 mod credential;
 
-type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
+/// [`CredentialProvider`] for [`MicrosoftAzure`]
+pub type AzureCredentialProvider =
+    Arc<dyn CredentialProvider<Credential = AzureCredential>>;
+pub use credential::AzureCredential;
 
 const STORE: &str = "MicrosoftAzure";
 
@@ -126,11 +128,6 @@ enum Error {
 
     #[snafu(display("ETag Header missing from response"))]
     MissingEtag,
-
-    #[snafu(display("Failed to parse headers: {}", source))]
-    Header {
-        source: crate::client::header::Error,
-    },
 }
 
 impl From<Error> for super::Error {
@@ -151,6 +148,13 @@ impl From<Error> for super::Error {
 #[derive(Debug)]
 pub struct MicrosoftAzure {
     client: Arc<client::AzureClient>,
+}
+
+impl MicrosoftAzure {
+    /// Returns the [`AzureCredentialProvider`] used by [`MicrosoftAzure`]
+    pub fn credentials(&self) -> &AzureCredentialProvider {
+        &self.client.config().credentials
+    }
 }
 
 impl std::fmt::Display for MicrosoftAzure {
@@ -181,7 +185,7 @@ impl ObjectStore for MicrosoftAzure {
             client: Arc::clone(&self.client),
             location: location.to_owned(),
         };
-        Ok((String::new(), Box::new(CloudMultiPartUpload::new(inner, 8))))
+        Ok((String::new(), Box::new(WriteMultiPart::new(inner, 8))))
     }
 
     async fn abort_multipart(
@@ -195,25 +199,11 @@ impl ObjectStore for MicrosoftAzure {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        let response = self.client.get_request(location, options, false).await?;
-        let stream = response
-            .bytes_stream()
-            .map_err(|source| crate::Error::Generic {
-                store: STORE,
-                source: Box::new(source),
-            })
-            .boxed();
-
-        Ok(GetResult::Stream(stream))
+        self.client.get_opts(location, options).await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let options = GetOptions::default();
-
-        // Extract meta from headers
-        // https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
-        let response = self.client.get_request(location, options, true).await?;
-        Ok(header_meta(location, response.headers()).context(HeaderSnafu)?)
+        self.client.head(location).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
@@ -224,32 +214,11 @@ impl ObjectStore for MicrosoftAzure {
         &self,
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        let stream = self
-            .client
-            .list_paginated(prefix, false)
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed();
-
-        Ok(stream)
+        self.client.list(prefix).await
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.client.list_paginated(prefix, true);
-
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let response = result?;
-            common_prefixes.extend(response.common_prefixes.into_iter());
-            objects.extend(response.objects.into_iter());
-        }
-
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
-        })
+        self.client.list_with_delimiter(prefix).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -273,12 +242,8 @@ struct AzureMultiPartUpload {
 }
 
 #[async_trait]
-impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
-    async fn put_multipart_part(
-        &self,
-        buf: Vec<u8>,
-        part_idx: usize,
-    ) -> Result<UploadPart, io::Error> {
+impl PutPart for AzureMultiPartUpload {
+    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
         let content_id = format!("{part_idx:20}");
         let block_id: BlockId = content_id.clone().into();
 
@@ -294,10 +259,10 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
             )
             .await?;
 
-        Ok(UploadPart { content_id })
+        Ok(PartId { content_id })
     }
 
-    async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error> {
+    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
         let blocks = completed_parts
             .into_iter()
             .map(|part| BlockId::from(part.content_id))
@@ -374,6 +339,8 @@ pub struct MicrosoftAzureBuilder {
     retry_config: RetryConfig,
     /// Client options
     client_options: ClientOptions,
+    /// Credentials
+    credentials: Option<AzureCredentialProvider>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -840,6 +807,12 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Set the credential provider overriding any other options
+    pub fn with_credentials(mut self, credentials: AzureCredentialProvider) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
     /// Set if the Azure emulator should be used (defaults to false)
     pub fn with_use_emulator(mut self, use_emulator: bool) -> Self {
         self.use_emulator = use_emulator.into();
@@ -937,7 +910,9 @@ impl MicrosoftAzureBuilder {
             let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
 
-            let credential = if let Some(bearer_token) = self.bearer_token {
+            let credential = if let Some(credential) = self.credentials {
+                credential
+            } else if let Some(bearer_token) = self.bearer_token {
                 static_creds(AzureCredential::BearerToken(bearer_token))
             } else if let Some(access_key) = self.access_key {
                 static_creds(AzureCredential::AccessKey(access_key))

@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::types::*;
 use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -119,11 +119,6 @@ impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.values_builder.len()
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.values_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -278,11 +273,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Builds the [`PrimitiveArray`] and reset this builder.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let nulls = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(self.values_builder.finish())
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
@@ -291,15 +286,12 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Builds the [`PrimitiveArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
+        let nulls = self.null_buffer_builder.finish_cloned();
         let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(values_buffer)
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
@@ -331,6 +323,36 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             self.values_builder.as_slice_mut(),
             self.null_buffer_builder.as_slice_mut(),
         )
+    }
+}
+
+impl<P: DecimalType> PrimitiveBuilder<P> {
+    /// Sets the precision and scale
+    pub fn with_precision_and_scale(
+        self,
+        precision: u8,
+        scale: i8,
+    ) -> Result<Self, ArrowError> {
+        validate_decimal_precision_and_scale::<P>(precision, scale)?;
+        Ok(Self {
+            data_type: P::TYPE_CONSTRUCTOR(precision, scale),
+            ..self
+        })
+    }
+}
+
+impl<P: ArrowTimestampType> PrimitiveBuilder<P> {
+    /// Sets the timezone
+    pub fn with_timezone(self, timezone: impl Into<Arc<str>>) -> Self {
+        self.with_timezone_opt(Some(timezone.into()))
+    }
+
+    /// Sets an optional timezone
+    pub fn with_timezone_opt<S: Into<Arc<str>>>(self, timezone: Option<S>) -> Self {
+        Self {
+            data_type: DataType::Timestamp(P::UNIT, timezone.map(Into::into)),
+            ..self
+        }
     }
 }
 

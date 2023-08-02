@@ -164,7 +164,7 @@ struct Args {
 
     /// Sets best effort maximum size of a data page in bytes.
     #[clap(long)]
-    data_pagesize_limit: Option<usize>,
+    data_page_size_limit: Option<usize>,
 
     /// Sets max statistics size for any column.
     ///
@@ -174,7 +174,7 @@ struct Args {
 
     /// Sets best effort maximum dictionary page size, in bytes.
     #[clap(long)]
-    dictionary_pagesize_limit: Option<usize>,
+    dictionary_page_size_limit: Option<usize>,
 
     /// Sets whether bloom filter is enabled for any column.
     #[clap(long)]
@@ -237,13 +237,13 @@ fn main() {
         writer_properties_builder =
             writer_properties_builder.set_data_page_row_count_limit(value);
     }
-    if let Some(value) = args.data_pagesize_limit {
+    if let Some(value) = args.data_page_size_limit {
         writer_properties_builder =
-            writer_properties_builder.set_data_pagesize_limit(value);
+            writer_properties_builder.set_data_page_size_limit(value);
     }
-    if let Some(value) = args.dictionary_pagesize_limit {
+    if let Some(value) = args.dictionary_page_size_limit {
         writer_properties_builder =
-            writer_properties_builder.set_dictionary_pagesize_limit(value);
+            writer_properties_builder.set_dictionary_page_size_limit(value);
     }
     if let Some(value) = args.max_statistics_size {
         writer_properties_builder =

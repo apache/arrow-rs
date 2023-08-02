@@ -79,7 +79,7 @@ impl<'a> TryFrom<&'a str> for SerializedFileReader<File> {
 /// Conversion into a [`RowIter`](crate::record::reader::RowIter)
 /// using the full file schema over all row groups.
 impl IntoIterator for SerializedFileReader<File> {
-    type Item = Row;
+    type Item = Result<Row>;
     type IntoIter = RowIter<'static>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -299,7 +299,7 @@ pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
 
 impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
     /// Creates new row group reader from a file, row group metadata and custom config.
-    fn new(
+    pub fn new(
         chunk_reader: Arc<R>,
         metadata: &'a RowGroupMetaData,
         page_locations: Option<&'a [Vec<PageLocation>]>,
@@ -722,7 +722,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
             } => {
                 if dictionary_page.is_some() {
                     Ok(Some(PageMetadata {
-                        num_rows: 0,
+                        num_rows: None,
+                        num_levels: None,
                         is_dict: true,
                     }))
                 } else if let Some(page) = page_locations.front() {
@@ -732,7 +733,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         .unwrap_or(*total_rows);
 
                     Ok(Some(PageMetadata {
-                        num_rows: next_rows - page.first_row_index as usize,
+                        num_rows: Some(next_rows - page.first_row_index as usize),
+                        num_levels: None,
                         is_dict: false,
                     }))
                 } else {
@@ -785,7 +787,6 @@ mod tests {
     use crate::file::page_index::index_reader::{
         read_columns_indexes, read_pages_locations,
     };
-    use crate::file::properties::WriterProperties;
     use crate::file::writer::SerializedFileWriter;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
@@ -809,7 +810,9 @@ mod tests {
         let file_iter = read_from_file.get_row_iter(None).unwrap();
         let cursor_iter = read_from_cursor.get_row_iter(None).unwrap();
 
-        assert!(file_iter.eq(cursor_iter));
+        for (a, b) in file_iter.zip(cursor_iter) {
+            assert_eq!(a.unwrap(), b.unwrap())
+        }
     }
 
     #[test]
@@ -853,7 +856,7 @@ mod tests {
             .iter()
             .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
             .flat_map(|r| r.into_iter())
-            .flat_map(|r| r.get_int(0))
+            .flat_map(|r| r.unwrap().get_int(0))
             .collect::<Vec<_>>();
 
         // rows in the parquet file are not sorted by "id"
@@ -873,7 +876,7 @@ mod tests {
 
                 r.into_iter().project(proj).unwrap()
             })
-            .map(|r| format!("{r}"))
+            .map(|r| format!("{}", r.unwrap()))
             .collect::<Vec<_>>()
             .join(",");
 
@@ -1645,11 +1648,11 @@ mod tests {
             // have checked with `parquet-tools column-index   -c string_col  ./alltypes_tiny_pages.parquet`
             // page meta has two scenarios(21, 20) of num_rows expect last page has 11 rows.
             if i != 351 {
-                assert!((meta.num_rows == 21) || (meta.num_rows == 20));
+                assert!((meta.num_rows == Some(21)) || (meta.num_rows == Some(20)));
             } else {
                 // last page first row index is 7290, total row count is 7300
                 // because first row start with zero, last page row count should be 10.
-                assert_eq!(meta.num_rows, 10);
+                assert_eq!(meta.num_rows, Some(10));
             }
             assert!(!meta.is_dict);
             vec.push(meta);
@@ -1687,11 +1690,11 @@ mod tests {
             // have checked with `parquet-tools column-index   -c string_col  ./alltypes_tiny_pages.parquet`
             // page meta has two scenarios(21, 20) of num_rows expect last page has 11 rows.
             if i != 351 {
-                assert!((meta.num_rows == 21) || (meta.num_rows == 20));
+                assert!((meta.num_levels == Some(21)) || (meta.num_levels == Some(20)));
             } else {
                 // last page first row index is 7290, total row count is 7300
                 // because first row start with zero, last page row count should be 10.
-                assert_eq!(meta.num_rows, 10);
+                assert_eq!(meta.num_levels, Some(10));
             }
             assert!(!meta.is_dict);
             vec.push(meta);
@@ -1716,12 +1719,9 @@ mod tests {
 
         let schema = parse_message_type(message_type).unwrap();
         let mut out = Vec::with_capacity(1024);
-        let mut writer = SerializedFileWriter::new(
-            &mut out,
-            Arc::new(schema),
-            Arc::new(WriterProperties::builder().build()),
-        )
-        .unwrap();
+        let mut writer =
+            SerializedFileWriter::new(&mut out, Arc::new(schema), Default::default())
+                .unwrap();
 
         let mut r = writer.next_row_group().unwrap();
         let mut c = r.next_column().unwrap().unwrap();

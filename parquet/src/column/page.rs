@@ -21,7 +21,6 @@ use crate::basic::{Encoding, PageType};
 use crate::errors::{ParquetError, Result};
 use crate::file::{metadata::ColumnChunkMetaData, statistics::Statistics};
 use crate::format::PageHeader;
-use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 use crate::util::memory::ByteBufferPtr;
 
 /// Parquet Page definition.
@@ -162,6 +161,75 @@ impl CompressedPage {
     pub fn data(&self) -> &[u8] {
         self.compressed_page.buffer().data()
     }
+
+    /// Returns the thrift page header
+    pub(crate) fn to_thrift_header(&self) -> PageHeader {
+        let uncompressed_size = self.uncompressed_size();
+        let compressed_size = self.compressed_size();
+        let num_values = self.num_values();
+        let encoding = self.encoding();
+        let page_type = self.page_type();
+
+        let mut page_header = PageHeader {
+            type_: page_type.into(),
+            uncompressed_page_size: uncompressed_size as i32,
+            compressed_page_size: compressed_size as i32,
+            // TODO: Add support for crc checksum
+            crc: None,
+            data_page_header: None,
+            index_page_header: None,
+            dictionary_page_header: None,
+            data_page_header_v2: None,
+        };
+
+        match self.compressed_page {
+            Page::DataPage {
+                def_level_encoding,
+                rep_level_encoding,
+                ref statistics,
+                ..
+            } => {
+                let data_page_header = crate::format::DataPageHeader {
+                    num_values: num_values as i32,
+                    encoding: encoding.into(),
+                    definition_level_encoding: def_level_encoding.into(),
+                    repetition_level_encoding: rep_level_encoding.into(),
+                    statistics: crate::file::statistics::to_thrift(statistics.as_ref()),
+                };
+                page_header.data_page_header = Some(data_page_header);
+            }
+            Page::DataPageV2 {
+                num_nulls,
+                num_rows,
+                def_levels_byte_len,
+                rep_levels_byte_len,
+                is_compressed,
+                ref statistics,
+                ..
+            } => {
+                let data_page_header_v2 = crate::format::DataPageHeaderV2 {
+                    num_values: num_values as i32,
+                    num_nulls: num_nulls as i32,
+                    num_rows: num_rows as i32,
+                    encoding: encoding.into(),
+                    definition_levels_byte_length: def_levels_byte_len as i32,
+                    repetition_levels_byte_length: rep_levels_byte_len as i32,
+                    is_compressed: Some(is_compressed),
+                    statistics: crate::file::statistics::to_thrift(statistics.as_ref()),
+                };
+                page_header.data_page_header_v2 = Some(data_page_header_v2);
+            }
+            Page::DictionaryPage { is_sorted, .. } => {
+                let dictionary_page_header = crate::format::DictionaryPageHeader {
+                    num_values: num_values as i32,
+                    encoding: encoding.into(),
+                    is_sorted: Some(is_sorted),
+                };
+                page_header.dictionary_page_header = Some(dictionary_page_header);
+            }
+        }
+        page_header
+    }
 }
 
 /// Contains page write metrics.
@@ -197,9 +265,10 @@ impl PageWriteSpec {
 /// Contains metadata for a page
 #[derive(Clone)]
 pub struct PageMetadata {
-    /// The number of rows in this page
-    pub num_rows: usize,
-
+    /// The number of rows within the page if known
+    pub num_rows: Option<usize>,
+    /// The number of levels within the page if known
+    pub num_levels: Option<usize>,
     /// Returns true if the page is a dictionary page
     pub is_dict: bool,
 }
@@ -209,18 +278,27 @@ impl TryFrom<&PageHeader> for PageMetadata {
 
     fn try_from(value: &PageHeader) -> std::result::Result<Self, Self::Error> {
         match value.type_ {
-            crate::format::PageType::DATA_PAGE => Ok(PageMetadata {
-                num_rows: value.data_page_header.as_ref().unwrap().num_values as usize,
-                is_dict: false,
-            }),
+            crate::format::PageType::DATA_PAGE => {
+                let header = value.data_page_header.as_ref().unwrap();
+                Ok(PageMetadata {
+                    num_rows: None,
+                    num_levels: Some(header.num_values as _),
+                    is_dict: false,
+                })
+            }
             crate::format::PageType::DICTIONARY_PAGE => Ok(PageMetadata {
-                num_rows: usize::MIN,
+                num_rows: None,
+                num_levels: None,
                 is_dict: true,
             }),
-            crate::format::PageType::DATA_PAGE_V2 => Ok(PageMetadata {
-                num_rows: value.data_page_header_v2.as_ref().unwrap().num_rows as usize,
-                is_dict: false,
-            }),
+            crate::format::PageType::DATA_PAGE_V2 => {
+                let header = value.data_page_header_v2.as_ref().unwrap();
+                Ok(PageMetadata {
+                    num_rows: Some(header.num_rows as _),
+                    num_levels: Some(header.num_values as _),
+                    is_dict: false,
+                })
+            }
             other => Err(ParquetError::General(format!(
                 "page type {other:?} cannot be converted to PageMetadata"
             ))),
@@ -248,7 +326,7 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
 ///
 /// It is reasonable to assume that all pages will be written in the correct order, e.g.
 /// dictionary page followed by data pages, or a set of data pages, etc.
-pub trait PageWriter {
+pub trait PageWriter: Send {
     /// Writes a page into the output stream/sink.
     /// Returns `PageWriteSpec` that contains information about written page metrics,
     /// including number of bytes, size, number of values, offset, etc.
@@ -269,13 +347,7 @@ pub trait PageWriter {
 }
 
 /// An iterator over pages of one specific column in a parquet file.
-pub trait PageIterator: Iterator<Item = Result<Box<dyn PageReader>>> + Send {
-    /// Get schema of parquet file.
-    fn schema(&mut self) -> Result<SchemaDescPtr>;
-
-    /// Get column schema of this page iterator.
-    fn column_schema(&mut self) -> Result<ColumnDescPtr>;
-}
+pub trait PageIterator: Iterator<Item = Result<Box<dyn PageReader>>> + Send {}
 
 #[cfg(test)]
 mod tests {

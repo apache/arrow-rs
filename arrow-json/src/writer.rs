@@ -107,7 +107,7 @@ use arrow_schema::*;
 
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 
-fn primitive_array_to_json<T>(array: &ArrayRef) -> Result<Vec<Value>, ArrowError>
+fn primitive_array_to_json<T>(array: &dyn Array) -> Result<Vec<Value>, ArrowError>
 where
     T: ArrowPrimitiveType,
     T::Native: JsonSerializable,
@@ -137,8 +137,8 @@ fn struct_array_to_jsonmap_array(
     Ok(inner_objs)
 }
 
-/// Converts an arrow [`ArrayRef`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
-pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
+/// Converts an arrow [`Array`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
+pub fn array_to_json_array(array: &dyn Array) -> Result<Vec<Value>, ArrowError> {
     match array.data_type() {
         DataType::Null => Ok(iter::repeat(Value::Null).take(array.len()).collect()),
         DataType::Boolean => Ok(array
@@ -174,6 +174,7 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
         DataType::UInt16 => primitive_array_to_json::<UInt16Type>(array),
         DataType::UInt32 => primitive_array_to_json::<UInt32Type>(array),
         DataType::UInt64 => primitive_array_to_json::<UInt64Type>(array),
+        DataType::Float16 => primitive_array_to_json::<Float16Type>(array),
         DataType::Float32 => primitive_array_to_json::<Float32Type>(array),
         DataType::Float64 => primitive_array_to_json::<Float64Type>(array),
         DataType::List(_) => as_list_array(array)
@@ -190,10 +191,24 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>, ArrowError> {
                 None => Ok(Value::Null),
             })
             .collect(),
+        DataType::FixedSizeList(_, _) => as_fixed_size_list_array(array)
+            .iter()
+            .map(|maybe_value| match maybe_value {
+                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                None => Ok(Value::Null),
+            })
+            .collect(),
         DataType::Struct(_) => {
             let jsonmaps = struct_array_to_jsonmap_array(array.as_struct())?;
             Ok(jsonmaps.into_iter().map(Value::Object).collect())
         }
+        DataType::Map(_, _) => as_map_array(array)
+            .iter()
+            .map(|maybe_value| match maybe_value {
+                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                None => Ok(Value::Null),
+            })
+            .collect(),
         t => Err(ArrowError::JsonError(format!(
             "data type {t:?} not supported"
         ))),
@@ -263,6 +278,9 @@ fn set_column_for_json_rows(
         }
         DataType::UInt64 => {
             set_column_by_primitive_type::<UInt64Type>(rows, array, col_name);
+        }
+        DataType::Float16 => {
+            set_column_by_primitive_type::<Float16Type>(rows, array, col_name);
         }
         DataType::Float32 => {
             set_column_by_primitive_type::<Float32Type>(rows, array, col_name);
@@ -606,10 +624,13 @@ mod tests {
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
 
-    use crate::reader::*;
+    use serde_json::json;
+
+    use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
-    use serde_json::json;
+
+    use crate::reader::*;
 
     use super::*;
 
@@ -1452,6 +1473,7 @@ mod tests {
             Field::new("e", DataType::Utf8, true),
             Field::new("f", DataType::Utf8, true),
             Field::new("g", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new("h", DataType::Float16, true),
         ]));
 
         let mut reader = ReaderBuilder::new(schema.clone())
@@ -1482,5 +1504,76 @@ mod tests {
             }
             assert_eq!(serde_json::from_str::<Value>(r).unwrap(), expected_json,);
         }
+    }
+
+    #[test]
+    fn test_array_to_json_array_for_fixed_size_list_array() {
+        let expected_json = vec![
+            json!([0, 1, 2]),
+            json!(null),
+            json!([3, null, 5]),
+            json!([6, 7, 45]),
+        ];
+
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(6), Some(7), Some(45)]),
+        ];
+
+        let list_array =
+            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(data, 3);
+        let list_array = Arc::new(list_array) as ArrayRef;
+
+        assert_eq!(array_to_json_array(&list_array).unwrap(), expected_json);
+    }
+
+    #[test]
+    fn test_array_to_json_array_for_map_array() {
+        let expected_json = serde_json::from_value::<Vec<Value>>(json!([
+            [
+                {
+                    "keys": "joe",
+                    "values": 1
+                }
+            ],
+            [
+                {
+                    "keys": "blogs",
+                    "values": 2
+                },
+                {
+                    "keys": "foo",
+                    "values": 4
+                }
+            ],
+            [],
+            null
+        ]))
+        .unwrap();
+
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::with_capacity(4);
+
+        let mut builder = MapBuilder::new(None, string_builder, int_builder);
+
+        builder.keys().append_value("joe");
+        builder.values().append_value(1);
+        builder.append(true).unwrap();
+
+        builder.keys().append_value("blogs");
+        builder.values().append_value(2);
+        builder.keys().append_value("foo");
+        builder.values().append_value(4);
+        builder.append(true).unwrap();
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+
+        let array = builder.finish();
+
+        let map_array = Arc::new(array) as ArrayRef;
+
+        assert_eq!(array_to_json_array(&map_array).unwrap(), expected_json);
     }
 }

@@ -64,7 +64,7 @@ macro_rules! repeat_pat {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_integer {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
             $crate::repeat_pat!(arrow_schema::DataType::Int8, $($data_type),+) => {
                 $m!($crate::types::Int8Type $(, $args)*)
@@ -90,7 +90,7 @@ macro_rules! downcast_integer {
             $crate::repeat_pat!(arrow_schema::DataType::UInt64, $($data_type),+) => {
                 $m!($crate::types::UInt64Type $(, $args)*)
             }
-            $(($($p),+) => $fallback,)*
+            $($p => $fallback,)*
         }
     };
 }
@@ -127,7 +127,7 @@ macro_rules! downcast_integer {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_run_end_index {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
             $crate::repeat_pat!(arrow_schema::DataType::Int16, $($data_type),+) => {
                 $m!($crate::types::Int16Type $(, $args)*)
@@ -138,7 +138,7 @@ macro_rules! downcast_run_end_index {
             $crate::repeat_pat!(arrow_schema::DataType::Int64, $($data_type),+) => {
                 $m!($crate::types::Int64Type $(, $args)*)
             }
-            $(($($p),+) => $fallback,)*
+            $($p => $fallback,)*
         }
     };
 }
@@ -170,7 +170,7 @@ macro_rules! downcast_run_end_index {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_temporal {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
             $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Second), $($data_type),+) => {
                 $m!($crate::types::Time32SecondType $(, $args)*)
@@ -202,7 +202,7 @@ macro_rules! downcast_temporal {
             $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _), $($data_type),+) => {
                 $m!($crate::types::TimestampNanosecondType $(, $args)*)
             }
-            $(($($p),+) => $fallback,)*
+            $($p => $fallback,)*
         }
     };
 }
@@ -237,16 +237,16 @@ macro_rules! downcast_temporal_array {
     ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
         $crate::downcast_temporal_array!($values => {$e} $($p => $fallback)*)
     };
-    (($($values:ident),+) => $e:block $($($p:pat),+ => $fallback:expr $(,)*)*) => {
-        $crate::downcast_temporal_array!($($values),+ => $e $($($p),+ => $fallback)*)
+    (($($values:ident),+) => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_temporal_array!($($values),+ => {$e} $($p => $fallback)*)
     };
-    (($($values:ident),+) => $e:block $(($($p:pat),+) => $fallback:expr $(,)*)*) => {
-        $crate::downcast_temporal_array!($($values),+ => $e $($($p),+ => $fallback)*)
+    ($($values:ident),+ => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_temporal_array!(($($values),+) => $e $($p => $fallback)*)
     };
-    ($($values:ident),+ => $e:block $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+    (($($values:ident),+) => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
         $crate::downcast_temporal!{
             $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
-            $($($p),+ => $fallback,)*
+            $($p => $fallback,)*
         }
     };
 }
@@ -281,7 +281,7 @@ macro_rules! downcast_temporal_array {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_primitive {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
         $crate::downcast_integer! {
             $($data_type),+ => ($m $(, $args)*),
             $crate::repeat_pat!(arrow_schema::DataType::Float16, $($data_type),+) => {
@@ -323,7 +323,7 @@ macro_rules! downcast_primitive {
             _ => {
                 $crate::downcast_temporal! {
                     $($data_type),+ => ($m $(, $args)*),
-                    $($($p),+ => $fallback,)*
+                    $($p => $fallback,)*
                 }
             }
         }
@@ -369,16 +369,16 @@ macro_rules! downcast_primitive_array {
     ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
         $crate::downcast_primitive_array!($values => {$e} $($p => $fallback)*)
     };
-    (($($values:ident),+) => $e:block $($($p:pat),+ => $fallback:expr $(,)*)*) => {
-        $crate::downcast_primitive_array!($($values),+ => $e $($($p),+ => $fallback)*)
+    (($($values:ident),+) => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_primitive_array!($($values),+ => {$e} $($p => $fallback)*)
     };
-    (($($values:ident),+) => $e:block $(($($p:pat),+) => $fallback:expr $(,)*)*) => {
-        $crate::downcast_primitive_array!($($values),+ => $e $($($p),+ => $fallback)*)
+    ($($values:ident),+ => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_primitive_array!(($($values),+) => $e $($p => $fallback)*)
     };
-    ($($values:ident),+ => $e:block $($($p:pat),+ => $fallback:expr $(,)*)*) => {
+    (($($values:ident),+) => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
         $crate::downcast_primitive!{
             $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
-            $($($p),+ => $fallback,)*
+            $($p => $fallback,)*
         }
     };
 }
@@ -577,7 +577,7 @@ macro_rules! downcast_run_array {
 }
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
-/// [`GenericListArray<T>`], panic'ing on failure.
+/// [`GenericListArray<T>`], panicking on failure.
 pub fn as_generic_list_array<S: OffsetSizeTrait>(
     arr: &dyn Array,
 ) -> &GenericListArray<S> {
@@ -587,21 +587,30 @@ pub fn as_generic_list_array<S: OffsetSizeTrait>(
 }
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
-/// [`ListArray`], panic'ing on failure.
+/// [`ListArray`], panicking on failure.
 #[inline]
 pub fn as_list_array(arr: &dyn Array) -> &ListArray {
     as_generic_list_array::<i32>(arr)
 }
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
-/// [`LargeListArray`], panic'ing on failure.
+/// [`FixedSizeListArray`], panicking on failure.
+#[inline]
+pub fn as_fixed_size_list_array(arr: &dyn Array) -> &FixedSizeListArray {
+    arr.as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("Unable to downcast to fixed size list array")
+}
+
+/// Force downcast of an [`Array`], such as an [`ArrayRef`] to
+/// [`LargeListArray`], panicking on failure.
 #[inline]
 pub fn as_large_list_array(arr: &dyn Array) -> &LargeListArray {
     as_generic_list_array::<i64>(arr)
 }
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
-/// [`GenericBinaryArray<S>`], panic'ing on failure.
+/// [`GenericBinaryArray<S>`], panicking on failure.
 #[inline]
 pub fn as_generic_binary_array<S: OffsetSizeTrait>(
     arr: &dyn Array,
@@ -612,7 +621,7 @@ pub fn as_generic_binary_array<S: OffsetSizeTrait>(
 }
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
-/// [`StringArray`], panic'ing on failure.
+/// [`StringArray`], panicking on failure.
 ///
 /// # Example
 ///
@@ -631,7 +640,7 @@ pub fn as_string_array(arr: &dyn Array) -> &StringArray {
 }
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
-/// [`BooleanArray`], panic'ing on failure.
+/// [`BooleanArray`], panicking on failure.
 ///
 /// # Example
 ///
@@ -666,7 +675,7 @@ macro_rules! array_downcast_fn {
         array_downcast_fn!(
             $name,
             $arrty,
-            concat!("[`", stringify!($arrty), "`], panic'ing on failure.")
+            concat!("[`", stringify!($arrty), "`], panicking on failure.")
         );
     };
 }
@@ -676,7 +685,12 @@ array_downcast_fn!(as_null_array, NullArray);
 array_downcast_fn!(as_struct_array, StructArray);
 array_downcast_fn!(as_union_array, UnionArray);
 array_downcast_fn!(as_map_array, MapArray);
-array_downcast_fn!(as_decimal_array, Decimal128Array);
+
+/// Force downcast of an Array, such as an ArrayRef to Decimal128Array, panic’ing on failure.
+#[deprecated(note = "please use `as_primitive_array::<Decimal128Type>` instead")]
+pub fn as_decimal_array(arr: &dyn Array) -> &PrimitiveArray<Decimal128Type> {
+    as_primitive_array::<Decimal128Type>(arr)
+}
 
 /// Downcasts a `dyn Array` to a concrete type
 ///
@@ -785,6 +799,15 @@ pub trait AsArray: private::Sealed {
         self.as_list_opt().expect("list array")
     }
 
+    /// Downcast this to a [`FixedSizeListArray`] returning `None` if not possible
+    fn as_fixed_size_list_opt(&self) -> Option<&FixedSizeListArray>;
+
+    /// Downcast this to a [`FixedSizeListArray`] panicking if not possible
+    fn as_fixed_size_list(&self) -> &FixedSizeListArray {
+        self.as_fixed_size_list_opt()
+            .expect("fixed size list array")
+    }
+
     /// Downcast this to a [`MapArray`] returning `None` if not possible
     fn as_map_opt(&self) -> Option<&MapArray>;
 
@@ -825,6 +848,10 @@ impl AsArray for dyn Array + '_ {
         self.as_any().downcast_ref()
     }
 
+    fn as_fixed_size_list_opt(&self) -> Option<&FixedSizeListArray> {
+        self.as_any().downcast_ref()
+    }
+
     fn as_map_opt(&self) -> Option<&MapArray> {
         self.as_any().downcast_ref()
     }
@@ -858,6 +885,10 @@ impl AsArray for ArrayRef {
         self.as_ref().as_list_opt()
     }
 
+    fn as_fixed_size_list_opt(&self) -> Option<&FixedSizeListArray> {
+        self.as_ref().as_fixed_size_list_opt()
+    }
+
     fn as_map_opt(&self) -> Option<&MapArray> {
         self.as_any().downcast_ref()
     }
@@ -875,18 +906,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-
-    #[test]
-    fn test_as_decimal_array_ref() {
-        let array: Decimal128Array = vec![Some(123), None, Some(1111)]
-            .into_iter()
-            .collect::<Decimal128Array>()
-            .with_precision_and_scale(10, 2)
-            .unwrap();
-        assert!(!as_decimal_array(&array).is_empty());
-        let result_decimal = as_decimal_array(&array);
-        assert_eq!(result_decimal, &array);
-    }
 
     #[test]
     fn test_as_primitive_array_ref() {

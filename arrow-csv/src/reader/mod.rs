@@ -150,10 +150,10 @@ lazy_static! {
         r"^-?(\d+)$", //INTEGER
         r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
         r"^\d{4}-\d\d-\d\d$", //DATE32
-        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d$", //Timestamp(Second)
-        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,3}$", //Timestamp(Millisecond)
-        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,6}$", //Timestamp(Microsecond)
-        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d.\d{1,9}$", //Timestamp(Nanosecond)
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,6}(?:[^\d].*)?$", //Timestamp(Microsecond)
+        r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}(?:[^\d].*)?$", //Timestamp(Nanosecond)
     ]).unwrap();
 }
 
@@ -2164,6 +2164,19 @@ mod tests {
                     "2020-03-19 00:00:00.000000",
                 ],
                 DataType::Timestamp(TimeUnit::Microsecond, None),
+            ),
+            (
+                &["2020-03-19 02:00:00+02:00", "2020-03-19 02:00:00Z"],
+                DataType::Timestamp(TimeUnit::Second, None),
+            ),
+            (
+                &[
+                    "2020-03-19",
+                    "2020-03-19 02:00:00+02:00",
+                    "2020-03-19 02:00:00Z",
+                    "2020-03-19 02:00:00.12Z",
+                ],
+                DataType::Timestamp(TimeUnit::Millisecond, None),
             ),
             (
                 &[

@@ -23,14 +23,15 @@ use crate::{
     make_array, Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType,
     PrimitiveArray, StringArray,
 };
+use arrow_buffer::bit_util::set_bit;
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, BooleanBufferBuilder};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-/// A dictionary array indexed by `i8`
+/// A [`DictionaryArray`] indexed by `i8`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -42,9 +43,11 @@ use std::sync::Arc;
 /// assert_eq!(array.keys(), &Int8Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int8DictionaryArray = DictionaryArray<Int8Type>;
 
-/// A dictionary array indexed by `i16`
+/// A [`DictionaryArray`] indexed by `i16`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -56,9 +59,11 @@ pub type Int8DictionaryArray = DictionaryArray<Int8Type>;
 /// assert_eq!(array.keys(), &Int16Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int16DictionaryArray = DictionaryArray<Int16Type>;
 
-/// A dictionary array indexed by `i32`
+/// A [`DictionaryArray`] indexed by `i32`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -70,9 +75,11 @@ pub type Int16DictionaryArray = DictionaryArray<Int16Type>;
 /// assert_eq!(array.keys(), &Int32Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int32DictionaryArray = DictionaryArray<Int32Type>;
 
-/// A dictionary array indexed by `i64`
+/// A [`DictionaryArray`] indexed by `i64`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -84,9 +91,11 @@ pub type Int32DictionaryArray = DictionaryArray<Int32Type>;
 /// assert_eq!(array.keys(), &Int64Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type Int64DictionaryArray = DictionaryArray<Int64Type>;
 
-/// A dictionary array indexed by `u8`
+/// A [`DictionaryArray`] indexed by `u8`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -98,9 +107,11 @@ pub type Int64DictionaryArray = DictionaryArray<Int64Type>;
 /// assert_eq!(array.keys(), &UInt8Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt8DictionaryArray = DictionaryArray<UInt8Type>;
 
-/// A dictionary array indexed by `u16`
+/// A [`DictionaryArray`] indexed by `u16`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -112,9 +123,11 @@ pub type UInt8DictionaryArray = DictionaryArray<UInt8Type>;
 /// assert_eq!(array.keys(), &UInt16Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt16DictionaryArray = DictionaryArray<UInt16Type>;
 
-/// A dictionary array indexed by `u32`
+/// A [`DictionaryArray`] indexed by `u32`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -126,9 +139,11 @@ pub type UInt16DictionaryArray = DictionaryArray<UInt16Type>;
 /// assert_eq!(array.keys(), &UInt32Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 
-/// A dictionary array indexed by `u64`
+/// A [`DictionaryArray`] indexed by `u64`
 ///
 /// # Example: Using `collect`
 /// ```
@@ -140,6 +155,8 @@ pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 /// assert_eq!(array.keys(), &UInt64Array::from(vec![0, 0, 1, 2]));
 /// assert_eq!(array.values(), &values);
 /// ```
+///
+/// See [`DictionaryArray`] for more information and examples
 pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 
 /// An array of [dictionary encoded values](https://arrow.apache.org/docs/format/Columnar.html#dictionary-encoded-layout)
@@ -175,38 +192,53 @@ pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 ///              length = 6
 /// ```
 ///
-/// Example **with nullable** data:
+/// # Example: From Nullable Data
 ///
 /// ```
-/// use arrow_array::{DictionaryArray, Int8Array, types::Int8Type};
+/// # use arrow_array::{DictionaryArray, Int8Array, types::Int8Type};
 /// let test = vec!["a", "a", "b", "c"];
 /// let array : DictionaryArray<Int8Type> = test.iter().map(|&x| if x == "b" {None} else {Some(x)}).collect();
 /// assert_eq!(array.keys(), &Int8Array::from(vec![Some(0), Some(0), None, Some(1)]));
 /// ```
 ///
-/// Example **without nullable** data:
+/// # Example: From Non-Nullable Data
 ///
 /// ```
-/// use arrow_array::{DictionaryArray, Int8Array, types::Int8Type};
+/// # use arrow_array::{DictionaryArray, Int8Array, types::Int8Type};
 /// let test = vec!["a", "a", "b", "c"];
 /// let array : DictionaryArray<Int8Type> = test.into_iter().collect();
 /// assert_eq!(array.keys(), &Int8Array::from(vec![0, 0, 1, 2]));
 /// ```
 ///
-/// Example from existing arrays:
+/// # Example: From Existing Arrays
 ///
 /// ```
-/// use std::sync::Arc;
-/// use arrow_array::{DictionaryArray, Int8Array, StringArray, types::Int8Type};
+/// # use std::sync::Arc;
+/// # use arrow_array::{DictionaryArray, Int8Array, StringArray, types::Int8Type};
 /// // You can form your own DictionaryArray by providing the
 /// // values (dictionary) and keys (indexes into the dictionary):
 /// let values = StringArray::from_iter_values(["a", "b", "c"]);
 /// let keys = Int8Array::from_iter_values([0, 0, 1, 2]);
 /// let array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
-/// let expected: DictionaryArray::<Int8Type> = vec!["a", "a", "b", "c"]
-///    .into_iter()
-///    .collect();
+/// let expected: DictionaryArray::<Int8Type> = vec!["a", "a", "b", "c"].into_iter().collect();
 /// assert_eq!(&array, &expected);
+/// ```
+///
+/// # Example: Using Builder
+///
+/// ```
+/// # use arrow_array::{Array, StringArray};
+/// # use arrow_array::builder::StringDictionaryBuilder;
+/// # use arrow_array::types::Int32Type;
+/// let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+/// builder.append_value("a");
+/// builder.append_null();
+/// builder.append_value("a");
+/// builder.append_value("b");
+/// let array = builder.finish();
+///
+/// let values: Vec<_> = array.downcast_dict::<StringArray>().unwrap().into_iter().collect();
+/// assert_eq!(&values, &[Some("a"), None, Some("a"), Some("b")]);
 /// ```
 pub struct DictionaryArray<K: ArrowDictionaryKeyType> {
     data_type: DataType,
@@ -517,6 +549,29 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
             .iter_mut()
             .for_each(|v| *v = op(*v));
         Ok(builder.finish())
+    }
+
+    /// Computes an occupancy mask for this dictionary's values
+    ///
+    /// For each value in [`Self::values`] the corresponding bit will be set in the
+    /// returned mask if it is referenced by a key in this [`DictionaryArray`]
+    pub fn occupancy(&self) -> BooleanBuffer {
+        let len = self.values.len();
+        let mut builder = BooleanBufferBuilder::new(len);
+        builder.resize(len);
+        let slice = builder.as_slice_mut();
+        match self.keys.nulls().filter(|n| n.null_count() > 0) {
+            Some(n) => {
+                let v = self.keys.values();
+                n.valid_indices()
+                    .for_each(|idx| set_bit(slice, v[idx].as_usize()))
+            }
+            None => {
+                let v = self.keys.values();
+                v.iter().for_each(|v| set_bit(slice, v.as_usize()))
+            }
+        }
+        builder.finish()
     }
 }
 
@@ -1175,5 +1230,27 @@ mod tests {
 
         let expected = DictionaryArray::new(keys, Arc::new(values));
         assert_eq!(expected, returned);
+    }
+
+    #[test]
+    fn test_occupancy() {
+        let keys = Int32Array::new((100..200).collect(), None);
+        let values = Int32Array::from(vec![0; 1024]);
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+        for (idx, v) in dict.occupancy().iter().enumerate() {
+            let expected = (100..200).contains(&idx);
+            assert_eq!(v, expected, "{idx}");
+        }
+
+        let keys = Int32Array::new(
+            (0..100).collect(),
+            Some((0..100).map(|x| x % 4 == 0).collect()),
+        );
+        let values = Int32Array::from(vec![0; 1024]);
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+        for (idx, v) in dict.occupancy().iter().enumerate() {
+            let expected = idx % 4 == 0 && idx < 100;
+            assert_eq!(v, expected, "{idx}");
+        }
     }
 }

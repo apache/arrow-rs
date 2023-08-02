@@ -28,10 +28,10 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::memory::ByteBufferPtr;
 use arrow_array::{
-    ArrayRef, Decimal128Array, FixedSizeBinaryArray, IntervalDayTimeArray,
-    IntervalYearMonthArray,
+    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray,
+    IntervalDayTimeArray, IntervalYearMonthArray,
 };
-use arrow_buffer::Buffer;
+use arrow_buffer::{i256, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use std::any::Any;
@@ -61,13 +61,20 @@ pub fn make_fixed_len_byte_array_reader(
             ))
         }
     };
-
     match &data_type {
         ArrowType::FixedSizeBinary(_) => {}
         ArrowType::Decimal128(_, _) => {
             if byte_length > 16 {
                 return Err(general_err!(
                     "decimal 128 type too large, must be less than 16 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
+        ArrowType::Decimal256(_, _) => {
+            if byte_length > 32 {
+                return Err(general_err!(
+                    "decimal 256 type too large, must be less than 32 bytes, got {}",
                     byte_length
                 ));
             }
@@ -155,12 +162,21 @@ impl ArrayReader for FixedLenByteArrayReader {
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
         // TODO: An improvement might be to do this conversion on read
-        let array = match &self.data_type {
+        let array: ArrayRef = match &self.data_type {
             ArrowType::Decimal128(p, s) => {
                 let decimal = binary
                     .iter()
                     .map(|opt| Some(i128::from_be_bytes(sign_extend_be(opt?))))
                     .collect::<Decimal128Array>()
+                    .with_precision_and_scale(*p, *s)?;
+
+                Arc::new(decimal)
+            }
+            ArrowType::Decimal256(p, s) => {
+                let decimal = binary
+                    .iter()
+                    .map(|opt| Some(i256::from_be_bytes(sign_extend_be(opt?))))
+                    .collect::<Decimal256Array>()
                     .with_precision_and_scale(*p, *s)?;
 
                 Arc::new(decimal)
@@ -231,8 +247,8 @@ impl BufferQueue for FixedLenByteArrayBuffer {
     type Output = Buffer;
     type Slice = Self;
 
-    fn split_off(&mut self, len: usize) -> Self::Output {
-        self.buffer.split_off(len * self.byte_length)
+    fn consume(&mut self) -> Self::Output {
+        self.buffer.consume()
     }
 
     fn spare_capacity_mut(&mut self, _batch_size: usize) -> &mut Self::Slice {
@@ -428,16 +444,18 @@ mod tests {
     use super::*;
     use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use crate::arrow::ArrowWriter;
-    use arrow_array::{Array, Decimal128Array, ListArray};
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
     use arrow_array::RecordBatch;
+    use arrow_array::{Array, ListArray};
     use bytes::Bytes;
     use std::sync::Arc;
 
     #[test]
     fn test_decimal_list() {
-        let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
+        let decimals = Decimal256Array::from_iter_values(
+            [1, 2, 3, 4, 5, 6, 7, 8].into_iter().map(i256::from_i128),
+        );
 
         // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
         let data = ArrayDataBuilder::new(ArrowType::List(Arc::new(Field::new(

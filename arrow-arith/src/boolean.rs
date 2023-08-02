@@ -23,10 +23,8 @@
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
 use arrow_array::*;
-use arrow_buffer::bit_util::ceil;
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
-use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
-use arrow_data::ArrayData;
+use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::{ArrowError, DataType};
 
 /// Logical 'and' boolean values with Kleene logic
@@ -314,7 +312,11 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
 /// ```
 pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
     let values = match input.nulls() {
-        None => NullBuffer::new_null(input.len()).into_inner(),
+        // NullArray has no nulls buffer yet all values are null
+        None if input.data_type() == &DataType::Null => {
+            BooleanBuffer::new_set(input.len())
+        }
+        None => BooleanBuffer::new_unset(input.len()),
         Some(nulls) => !nulls.inner(),
     };
 
@@ -333,31 +335,15 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
 /// assert_eq!(a_is_not_null, BooleanArray::from(vec![true, true, false]));
 /// ```
 pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    let len = input.len();
-
-    let output = match input.nulls() {
-        None => {
-            let len_bytes = ceil(len, 8);
-            MutableBuffer::new(len_bytes)
-                .with_bitset(len_bytes, true)
-                .into()
+    let values = match input.nulls() {
+        // NullArray has no nulls buffer yet all values are null
+        None if input.data_type() == &DataType::Null => {
+            BooleanBuffer::new_unset(input.len())
         }
-        Some(nulls) => nulls.inner().sliced(),
+        None => BooleanBuffer::new_set(input.len()),
+        Some(n) => n.inner().clone(),
     };
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            len,
-            None,
-            None,
-            0,
-            vec![output],
-            vec![],
-        )
-    };
-
-    Ok(BooleanArray::from(data))
+    Ok(BooleanArray::new(values, None))
 }
 
 #[cfg(test)]
@@ -889,6 +875,30 @@ mod tests {
         let res = is_not_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![true, false, true, false]);
+
+        assert_eq!(expected, res);
+        assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_null_array_is_null() {
+        let a = NullArray::new(3);
+
+        let res = is_null(&a).unwrap();
+
+        let expected = BooleanArray::from(vec![true, true, true]);
+
+        assert_eq!(expected, res);
+        assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_null_array_is_not_null() {
+        let a = NullArray::new(3);
+
+        let res = is_not_null(&a).unwrap();
+
+        let expected = BooleanArray::from(vec![false, false, false]);
 
         assert_eq!(expected, res);
         assert!(res.nulls().is_none());

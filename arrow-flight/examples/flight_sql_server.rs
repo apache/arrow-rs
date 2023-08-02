@@ -15,40 +15,44 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::StringBuilder;
-use arrow_array::{ArrayRef, RecordBatch};
-use arrow_flight::sql::{
-    ActionCreatePreparedStatementResult, Any, ProstMessageExt, SqlInfo,
-};
-use arrow_flight::{
-    Action, FlightData, FlightEndpoint, HandshakeRequest, HandshakeResponse, IpcMessage,
-    Location, SchemaAsIpc, Ticket,
-};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use futures::{stream, Stream};
+use futures::{stream, Stream, TryStreamExt};
+use once_cell::sync::Lazy;
 use prost::Message;
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 use tonic::transport::Server;
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 
-use arrow_flight::flight_descriptor::DescriptorType;
+use arrow_array::builder::StringBuilder;
+use arrow_array::{ArrayRef, RecordBatch};
+use arrow_flight::encode::FlightDataEncoderBuilder;
+use arrow_flight::sql::metadata::{
+    SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData,
+    XdbcTypeInfoDataBuilder,
+};
+use arrow_flight::sql::{
+    server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
+    ActionBeginTransactionRequest, ActionBeginTransactionResult,
+    ActionCancelQueryRequest, ActionCancelQueryResult,
+    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
+    ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
+    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
+    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
+    CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
+    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
+    CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable, ProstMessageExt,
+    Searchable, SqlInfo, TicketStatementQuery, XdbcDataType,
+};
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
-    flight_service_server::FlightService,
-    flight_service_server::FlightServiceServer,
-    sql::{
-        server::FlightSqlService, ActionClosePreparedStatementRequest,
-        ActionCreatePreparedStatementRequest, CommandGetCatalogs,
-        CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
-        CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
-        CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-        CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-        CommandStatementQuery, CommandStatementUpdate, TicketStatementQuery,
-    },
-    FlightDescriptor, FlightInfo,
+    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
+    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
+    HandshakeResponse, IpcMessage, Location, SchemaAsIpc, Ticket,
 };
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
@@ -62,6 +66,44 @@ macro_rules! status {
 const FAKE_TOKEN: &str = "uuid_token";
 const FAKE_HANDLE: &str = "uuid_handle";
 const FAKE_UPDATE_RESULT: i64 = 1;
+
+static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
+    let mut builder = SqlInfoDataBuilder::new();
+    // Server information
+    builder.append(SqlInfo::FlightSqlServerName, "Example Flight SQL Server");
+    builder.append(SqlInfo::FlightSqlServerVersion, "1");
+    // 1.3 comes from https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/Schema.fbs#L24
+    builder.append(SqlInfo::FlightSqlServerArrowVersion, "1.3");
+    builder.build().unwrap()
+});
+
+static INSTANCE_XBDC_DATA: Lazy<XdbcTypeInfoData> = Lazy::new(|| {
+    let mut builder = XdbcTypeInfoDataBuilder::new();
+    builder.append(XdbcTypeInfo {
+        type_name: "INTEGER".into(),
+        data_type: XdbcDataType::XdbcInteger,
+        column_size: Some(32),
+        literal_prefix: None,
+        literal_suffix: None,
+        create_params: None,
+        nullable: Nullable::NullabilityNullable,
+        case_sensitive: false,
+        searchable: Searchable::Full,
+        unsigned_attribute: Some(false),
+        fixed_prec_scale: false,
+        auto_increment: Some(false),
+        local_type_name: Some("INTEGER".into()),
+        minimum_scale: None,
+        maximum_scale: None,
+        sql_data_type: XdbcDataType::XdbcInteger,
+        datetime_subcode: None,
+        num_prec_radix: Some(2),
+        interval_precision: None,
+    });
+    builder.build().unwrap()
+});
+
+static TABLES: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["flight_sql.example.table"]);
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {}
@@ -177,6 +219,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
+    async fn get_flight_info_substrait_plan(
+        &self,
+        _query: CommandStatementSubstraitPlan,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_substrait_plan not implemented",
+        ))
+    }
+
     async fn get_flight_info_prepared_statement(
         &self,
         cmd: CommandPreparedStatementQuery,
@@ -202,57 +254,77 @@ impl FlightSqlService for FlightSqlServiceImpl {
             ticket: Some(ticket),
             location: vec![loc],
         };
-        let endpoints = vec![endpoint];
+        let info = FlightInfo::new()
+            .try_with_schema(&schema)
+            .map_err(|e| status!("Unable to serialize schema", e))?
+            .with_descriptor(FlightDescriptor::new_cmd(vec![]))
+            .with_endpoint(endpoint)
+            .with_total_records(num_rows as i64)
+            .with_total_bytes(num_bytes as i64)
+            .with_ordered(false);
 
-        let message = SchemaAsIpc::new(&schema, &IpcWriteOptions::default())
-            .try_into()
-            .map_err(|e| status!("Unable to serialize schema", e))?;
-        let IpcMessage(schema_bytes) = message;
-
-        let flight_desc = FlightDescriptor {
-            r#type: DescriptorType::Cmd.into(),
-            cmd: Default::default(),
-            path: vec![],
-        };
-        let info = FlightInfo {
-            schema: schema_bytes,
-            flight_descriptor: Some(flight_desc),
-            endpoint: endpoints,
-            total_records: num_rows as i64,
-            total_bytes: num_bytes as i64,
-        };
         let resp = Response::new(info);
         Ok(resp)
     }
 
     async fn get_flight_info_catalogs(
         &self,
-        _query: CommandGetCatalogs,
-        _request: Request<FlightDescriptor>,
+        query: CommandGetCatalogs,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_catalogs not implemented",
-        ))
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.encode_to_vec().into(),
+        };
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&query.into_builder().schema())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(tonic::Response::new(flight_info))
     }
 
     async fn get_flight_info_schemas(
         &self,
-        _query: CommandGetDbSchemas,
-        _request: Request<FlightDescriptor>,
+        query: CommandGetDbSchemas,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_schemas not implemented",
-        ))
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.encode_to_vec().into(),
+        };
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&query.into_builder().schema())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(tonic::Response::new(flight_info))
     }
 
     async fn get_flight_info_tables(
         &self,
-        _query: CommandGetTables,
-        _request: Request<FlightDescriptor>,
+        query: CommandGetTables,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_tables not implemented",
-        ))
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.encode_to_vec().into(),
+        };
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&query.into_builder().schema())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(tonic::Response::new(flight_info))
     }
 
     async fn get_flight_info_table_types(
@@ -267,12 +339,20 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn get_flight_info_sql_info(
         &self,
-        _query: CommandGetSqlInfo,
-        _request: Request<FlightDescriptor>,
+        query: CommandGetSqlInfo,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_sql_info not implemented",
-        ))
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket::new(query.encode_to_vec());
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(query.into_builder(&INSTANCE_SQL_DATA).schema().as_ref())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(tonic::Response::new(flight_info))
     }
 
     async fn get_flight_info_primary_keys(
@@ -317,12 +397,20 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn get_flight_info_xdbc_type_info(
         &self,
-        _query: CommandGetXdbcTypeInfo,
-        _request: Request<FlightDescriptor>,
+        query: CommandGetXdbcTypeInfo,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_xdbc_type_info not implemented",
-        ))
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket::new(query.encode_to_vec());
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(query.into_builder(&INSTANCE_XBDC_DATA).schema().as_ref())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(tonic::Response::new(flight_info))
     }
 
     // do_get
@@ -346,26 +434,91 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_get_catalogs(
         &self,
-        _query: CommandGetCatalogs,
+        query: CommandGetCatalogs,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_catalogs not implemented"))
+        let catalog_names = TABLES
+            .iter()
+            .map(|full_name| full_name.split('.').collect::<Vec<_>>()[0].to_string())
+            .collect::<HashSet<_>>();
+        let mut builder = query.into_builder();
+        for catalog_name in catalog_names {
+            builder.append(catalog_name);
+        }
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn do_get_schemas(
         &self,
-        _query: CommandGetDbSchemas,
+        query: CommandGetDbSchemas,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_schemas not implemented"))
+        let schemas = TABLES
+            .iter()
+            .map(|full_name| {
+                let parts = full_name.split('.').collect::<Vec<_>>();
+                (parts[0].to_string(), parts[1].to_string())
+            })
+            .collect::<HashSet<_>>();
+
+        let mut builder = query.into_builder();
+        for (catalog_name, schema_name) in schemas {
+            builder.append(catalog_name, schema_name);
+        }
+
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn do_get_tables(
         &self,
-        _query: CommandGetTables,
+        query: CommandGetTables,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_tables not implemented"))
+        let tables = TABLES
+            .iter()
+            .map(|full_name| {
+                let parts = full_name.split('.').collect::<Vec<_>>();
+                (
+                    parts[0].to_string(),
+                    parts[1].to_string(),
+                    parts[2].to_string(),
+                )
+            })
+            .collect::<HashSet<_>>();
+
+        let dummy_schema = Schema::empty();
+        let mut builder = query.into_builder();
+        for (catalog_name, schema_name, table_name) in tables {
+            builder
+                .append(
+                    catalog_name,
+                    schema_name,
+                    table_name,
+                    "TABLE",
+                    &dummy_schema,
+                )
+                .map_err(Status::from)?;
+        }
+
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn do_get_table_types(
@@ -378,10 +531,17 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_get_sql_info(
         &self,
-        _query: CommandGetSqlInfo,
+        query: CommandGetSqlInfo,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_sql_info not implemented"))
+        let builder = query.into_builder(&INSTANCE_SQL_DATA);
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn do_get_primary_keys(
@@ -424,12 +584,18 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_get_xdbc_type_info(
         &self,
-        _query: CommandGetXdbcTypeInfo,
+        query: CommandGetXdbcTypeInfo,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_xdbc_type_info not implemented",
-        ))
+        // create a builder with pre-defined Xdbc data:
+        let builder = query.into_builder(&INSTANCE_XBDC_DATA);
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
     }
 
     // do_put
@@ -439,6 +605,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _request: Request<Streaming<FlightData>>,
     ) -> Result<i64, Status> {
         Ok(FAKE_UPDATE_RESULT)
+    }
+
+    async fn do_put_substrait_plan(
+        &self,
+        _ticket: CommandStatementSubstraitPlan,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<i64, Status> {
+        Err(Status::unimplemented(
+            "do_put_substrait_plan not implemented",
+        ))
     }
 
     async fn do_put_prepared_statement_query(
@@ -486,8 +662,62 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: ActionClosePreparedStatementRequest,
         _request: Request<Action>,
-    ) {
-        unimplemented!("Implement do_action_close_prepared_statement")
+    ) -> Result<(), Status> {
+        Err(Status::unimplemented(
+            "Implement do_action_close_prepared_statement",
+        ))
+    }
+
+    async fn do_action_create_prepared_substrait_plan(
+        &self,
+        _query: ActionCreatePreparedSubstraitPlanRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionCreatePreparedStatementResult, Status> {
+        Err(Status::unimplemented(
+            "Implement do_action_create_prepared_substrait_plan",
+        ))
+    }
+
+    async fn do_action_begin_transaction(
+        &self,
+        _query: ActionBeginTransactionRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionBeginTransactionResult, Status> {
+        Err(Status::unimplemented(
+            "Implement do_action_begin_transaction",
+        ))
+    }
+
+    async fn do_action_end_transaction(
+        &self,
+        _query: ActionEndTransactionRequest,
+        _request: Request<Action>,
+    ) -> Result<(), Status> {
+        Err(Status::unimplemented("Implement do_action_end_transaction"))
+    }
+
+    async fn do_action_begin_savepoint(
+        &self,
+        _query: ActionBeginSavepointRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionBeginSavepointResult, Status> {
+        Err(Status::unimplemented("Implement do_action_begin_savepoint"))
+    }
+
+    async fn do_action_end_savepoint(
+        &self,
+        _query: ActionEndSavepointRequest,
+        _request: Request<Action>,
+    ) -> Result<(), Status> {
+        Err(Status::unimplemented("Implement do_action_end_savepoint"))
+    }
+
+    async fn do_action_cancel_query(
+        &self,
+        _query: ActionCancelQueryRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionCancelQueryResult, Status> {
+        Err(Status::unimplemented("Implement do_action_cancel_query"))
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
@@ -718,7 +948,7 @@ mod tests {
         test_all_clients(|mut client| async move {
             auth_client(&mut client).await;
 
-            let mut stmt = client.prepare("select 1;".to_string()).await.unwrap();
+            let mut stmt = client.prepare("select 1;".to_string(), None).await.unwrap();
 
             let flight_info = stmt.execute().await.unwrap();
 
@@ -746,7 +976,7 @@ mod tests {
         test_all_clients(|mut client| async move {
             auth_client(&mut client).await;
             let res = client
-                .execute_update("creat table test(a int);".to_string())
+                .execute_update("creat table test(a int);".to_string(), None)
                 .await
                 .unwrap();
             assert_eq!(res, FAKE_UPDATE_RESULT);
@@ -759,7 +989,7 @@ mod tests {
         test_all_clients(|mut client| async move {
             // no handshake
             assert!(client
-                .prepare("select 1;".to_string())
+                .prepare("select 1;".to_string(), None)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -776,7 +1006,7 @@ mod tests {
             // forget to set_token
             client.handshake("admin", "password").await.unwrap();
             assert!(client
-                .prepare("select 1;".to_string())
+                .prepare("select 1;".to_string(), None)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -786,7 +1016,7 @@ mod tests {
             client.handshake("admin", "password").await.unwrap();
             client.set_token("wrong token".to_string());
             assert!(client
-                .prepare("select 1;".to_string())
+                .prepare("select 1;".to_string(), None)
                 .await
                 .unwrap_err()
                 .to_string()

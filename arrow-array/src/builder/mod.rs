@@ -148,8 +148,7 @@
 //! }
 //! ```
 
-mod boolean_buffer_builder;
-pub use boolean_buffer_builder::*;
+pub use arrow_buffer::BooleanBufferBuilder;
 
 mod boolean_builder;
 pub use boolean_builder::*;
@@ -165,7 +164,8 @@ mod generic_list_builder;
 pub use generic_list_builder::*;
 mod map_builder;
 pub use map_builder::*;
-mod null_buffer_builder;
+mod null_builder;
+pub use null_builder::*;
 mod primitive_builder;
 pub use primitive_builder::*;
 mod primitive_dictionary_builder;
@@ -237,7 +237,9 @@ pub trait ArrayBuilder: Any + Send {
     fn len(&self) -> usize;
 
     /// Returns whether number of array slots is zero
-    fn is_empty(&self) -> bool;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Builds the array
     fn finish(&mut self) -> ArrayRef;

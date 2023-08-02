@@ -21,20 +21,23 @@ use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_flight::{
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{
-        server::FlightSqlService, ActionClosePreparedStatementRequest,
-        ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult, Any,
-        CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas,
-        CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
-        CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
-        CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
-        CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementUpdate,
+        server::FlightSqlService, ActionBeginSavepointRequest,
+        ActionBeginSavepointResult, ActionBeginTransactionRequest,
+        ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
+        ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
+        ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
+        ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
+        CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
+        CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
+        CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
+        CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+        CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate,
         ProstMessageExt, SqlInfo, TicketStatementQuery,
     },
     utils::batches_to_flight_data,
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
+    HandshakeResponse, Ticket,
 };
-use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 use assert_cmd::Command;
 use futures::Stream;
@@ -163,41 +166,31 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let batch = Self::fake_result().unwrap();
 
-        let IpcMessage(schema_bytes) =
-            SchemaAsIpc::new(batch.schema().as_ref(), &IpcWriteOptions::default())
-                .try_into()
-                .unwrap();
+        let info = FlightInfo::new()
+            .try_with_schema(&batch.schema())
+            .expect("encoding schema")
+            .with_endpoint(
+                FlightEndpoint::new().with_ticket(Ticket::new(
+                    FetchResults {
+                        handle: String::from("part_1"),
+                    }
+                    .as_any()
+                    .encode_to_vec(),
+                )),
+            )
+            .with_endpoint(
+                FlightEndpoint::new().with_ticket(Ticket::new(
+                    FetchResults {
+                        handle: String::from("part_2"),
+                    }
+                    .as_any()
+                    .encode_to_vec(),
+                )),
+            )
+            .with_total_records(batch.num_rows() as i64)
+            .with_total_bytes(batch.get_array_memory_size() as i64)
+            .with_ordered(false);
 
-        let info = FlightInfo {
-            schema: schema_bytes,
-            flight_descriptor: None,
-            endpoint: vec![
-                FlightEndpoint {
-                    ticket: Some(Ticket {
-                        ticket: FetchResults {
-                            handle: String::from("part_1"),
-                        }
-                        .as_any()
-                        .encode_to_vec()
-                        .into(),
-                    }),
-                    location: vec![],
-                },
-                FlightEndpoint {
-                    ticket: Some(Ticket {
-                        ticket: FetchResults {
-                            handle: String::from("part_2"),
-                        }
-                        .as_any()
-                        .encode_to_vec()
-                        .into(),
-                    }),
-                    location: vec![],
-                },
-            ],
-            total_records: batch.num_rows() as i64,
-            total_bytes: batch.get_array_memory_size() as i64,
-        };
         let resp = Response::new(info);
         Ok(resp)
     }
@@ -209,6 +202,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented(
             "get_flight_info_prepared_statement not implemented",
+        ))
+    }
+
+    async fn get_flight_info_substrait_plan(
+        &self,
+        _query: CommandStatementSubstraitPlan,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_substrait_plan not implemented",
         ))
     }
 
@@ -430,6 +433,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
+    async fn do_put_substrait_plan(
+        &self,
+        _ticket: CommandStatementSubstraitPlan,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<i64, Status> {
+        Err(Status::unimplemented(
+            "do_put_substrait_plan not implemented",
+        ))
+    }
+
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
@@ -464,7 +477,56 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: ActionClosePreparedStatementRequest,
         _request: Request<Action>,
-    ) {
+    ) -> Result<(), Status> {
+        unimplemented!("Implement do_action_close_prepared_statement")
+    }
+
+    async fn do_action_create_prepared_substrait_plan(
+        &self,
+        _query: ActionCreatePreparedSubstraitPlanRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionCreatePreparedStatementResult, Status> {
+        unimplemented!("Implement do_action_create_prepared_substrait_plan")
+    }
+
+    async fn do_action_begin_transaction(
+        &self,
+        _query: ActionBeginTransactionRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionBeginTransactionResult, Status> {
+        unimplemented!("Implement do_action_begin_transaction")
+    }
+
+    async fn do_action_end_transaction(
+        &self,
+        _query: ActionEndTransactionRequest,
+        _request: Request<Action>,
+    ) -> Result<(), Status> {
+        unimplemented!("Implement do_action_end_transaction")
+    }
+
+    async fn do_action_begin_savepoint(
+        &self,
+        _query: ActionBeginSavepointRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionBeginSavepointResult, Status> {
+        unimplemented!("Implement do_action_begin_savepoint")
+    }
+
+    async fn do_action_end_savepoint(
+        &self,
+        _query: ActionEndSavepointRequest,
+        _request: Request<Action>,
+    ) -> Result<(), Status> {
+        unimplemented!("Implement do_action_end_savepoint")
+    }
+
+    async fn do_action_cancel_query(
+        &self,
+        _query: ActionCancelQueryRequest,
+        _request: Request<Action>,
+    ) -> Result<ActionCancelQueryResult, Status> {
+        unimplemented!("Implement do_action_cancel_query")
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}

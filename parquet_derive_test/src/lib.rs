@@ -56,8 +56,7 @@ mod tests {
     use std::{env, fs, io::Write, sync::Arc};
 
     use parquet::{
-        file::{properties::WriterProperties, writer::SerializedFileWriter},
-        record::RecordWriter,
+        file::writer::SerializedFileWriter, record::RecordWriter,
         schema::parser::parse_message_type,
     };
 
@@ -139,7 +138,7 @@ mod tests {
 
         assert_eq!(&schema, &generated_schema);
 
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Default::default();
         let mut writer =
             SerializedFileWriter::new(file, generated_schema, props).unwrap();
 

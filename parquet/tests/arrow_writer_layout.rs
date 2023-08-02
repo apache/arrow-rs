@@ -19,6 +19,7 @@
 
 use arrow::array::{Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
+use arrow_array::builder::{Int32Builder, ListBuilder};
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
@@ -175,7 +176,7 @@ fn test_primitive() {
     let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
     let props = WriterProperties::builder()
         .set_dictionary_enabled(false)
-        .set_data_pagesize_limit(1000)
+        .set_data_page_size_limit(1000)
         .set_write_batch_size(10)
         .build();
 
@@ -204,8 +205,8 @@ fn test_primitive() {
     // Test spill dictionary
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(1000)
-        .set_data_pagesize_limit(10000)
+        .set_dictionary_page_size_limit(1000)
+        .set_data_page_size_limit(10000)
         .set_write_batch_size(10)
         .build();
 
@@ -246,8 +247,8 @@ fn test_primitive() {
     // Test spill dictionary encoded pages
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(10000)
-        .set_data_pagesize_limit(500)
+        .set_dictionary_page_size_limit(10000)
+        .set_data_page_size_limit(500)
         .set_write_batch_size(10)
         .build();
 
@@ -350,7 +351,7 @@ fn test_string() {
     let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
     let props = WriterProperties::builder()
         .set_dictionary_enabled(false)
-        .set_data_pagesize_limit(1000)
+        .set_data_page_size_limit(1000)
         .set_write_batch_size(10)
         .build();
 
@@ -386,8 +387,8 @@ fn test_string() {
     // Test spill dictionary
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(1000)
-        .set_data_pagesize_limit(10000)
+        .set_dictionary_page_size_limit(1000)
+        .set_data_page_size_limit(10000)
         .set_write_batch_size(10)
         .build();
 
@@ -435,8 +436,8 @@ fn test_string() {
     // Test spill dictionary encoded pages
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
-        .set_dictionary_pagesize_limit(20000)
-        .set_data_pagesize_limit(500)
+        .set_dictionary_page_size_limit(20000)
+        .set_data_page_size_limit(500)
         .set_write_batch_size(10)
         .build();
 
@@ -497,6 +498,48 @@ fn test_string() {
                         encoding: Encoding::PLAIN,
                         page_type: PageType::DICTIONARY_PAGE,
                     }),
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
+fn test_list() {
+    let mut list = ListBuilder::new(Int32Builder::new());
+    for _ in 0..200 {
+        let values = list.values();
+        for i in 0..8 {
+            values.append_value(i);
+        }
+        list.append(true);
+    }
+    let array = Arc::new(list.finish()) as _;
+
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_row_count_limit(20)
+        .set_write_batch_size(3)
+        .build();
+
+    // Test rows not split across pages
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    pages: (0..10)
+                        .map(|_| Page {
+                            rows: 20,
+                            page_header_size: 34,
+                            compressed_size: 672,
+                            encoding: Encoding::PLAIN,
+                            page_type: PageType::DATA_PAGE,
+                        })
+                        .collect(),
+                    dictionary_page: None,
                 }],
             }],
         },

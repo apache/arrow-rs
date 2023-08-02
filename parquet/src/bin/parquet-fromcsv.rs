@@ -381,7 +381,7 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
             Box::new(snap::read::FrameDecoder::new(input_file)) as Box<dyn Read>
         }
         Compression::GZIP(_) => {
-            Box::new(flate2::read::GzDecoder::new(input_file)) as Box<dyn Read>
+            Box::new(flate2::read::MultiGzDecoder::new(input_file)) as Box<dyn Read>
         }
         Compression::BROTLI(_) => {
             Box::new(brotli::Decompressor::new(input_file, 0)) as Box<dyn Read>

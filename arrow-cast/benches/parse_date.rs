@@ -15,20 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Computation kernels on Arrow Arrays
+use arrow_array::types::Date32Type;
+use arrow_cast::parse::Parser;
+use criterion::*;
 
-pub mod limit;
+fn criterion_benchmark(c: &mut Criterion) {
+    let timestamps = ["2020-09-08", "2020-9-8", "2020-09-8", "2020-9-08"];
 
-pub use arrow_arith::{aggregate, arithmetic, arity, bitwise, boolean, temporal};
-pub use arrow_cast::cast;
-pub use arrow_cast::parse as cast_utils;
-pub use arrow_ord::{partition, sort};
-pub use arrow_select::{concat, filter, interleave, nullif, take, window, zip};
-pub use arrow_string::{concat_elements, length, regexp, substring};
-
-/// Comparison kernels for `Array`s.
-pub mod comparison {
-    pub use arrow_ord::comparison::*;
-    pub use arrow_string::like::*;
-    pub use arrow_string::regexp::{regexp_is_match_utf8, regexp_is_match_utf8_scalar};
+    for timestamp in timestamps {
+        let t = black_box(timestamp);
+        c.bench_function(t, |b| {
+            b.iter(|| Date32Type::parse(t).unwrap());
+        });
+    }
 }
+
+criterion_group!(benches, criterion_benchmark);
+criterion_main!(benches);

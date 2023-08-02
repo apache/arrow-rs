@@ -69,7 +69,7 @@ impl CompressionCodec {
             output.extend_from_slice(&uncompressed_data_len.to_le_bytes());
             self.compress(input, output)?;
 
-            let compression_len = output.len();
+            let compression_len = output.len() - original_output_len;
             if compression_len > uncompressed_data_len {
                 // length of compressed data was larger than
                 // uncompressed data, use the uncompressed data with

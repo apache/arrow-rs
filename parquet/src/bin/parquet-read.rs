@@ -91,9 +91,9 @@ fn main() {
 
     while all_records || start < end {
         match iter.next() {
-            Some(row) => print_row(&row, json),
+            Some(row) => print_row(&row.unwrap(), json),
             None => break,
-        }
+        };
         start += 1;
     }
 }

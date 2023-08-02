@@ -34,6 +34,52 @@ use std::sync::Arc;
 ///
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing arbitrary bytes
 ///
+/// # Example: From a Vec
+///
+/// ```
+/// # use arrow_array::{Array, GenericByteArray, types::Utf8Type};
+/// let arr: GenericByteArray<Utf8Type> = vec!["hello", "world", ""].into();
+/// assert_eq!(arr.value_data(), b"helloworld");
+/// assert_eq!(arr.value_offsets(), &[0, 5, 10, 10]);
+/// let values: Vec<_> = arr.iter().collect();
+/// assert_eq!(values, &[Some("hello"), Some("world"), Some("")]);
+/// ```
+///
+/// # Example: From an optional Vec
+///
+/// ```
+/// # use arrow_array::{Array, GenericByteArray, types::Utf8Type};
+/// let arr: GenericByteArray<Utf8Type> = vec![Some("hello"), Some("world"), Some(""), None].into();
+/// assert_eq!(arr.value_data(), b"helloworld");
+/// assert_eq!(arr.value_offsets(), &[0, 5, 10, 10, 10]);
+/// let values: Vec<_> = arr.iter().collect();
+/// assert_eq!(values, &[Some("hello"), Some("world"), Some(""), None]);
+/// ```
+///
+/// # Example: From an iterator of option
+///
+/// ```
+/// # use arrow_array::{Array, GenericByteArray, types::Utf8Type};
+/// let arr: GenericByteArray<Utf8Type> = (0..5).map(|x| (x % 2 == 0).then(|| x.to_string())).collect();
+/// let values: Vec<_> = arr.iter().collect();
+/// assert_eq!(values, &[Some("0"), None, Some("2"), None, Some("4")]);
+/// ```
+///
+/// # Example: Using Builder
+///
+/// ```
+/// # use arrow_array::Array;
+/// # use arrow_array::builder::GenericByteBuilder;
+/// # use arrow_array::types::Utf8Type;
+/// let mut builder = GenericByteBuilder::<Utf8Type>::new();
+/// builder.append_value("hello");
+/// builder.append_null();
+/// builder.append_value("world");
+/// let array = builder.finish();
+/// let values: Vec<_> = array.iter().collect();
+/// assert_eq!(values, &[Some("hello"), None, Some("world")]);
+/// ```
+///
 /// [`StringArray`]: crate::StringArray
 /// [`LargeStringArray`]: crate::LargeStringArray
 /// [`BinaryArray`]: crate::BinaryArray
@@ -113,7 +159,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// # Safety
     ///
     /// Safe if [`Self::try_new`] would not error
-    pub fn new_unchecked(
+    pub unsafe fn new_unchecked(
         offsets: OffsetBuffer<T::Offset>,
         values: Buffer,
         nulls: Option<NullBuffer>,
@@ -133,6 +179,41 @@ impl<T: ByteArrayType> GenericByteArray<T> {
             value_offsets: OffsetBuffer::new_zeroed(len),
             value_data: MutableBuffer::new(0).into(),
             nulls: Some(NullBuffer::new_null(len)),
+        }
+    }
+
+    /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
+    pub fn from_iter_values<Ptr, I>(iter: I) -> Self
+    where
+        Ptr: AsRef<T::Native>,
+        I: IntoIterator<Item = Ptr>,
+    {
+        let iter = iter.into_iter();
+        let (_, data_len) = iter.size_hint();
+        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+
+        let mut offsets =
+            MutableBuffer::new((data_len + 1) * std::mem::size_of::<T::Offset>());
+        offsets.push(T::Offset::usize_as(0));
+
+        let mut values = MutableBuffer::new(0);
+        for s in iter {
+            let s: &[u8] = s.as_ref().as_ref();
+            values.extend_from_slice(s);
+            offsets.push(T::Offset::usize_as(values.len()));
+        }
+
+        T::Offset::from_usize(values.len()).expect("offset overflow");
+        let offsets = Buffer::from(offsets);
+
+        // Safety: valid by construction
+        let value_offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+
+        Self {
+            data_type: T::DATA_TYPE,
+            value_data: values.into(),
+            value_offsets,
+            nulls: None,
         }
     }
 
@@ -453,6 +534,29 @@ impl<'a, T: ByteArrayType> IntoIterator for &'a GenericByteArray<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         ArrayIter::new(self)
+    }
+}
+
+impl<'a, Ptr, T: ByteArrayType> FromIterator<&'a Option<Ptr>> for GenericByteArray<T>
+where
+    Ptr: AsRef<T::Native> + 'a,
+{
+    fn from_iter<I: IntoIterator<Item = &'a Option<Ptr>>>(iter: I) -> Self {
+        iter.into_iter()
+            .map(|o| o.as_ref().map(|p| p.as_ref()))
+            .collect()
+    }
+}
+
+impl<Ptr, T: ByteArrayType> FromIterator<Option<Ptr>> for GenericByteArray<T>
+where
+    Ptr: AsRef<T::Native>,
+{
+    fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let mut builder = GenericByteBuilder::with_capacity(iter.size_hint().0, 1024);
+        builder.extend(iter);
+        builder.finish()
     }
 }
 

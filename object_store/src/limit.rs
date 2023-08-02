@@ -148,6 +148,13 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.delete(location).await
     }
 
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
     async fn list(
         &self,
         prefix: Option<&Path>,

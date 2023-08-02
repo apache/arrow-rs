@@ -20,7 +20,7 @@ use crate::basic::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{BasicTypeInfo, Type};
-use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use arrow_schema::{DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION};
 
 /// Converts [`Type`] to [`DataType`] with an optional `arrow_type_hint`
 /// provided by the arrow schema
@@ -61,6 +61,9 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
 
         // Determine interval time unit (#1666)
         (DataType::Interval(_), DataType::Interval(_)) => hint,
+
+        // Promote to Decimal256
+        (DataType::Decimal128(_, _), DataType::Decimal256(_, _)) => hint,
 
         // Potentially preserve dictionary encoding
         (_, DataType::Dictionary(_, value)) => {
@@ -104,6 +107,14 @@ fn from_parquet(parquet_type: &Type) -> Result<DataType> {
 }
 
 fn decimal_type(scale: i32, precision: i32) -> Result<DataType> {
+    if precision <= DECIMAL128_MAX_PRECISION as _ {
+        decimal_128_type(scale, precision)
+    } else {
+        decimal_256_type(scale, precision)
+    }
+}
+
+fn decimal_128_type(scale: i32, precision: i32) -> Result<DataType> {
     let scale = scale
         .try_into()
         .map_err(|_| arrow_err!("scale cannot be negative: {}", scale))?;
@@ -113,6 +124,18 @@ fn decimal_type(scale: i32, precision: i32) -> Result<DataType> {
         .map_err(|_| arrow_err!("precision cannot be negative: {}", precision))?;
 
     Ok(DataType::Decimal128(precision, scale))
+}
+
+fn decimal_256_type(scale: i32, precision: i32) -> Result<DataType> {
+    let scale = scale
+        .try_into()
+        .map_err(|_| arrow_err!("scale cannot be negative: {}", scale))?;
+
+    let precision = precision
+        .try_into()
+        .map_err(|_| arrow_err!("precision cannot be negative: {}", precision))?;
+
+    Ok(DataType::Decimal256(precision, scale))
 }
 
 fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
@@ -136,7 +159,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             _ => Err(arrow_err!("Cannot create INT32 physical type from {:?}", t)),
         },
         (Some(LogicalType::Decimal { scale, precision }), _) => {
-            decimal_type(scale, precision)
+            decimal_128_type(scale, precision)
         }
         (Some(LogicalType::Date), _) => Ok(DataType::Date32),
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
@@ -156,7 +179,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
         (None, ConvertedType::INT_32) => Ok(DataType::Int32),
         (None, ConvertedType::DATE) => Ok(DataType::Date32),
         (None, ConvertedType::TIME_MILLIS) => Ok(DataType::Time32(TimeUnit::Millisecond)),
-        (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
+        (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet INT32 logical type {:?} or converted type {}",
             logical,
@@ -206,16 +229,18 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
         (None, ConvertedType::INT_64) => Ok(DataType::Int64),
         (None, ConvertedType::UINT_64) => Ok(DataType::UInt64),
         (None, ConvertedType::TIME_MICROS) => Ok(DataType::Time64(TimeUnit::Microsecond)),
-        (None, ConvertedType::TIMESTAMP_MILLIS) => {
-            Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
-        }
-        (None, ConvertedType::TIMESTAMP_MICROS) => {
-            Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
-        }
+        (None, ConvertedType::TIMESTAMP_MILLIS) => Ok(DataType::Timestamp(
+            TimeUnit::Millisecond,
+            Some("UTC".into()),
+        )),
+        (None, ConvertedType::TIMESTAMP_MICROS) => Ok(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some("UTC".into()),
+        )),
         (Some(LogicalType::Decimal { scale, precision }), _) => {
-            decimal_type(scale, precision)
+            decimal_128_type(scale, precision)
         }
-        (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
+        (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet INT64 logical type {:?} or converted type {}",
             logical,
@@ -235,7 +260,13 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<D
         (None, ConvertedType::BSON) => Ok(DataType::Binary),
         (None, ConvertedType::ENUM) => Ok(DataType::Binary),
         (None, ConvertedType::UTF8) => Ok(DataType::Utf8),
-        (Some(LogicalType::Decimal { scale: s, precision: p }), _) => decimal_type(s, p),
+        (
+            Some(LogicalType::Decimal {
+                scale: s,
+                precision: p,
+            }),
+            _,
+        ) => decimal_type(s, p),
         (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {}",
@@ -254,9 +285,19 @@ fn from_fixed_len_byte_array(
     // TODO: This should check the type length for the decimal and interval types
     match (info.logical_type(), info.converted_type()) {
         (Some(LogicalType::Decimal { scale, precision }), _) => {
-            decimal_type(scale, precision)
+            if type_length <= 16 {
+                decimal_128_type(scale, precision)
+            } else {
+                decimal_256_type(scale, precision)
+            }
         }
-        (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
+        (None, ConvertedType::DECIMAL) => {
+            if type_length <= 16 {
+                decimal_128_type(scale, precision)
+            } else {
+                decimal_256_type(scale, precision)
+            }
+        }
         (None, ConvertedType::INTERVAL) => {
             // There is currently no reliable way of determining which IntervalUnit
             // to return. Thus without the original Arrow schema, the results

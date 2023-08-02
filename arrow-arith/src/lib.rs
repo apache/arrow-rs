@@ -18,8 +18,10 @@
 //! Arrow arithmetic and aggregation kernels
 
 pub mod aggregate;
+#[doc(hidden)] // Kernels to be removed in a future release
 pub mod arithmetic;
 pub mod arity;
 pub mod bitwise;
 pub mod boolean;
+pub mod numeric;
 pub mod temporal;

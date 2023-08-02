@@ -287,14 +287,18 @@ impl InMemory {
         Self::default()
     }
 
-    /// Creates a clone of the store
-    pub async fn clone(&self) -> Self {
+    /// Creates a fork of the store, with the current content copied into the
+    /// new store.
+    pub fn fork(&self) -> Self {
         let storage = self.storage.read();
-        let storage = storage.clone();
+        let storage = Arc::new(RwLock::new(storage.clone()));
+        Self { storage }
+    }
 
-        Self {
-            storage: Arc::new(RwLock::new(storage)),
-        }
+    /// Creates a clone of the store
+    #[deprecated(note = "Use fork() instead")]
+    pub async fn clone(&self) -> Self {
+        self.fork()
     }
 
     async fn entry(&self, location: &Path) -> Result<(Bytes, DateTime<Utc>)> {
@@ -401,6 +405,32 @@ mod tests {
     #[tokio::test]
     async fn in_memory_test() {
         let integration = InMemory::new();
+
+        put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        stream_get(&integration).await;
+    }
+
+    #[tokio::test]
+    async fn box_test() {
+        let integration: Box<dyn ObjectStore> = Box::new(InMemory::new());
+
+        put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        stream_get(&integration).await;
+    }
+
+    #[tokio::test]
+    async fn arc_test() {
+        let integration: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;

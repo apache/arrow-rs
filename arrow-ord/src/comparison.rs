@@ -841,9 +841,13 @@ pub fn eq_dyn_binary_scalar(
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Binary => eq_binary_scalar(left.as_binary::<i32>(), right),
+        DataType::FixedSizeBinary(_) => {
+            let left = left.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+            compare_op_scalar(left, |a| a == right)
+        }
         DataType::LargeBinary => eq_binary_scalar(left.as_binary::<i64>(), right),
         _ => Err(ArrowError::ComputeError(
-            "eq_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+            "eq_dyn_binary_scalar only supports Binary / FixedSizeBinary / LargeBinary arrays".to_string(),
         )),
     }
 }
@@ -857,8 +861,12 @@ pub fn neq_dyn_binary_scalar(
     match left.data_type() {
         DataType::Binary => neq_binary_scalar(left.as_binary::<i32>(), right),
         DataType::LargeBinary => neq_binary_scalar(left.as_binary::<i64>(), right),
+        DataType::FixedSizeBinary(_) => {
+            let left = left.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+            compare_op_scalar(left, |a| a != right)
+        }
         _ => Err(ArrowError::ComputeError(
-            "neq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
+            "neq_dyn_binary_scalar only supports Binary / FixedSizeBinary / LargeBinary arrays"
                 .to_string(),
         )),
     }
@@ -1196,9 +1204,10 @@ where
     K: ArrowDictionaryKeyType,
     K::Native: num::ToPrimitive,
 {
-    // TODO: Use take_boolean (#2967)
-    let array = take(&dict_comparison, dict.keys(), None)?;
-    Ok(BooleanArray::from(array.to_data()))
+    let array = take(&dict_comparison, dict.keys(), None)?
+        .as_boolean()
+        .clone();
+    Ok(array)
 }
 
 /// Helper function to perform boolean lambda function on values from two arrays using
@@ -2700,7 +2709,7 @@ where
 }
 
 /// Checks if a [`GenericListArray`] contains a value in the [`PrimitiveArray`]
-pub fn contains<T, OffsetSize>(
+pub fn in_list<T, OffsetSize>(
     left: &PrimitiveArray<T>,
     right: &GenericListArray<OffsetSize>,
 ) -> Result<BooleanArray, ArrowError>
@@ -2742,7 +2751,7 @@ where
 }
 
 /// Checks if a [`GenericListArray`] contains a value in the [`GenericStringArray`]
-pub fn contains_utf8<OffsetSize>(
+pub fn in_list_utf8<OffsetSize>(
     left: &GenericStringArray<OffsetSize>,
     right: &ListArray,
 ) -> Result<BooleanArray, ArrowError>
@@ -3425,7 +3434,7 @@ mod tests {
         let list_array = LargeListArray::from(list_data);
 
         let nulls = Int32Array::from(vec![None, None, None, None]);
-        let nulls_result = contains(&nulls, &list_array).unwrap();
+        let nulls_result = in_list(&nulls, &list_array).unwrap();
         assert_eq!(
             nulls_result
                 .as_any()
@@ -3435,7 +3444,7 @@ mod tests {
         );
 
         let values = Int32Array::from(vec![Some(0), Some(0), Some(0), Some(0)]);
-        let values_result = contains(&values, &list_array).unwrap();
+        let values_result = in_list(&values, &list_array).unwrap();
         assert_eq!(
             values_result
                 .as_any()
@@ -3695,7 +3704,7 @@ mod tests {
 
         let v: Vec<Option<&str>> = vec![None, None, None, None];
         let nulls = StringArray::from(v);
-        let nulls_result = contains_utf8(&nulls, &list_array).unwrap();
+        let nulls_result = in_list_utf8(&nulls, &list_array).unwrap();
         assert_eq!(
             nulls_result
                 .as_any()
@@ -3710,7 +3719,7 @@ mod tests {
             Some("Lorem"),
             Some("Lorem"),
         ]);
-        let values_result = contains_utf8(&values, &list_array).unwrap();
+        let values_result = in_list_utf8(&values, &list_array).unwrap();
         assert_eq!(
             values_result
                 .as_any()
@@ -4275,6 +4284,15 @@ mod tests {
             eq_dyn_binary_scalar(&large_array, scalar).unwrap(),
             expected
         );
+
+        let fsb_array = FixedSizeBinaryArray::try_from_iter(
+            vec![vec![0u8], vec![0u8], vec![0u8], vec![1u8]].into_iter(),
+        )
+        .unwrap();
+        let scalar = &[1u8];
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]);
+        assert_eq!(eq_dyn_binary_scalar(&fsb_array, scalar).unwrap(), expected);
     }
 
     #[test]
@@ -4292,6 +4310,15 @@ mod tests {
             neq_dyn_binary_scalar(&large_array, scalar).unwrap(),
             expected
         );
+
+        let fsb_array = FixedSizeBinaryArray::try_from_iter(
+            vec![vec![0u8], vec![0u8], vec![0u8], vec![1u8]].into_iter(),
+        )
+        .unwrap();
+        let scalar = &[1u8];
+        let expected =
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]);
+        assert_eq!(neq_dyn_binary_scalar(&fsb_array, scalar).unwrap(), expected);
     }
 
     #[test]

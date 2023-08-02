@@ -58,18 +58,19 @@ pub fn compute_dictionary_mapping(
 
 /// Encode dictionary values not preserving the dictionary encoding
 pub fn encode_dictionary_values<K: ArrowDictionaryKeyType>(
-    out: &mut Rows,
+    data: &mut [u8],
+    offsets: &mut [usize],
     column: &DictionaryArray<K>,
     values: &Rows,
     null: &Row<'_>,
 ) {
-    for (offset, k) in out.offsets.iter_mut().skip(1).zip(column.keys()) {
+    for (offset, k) in offsets.iter_mut().skip(1).zip(column.keys()) {
         let row = match k {
             Some(k) => values.row(k.as_usize()).data,
             None => null.data,
         };
         let end_offset = *offset + row.len();
-        out.buffer[*offset..end_offset].copy_from_slice(row);
+        data[*offset..end_offset].copy_from_slice(row);
         *offset = end_offset;
     }
 }
@@ -79,27 +80,26 @@ pub fn encode_dictionary_values<K: ArrowDictionaryKeyType>(
 /// - single `0_u8` if null
 /// - the bytes of the corresponding normalized key including the null terminator
 pub fn encode_dictionary<K: ArrowDictionaryKeyType>(
-    out: &mut Rows,
+    data: &mut [u8],
+    offsets: &mut [usize],
     column: &DictionaryArray<K>,
     normalized_keys: &[Option<&[u8]>],
     opts: SortOptions,
 ) {
-    for (offset, k) in out.offsets.iter_mut().skip(1).zip(column.keys()) {
+    for (offset, k) in offsets.iter_mut().skip(1).zip(column.keys()) {
         match k.and_then(|k| normalized_keys[k.as_usize()]) {
             Some(normalized_key) => {
                 let end_offset = *offset + 1 + normalized_key.len();
-                out.buffer[*offset] = 1;
-                out.buffer[*offset + 1..end_offset].copy_from_slice(normalized_key);
+                data[*offset] = 1;
+                data[*offset + 1..end_offset].copy_from_slice(normalized_key);
                 // Negate if descending
                 if opts.descending {
-                    out.buffer[*offset..end_offset]
-                        .iter_mut()
-                        .for_each(|v| *v = !*v)
+                    data[*offset..end_offset].iter_mut().for_each(|v| *v = !*v)
                 }
                 *offset = end_offset;
             }
             None => {
-                out.buffer[*offset] = null_sentinel(opts);
+                data[*offset] = null_sentinel(opts);
                 *offset += 1;
             }
         }

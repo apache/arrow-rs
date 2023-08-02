@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeListArray};
-use arrow_buffer::Buffer;
+use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, Field};
 use std::any::Any;
@@ -74,7 +73,11 @@ impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
     /// Creates a new [`FixedSizeListBuilder`] from a given values array builder
     /// `value_length` is the number of values within each array
     pub fn new(values_builder: T, value_length: i32) -> Self {
-        let capacity = values_builder.len();
+        let capacity = values_builder
+            .len()
+            .checked_div(value_length as _)
+            .unwrap_or_default();
+
         Self::with_capacity(values_builder, value_length, capacity)
     }
 
@@ -112,11 +115,6 @@ where
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -167,14 +165,14 @@ where
             len,
         );
 
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let nulls = self.null_buffer_builder.finish();
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Arc::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
         .add_child_data(values_data)
-        .null_bit_buffer(null_bit_buffer);
+        .nulls(nulls);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -195,17 +193,14 @@ where
             len,
         );
 
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
+        let nulls = self.null_buffer_builder.finish_cloned();
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Arc::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
         .add_child_data(values_data)
-        .null_bit_buffer(null_bit_buffer);
+        .nulls(nulls);
 
         let array_data = unsafe { array_data.build_unchecked() };
 

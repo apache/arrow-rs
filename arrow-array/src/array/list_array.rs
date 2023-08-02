@@ -19,7 +19,7 @@ use crate::array::{get_offsets, make_array, print_long_array};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
     iterator::GenericListArrayIter, new_empty_array, Array, ArrayAccessor, ArrayRef,
-    ArrowPrimitiveType,
+    ArrowPrimitiveType, FixedSizeListArray,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -57,6 +57,8 @@ impl OffsetSizeTrait for i64 {
 /// An array of [variable length arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout)
 ///
 /// See [`ListArray`] and [`LargeListArray`]`
+///
+/// See [`GenericListBuilder`](crate::builder::GenericListBuilder) for how to construct a [`GenericListArray`]
 pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
@@ -94,6 +96,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// * `offsets.len() - 1 != nulls.len()`
     /// * `offsets.last() > values.len()`
     /// * `!field.is_nullable() && values.null_count() != 0`
+    /// * `field.data_type() != values.data_type()`
     pub fn try_new(
         field: FieldRef,
         offsets: OffsetBuffer<OffsetSize>,
@@ -103,7 +106,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         let len = offsets.len() - 1; // Offsets guaranteed to not be empty
         let end_offset = offsets.last().unwrap().as_usize();
         // don't need to check other values of `offsets` because they are checked
-        // during construction of `OffsetsbBuffer`
+        // during construction of `OffsetBuffer`
         if end_offset > values.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Max offset of {end_offset} exceeds length of values {}",
@@ -310,9 +313,7 @@ impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericListArray<OffsetSiz
     }
 }
 
-impl<OffsetSize: 'static + OffsetSizeTrait> From<GenericListArray<OffsetSize>>
-    for ArrayData
-{
+impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>> for ArrayData {
     fn from(array: GenericListArray<OffsetSize>) -> Self {
         let len = array.len();
         let builder = ArrayDataBuilder::new(array.data_type)
@@ -322,6 +323,27 @@ impl<OffsetSize: 'static + OffsetSizeTrait> From<GenericListArray<OffsetSize>>
             .child_data(vec![array.values.to_data()]);
 
         unsafe { builder.build_unchecked() }
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray>
+    for GenericListArray<OffsetSize>
+{
+    fn from(value: FixedSizeListArray) -> Self {
+        let (field, size) = match value.data_type() {
+            DataType::FixedSizeList(f, size) => (f, *size as usize),
+            _ => unreachable!(),
+        };
+
+        let offsets =
+            OffsetBuffer::from_lengths(std::iter::repeat(size).take(value.len()));
+
+        Self {
+            data_type: Self::DATA_TYPE_CONSTRUCTOR(field.clone()),
+            nulls: value.nulls().cloned(),
+            values: value.values().clone(),
+            value_offsets: offsets,
+        }
     }
 }
 
@@ -452,64 +474,21 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
     }
 }
 
-/// An array of variable size lists, storing offsets as `i32`.
+/// A [`GenericListArray`] of variable size lists, storing offsets as `i32`.
 ///
-/// # Example
-///
-/// ```
-/// # use arrow_array::{Array, ListArray, Int32Array, types::Int32Type};
-/// # use arrow_schema::DataType;
-/// let data = vec![
-///    Some(vec![]),
-///    None,
-///    Some(vec![Some(3), None, Some(5), Some(19)]),
-///    Some(vec![Some(6), Some(7)]),
-/// ];
-/// let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-///
-/// assert_eq!(false, list_array.is_valid(1));
-///
-/// let list0 = list_array.value(0);
-/// let list2 = list_array.value(2);
-/// let list3 = list_array.value(3);
-///
-/// assert_eq!(&[] as &[i32], list0.as_any().downcast_ref::<Int32Array>().unwrap().values());
-/// assert_eq!(false, list2.as_any().downcast_ref::<Int32Array>().unwrap().is_valid(1));
-/// assert_eq!(&[6, 7], list3.as_any().downcast_ref::<Int32Array>().unwrap().values());
-/// ```
+// See [`ListBuilder`](crate::builder::ListBuilder) for how to construct a [`ListArray`]
 pub type ListArray = GenericListArray<i32>;
 
-/// An array of variable size lists, storing offsets as `i64`.
+/// A [`GenericListArray`] of variable size lists, storing offsets as `i64`.
 ///
-/// # Example
-///
-/// ```
-/// # use arrow_array::{Array, LargeListArray, Int32Array, types::Int32Type};
-/// # use arrow_schema::DataType;
-/// let data = vec![
-///    Some(vec![]),
-///    None,
-///    Some(vec![Some(3), None, Some(5), Some(19)]),
-///    Some(vec![Some(6), Some(7)]),
-/// ];
-/// let list_array = LargeListArray::from_iter_primitive::<Int32Type, _, _>(data);
-///
-/// assert_eq!(false, list_array.is_valid(1));
-///
-/// let list0 = list_array.value(0);
-/// let list2 = list_array.value(2);
-/// let list3 = list_array.value(3);
-///
-/// assert_eq!(&[] as &[i32], list0.as_any().downcast_ref::<Int32Array>().unwrap().values());
-/// assert_eq!(false, list2.as_any().downcast_ref::<Int32Array>().unwrap().is_valid(1));
-/// assert_eq!(&[6, 7], list3.as_any().downcast_ref::<Int32Array>().unwrap().values());
-/// ```
+// See [`LargeListBuilder`](crate::builder::LargeListBuilder) for how to construct a [`LargeListArray`]
 pub type LargeListArray = GenericListArray<i64>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{Int32Builder, ListBuilder};
+    use crate::builder::{FixedSizeListBuilder, Int32Builder, ListBuilder};
+    use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Int32Array, Int64Array};
     use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
@@ -989,7 +968,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "memory is not aligned")]
+    #[should_panic(
+        expected = "Memory pointer is not aligned with the specified scalar type"
+    )]
     fn test_primitive_array_alignment() {
         let buf = Buffer::from_slice_ref([0_u64]);
         let buf2 = buf.slice(1);
@@ -1001,7 +982,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "memory is not aligned")]
+    #[should_panic(
+        expected = "Memory pointer is not aligned with the specified scalar type"
+    )]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
@@ -1177,5 +1160,23 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Max offset of 5 exceeds length of values 2"
         );
+    }
+
+    #[test]
+    fn test_from_fixed_size_list() {
+        let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 3);
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[0, 0, 0]);
+        builder.append(false);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true);
+        let list: ListArray = builder.finish().into();
+
+        let values: Vec<_> = list
+            .iter()
+            .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
+            .collect();
+        assert_eq!(values, vec![Some(vec![1, 2, 3]), None, Some(vec![4, 5, 6])])
     }
 }

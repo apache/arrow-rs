@@ -103,13 +103,9 @@ pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
     }
 
     // get the metadata length from the footer
-    let metadata_len = i32::from_le_bytes(slice[..4].try_into().unwrap());
-    metadata_len.try_into().map_err(|_| {
-        general_err!(
-            "Invalid Parquet file. Metadata length is less than zero ({})",
-            metadata_len
-        )
-    })
+    let metadata_len = u32::from_le_bytes(slice[..4].try_into().unwrap());
+    // u32 won't be larger than usize in most cases
+    Ok(metadata_len as usize)
 }
 
 /// Parses column orders from Thrift definition.
@@ -172,16 +168,6 @@ mod tests {
         assert_eq!(
             reader_result.unwrap_err().to_string(),
             "Parquet error: Invalid Parquet file. Corrupt footer"
-        );
-    }
-
-    #[test]
-    fn test_parse_metadata_invalid_length() {
-        let test_file = Bytes::from(vec![0, 0, 0, 255, b'P', b'A', b'R', b'1']);
-        let reader_result = parse_metadata(&test_file);
-        assert_eq!(
-            reader_result.unwrap_err().to_string(),
-            "Parquet error: Invalid Parquet file. Metadata length is less than zero (-16777216)"
         );
     }
 

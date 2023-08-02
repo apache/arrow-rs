@@ -82,6 +82,7 @@ impl From<Error> for crate::Error {
     }
 }
 
+/// A Google Cloud Storage Credential
 #[derive(Debug, Eq, PartialEq)]
 pub struct GcpCredential {
     /// An HTTP bearer token

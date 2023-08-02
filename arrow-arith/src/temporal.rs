@@ -181,26 +181,7 @@ pub fn using_chrono_tz_and_utc_naive_date_time(
 /// the range of [0, 23]. If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn hour_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let hour_values = hour_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&hour_values)))
-                }
-                dt => return_compute_error_with!("hour does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   hour(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("hour does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "hour", |t| t.hour() as i32)
 }
 
 /// Extracts the hours of a given temporal primitive array as an array of integers within
@@ -430,6 +411,41 @@ where
 /// an `Err` will be returned.
 pub fn nanosecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     time_fraction_dyn(array, "nanosecond", |t| t.nanosecond() as i32)
+}
+
+/// Extracts the microseconds of a given temporal primitive array as an array of integers
+pub fn microsecond<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    time_fraction_internal(array, "microsecond", |t| (t.nanosecond() / 1_000) as i32)
+}
+
+/// Extracts the microseconds of a given temporal primitive array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn microsecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    time_fraction_dyn(array, "microsecond", |t| (t.nanosecond() / 1_000) as i32)
+}
+
+/// Extracts the milliseconds of a given temporal primitive array as an array of integers
+pub fn millisecond<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    time_fraction_internal(array, "millisecond", |t| {
+        (t.nanosecond() / 1_000_000) as i32
+    })
+}
+/// Extracts the milliseconds of a given temporal primitive array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn millisecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    time_fraction_dyn(array, "millisecond", |t| {
+        (t.nanosecond() / 1_000_000) as i32
+    })
 }
 
 /// Extracts the time fraction of a given temporal array as an array of integers
@@ -905,37 +921,6 @@ mod tests {
         assert!(err.contains("Invalid timezone"), "{}", err);
     }
 
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
-        let a = TimestampSecondArray::from(vec![60 * 60 * 10])
-            .with_timezone("Asia/Kolkata".to_string());
-        let b = hour(&a).unwrap();
-        assert_eq!(15, b.value(0));
-    }
-
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_temporal_array_timestamp_hour_with_dst_timezone_using_chrono_tz() {
-        //
-        // 1635577147 converts to 2021-10-30 17:59:07 in time zone Australia/Sydney (AEDT)
-        // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
-        // When daylight savings is not in effect, Australia/Sydney has an offset difference of +10:00.
-
-        let a = TimestampMillisecondArray::from(vec![Some(1635577147000)])
-            .with_timezone("Australia/Sydney".to_string());
-        let b = hour(&a).unwrap();
-        assert_eq!(17, b.value(0));
-    }
-
-    #[cfg(not(feature = "chrono-tz"))]
-    #[test]
-    fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
-        let a = TimestampSecondArray::from(vec![60 * 60 * 10])
-            .with_timezone("Asia/Kolkatta".to_string());
-        assert!(matches!(hour(&a), Err(ArrowError::ParseError(_))))
-    }
-
     #[test]
     fn test_temporal_array_timestamp_week_without_timezone() {
         // 1970-01-01T00:00:00                     -> 1970-01-01T00:00:00 Thursday (week 1)
@@ -1114,6 +1099,42 @@ mod tests {
         let b = nanosecond_dyn(&dict).unwrap();
 
         let a = Int32Array::from(vec![None, Some(453_000_000)]);
+        let expected_dict = DictionaryArray::new(keys, Arc::new(a));
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
+    }
+
+    #[test]
+    fn test_temporal_array_date64_microsecond() {
+        let a: PrimitiveArray<Date64Type> = vec![None, Some(1667328721453)].into();
+
+        let b = microsecond(&a).unwrap();
+        assert!(!b.is_valid(0));
+        assert_eq!(453_000, b.value(1));
+
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1)]);
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
+        let b = microsecond_dyn(&dict).unwrap();
+
+        let a = Int32Array::from(vec![None, Some(453_000)]);
+        let expected_dict = DictionaryArray::new(keys, Arc::new(a));
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
+    }
+
+    #[test]
+    fn test_temporal_array_date64_millisecond() {
+        let a: PrimitiveArray<Date64Type> = vec![None, Some(1667328721453)].into();
+
+        let b = millisecond(&a).unwrap();
+        assert!(!b.is_valid(0));
+        assert_eq!(453, b.value(1));
+
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1)]);
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
+        let b = millisecond_dyn(&dict).unwrap();
+
+        let a = Int32Array::from(vec![None, Some(453)]);
         let expected_dict = DictionaryArray::new(keys, Arc::new(a));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);

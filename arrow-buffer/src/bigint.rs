@@ -39,6 +39,14 @@ impl std::fmt::Display for ParseI256Error {
 }
 impl std::error::Error for ParseI256Error {}
 
+/// Error returned by i256::DivRem
+enum DivRemError {
+    /// Division by zero
+    DivideByZero,
+    /// Division overflow
+    DivideOverflow,
+}
+
 /// A signed 256-bit integer
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone, Default, Eq, PartialEq, Hash)]
@@ -86,6 +94,30 @@ impl FromStr for i256 {
         }
 
         parse_impl(s, negative)
+    }
+}
+
+impl From<i8> for i256 {
+    fn from(value: i8) -> Self {
+        Self::from_i128(value.into())
+    }
+}
+
+impl From<i16> for i256 {
+    fn from(value: i16) -> Self {
+        Self::from_i128(value.into())
+    }
+}
+
+impl From<i32> for i256 {
+    fn from(value: i32) -> Self {
+        Self::from_i128(value.into())
+    }
+}
+
+impl From<i64> for i256 {
+    fn from(value: i64) -> Self {
+        Self::from_i128(value.into())
     }
 }
 
@@ -396,42 +428,101 @@ impl i256 {
             .then_some(Self { low, high })
     }
 
+    /// Return the least number of bits needed to represent the number
+    #[inline]
+    fn bits_required(&self) -> usize {
+        let le_bytes = self.to_le_bytes();
+        let arr: [u128; 2] = [
+            u128::from_le_bytes(le_bytes[0..16].try_into().unwrap()),
+            u128::from_le_bytes(le_bytes[16..32].try_into().unwrap()),
+        ];
+
+        let iter = arr.iter().rev().take(2 - 1);
+        if self.is_negative() {
+            let ctr = iter.take_while(|&&b| b == ::core::u128::MAX).count();
+            (128 * (2 - ctr)) + 1 - (!arr[2 - ctr - 1]).leading_zeros() as usize
+        } else {
+            let ctr = iter.take_while(|&&b| b == ::core::u128::MIN).count();
+            (128 * (2 - ctr)) + 1 - arr[2 - ctr - 1].leading_zeros() as usize
+        }
+    }
+
+    /// Division operation, returns (quotient, remainder).
+    /// This basically implements [Long division]: `<https://en.wikipedia.org/wiki/Division_algorithm>`
+    #[inline]
+    fn div_rem(self, other: Self) -> Result<(Self, Self), DivRemError> {
+        if other == Self::ZERO {
+            return Err(DivRemError::DivideByZero);
+        }
+        if other == Self::MINUS_ONE && self == Self::MIN {
+            return Err(DivRemError::DivideOverflow);
+        }
+
+        if self == Self::MIN || other == Self::MIN {
+            let l = BigInt::from_signed_bytes_le(&self.to_le_bytes());
+            let r = BigInt::from_signed_bytes_le(&other.to_le_bytes());
+            let d = i256::from_bigint_with_overflow(&l / &r).0;
+            let r = i256::from_bigint_with_overflow(&l % &r).0;
+            return Ok((d, r));
+        }
+
+        let mut me = self.checked_abs().unwrap();
+        let mut you = other.checked_abs().unwrap();
+        let mut ret = [0u128; 2];
+        if me < you {
+            return Ok((Self::from_parts(ret[0], ret[1] as i128), self));
+        }
+
+        let shift = me.bits_required() - you.bits_required();
+        you = you.shl(shift as u8);
+        for i in (0..=shift).rev() {
+            if me >= you {
+                ret[i / 128] |= 1 << (i % 128);
+                me = me.checked_sub(you).unwrap();
+            }
+            you = you.shr(1);
+        }
+
+        Ok((
+            if self.is_negative() == other.is_negative() {
+                Self::from_parts(ret[0], ret[1] as i128)
+            } else {
+                -Self::from_parts(ret[0], ret[1] as i128)
+            },
+            if self.is_negative() { -me } else { me },
+        ))
+    }
+
     /// Performs wrapping division
     #[inline]
     pub fn wrapping_div(self, other: Self) -> Self {
-        let l = BigInt::from_signed_bytes_le(&self.to_le_bytes());
-        let r = BigInt::from_signed_bytes_le(&other.to_le_bytes());
-        Self::from_bigint_with_overflow(l / r).0
+        match self.div_rem(other) {
+            Ok((v, _)) => v,
+            Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
+            Err(_) => Self::MIN,
+        }
     }
 
     /// Performs checked division
     #[inline]
     pub fn checked_div(self, other: Self) -> Option<Self> {
-        let l = BigInt::from_signed_bytes_le(&self.to_le_bytes());
-        let r = BigInt::from_signed_bytes_le(&other.to_le_bytes());
-        let (val, overflow) = Self::from_bigint_with_overflow(l / r);
-        (!overflow).then_some(val)
+        self.div_rem(other).map(|(v, _)| v).ok()
     }
 
     /// Performs wrapping remainder
     #[inline]
     pub fn wrapping_rem(self, other: Self) -> Self {
-        let l = BigInt::from_signed_bytes_le(&self.to_le_bytes());
-        let r = BigInt::from_signed_bytes_le(&other.to_le_bytes());
-        Self::from_bigint_with_overflow(l % r).0
+        match self.div_rem(other) {
+            Ok((_, v)) => v,
+            Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
+            Err(_) => Self::ZERO,
+        }
     }
 
     /// Performs checked remainder
     #[inline]
     pub fn checked_rem(self, other: Self) -> Option<Self> {
-        if other == Self::ZERO {
-            return None;
-        }
-
-        let l = BigInt::from_signed_bytes_le(&self.to_le_bytes());
-        let r = BigInt::from_signed_bytes_le(&other.to_le_bytes());
-        let (val, overflow) = Self::from_bigint_with_overflow(l % r);
-        (!overflow).then_some(val)
+        self.div_rem(other).map(|(_, v)| v).ok()
     }
 
     /// Performs checked exponentiation
@@ -851,6 +942,43 @@ mod tests {
                 Some(actual),
                 "{il} * {ir} = {actual} vs {bl} * {br} = {expected}"
             ),
+        }
+
+        // Division
+        if ir != i256::ZERO {
+            let actual = il.wrapping_div(ir);
+            let expected = bl.clone() / br.clone();
+            let checked = il.checked_div(ir);
+
+            if ir == i256::MINUS_ONE && il == i256::MIN {
+                // BigInt produces an integer over i256::MAX
+                assert_eq!(actual, i256::MIN);
+                assert!(checked.is_none());
+            } else {
+                assert_eq!(actual.to_string(), expected.to_string());
+                assert_eq!(checked.unwrap().to_string(), expected.to_string());
+            }
+        } else {
+            // `wrapping_div` panics on division by zero
+            assert!(il.checked_div(ir).is_none());
+        }
+
+        // Remainder
+        if ir != i256::ZERO {
+            let actual = il.wrapping_rem(ir);
+            let expected = bl.clone() % br.clone();
+            let checked = il.checked_rem(ir);
+
+            assert_eq!(actual.to_string(), expected.to_string());
+
+            if ir == i256::MINUS_ONE && il == i256::MIN {
+                assert!(checked.is_none());
+            } else {
+                assert_eq!(checked.unwrap().to_string(), expected.to_string());
+            }
+        } else {
+            // `wrapping_rem` panics on division by zero
+            assert!(il.checked_rem(ir).is_none());
         }
 
         // Exponentiation
