@@ -277,6 +277,7 @@ pub struct RowGroupMetaData {
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
+    ordinal: Option<i16>,
 }
 
 impl RowGroupMetaData {
@@ -350,6 +351,7 @@ impl RowGroupMetaData {
             sorting_columns,
             total_byte_size,
             schema_descr,
+            ordinal: rg.ordinal,
         })
     }
 
@@ -360,9 +362,9 @@ impl RowGroupMetaData {
             total_byte_size: self.total_byte_size,
             num_rows: self.num_rows,
             sorting_columns: self.sorting_columns().cloned(),
-            file_offset: None,
-            total_compressed_size: None,
-            ordinal: None,
+            file_offset: self.columns().iter().next().map(|m| m.file_offset),
+            total_compressed_size: Some(self.compressed_size()),
+            ordinal: self.ordinal,
         }
     }
 
@@ -384,6 +386,7 @@ impl RowGroupMetaDataBuilder {
             num_rows: 0,
             sorting_columns: None,
             total_byte_size: 0,
+            ordinal: None,
         })
     }
 
@@ -408,6 +411,12 @@ impl RowGroupMetaDataBuilder {
     /// Sets column metadata for this row group.
     pub fn set_column_metadata(mut self, value: Vec<ColumnChunkMetaData>) -> Self {
         self.0.columns = value;
+        self
+    }
+
+    /// Sets ordinal for this row group.
+    pub fn set_ordinal(mut self, value: usize) -> Self {
+        self.0.ordinal = Some(value as i16);
         self
     }
 

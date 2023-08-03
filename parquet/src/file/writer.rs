@@ -110,12 +110,12 @@ pub type OnCloseColumnChunk<'a> = Box<dyn FnOnce(ColumnCloseResult) -> Result<()
 /// - the offset index for each column chunk
 pub type OnCloseRowGroup<'a> = Box<
     dyn FnOnce(
-            RowGroupMetaDataPtr,
-            Vec<Option<Sbbf>>,
-            Vec<Option<ColumnIndex>>,
-            Vec<Option<OffsetIndex>>,
-        ) -> Result<()>
-        + 'a,
+        RowGroupMetaDataPtr,
+        Vec<Option<Sbbf>>,
+        Vec<Option<ColumnIndex>>,
+        Vec<Option<OffsetIndex>>,
+    ) -> Result<()>
+    + 'a,
 >;
 
 // ----------------------------------------------------------------------
@@ -204,6 +204,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             self.descr.clone(),
             self.props.clone(),
             &mut self.buf,
+            self.row_group_index,
             Some(Box::new(on_close)),
         );
         Ok(row_group_writer)
@@ -409,6 +410,7 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     bloom_filters: Vec<Option<Sbbf>>,
     column_indexes: Vec<Option<ColumnIndex>>,
     offset_indexes: Vec<Option<OffsetIndex>>,
+    row_group_index: usize,
     on_close: Option<OnCloseRowGroup<'a>>,
 }
 
@@ -418,16 +420,19 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     /// - `schema_descr` - the schema to write
     /// - `properties` - writer properties
     /// - `buf` - the buffer to write data to
+    /// - `row_group_index` - row group index in this parquet file.
     /// - `on_close` - an optional callback that will invoked on [`Self::close`]
     pub fn new(
         schema_descr: SchemaDescPtr,
         properties: WriterPropertiesPtr,
         buf: &'a mut TrackedWrite<W>,
+        row_group_index: usize,
         on_close: Option<OnCloseRowGroup<'a>>,
     ) -> Self {
         let num_columns = schema_descr.num_columns();
         Self {
             buf,
+            row_group_index,
             on_close,
             total_rows_written: None,
             descr: schema_descr,
@@ -492,13 +497,13 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         &'b mut self,
         factory: F,
     ) -> Result<Option<C>>
-    where
-        F: FnOnce(
-            ColumnDescPtr,
-            WriterPropertiesPtr,
-            Box<dyn PageWriter + 'b>,
-            OnCloseColumnChunk<'b>,
-        ) -> Result<C>,
+        where
+            F: FnOnce(
+                ColumnDescPtr,
+                WriterPropertiesPtr,
+                Box<dyn PageWriter + 'b>,
+                OnCloseColumnChunk<'b>,
+            ) -> Result<C>,
     {
         self.assert_previous_writer_closed()?;
         Ok(match self.next_column_desc() {
@@ -603,6 +608,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 .set_total_byte_size(self.total_uncompressed_bytes)
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
                 .set_sorting_columns(self.props.sorting_columns().cloned())
+                .set_ordinal(self.row_group_index)
                 .build()?;
 
             let metadata = Arc::new(row_group_metadata);
@@ -1226,7 +1232,7 @@ mod tests {
                 None,
                 Arc::new(props),
             )
-            .unwrap();
+                .unwrap();
 
             while let Some(page) = page_reader.get_next_page().unwrap() {
                 result_pages.push(page);
@@ -1265,9 +1271,9 @@ mod tests {
         data: Vec<Vec<i32>>,
         compression: Compression,
     ) -> crate::format::FileMetaData
-    where
-        W: Write + Send,
-        R: ChunkReader + From<W> + 'static,
+        where
+            W: Write + Send,
+            R: ChunkReader + From<W> + 'static,
     {
         test_roundtrip::<W, R, Int32Type, _>(
             file,
@@ -1285,11 +1291,11 @@ mod tests {
         value: F,
         compression: Compression,
     ) -> crate::format::FileMetaData
-    where
-        W: Write + Send,
-        R: ChunkReader + From<W> + 'static,
-        D: DataType,
-        F: Fn(Row) -> D::T,
+        where
+            W: Write + Send,
+            R: ChunkReader + From<W> + 'static,
+            D: DataType,
+            F: Fn(Row) -> D::T,
     {
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
