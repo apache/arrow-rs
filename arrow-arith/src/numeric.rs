@@ -738,6 +738,8 @@ fn decimal_op<T: DecimalType>(
 
     // Follow the Hive decimal arithmetic rules
     // https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf
+    // And the Calcite rules
+    // https://github.com/apache/arrow/blob/36ddbb531cac9b9e512dfa3776d1d64db588209f/java/gandiva/src/main/java/org/apache/arrow/gandiva/evaluator/DecimalTypeUtil.java#L46
     let array: PrimitiveArray<T> = match op {
         Op::Add | Op::AddWrapping | Op::Sub | Op::SubWrapping => {
             // max(s1, s2)
@@ -794,7 +796,6 @@ fn decimal_op<T: DecimalType>(
         }
 
         Op::Div => {
-            // Follow postgres and MySQL adding a fixed scale increment of 4
             // max(6, s1 + p2 + 1)
             let result_scale = 6.max(s1 + *p2 as i8 + 1).min(T::MAX_SCALE);
             let mul_pow = result_scale - s1 + s2;
