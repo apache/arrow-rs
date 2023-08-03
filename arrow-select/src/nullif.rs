@@ -18,7 +18,7 @@
 use arrow_array::{make_array, Array, ArrayRef, BooleanArray};
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_unary_op_helper};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 
 /// Copies original array, setting validity bit to false if a secondary comparison
 /// boolean array is set to true
@@ -35,7 +35,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     }
     let len = left_data.len();
 
-    if len == 0 {
+    if len == 0 || left_data.data_type() == &DataType::Null {
         return Ok(make_array(left_data));
     }
 
