@@ -2442,4 +2442,32 @@ mod tests {
             assert_eq!(&back[0], &array);
         }
     }
+
+    #[test]
+    fn test_append_codec_dictionary_binary() {
+        use DataType::*;
+        // Dictionary RowConverter
+        let mut converter = RowConverter::new(vec![SortField::new(Dictionary(
+            Box::new(Int32),
+            Box::new(Binary),
+        ))])
+        .unwrap();
+        let mut rows = converter.empty_rows(4, 128);
+
+        let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
+        let values = BinaryArray::from(vec![
+            Some("a".as_bytes()),
+            Some(b"b"),
+            Some(b"c"),
+            Some(b"d"),
+        ]);
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+
+        rows.clear();
+        let array = Arc::new(dict_array) as ArrayRef;
+        converter.append(&mut rows, &[array.clone()]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+
+        assert_eq!(&back[0], &array);
+    }
 }
