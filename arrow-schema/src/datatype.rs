@@ -578,7 +578,7 @@ impl DataType {
     }
 
     /// Create a [`DataType::List`] where each elements has the
-    /// specified type and nullability and coventional name
+    /// specified type and nullability and conventional name
     /// (`"item"`);
     ///
     /// To specify field level metadata, construct the inner `Field`
