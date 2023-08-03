@@ -100,7 +100,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
 mod tests {
     use super::*;
     use arrow_array::builder::{BooleanBuilder, Int32Builder, StructBuilder};
-    use arrow_array::cast::{as_null_array, AsArray};
+    use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, NullArray, StringArray, StructArray};
     use arrow_data::ArrayData;
@@ -131,20 +131,19 @@ mod tests {
     #[test]
     fn test_nullif_null_array() {
         assert_eq!(
-            as_null_array(
-                &nullif(&NullArray::new(0), &BooleanArray::new_null(0)).unwrap()
-            ),
+            nullif(&NullArray::new(0), &BooleanArray::new_null(0))
+                .unwrap()
+                .as_ref(),
             &NullArray::new(0)
         );
 
         assert_eq!(
-            as_null_array(
-                &nullif(
-                    &NullArray::new(3),
-                    &BooleanArray::from(vec![Some(false), Some(true), None]),
-                )
-                .unwrap()
-            ),
+            nullif(
+                &NullArray::new(3),
+                &BooleanArray::from(vec![Some(false), Some(true), None]),
+            )
+            .unwrap()
+            .as_ref(),
             &NullArray::new(3)
         );
     }
