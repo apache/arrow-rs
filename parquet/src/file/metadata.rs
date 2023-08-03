@@ -277,7 +277,9 @@ pub struct RowGroupMetaData {
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
-    ordinal: Option<i16>,
+    // We can't infer from file offset of first column since there may empty columns in row group.
+    file_offset: Option<usize>,
+    ordinal: Option<usize>,
 }
 
 impl RowGroupMetaData {
@@ -331,6 +333,18 @@ impl RowGroupMetaData {
         self.schema_descr.clone()
     }
 
+    /// Returns ordinal of this row group in file
+    #[inline(always)]
+    pub fn ordinal(&self) -> Option<usize> {
+        self.ordinal
+    }
+
+    /// Returns file offset of this row group in file.
+    #[inline(always)]
+    pub fn file_offset(&self) -> Option<usize> {
+        self.file_offset
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(
         schema_descr: SchemaDescPtr,
@@ -351,7 +365,8 @@ impl RowGroupMetaData {
             sorting_columns,
             total_byte_size,
             schema_descr,
-            ordinal: rg.ordinal,
+            file_offset: rg.file_offset.map(|v| v as usize),
+            ordinal: rg.ordinal.map(|o| o as usize),
         })
     }
 
@@ -362,9 +377,9 @@ impl RowGroupMetaData {
             total_byte_size: self.total_byte_size,
             num_rows: self.num_rows,
             sorting_columns: self.sorting_columns().cloned(),
-            file_offset: self.columns().iter().next().map(|m| m.file_offset),
+            file_offset: self.file_offset().map(|v| v as i64),
             total_compressed_size: Some(self.compressed_size()),
-            ordinal: self.ordinal,
+            ordinal: self.ordinal.map(|v| v as i16),
         }
     }
 
@@ -383,6 +398,7 @@ impl RowGroupMetaDataBuilder {
         Self(RowGroupMetaData {
             columns: Vec::with_capacity(schema_descr.num_columns()),
             schema_descr,
+            file_offset: None,
             num_rows: 0,
             sorting_columns: None,
             total_byte_size: 0,
@@ -416,7 +432,12 @@ impl RowGroupMetaDataBuilder {
 
     /// Sets ordinal for this row group.
     pub fn set_ordinal(mut self, value: usize) -> Self {
-        self.0.ordinal = Some(value as i16);
+        self.0.ordinal = Some(value);
+        self
+    }
+
+    pub fn set_file_offset(mut self, value: usize) -> Self {
+        self.0.file_offset = Some(value);
         self
     }
 

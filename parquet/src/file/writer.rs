@@ -184,6 +184,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     pub fn next_row_group(&mut self) -> Result<SerializedRowGroupWriter<'_, W>> {
         self.assert_previous_writer_closed()?;
         self.row_group_index += 1;
+        let file_offset = self.buf.bytes_written();
 
         let row_groups = &mut self.row_groups;
         let row_bloom_filters = &mut self.bloom_filters;
@@ -204,7 +205,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             self.descr.clone(),
             self.props.clone(),
             &mut self.buf,
-            self.row_group_index,
+            self.row_group_index - 1,
+            file_offset,
             Some(Box::new(on_close)),
         );
         Ok(row_group_writer)
@@ -411,6 +413,7 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     column_indexes: Vec<Option<ColumnIndex>>,
     offset_indexes: Vec<Option<OffsetIndex>>,
     row_group_index: usize,
+    file_offset: usize,
     on_close: Option<OnCloseRowGroup<'a>>,
 }
 
@@ -421,18 +424,21 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     /// - `properties` - writer properties
     /// - `buf` - the buffer to write data to
     /// - `row_group_index` - row group index in this parquet file.
+    /// - `file_offset` - file offset of this row group in this parquet file.
     /// - `on_close` - an optional callback that will invoked on [`Self::close`]
     pub fn new(
         schema_descr: SchemaDescPtr,
         properties: WriterPropertiesPtr,
         buf: &'a mut TrackedWrite<W>,
         row_group_index: usize,
+        file_offset: usize,
         on_close: Option<OnCloseRowGroup<'a>>,
     ) -> Self {
         let num_columns = schema_descr.num_columns();
         Self {
             buf,
             row_group_index,
+            file_offset,
             on_close,
             total_rows_written: None,
             descr: schema_descr,
@@ -609,6 +615,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
                 .set_sorting_columns(self.props.sorting_columns().cloned())
                 .set_ordinal(self.row_group_index)
+                .set_file_offset(self.file_offset)
                 .build()?;
 
             let metadata = Arc::new(row_group_metadata);
@@ -1318,6 +1325,7 @@ mod tests {
         let mut rows: i64 = 0;
 
         for (idx, subset) in data.iter().enumerate() {
+            let row_group_file_offset = file_writer.buf.bytes_written();
             let mut row_group_writer = file_writer.next_row_group().unwrap();
             if let Some(mut writer) = row_group_writer.next_column().unwrap() {
                 rows += writer
@@ -1329,6 +1337,8 @@ mod tests {
             let last_group = row_group_writer.close().unwrap();
             let flushed = file_writer.flushed_row_groups();
             assert_eq!(flushed.len(), idx + 1);
+            assert_eq!(Some(idx), last_group.ordinal());
+            assert_eq!(Some(row_group_file_offset), last_group.file_offset());
             assert_eq!(flushed[idx].as_ref(), last_group.as_ref());
         }
         let file_metadata = file_writer.close().unwrap();
