@@ -110,12 +110,12 @@ pub type OnCloseColumnChunk<'a> = Box<dyn FnOnce(ColumnCloseResult) -> Result<()
 /// - the offset index for each column chunk
 pub type OnCloseRowGroup<'a> = Box<
     dyn FnOnce(
-        RowGroupMetaDataPtr,
-        Vec<Option<Sbbf>>,
-        Vec<Option<ColumnIndex>>,
-        Vec<Option<OffsetIndex>>,
-    ) -> Result<()>
-    + 'a,
+            RowGroupMetaDataPtr,
+            Vec<Option<Sbbf>>,
+            Vec<Option<ColumnIndex>>,
+            Vec<Option<OffsetIndex>>,
+        ) -> Result<()>
+        + 'a,
 >;
 
 // ----------------------------------------------------------------------
@@ -497,13 +497,13 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         &'b mut self,
         factory: F,
     ) -> Result<Option<C>>
-        where
-            F: FnOnce(
-                ColumnDescPtr,
-                WriterPropertiesPtr,
-                Box<dyn PageWriter + 'b>,
-                OnCloseColumnChunk<'b>,
-            ) -> Result<C>,
+    where
+        F: FnOnce(
+            ColumnDescPtr,
+            WriterPropertiesPtr,
+            Box<dyn PageWriter + 'b>,
+            OnCloseColumnChunk<'b>,
+        ) -> Result<C>,
     {
         self.assert_previous_writer_closed()?;
         Ok(match self.next_column_desc() {
@@ -1232,7 +1232,7 @@ mod tests {
                 None,
                 Arc::new(props),
             )
-                .unwrap();
+            .unwrap();
 
             while let Some(page) = page_reader.get_next_page().unwrap() {
                 result_pages.push(page);
@@ -1271,9 +1271,9 @@ mod tests {
         data: Vec<Vec<i32>>,
         compression: Compression,
     ) -> crate::format::FileMetaData
-        where
-            W: Write + Send,
-            R: ChunkReader + From<W> + 'static,
+    where
+        W: Write + Send,
+        R: ChunkReader + From<W> + 'static,
     {
         test_roundtrip::<W, R, Int32Type, _>(
             file,
@@ -1291,11 +1291,11 @@ mod tests {
         value: F,
         compression: Compression,
     ) -> crate::format::FileMetaData
-        where
-            W: Write + Send,
-            R: ChunkReader + From<W> + 'static,
-            D: DataType,
-            F: Fn(Row) -> D::T,
+    where
+        W: Write + Send,
+        R: ChunkReader + From<W> + 'static,
+        D: DataType,
+        F: Fn(Row) -> D::T,
     {
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
