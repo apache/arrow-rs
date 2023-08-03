@@ -23,7 +23,7 @@ mod null;
 pub use null::*;
 
 use crate::{ArrowNativeType, Buffer, MutableBuffer};
-use std::marker::PhantomData;
+use std::{iter, marker::PhantomData};
 
 /// Builder for creating a [Buffer] object.
 ///
@@ -191,8 +191,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn append(&mut self, v: T) {
         self.reserve(1);
-        self.buffer.push(v);
-        self.len += 1;
+        self.extend(iter::once(v));
     }
 
     /// Appends a value of type `T` into the builder N times,
@@ -211,10 +210,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn append_n(&mut self, n: usize, v: T) {
         self.reserve(n);
-        for _ in 0..n {
-            self.buffer.push(v);
-        }
-        self.len += n;
+        self.extend(iter::repeat(v).take(n))
     }
 
     /// Appends `n`, zero-initialized values
@@ -336,10 +332,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
             .1
             .expect("append_trusted_len_iter expects upper bound");
         self.reserve(len);
-        for v in iter {
-            self.buffer.push(v)
-        }
-        self.len += len;
+        self.extend(iter);
     }
 
     /// Resets this builder and returns an immutable [Buffer].
@@ -358,8 +351,61 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     /// ```
     #[inline]
     pub fn finish(&mut self) -> Buffer {
-        let buf = std::mem::replace(&mut self.buffer, MutableBuffer::new(0));
+        let buf = std::mem::take(&mut self.buffer);
         self.len = 0;
         buf.into()
+    }
+}
+
+impl<T: ArrowNativeType> Default for BufferBuilder<T> {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl<T: ArrowNativeType> Extend<T> for BufferBuilder<T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        self.buffer.extend(iter.into_iter().inspect(|_| {
+            self.len += 1;
+        }))
+    }
+}
+
+impl<T: ArrowNativeType> FromIterator<T> for BufferBuilder<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut builder = Self::default();
+        builder.extend(iter);
+        builder
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem;
+
+    #[test]
+    fn default() {
+        let builder = BufferBuilder::<u32>::default();
+        assert!(builder.is_empty());
+        assert!(builder.buffer.is_empty());
+        assert_eq!(builder.buffer.capacity(), 0);
+    }
+
+    #[test]
+    fn from_iter() {
+        let input = [1u16, 2, 3, 4];
+        let builder = input.into_iter().collect::<BufferBuilder<_>>();
+        assert_eq!(builder.len(), 4);
+        assert_eq!(builder.buffer.len(), 4 * mem::size_of::<u16>());
+    }
+
+    #[test]
+    fn extend() {
+        let input = [1, 2];
+        let mut builder = input.into_iter().collect::<BufferBuilder<_>>();
+        assert_eq!(builder.len(), 2);
+        builder.extend([3, 4]);
+        assert_eq!(builder.len(), 4);
     }
 }
