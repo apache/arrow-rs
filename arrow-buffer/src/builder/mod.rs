@@ -191,7 +191,8 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn append(&mut self, v: T) {
         self.reserve(1);
-        self.extend(iter::once(v));
+        self.buffer.push(v);
+        self.len += 1;
     }
 
     /// Appends a value of type `T` into the builder N times,
