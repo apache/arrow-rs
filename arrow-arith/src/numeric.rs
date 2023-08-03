@@ -795,8 +795,8 @@ fn decimal_op<T: DecimalType>(
 
         Op::Div => {
             // Follow postgres and MySQL adding a fixed scale increment of 4
-            // s1 + 4
-            let result_scale = s1.saturating_add(4).min(T::MAX_SCALE);
+            // max(6, s1 + p2 + 1)
+            let result_scale = 6.max(s1 + *p2 as i8 + 1).min(T::MAX_SCALE);
             let mul_pow = result_scale - s1 + s2;
 
             // p1 - s1 + s2 + result_scale
@@ -1126,10 +1126,17 @@ mod tests {
         );
 
         let result = div(&a, &b).unwrap();
-        assert_eq!(result.data_type(), &DataType::Decimal128(17, 7));
+        assert_eq!(result.data_type(), &DataType::Decimal128(26, 16));
         assert_eq!(
             result.as_primitive::<Decimal128Type>().values(),
-            &[27777, 0, 162078, 11133333, -1300000, 402]
+            &[
+                27777777777777,
+                0,
+                162078651685393,
+                11133333333333333,
+                -1300000000000000,
+                402684563758
+            ]
         );
 
         let result = rem(&a, &b).unwrap();
