@@ -577,7 +577,7 @@ impl DataType {
         }
     }
 
-    /// Create a [`DataType::List`] where each elements has the
+    /// Create a [`DataType::List`] where each element has the
     /// specified type and nullability and conventional name
     /// (`"item"`);
     ///
