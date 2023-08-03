@@ -140,10 +140,10 @@ impl Field {
     /// # use arrow_schema::{Field, DataType};
     /// assert_eq!(
     ///   Field::new("item", DataType::Int32, true),
-    ///   Field::new_list_item(DataType::Int32, true)
+    ///   Field::new_list_field(DataType::Int32, true)
     /// );
     /// ```
-    pub fn new_list_item(data_type: DataType, nullable: bool) -> Self {
+    pub fn new_list_field(data_type: DataType, nullable: bool) -> Self {
         Self::new("item", data_type, nullable)
     }
 
