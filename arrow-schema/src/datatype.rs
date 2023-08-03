@@ -584,7 +584,7 @@ impl DataType {
     /// To specify field level metadata, construct the inner `Field`
     /// directly via [`Field::new`] or [`Field::new_list_item`].
     pub fn new_list(data_type: DataType, nullable: bool) -> Self {
-        DataType::List(Arc::new(Field::new_list_item(data_type, nullable)))
+        DataType::List(Arc::new(Field::new_list_field(data_type, nullable)))
     }
 }
 
