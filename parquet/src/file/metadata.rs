@@ -975,6 +975,7 @@ mod tests {
             .set_num_rows(1000)
             .set_total_byte_size(2000)
             .set_column_metadata(columns)
+            .set_ordinal(1)
             .build()
             .unwrap();
 
