@@ -1135,7 +1135,8 @@ mod tests {
                         statistics: from_thrift(
                             physical_type,
                             to_thrift(statistics.as_ref()),
-                        ),
+                        )
+                        .unwrap(),
                     }
                 }
                 Page::DataPageV2 {
@@ -1168,7 +1169,8 @@ mod tests {
                         statistics: from_thrift(
                             physical_type,
                             to_thrift(statistics.as_ref()),
-                        ),
+                        )
+                        .unwrap(),
                     }
                 }
                 Page::DictionaryPage {
