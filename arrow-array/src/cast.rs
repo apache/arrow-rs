@@ -799,6 +799,15 @@ pub trait AsArray: private::Sealed {
         self.as_list_opt().expect("list array")
     }
 
+    /// Downcast this to a [`FixedSizeBinaryArray`] returning `None` if not possible
+    fn as_fixed_size_binary_opt(&self) -> Option<&FixedSizeBinaryArray>;
+
+    /// Downcast this to a [`FixedSizeBinaryArray`] panicking if not possible
+    fn as_fixed_size_binary(&self) -> &FixedSizeBinaryArray {
+        self.as_fixed_size_binary_opt()
+            .expect("fixed size binary array")
+    }
+
     /// Downcast this to a [`FixedSizeListArray`] returning `None` if not possible
     fn as_fixed_size_list_opt(&self) -> Option<&FixedSizeListArray>;
 
@@ -848,6 +857,10 @@ impl AsArray for dyn Array + '_ {
         self.as_any().downcast_ref()
     }
 
+    fn as_fixed_size_binary_opt(&self) -> Option<&FixedSizeBinaryArray> {
+        self.as_any().downcast_ref()
+    }
+
     fn as_fixed_size_list_opt(&self) -> Option<&FixedSizeListArray> {
         self.as_any().downcast_ref()
     }
@@ -883,6 +896,10 @@ impl AsArray for ArrayRef {
 
     fn as_list_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericListArray<O>> {
         self.as_ref().as_list_opt()
+    }
+
+    fn as_fixed_size_binary_opt(&self) -> Option<&FixedSizeBinaryArray> {
+        self.as_ref().as_fixed_size_binary_opt()
     }
 
     fn as_fixed_size_list_opt(&self) -> Option<&FixedSizeListArray> {

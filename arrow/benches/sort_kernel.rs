@@ -67,23 +67,37 @@ fn bench_sort_to_indices(array: &dyn Array, limit: Option<usize>) {
 
 fn add_benchmark(c: &mut Criterion) {
     let arr = create_primitive_array::<Int32Type>(2usize.pow(10), 0.0);
-    c.bench_function("sort i64 2^10", |b| b.iter(|| bench_sort(&arr)));
-
-    let arr = create_primitive_array::<Int32Type>(2usize.pow(12), 0.5);
-    c.bench_function("sort i64 2^12", |b| b.iter(|| bench_sort(&arr)));
+    c.bench_function("sort i32 2^10", |b| b.iter(|| bench_sort(&arr)));
+    c.bench_function("sort i32 to indices 2^10", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
 
     let arr = create_primitive_array::<Int32Type>(2usize.pow(12), 0.0);
-    c.bench_function("sort i64 nulls 2^10", |b| b.iter(|| bench_sort(&arr)));
+    c.bench_function("sort i32 2^12", |b| b.iter(|| bench_sort(&arr)));
+    c.bench_function("sort i32 to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_primitive_array::<Int32Type>(2usize.pow(10), 0.5);
+    c.bench_function("sort i32 nulls 2^10", |b| b.iter(|| bench_sort(&arr)));
+    c.bench_function("sort i32 nulls to indices 2^10", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
 
     let arr = create_primitive_array::<Int32Type>(2usize.pow(12), 0.5);
-    c.bench_function("sort i64 nulls 2^12", |b| b.iter(|| bench_sort(&arr)));
+    c.bench_function("sort i32 nulls 2^12", |b| b.iter(|| bench_sort(&arr)));
+    c.bench_function("sort i32 nulls to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
 
     let arr = create_f32_array(2_usize.pow(12), false);
+    c.bench_function("sort f32 2^12", |b| b.iter(|| bench_sort(&arr)));
     c.bench_function("sort f32 to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
     let arr = create_f32_array(2usize.pow(12), true);
+    c.bench_function("sort f32 nulls 2^12", |b| b.iter(|| bench_sort(&arr)));
     c.bench_function("sort f32 nulls to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
