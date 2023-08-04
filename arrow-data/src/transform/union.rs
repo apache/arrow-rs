@@ -67,11 +67,3 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend {
         },
     )
 }
-
-pub(super) fn extend_nulls_dense(_mutable: &mut _MutableArrayData, _len: usize) {
-    panic!("cannot call extend_nulls on UnionArray as cannot infer type");
-}
-
-pub(super) fn extend_nulls_sparse(_mutable: &mut _MutableArrayData, _len: usize) {
-    panic!("cannot call extend_nulls on UnionArray as cannot infer type");
-}

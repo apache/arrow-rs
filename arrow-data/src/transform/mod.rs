@@ -295,10 +295,9 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         DataType::FixedSizeBinary(_) => fixed_binary::extend_nulls,
         DataType::Float16 => primitive::extend_nulls::<f16>,
         DataType::FixedSizeList(_, _) => fixed_size_list::extend_nulls,
-        DataType::Union(_, mode) => match mode {
-            UnionMode::Sparse => union::extend_nulls_sparse,
-            UnionMode::Dense => union::extend_nulls_dense,
-        },
+        DataType::Union(_, _) => {
+            panic!("cannot call extend_nulls on UnionArray as cannot infer type")
+        }
         DataType::RunEndEncoded(_, _) => todo!(),
     })
 }
