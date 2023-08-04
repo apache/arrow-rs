@@ -343,7 +343,18 @@ impl Bucket {
     fn size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.slots.capacity() * std::mem::size_of::<Slot>()
+        // and account for the size of any embedded buckets in the slots
+            + self.slot_child_bucket_size()
             + self.next.as_ref().map(|x| x.size()).unwrap_or_default()
+    }
+
+    /// returns the total size of any recursively allocated `Bucket`s
+    /// in self.slots. This does not include the size of the child Slot itself
+    fn slot_child_bucket_size(&self) -> usize {
+        self.slots
+            .iter()
+            .map(|slot| slot.child.as_ref().map(|x| x.size()).unwrap_or_default())
+            .sum()
     }
 }
 
