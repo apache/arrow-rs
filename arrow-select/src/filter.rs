@@ -992,7 +992,7 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_record_batch() {
+    fn test_filter_record_batch_no_columns() {
         let pred = BooleanArray::from(vec![Some(true), Some(true), None]);
         let options = RecordBatchOptions::default().with_row_count(Some(100));
         let record_batch = RecordBatch::try_new_with_options(
