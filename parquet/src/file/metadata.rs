@@ -616,7 +616,7 @@ impl ColumnChunkMetaData {
         let data_page_offset = col_metadata.data_page_offset;
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
-        let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
+        let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
         let encoding_stats = col_metadata
             .encoding_stats
             .as_ref()

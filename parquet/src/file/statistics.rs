@@ -44,6 +44,7 @@ use crate::format::Statistics as TStatistics;
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
+use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::from_le_slice;
 
 pub(crate) mod private {
@@ -119,15 +120,18 @@ macro_rules! statistics_enum_func {
 pub fn from_thrift(
     physical_type: Type,
     thrift_stats: Option<TStatistics>,
-) -> Option<Statistics> {
-    match thrift_stats {
+) -> Result<Option<Statistics>> {
+    Ok(match thrift_stats {
         Some(stats) => {
             // Number of nulls recorded, when it is not available, we just mark it as 0.
             let null_count = stats.null_count.unwrap_or(0);
-            assert!(
-                null_count >= 0,
-                "Statistics null count is negative ({null_count})"
-            );
+
+            if null_count < 0 {
+                return Err(ParquetError::General(format!(
+                    "Statistics null count is negative {}",
+                    null_count
+                )));
+            }
 
             // Generic null count.
             let null_count = null_count as u64;
@@ -221,7 +225,7 @@ pub fn from_thrift(
             Some(res)
         }
         None => None,
-    }
+    })
 }
 
 // Convert Statistics into Thrift definition.
@@ -594,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Statistics null count is negative (-10)")]
+    #[should_panic(expected = "General(\"Statistics null count is negative -10\")")]
     fn test_statistics_negative_null_count() {
         let thrift_stats = TStatistics {
             max: None,
@@ -605,13 +609,13 @@ mod tests {
             min_value: None,
         };
 
-        from_thrift(Type::INT32, Some(thrift_stats));
+        from_thrift(Type::INT32, Some(thrift_stats)).unwrap();
     }
 
     #[test]
     fn test_statistics_thrift_none() {
-        assert_eq!(from_thrift(Type::INT32, None), None);
-        assert_eq!(from_thrift(Type::BYTE_ARRAY, None), None);
+        assert_eq!(from_thrift(Type::INT32, None).unwrap(), None);
+        assert_eq!(from_thrift(Type::BYTE_ARRAY, None).unwrap(), None);
     }
 
     #[test]
@@ -715,7 +719,7 @@ mod tests {
         fn check_stats(stats: Statistics) {
             let tpe = stats.physical_type();
             let thrift_stats = to_thrift(Some(&stats));
-            assert_eq!(from_thrift(tpe, thrift_stats), Some(stats));
+            assert_eq!(from_thrift(tpe, thrift_stats).unwrap(), Some(stats));
         }
 
         check_stats(Statistics::boolean(Some(false), Some(true), None, 7, true));

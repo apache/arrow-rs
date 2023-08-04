@@ -461,7 +461,7 @@ pub(crate) fn decode_page(
                 encoding: Encoding::try_from(header.encoding)?,
                 def_level_encoding: Encoding::try_from(header.definition_level_encoding)?,
                 rep_level_encoding: Encoding::try_from(header.repetition_level_encoding)?,
-                statistics: statistics::from_thrift(physical_type, header.statistics),
+                statistics: statistics::from_thrift(physical_type, header.statistics)?,
             }
         }
         PageType::DATA_PAGE_V2 => {
@@ -477,7 +477,7 @@ pub(crate) fn decode_page(
                 def_levels_byte_len: header.definition_levels_byte_length as u32,
                 rep_levels_byte_len: header.repetition_levels_byte_length as u32,
                 is_compressed,
-                statistics: statistics::from_thrift(physical_type, header.statistics),
+                statistics: statistics::from_thrift(physical_type, header.statistics)?,
             }
         }
         _ => {
