@@ -374,7 +374,7 @@ impl<T: ArrowNativeType> Extend<T> for BufferBuilder<T> {
 
 impl<T: ArrowNativeType> From<Vec<T>> for BufferBuilder<T> {
     fn from(value: Vec<T>) -> Self {
-        Self::new_from_buffer(MutableBuffer::from_vec(value))
+        Self::new_from_buffer(MutableBuffer::from(value))
     }
 }
 
