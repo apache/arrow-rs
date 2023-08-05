@@ -502,6 +502,12 @@ impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
     }
 }
 
+impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
+    fn from(value: Vec<T>) -> Self {
+        Self::from_vec(value)
+    }
+}
+
 impl MutableBuffer {
     #[inline]
     pub(super) fn extend_from_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
