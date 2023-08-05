@@ -302,6 +302,7 @@ impl FilterPredicate {
         filter_array(values, self)
     }
 
+    /// Number of rows being selected based on this [`FilterPredicate`]
     pub fn count(&self) -> usize {
         self.count
     }
