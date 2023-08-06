@@ -112,17 +112,9 @@ impl MutableBuffer {
 
     /// Create a [`MutableBuffer`] from the provided [`Vec`] without copying
     #[inline]
+    #[deprecated(note = "Use From<Vec<T>>")]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
-        // Safety
-        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
-        let data = unsafe { NonNull::new_unchecked(vec.as_ptr() as _) };
-        let len = vec.len() * mem::size_of::<T>();
-        // Safety
-        // Vec guaranteed to have a valid layout matching that of `Layout::array`
-        // This is based on `RawVec::current_memory`
-        let layout = unsafe { Layout::array::<T>(vec.capacity()).unwrap_unchecked() };
-        mem::forget(vec);
-        Self { data, len, layout }
+        Self::from(vec)
     }
 
     /// Allocates a new [MutableBuffer] from given `Bytes`.
@@ -499,6 +491,21 @@ impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
     fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T) {
         let iterator = iter.into_iter();
         self.extend_from_iter(iterator)
+    }
+}
+
+impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
+    fn from(value: Vec<T>) -> Self {
+        // Safety
+        // Vec::as_ptr guaranteed to not be null and ArrowNativeType are trivially transmutable
+        let data = unsafe { NonNull::new_unchecked(value.as_ptr() as _) };
+        let len = value.len() * mem::size_of::<T>();
+        // Safety
+        // Vec guaranteed to have a valid layout matching that of `Layout::array`
+        // This is based on `RawVec::current_memory`
+        let layout = unsafe { Layout::array::<T>(value.capacity()).unwrap_unchecked() };
+        mem::forget(value);
+        Self { data, len, layout }
     }
 }
 
