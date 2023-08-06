@@ -142,8 +142,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          # Pinned nightly (#4651)
-          rust-version: nightly-2023-08-03
+          rust-version: nightly
       - name: Test arrow-array with SIMD
         run: cargo test -p arrow-array --features simd
       - name: Test arrow-ord with SIMD
@@ -169,8 +168,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          # Pinned nightly (#4651)
-          rust-version: nightly-2023-08-03
+          rust-version: nightly
           target: wasm32-unknown-unknown,wasm32-wasi
       - name: Build wasm32-unknown-unknown
         run: cargo build -p arrow --no-default-features --features=json,csv,ipc,simd,ffi --target wasm32-unknown-unknown
