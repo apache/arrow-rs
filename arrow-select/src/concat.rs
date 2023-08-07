@@ -97,6 +97,7 @@ pub fn concat_batches<'a>(
     schema: &SchemaRef,
     input_batches: impl IntoIterator<Item = &'a RecordBatch>,
 ) -> Result<RecordBatch, ArrowError> {
+    // When schema is empty, sum the number of the rows of all batches
     if schema.fields().is_empty() {
         let num_rows: usize = input_batches.into_iter().map(RecordBatch::num_rows).sum();
         let mut options = RecordBatchOptions::default();
