@@ -409,6 +409,18 @@ def test_record_batch_reader():
     got_batches = list(b)
     assert got_batches == batches
 
+def test_record_batch_reader_error():
+    schema = pa.schema([('ints', pa.list_(pa.int32()))])
+
+    def iter_batches():
+        yield pa.record_batch([[[1], [2, 42]]], schema)
+        raise ValueError("test error")
+
+    reader = pa.RecordBatchReader.from_batches(schema, iter_batches())
+
+    with pytest.raises(ValueError, match="test error"):
+        rust.reader_return_errors(reader)
+
 def test_reject_other_classes():
     # Arbitrary type that is not a PyArrow type
     not_pyarrow = ["hello"]
