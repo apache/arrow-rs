@@ -438,4 +438,84 @@ mod tests {
             interner.normalized_key(interned[3]) < interner.normalized_key(interned[2])
         );
     }
+
+    #[test]
+    fn test_intern_sizes() {
+        let mut interner = OrderPreservingInterner::default();
+
+        // Intern a 1K values each 8 bytes large
+        let num_items = 1000;
+        let mut values: Vec<usize> = (0..num_items).collect();
+        values.reverse();
+
+        // intern these values 1 at a time (otherwise the interner
+        // will sort them first);
+        for v in values {
+            interner.intern([Some(v.to_be_bytes())]);
+        }
+
+        let actual_size = interner.size();
+
+        // Figure out the expected size (this is a second
+        // implementation of size()) as a double check
+        let min_expected_size = BucketWalker::new()
+            .visit_bucket(&interner.bucket.as_ref())
+            .memory_estimate()
+            // hash table  size
+            + interner.lookup.capacity() *  std::mem::size_of::<Interned>()
+            // key/value storage
+            + interner.keys.buffer_size()
+            + interner.values.buffer_size();
+
+        assert!(actual_size > min_expected_size,
+                "actual_size {actual_size} not larger than min_expected_size: {min_expected_size}")
+    }
+
+    // Walks over the buckets / slots counting counting them all
+    struct BucketWalker {
+        num_buckets: usize,
+        num_slots: usize,
+    }
+
+    impl BucketWalker {
+        fn new() -> Self {
+            Self {
+                num_buckets: 0,
+                num_slots: 0,
+            }
+        }
+
+        // recursively visit the bucket and any slots/buckets contained
+        fn visit_bucket(mut self, bucket: &Bucket) -> Self {
+            self.num_buckets += 1;
+            let acc = bucket
+                .slots
+                .iter()
+                .fold(self, |acc, slot| acc.visit_slot(slot));
+
+            if let Some(next) = bucket.next.as_ref() {
+                acc.visit_bucket(next.as_ref())
+            } else {
+                acc
+            }
+        }
+
+        // recursively visit slot and any slots/buckets
+        fn visit_slot(mut self, slot: &Slot) -> Self {
+            self.num_slots += 1;
+            if let Some(child) = slot.child.as_ref() {
+                self.visit_bucket(child.as_ref())
+            } else {
+                self
+            }
+        }
+
+        // estimate how much memory is used just for Buckets / Slots
+        // (an underestimate of the total memory used for the
+        // interner as it doesn't contain any actual values)
+        fn memory_estimate(self) -> usize {
+            self.num_buckets * std::mem::size_of::<Bucket>()
+                + self.num_slots * std::mem::size_of::<Slot>()
+        }
+    }
 }
