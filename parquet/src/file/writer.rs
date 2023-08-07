@@ -183,8 +183,10 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// previous row group must be finalised and closed using `RowGroupWriter::close` method.
     pub fn next_row_group(&mut self) -> Result<SerializedRowGroupWriter<'_, W>> {
         self.assert_previous_writer_closed()?;
-        self.row_group_index += 1;
         let file_offset = self.buf.bytes_written();
+        let ordinal = self.row_group_index;
+
+        self.row_group_index += 1;
 
         let row_groups = &mut self.row_groups;
         let row_bloom_filters = &mut self.bloom_filters;
@@ -205,7 +207,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             self.descr.clone(),
             self.props.clone(),
             &mut self.buf,
-            self.row_group_index - 1,
+            ordinal,
             file_offset,
             Some(Box::new(on_close)),
         );
@@ -614,8 +616,8 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 .set_total_byte_size(self.total_uncompressed_bytes)
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
                 .set_sorting_columns(self.props.sorting_columns().cloned())
-                .set_ordinal(self.row_group_index)
-                .set_file_offset(self.file_offset)
+                .set_ordinal(self.row_group_index as i16)
+                .set_file_offset(self.file_offset as i64)
                 .build()?;
 
             let metadata = Arc::new(row_group_metadata);
@@ -1337,8 +1339,8 @@ mod tests {
             let last_group = row_group_writer.close().unwrap();
             let flushed = file_writer.flushed_row_groups();
             assert_eq!(flushed.len(), idx + 1);
-            assert_eq!(Some(idx), last_group.ordinal());
-            assert_eq!(Some(row_group_file_offset), last_group.file_offset());
+            assert_eq!(Some(idx as i16), last_group.ordinal());
+            assert_eq!(Some(row_group_file_offset as i64), last_group.file_offset());
             assert_eq!(flushed[idx].as_ref(), last_group.as_ref());
         }
         let file_metadata = file_writer.close().unwrap();

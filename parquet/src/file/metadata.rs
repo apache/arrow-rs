@@ -278,8 +278,8 @@ pub struct RowGroupMetaData {
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
     // We can't infer from file offset of first column since there may empty columns in row group.
-    file_offset: Option<usize>,
-    ordinal: Option<usize>,
+    file_offset: Option<i64>,
+    ordinal: Option<i16>,
 }
 
 impl RowGroupMetaData {
@@ -335,13 +335,13 @@ impl RowGroupMetaData {
 
     /// Returns ordinal of this row group in file
     #[inline(always)]
-    pub fn ordinal(&self) -> Option<usize> {
+    pub fn ordinal(&self) -> Option<i16> {
         self.ordinal
     }
 
     /// Returns file offset of this row group in file.
     #[inline(always)]
-    pub fn file_offset(&self) -> Option<usize> {
+    pub fn file_offset(&self) -> Option<i64> {
         self.file_offset
     }
 
@@ -365,8 +365,8 @@ impl RowGroupMetaData {
             sorting_columns,
             total_byte_size,
             schema_descr,
-            file_offset: rg.file_offset.map(|v| v as usize),
-            ordinal: rg.ordinal.map(|o| o as usize),
+            file_offset: rg.file_offset,
+            ordinal: rg.ordinal,
         })
     }
 
@@ -377,9 +377,9 @@ impl RowGroupMetaData {
             total_byte_size: self.total_byte_size,
             num_rows: self.num_rows,
             sorting_columns: self.sorting_columns().cloned(),
-            file_offset: self.file_offset().map(|v| v as i64),
+            file_offset: self.file_offset(),
             total_compressed_size: Some(self.compressed_size()),
-            ordinal: self.ordinal.map(|v| v as i16),
+            ordinal: self.ordinal,
         }
     }
 
@@ -431,12 +431,12 @@ impl RowGroupMetaDataBuilder {
     }
 
     /// Sets ordinal for this row group.
-    pub fn set_ordinal(mut self, value: usize) -> Self {
+    pub fn set_ordinal(mut self, value: i16) -> Self {
         self.0.ordinal = Some(value);
         self
     }
 
-    pub fn set_file_offset(mut self, value: usize) -> Self {
+    pub fn set_file_offset(mut self, value: i64) -> Self {
         self.0.file_offset = Some(value);
         self
     }
