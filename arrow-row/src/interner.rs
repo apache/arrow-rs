@@ -454,11 +454,11 @@ mod tests {
             interner.intern([Some(v.to_be_bytes())]);
         }
 
-        let actual_size = interner.size();
+        let reported = interner.size();
 
         // Figure out the expected size (this is a second
         // implementation of size()) as a double check
-        let min_expected_size = BucketWalker::new()
+        let min_expected = BucketWalker::new()
             .visit_bucket(&interner.bucket.as_ref())
             .memory_estimate()
             // hash table  size
@@ -467,8 +467,10 @@ mod tests {
             + interner.keys.buffer_size()
             + interner.values.buffer_size();
 
-        assert!(actual_size > min_expected_size,
-                "actual_size {actual_size} not larger than min_expected_size: {min_expected_size}")
+        assert!(
+            reported > min_expected,
+            "reported size {reported} not larger than min expected size: {min_expected}"
+        )
     }
 
     // Walks over the buckets / slots counting counting them all
