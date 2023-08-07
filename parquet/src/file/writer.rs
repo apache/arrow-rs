@@ -207,8 +207,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             self.descr.clone(),
             self.props.clone(),
             &mut self.buf,
-            ordinal,
-            file_offset,
+            ordinal as i16,
             Some(Box::new(on_close)),
         );
         Ok(row_group_writer)
@@ -414,8 +413,8 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     bloom_filters: Vec<Option<Sbbf>>,
     column_indexes: Vec<Option<ColumnIndex>>,
     offset_indexes: Vec<Option<OffsetIndex>>,
-    row_group_index: usize,
-    file_offset: usize,
+    row_group_index: i16,
+    file_offset: i64,
     on_close: Option<OnCloseRowGroup<'a>>,
 }
 
@@ -432,11 +431,11 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         schema_descr: SchemaDescPtr,
         properties: WriterPropertiesPtr,
         buf: &'a mut TrackedWrite<W>,
-        row_group_index: usize,
-        file_offset: usize,
+        row_group_index: i16,
         on_close: Option<OnCloseRowGroup<'a>>,
     ) -> Self {
         let num_columns = schema_descr.num_columns();
+        let file_offset = buf.bytes_written() as i64;
         Self {
             buf,
             row_group_index,
