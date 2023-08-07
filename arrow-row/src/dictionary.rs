@@ -37,7 +37,7 @@ pub fn compute_dictionary_mapping(
         values => interner
             .intern(values.iter().map(|x| x.map(|x| x.encode()))),
         DataType::Binary => {
-            let iter = as_generic_binary_array::<i64>(values).iter();
+            let iter = as_generic_binary_array::<i32>(values).iter();
             interner.intern(iter)
         }
         DataType::LargeBinary => {

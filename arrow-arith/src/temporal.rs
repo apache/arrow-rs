@@ -181,26 +181,7 @@ pub fn using_chrono_tz_and_utc_naive_date_time(
 /// the range of [0, 23]. If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn hour_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let hour_values = hour_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&hour_values)))
-                }
-                dt => return_compute_error_with!("hour does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   hour(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("hour does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "hour", |t| t.hour() as i32)
 }
 
 /// Extracts the hours of a given temporal primitive array as an array of integers within
@@ -938,37 +919,6 @@ mod tests {
             .with_timezone("01:00".to_string());
         let err = hour(&a).unwrap_err().to_string();
         assert!(err.contains("Invalid timezone"), "{}", err);
-    }
-
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
-        let a = TimestampSecondArray::from(vec![60 * 60 * 10])
-            .with_timezone("Asia/Kolkata".to_string());
-        let b = hour(&a).unwrap();
-        assert_eq!(15, b.value(0));
-    }
-
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_temporal_array_timestamp_hour_with_dst_timezone_using_chrono_tz() {
-        //
-        // 1635577147 converts to 2021-10-30 17:59:07 in time zone Australia/Sydney (AEDT)
-        // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
-        // When daylight savings is not in effect, Australia/Sydney has an offset difference of +10:00.
-
-        let a = TimestampMillisecondArray::from(vec![Some(1635577147000)])
-            .with_timezone("Australia/Sydney".to_string());
-        let b = hour(&a).unwrap();
-        assert_eq!(17, b.value(0));
-    }
-
-    #[cfg(not(feature = "chrono-tz"))]
-    #[test]
-    fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
-        let a = TimestampSecondArray::from(vec![60 * 60 * 10])
-            .with_timezone("Asia/Kolkatta".to_string());
-        assert!(matches!(hour(&a), Err(ArrowError::ParseError(_))))
     }
 
     #[test]

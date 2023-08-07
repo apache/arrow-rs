@@ -266,7 +266,7 @@ fn like<'a, S: ArrayAccessor<Item = &'a str>>(
     right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, false, |re_pattern| {
-        Regex::new(&format!("^{re_pattern}$")).map_err(|e| {
+        Regex::new(&format!("(?s)^{re_pattern}$")).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {e}"
             ))
@@ -312,7 +312,7 @@ fn like_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
         }))
     } else {
         let re_pattern = replace_like_wildcards(right)?;
-        let re = Regex::new(&format!("^{re_pattern}$")).map_err(|e| {
+        let re = Regex::new(&format!("(?s)^{re_pattern}$")).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {e}"
             ))
@@ -395,7 +395,7 @@ fn nlike<'a, S: ArrayAccessor<Item = &'a str>>(
     right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, true, |re_pattern| {
-        Regex::new(&format!("^{re_pattern}$")).map_err(|e| {
+        Regex::new(&format!("(?s)^{re_pattern}$")).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {e}"
             ))
@@ -442,7 +442,7 @@ fn ilike<'a, S: ArrayAccessor<Item = &'a str>>(
     right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, false, |re_pattern| {
-        Regex::new(&format!("(?i)^{re_pattern}$")).map_err(|e| {
+        Regex::new(&format!("(?is)^{re_pattern}$")).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from ILIKE pattern: {e}"
             ))
@@ -487,7 +487,7 @@ fn ilike_scalar_op<O: OffsetSizeTrait, F: Fn(bool) -> bool>(
     }
 
     let re_pattern = replace_like_wildcards(right)?;
-    let re = Regex::new(&format!("(?i)^{re_pattern}$")).map_err(|e| {
+    let re = Regex::new(&format!("(?is)^{re_pattern}$")).map_err(|e| {
         ArrowError::ComputeError(format!("Unable to build regex from ILIKE pattern: {e}"))
     })?;
 
@@ -530,7 +530,7 @@ fn nilike<'a, S: ArrayAccessor<Item = &'a str>>(
     right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, true, |re_pattern| {
-        Regex::new(&format!("(?i)^{re_pattern}$")).map_err(|e| {
+        Regex::new(&format!("(?is)^{re_pattern}$")).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from ILIKE pattern: {e}"
             ))
@@ -1368,6 +1368,7 @@ mod tests {
             Some("Air"),
             None,
             Some("Air"),
+            Some("bbbbb\nAir"),
         ];
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
@@ -1380,7 +1381,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(false),
             ]),
         );
 
@@ -1392,7 +1394,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(false),
             ]),
         );
 
@@ -1404,7 +1407,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1416,7 +1420,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1428,7 +1433,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1440,7 +1446,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1452,7 +1459,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1464,7 +1472,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1476,7 +1485,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1488,7 +1498,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
     }
@@ -1502,6 +1513,7 @@ mod tests {
             Some("Air"),
             None,
             Some("Air"),
+            Some("bbbbb\nAir"),
         ];
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
@@ -1514,7 +1526,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(true),
             ]),
         );
 
@@ -1526,7 +1539,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(true),
             ]),
         );
 
@@ -1538,7 +1552,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1550,7 +1565,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1562,7 +1578,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1574,7 +1591,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1586,7 +1604,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1598,7 +1617,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1610,7 +1630,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1622,7 +1643,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
     }
@@ -1636,6 +1658,7 @@ mod tests {
             Some("Air"),
             None,
             Some("Air"),
+            Some("bbbbb\nAir"),
         ];
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
@@ -1648,7 +1671,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(false),
             ]),
         );
 
@@ -1660,7 +1684,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(false),
             ]),
         );
 
@@ -1672,7 +1697,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1684,7 +1710,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1696,7 +1723,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1708,7 +1736,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1720,7 +1749,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1732,7 +1762,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1744,7 +1775,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1756,7 +1788,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
     }
@@ -1770,6 +1803,7 @@ mod tests {
             Some("Air"),
             None,
             Some("Air"),
+            Some("bbbbb\nAir"),
         ];
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
@@ -1782,7 +1816,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(true),
             ]),
         );
 
@@ -1794,7 +1829,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(true),
             ]),
         );
 
@@ -1806,7 +1842,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1818,7 +1855,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1830,7 +1868,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1842,7 +1881,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1854,7 +1894,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1866,7 +1907,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1878,7 +1920,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1890,7 +1933,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
     }

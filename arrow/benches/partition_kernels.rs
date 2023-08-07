@@ -20,13 +20,13 @@ extern crate criterion;
 use criterion::Criterion;
 use std::sync::Arc;
 extern crate arrow;
-use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::{lexsort, SortColumn};
 use arrow::util::bench_util::*;
 use arrow::{
     array::*,
     datatypes::{ArrowPrimitiveType, Float64Type, UInt8Type},
 };
+use arrow_ord::partition::partition;
 use rand::distributions::{Distribution, Standard};
 use std::iter;
 
@@ -40,19 +40,7 @@ where
 }
 
 fn bench_partition(sorted_columns: &[ArrayRef]) {
-    let columns = sorted_columns
-        .iter()
-        .map(|arr| SortColumn {
-            values: arr.clone(),
-            options: None,
-        })
-        .collect::<Vec<_>>();
-
-    criterion::black_box(
-        lexicographical_partition_ranges(&columns)
-            .unwrap()
-            .collect::<Vec<_>>(),
-    );
+    criterion::black_box(partition(sorted_columns).unwrap().ranges());
 }
 
 fn create_sorted_low_cardinality_data(length: usize) -> Vec<ArrayRef> {
@@ -109,37 +97,34 @@ fn create_sorted_data(pow: u32, with_nulls: bool) -> Vec<ArrayRef> {
 
 fn add_benchmark(c: &mut Criterion) {
     let sorted_columns = create_sorted_data(10, false);
-    c.bench_function("lexicographical_partition_ranges(u8) 2^10", |b| {
+    c.bench_function("partition(u8) 2^10", |b| {
         b.iter(|| bench_partition(&sorted_columns))
     });
 
     let sorted_columns = create_sorted_data(12, false);
-    c.bench_function("lexicographical_partition_ranges(u8) 2^12", |b| {
+    c.bench_function("partition(u8) 2^12", |b| {
         b.iter(|| bench_partition(&sorted_columns))
     });
 
     let sorted_columns = create_sorted_data(10, true);
-    c.bench_function(
-        "lexicographical_partition_ranges(u8) 2^10 with nulls",
-        |b| b.iter(|| bench_partition(&sorted_columns)),
-    );
+    c.bench_function("partition(u8) 2^10 with nulls", |b| {
+        b.iter(|| bench_partition(&sorted_columns))
+    });
 
     let sorted_columns = create_sorted_data(12, true);
-    c.bench_function(
-        "lexicographical_partition_ranges(u8) 2^12 with nulls",
-        |b| b.iter(|| bench_partition(&sorted_columns)),
-    );
+    c.bench_function("partition(u8) 2^12 with nulls", |b| {
+        b.iter(|| bench_partition(&sorted_columns))
+    });
 
     let sorted_columns = create_sorted_float_data(10, false);
-    c.bench_function("lexicographical_partition_ranges(f64) 2^10", |b| {
+    c.bench_function("partition(f64) 2^10", |b| {
         b.iter(|| bench_partition(&sorted_columns))
     });
 
     let sorted_columns = create_sorted_low_cardinality_data(1024);
-    c.bench_function(
-        "lexicographical_partition_ranges(low cardinality) 1024",
-        |b| b.iter(|| bench_partition(&sorted_columns)),
-    );
+    c.bench_function("partition(low cardinality) 1024", |b| {
+        b.iter(|| bench_partition(&sorted_columns))
+    });
 }
 
 criterion_group!(benches, add_benchmark);

@@ -43,8 +43,8 @@ use url::Url;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId,
+    ObjectMeta, ObjectStore, Result, RetryConfig,
 };
 
 mod client;
@@ -231,6 +231,12 @@ impl HttpBuilder {
         self
     }
 
+    /// Set individual client configuration without overriding the entire config
+    pub fn with_config(mut self, key: ClientConfigKey, value: impl Into<String>) -> Self {
+        self.client_options = self.client_options.with_config(key, value);
+        self
+    }
+
     /// Sets the client options, overriding any already set
     pub fn with_client_options(mut self, options: ClientOptions) -> Self {
         self.client_options = options;
@@ -256,12 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_test() {
-        dotenv::dotenv().ok();
-        let force = std::env::var("TEST_INTEGRATION");
-        if force.is_err() {
-            eprintln!("skipping HTTP integration test - set TEST_INTEGRATION to run");
-            return;
-        }
+        crate::test_util::maybe_skip_integration!();
         let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
         let options = ClientOptions::new().with_allow_http(true);
         let integration = HttpBuilder::new()

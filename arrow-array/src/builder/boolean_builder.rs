@@ -169,6 +169,11 @@ impl BooleanBuilder {
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
     }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
 }
 
 impl ArrayBuilder for BooleanBuilder {
@@ -190,11 +195,6 @@ impl ArrayBuilder for BooleanBuilder {
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.values_builder.len()
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.values_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.

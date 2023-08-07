@@ -250,8 +250,8 @@ pub use client::{backoff::BackoffConfig, retry::RetryConfig, CredentialProvider}
 #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
 mod config;
 
-#[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
-mod multipart;
+#[cfg(feature = "cloud")]
+pub mod multipart;
 mod parse;
 mod util;
 
@@ -270,10 +270,11 @@ use std::fmt::{Debug, Formatter};
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
+use std::sync::Arc;
 use tokio::io::AsyncWrite;
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp", feature = "http"))]
-pub use client::ClientOptions;
+pub use client::{ClientConfigKey, ClientOptions};
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
@@ -526,104 +527,122 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 }
 
-#[async_trait]
-impl ObjectStore for Box<dyn ObjectStore> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.as_ref().put(location, bytes).await
-    }
+macro_rules! as_ref_impl {
+    ($type:ty) => {
+        #[async_trait]
+        impl ObjectStore for $type {
+            async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+                self.as_ref().put(location, bytes).await
+            }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        self.as_ref().put_multipart(location).await
-    }
+            async fn put_multipart(
+                &self,
+                location: &Path,
+            ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+                self.as_ref().put_multipart(location).await
+            }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
-        self.as_ref().abort_multipart(location, multipart_id).await
-    }
+            async fn abort_multipart(
+                &self,
+                location: &Path,
+                multipart_id: &MultipartId,
+            ) -> Result<()> {
+                self.as_ref().abort_multipart(location, multipart_id).await
+            }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-        self.as_ref().append(location).await
-    }
+            async fn append(
+                &self,
+                location: &Path,
+            ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+                self.as_ref().append(location).await
+            }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        self.as_ref().get(location).await
-    }
+            async fn get(&self, location: &Path) -> Result<GetResult> {
+                self.as_ref().get(location).await
+            }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        self.as_ref().get_opts(location, options).await
-    }
+            async fn get_opts(
+                &self,
+                location: &Path,
+                options: GetOptions,
+            ) -> Result<GetResult> {
+                self.as_ref().get_opts(location, options).await
+            }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        self.as_ref().get_range(location, range).await
-    }
+            async fn get_range(
+                &self,
+                location: &Path,
+                range: Range<usize>,
+            ) -> Result<Bytes> {
+                self.as_ref().get_range(location, range).await
+            }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
-        self.as_ref().get_ranges(location, ranges).await
-    }
+            async fn get_ranges(
+                &self,
+                location: &Path,
+                ranges: &[Range<usize>],
+            ) -> Result<Vec<Bytes>> {
+                self.as_ref().get_ranges(location, ranges).await
+            }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        self.as_ref().head(location).await
-    }
+            async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+                self.as_ref().head(location).await
+            }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        self.as_ref().delete(location).await
-    }
+            async fn delete(&self, location: &Path) -> Result<()> {
+                self.as_ref().delete(location).await
+            }
 
-    fn delete_stream<'a>(
-        &'a self,
-        locations: BoxStream<'a, Result<Path>>,
-    ) -> BoxStream<'a, Result<Path>> {
-        self.as_ref().delete_stream(locations)
-    }
+            fn delete_stream<'a>(
+                &'a self,
+                locations: BoxStream<'a, Result<Path>>,
+            ) -> BoxStream<'a, Result<Path>> {
+                self.as_ref().delete_stream(locations)
+            }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        self.as_ref().list(prefix).await
-    }
+            async fn list(
+                &self,
+                prefix: Option<&Path>,
+            ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+                self.as_ref().list(prefix).await
+            }
 
-    async fn list_with_offset(
-        &self,
-        prefix: Option<&Path>,
-        offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        self.as_ref().list_with_offset(prefix, offset).await
-    }
+            async fn list_with_offset(
+                &self,
+                prefix: Option<&Path>,
+                offset: &Path,
+            ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+                self.as_ref().list_with_offset(prefix, offset).await
+            }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        self.as_ref().list_with_delimiter(prefix).await
-    }
+            async fn list_with_delimiter(
+                &self,
+                prefix: Option<&Path>,
+            ) -> Result<ListResult> {
+                self.as_ref().list_with_delimiter(prefix).await
+            }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.as_ref().copy(from, to).await
-    }
+            async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().copy(from, to).await
+            }
 
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-        self.as_ref().rename(from, to).await
-    }
+            async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().rename(from, to).await
+            }
 
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.as_ref().copy_if_not_exists(from, to).await
-    }
+            async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().copy_if_not_exists(from, to).await
+            }
 
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.as_ref().rename_if_not_exists(from, to).await
-    }
+            async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().rename_if_not_exists(from, to).await
+            }
+        }
+    };
 }
+
+as_ref_impl!(Arc<dyn ObjectStore>);
+as_ref_impl!(Box<dyn ObjectStore>);
 
 /// Result of a list call that includes objects, prefixes (directories) and a
 /// token for the next set of results. Individual result sets may be limited to
@@ -890,6 +909,16 @@ impl From<Error> for std::io::Error {
 mod test_util {
     use super::*;
     use futures::TryStreamExt;
+
+    macro_rules! maybe_skip_integration {
+        () => {
+            if std::env::var("TEST_INTEGRATION").is_err() {
+                eprintln!("Skipping integration test - set TEST_INTEGRATION");
+                return;
+            }
+        };
+    }
+    pub(crate) use maybe_skip_integration;
 
     pub async fn flatten_list_stream(
         storage: &DynObjectStore,
@@ -1239,6 +1268,15 @@ mod tests {
         }
 
         delete_fixtures(storage).await;
+
+        let path = Path::from("empty");
+        storage.put(&path, Bytes::new()).await.unwrap();
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.size, 0);
+        let data = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(data.len(), 0);
+
+        storage.delete(&path).await.unwrap();
     }
 
     pub(crate) async fn get_opts(storage: &dyn ObjectStore) {

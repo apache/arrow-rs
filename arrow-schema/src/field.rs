@@ -170,7 +170,7 @@ impl Field {
 
     /// Create a new [`Field`] with [`DataType::Struct`]
     ///
-    /// - `name`: the name of the [`DataType::List`] field
+    /// - `name`: the name of the [`DataType::Struct`] field
     /// - `fields`: the description of each struct element
     /// - `nullable`: if the [`DataType::Struct`] array is nullable
     pub fn new_struct(
@@ -186,8 +186,6 @@ impl Field {
     /// - `name`: the name of the [`DataType::List`] field
     /// - `value`: the description of each list element
     /// - `nullable`: if the [`DataType::List`] array is nullable
-    ///
-    /// Uses "item" as the name of the child field, this can be overridden with [`Self::new`]
     pub fn new_list(
         name: impl Into<String>,
         value: impl Into<FieldRef>,

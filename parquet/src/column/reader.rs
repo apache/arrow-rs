@@ -212,14 +212,17 @@ where
         Ok((values, levels))
     }
 
-    /// Read up to `num_records` returning the number of complete records, non-null
-    /// values and levels decoded
+    /// Read up to `max_records` whole records, returning the number of complete
+    /// records, non-null values and levels decoded. All levels for a given record
+    /// will be read, i.e. the next repetition level, if any, will be 0
     ///
-    /// If the max definition level is 0, `def_levels` will be ignored, otherwise it will be
+    /// If the max definition level is 0, `def_levels` will be ignored and the number of records,
+    /// non-null values and levels decoded will all be equal, otherwise `def_levels` will be
     /// populated with the number of levels read, with an error returned if it is `None`.
     ///
-    /// If the max repetition level is 0, `rep_levels` will be ignored, otherwise it will be
-    /// populated with the number of levels read, with an error returned if it is `None`.
+    /// If the max repetition level is 0, `rep_levels` will be ignored and the number of records
+    /// and levels decoded will both be equal, otherwise `rep_levels` will be populated with
+    /// the number of levels read, with an error returned if it is `None`.
     ///
     /// `values` will be contiguously populated with the non-null values. Note that if the column
     /// is not required, this may be less than either `max_records` or the number of levels read

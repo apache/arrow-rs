@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Cloud Multipart Upload
+//!
+//! This crate provides an asynchronous interface for multipart file uploads to cloud storage services.
+//! It's designed to offer efficient, non-blocking operations,
+//! especially useful when dealing with large files or high-throughput systems.
+
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, Future, StreamExt};
 use std::{io, pin::Pin, sync::Arc, task::Poll};
@@ -25,37 +31,33 @@ use crate::Result;
 type BoxedTryFuture<T> = Pin<Box<dyn Future<Output = Result<T, io::Error>> + Send>>;
 
 /// A trait that can be implemented by cloud-based object stores
-/// and used in combination with [`CloudMultiPartUpload`] to provide
+/// and used in combination with [`WriteMultiPart`] to provide
 /// multipart upload support
 #[async_trait]
-pub(crate) trait CloudMultiPartUploadImpl: 'static {
+pub trait PutPart: Send + Sync + 'static {
     /// Upload a single part
-    async fn put_multipart_part(
-        &self,
-        buf: Vec<u8>,
-        part_idx: usize,
-    ) -> Result<UploadPart, io::Error>;
+    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId>;
 
     /// Complete the upload with the provided parts
     ///
     /// `completed_parts` is in order of part number
-    async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error>;
+    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()>;
 }
 
+/// Represents a part of a file that has been successfully uploaded in a multipart upload process.
 #[derive(Debug, Clone)]
-pub(crate) struct UploadPart {
+pub struct PartId {
+    /// Id of this part
     pub content_id: String,
 }
 
-pub(crate) struct CloudMultiPartUpload<T>
-where
-    T: CloudMultiPartUploadImpl,
-{
+/// Wrapper around a [`PutPart`] that implements [`AsyncWrite`]
+pub struct WriteMultiPart<T: PutPart> {
     inner: Arc<T>,
     /// A list of completed parts, in sequential order.
-    completed_parts: Vec<Option<UploadPart>>,
+    completed_parts: Vec<Option<PartId>>,
     /// Part upload tasks currently running
-    tasks: FuturesUnordered<BoxedTryFuture<(usize, UploadPart)>>,
+    tasks: FuturesUnordered<BoxedTryFuture<(usize, PartId)>>,
     /// Maximum number of upload tasks to run concurrently
     max_concurrency: usize,
     /// Buffer that will be sent in next upload.
@@ -71,10 +73,8 @@ where
     completion_task: Option<BoxedTryFuture<()>>,
 }
 
-impl<T> CloudMultiPartUpload<T>
-where
-    T: CloudMultiPartUploadImpl,
-{
+impl<T: PutPart> WriteMultiPart<T> {
+    /// Create a new multipart upload with the implementation and the given maximum concurrency
     pub fn new(inner: T, max_concurrency: usize) -> Self {
         Self {
             inner: Arc::new(inner),
@@ -103,7 +103,8 @@ where
         to_copy
     }
 
-    pub fn poll_tasks(
+    /// Poll current tasks
+    fn poll_tasks(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Result<(), io::Error> {
@@ -119,12 +120,7 @@ where
         }
         Ok(())
     }
-}
 
-impl<T> CloudMultiPartUpload<T>
-where
-    T: CloudMultiPartUploadImpl + Send + Sync,
-{
     // The `poll_flush` function will only flush the in-progress tasks.
     // The `final_flush` method called during `poll_shutdown` will flush
     // the `current_buffer` along with in-progress tasks.
@@ -142,7 +138,7 @@ where
             let inner = Arc::clone(&self.inner);
             let part_idx = self.current_part_idx;
             self.tasks.push(Box::pin(async move {
-                let upload_part = inner.put_multipart_part(out_buffer, part_idx).await?;
+                let upload_part = inner.put_part(out_buffer, part_idx).await?;
                 Ok((part_idx, upload_part))
             }));
         }
@@ -158,10 +154,7 @@ where
     }
 }
 
-impl<T> AsyncWrite for CloudMultiPartUpload<T>
-where
-    T: CloudMultiPartUploadImpl + Send + Sync,
-{
+impl<T: PutPart> AsyncWrite for WriteMultiPart<T> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -188,7 +181,7 @@ where
             let inner = Arc::clone(&self.inner);
             let part_idx = self.current_part_idx;
             self.tasks.push(Box::pin(async move {
-                let upload_part = inner.put_multipart_part(out_buffer, part_idx).await?;
+                let upload_part = inner.put_part(out_buffer, part_idx).await?;
                 Ok((part_idx, upload_part))
             }));
             self.current_part_idx += 1;
@@ -255,5 +248,18 @@ where
         });
 
         Pin::new(completion_task).poll(cx)
+    }
+}
+
+impl<T: PutPart> std::fmt::Debug for WriteMultiPart<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WriteMultiPart")
+            .field("completed_parts", &self.completed_parts)
+            .field("tasks", &self.tasks)
+            .field("max_concurrency", &self.max_concurrency)
+            .field("current_buffer", &self.current_buffer)
+            .field("part_size", &self.part_size)
+            .field("current_part_idx", &self.current_part_idx)
+            .finish()
     }
 }

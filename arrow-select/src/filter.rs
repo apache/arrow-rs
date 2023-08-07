@@ -187,8 +187,8 @@ pub fn filter_record_batch(
         .iter()
         .map(|a| filter_array(a, &filter))
         .collect::<Result<Vec<_>, _>>()?;
-
-    RecordBatch::try_new(record_batch.schema(), filtered_arrays)
+    let options = RecordBatchOptions::default().with_row_count(Some(filter.count()));
+    RecordBatch::try_new_with_options(record_batch.schema(), filtered_arrays, &options)
 }
 
 /// A builder to construct [`FilterPredicate`]
@@ -301,6 +301,11 @@ impl FilterPredicate {
     pub fn filter(&self, values: &dyn Array) -> Result<ArrayRef, ArrowError> {
         filter_array(values, self)
     }
+
+    /// Number of rows being selected based on this [`FilterPredicate`]
+    pub fn count(&self) -> usize {
+        self.count
+    }
 }
 
 fn filter_array(
@@ -321,16 +326,6 @@ fn filter_array(
         // actually filter
         _ => downcast_primitive_array! {
             values => Ok(Arc::new(filter_primitive(values, predicate))),
-            DataType::Decimal128(p, s) => {
-                let values = values.as_any().downcast_ref::<Decimal128Array>().unwrap();
-                let filtered = filter_primitive(values, predicate);
-                Ok(Arc::new(filtered.with_precision_and_scale(*p, *s).unwrap()))
-            }
-            DataType::Decimal256(p, s) => {
-                let values = values.as_any().downcast_ref::<Decimal256Array>().unwrap();
-                let filtered = filter_primitive(values, predicate);
-                Ok(Arc::new(filtered.with_precision_and_scale(*p, *s).unwrap()))
-            }
             DataType::Boolean => {
                 let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
                 Ok(Arc::new(filter_boolean(values, predicate)))
@@ -985,6 +980,21 @@ mod tests {
         let mask1 = BooleanArray::from(vec![Some(true), Some(true), None]);
         let out = filter(&a, &mask1).unwrap();
         assert_eq!(out.as_ref(), &a.slice(0, 2));
+    }
+
+    #[test]
+    fn test_filter_record_batch_no_columns() {
+        let pred = BooleanArray::from(vec![Some(true), Some(true), None]);
+        let options = RecordBatchOptions::default().with_row_count(Some(100));
+        let record_batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &options,
+        )
+        .unwrap();
+        let out = filter_record_batch(&record_batch, &pred).unwrap();
+
+        assert_eq!(out.num_rows(), 2);
     }
 
     #[test]

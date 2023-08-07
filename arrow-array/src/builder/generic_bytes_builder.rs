@@ -189,11 +189,6 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
         self.null_buffer_builder.len()
     }
 
-    /// Returns whether the number of binary slots is zero
-    fn is_empty(&self) -> bool {
-        self.null_buffer_builder.is_empty()
-    }
-
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())

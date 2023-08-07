@@ -29,7 +29,6 @@
 //! to abort the upload and drop those unneeded parts. In addition, you may wish to
 //! consider implementing automatic clean up of unused parts that are older than one
 //! week.
-use std::io;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -52,7 +51,7 @@ use crate::client::{
     TokenCredentialProvider,
 };
 use crate::{
-    multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
+    multipart::{PartId, PutPart, WriteMultiPart},
     path::{Path, DELIMITER},
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Result, RetryConfig,
@@ -117,6 +116,15 @@ enum Error {
     #[snafu(display("Error getting put response body: {}", source))]
     PutResponseBody { source: reqwest::Error },
 
+    #[snafu(display("Got invalid put response: {}", source))]
+    InvalidPutResponse { source: quick_xml::de::DeError },
+
+    #[snafu(display("Error performing post request {}: {}", path, source))]
+    PostRequest {
+        source: crate::client::retry::Error,
+        path: String,
+    },
+
     #[snafu(display("Error decoding object size: {}", source))]
     InvalidSize { source: std::num::ParseIntError },
 
@@ -148,6 +156,12 @@ enum Error {
 
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
+
+    #[snafu(display("ETag Header missing from response"))]
+    MissingEtag,
+
+    #[snafu(display("Received header containing non-ASCII data"))]
+    BadHeader { source: header::ToStrError },
 }
 
 impl From<Error> for super::Error {
@@ -283,14 +297,9 @@ impl GoogleCloudStorageClient {
             })?;
 
         let data = response.bytes().await.context(PutResponseBodySnafu)?;
-        let result: InitiateMultipartUploadResult = quick_xml::de::from_reader(
-            data.as_ref().reader(),
-        )
-        .context(InvalidXMLResponseSnafu {
-            method: "POST".to_string(),
-            url,
-            data,
-        })?;
+        let result: InitiateMultipartUploadResult =
+            quick_xml::de::from_reader(data.as_ref().reader())
+                .context(InvalidPutResponseSnafu)?;
 
         Ok(result.upload_id)
     }
@@ -472,24 +481,16 @@ struct GCSMultipartUpload {
 }
 
 #[async_trait]
-impl CloudMultiPartUploadImpl for GCSMultipartUpload {
+impl PutPart for GCSMultipartUpload {
     /// Upload an object part <https://cloud.google.com/storage/docs/xml-api/put-object-multipart>
-    async fn put_multipart_part(
-        &self,
-        buf: Vec<u8>,
-        part_idx: usize,
-    ) -> Result<UploadPart, io::Error> {
+    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
         let upload_id = self.multipart_id.clone();
         let url = format!(
             "{}/{}/{}",
             self.client.base_url, self.client.bucket_name_encoded, self.encoded_path
         );
 
-        let credential = self
-            .client
-            .get_credential()
-            .await
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        let credential = self.client.get_credential().await?;
 
         let response = self
             .client
@@ -504,26 +505,24 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             .header(header::CONTENT_LENGTH, format!("{}", buf.len()))
             .body(buf)
             .send_retry(&self.client.retry_config)
-            .await?;
+            .await
+            .context(PutRequestSnafu {
+                path: &self.encoded_path,
+            })?;
 
         let content_id = response
             .headers()
             .get("ETag")
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "response headers missing ETag",
-                )
-            })?
+            .context(MissingEtagSnafu)?
             .to_str()
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+            .context(BadHeaderSnafu)?
             .to_string();
 
-        Ok(UploadPart { content_id })
+        Ok(PartId { content_id })
     }
 
     /// Complete a multipart upload <https://cloud.google.com/storage/docs/xml-api/post-object-complete>
-    async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error> {
+    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
         let upload_id = self.multipart_id.clone();
         let url = format!(
             "{}/{}/{}",
@@ -539,16 +538,11 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             })
             .collect();
 
-        let credential = self
-            .client
-            .get_credential()
-            .await
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
-
+        let credential = self.client.get_credential().await?;
         let upload_info = CompleteMultipartUpload { parts };
 
         let data = quick_xml::se::to_string(&upload_info)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?
+            .context(InvalidPutResponseSnafu)?
             // We cannot disable the escaping that transforms "/" to "&quote;" :(
             // https://github.com/tafia/quick-xml/issues/362
             // https://github.com/tafia/quick-xml/issues/350
@@ -561,7 +555,10 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
             .query(&[("uploadId", upload_id)])
             .body(data)
             .send_retry(&self.client.retry_config)
-            .await?;
+            .await
+            .context(PostRequestSnafu {
+                path: &self.encoded_path,
+            })?;
 
         Ok(())
     }
@@ -588,7 +585,7 @@ impl ObjectStore for GoogleCloudStorage {
             multipart_id: upload_id.clone(),
         };
 
-        Ok((upload_id, Box::new(CloudMultiPartUpload::new(inner, 8))))
+        Ok((upload_id, Box::new(WriteMultiPart::new(inner, 8))))
     }
 
     async fn abort_multipart(
@@ -1093,7 +1090,6 @@ impl GoogleCloudStorageBuilder {
 mod test {
     use bytes::Bytes;
     use std::collections::HashMap;
-    use std::env;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -1104,56 +1100,10 @@ mod test {
     const FAKE_KEY: &str = r#"{"private_key": "private_key", "client_email":"client_email", "disable_oauth":true}"#;
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
-    // Helper macro to skip tests if TEST_INTEGRATION and the GCP environment variables are not set.
-    macro_rules! maybe_skip_integration {
-        () => {{
-            dotenv::dotenv().ok();
-
-            let required_vars = ["OBJECT_STORE_BUCKET", "GOOGLE_SERVICE_ACCOUNT"];
-            let unset_vars: Vec<_> = required_vars
-                .iter()
-                .filter_map(|&name| match env::var(name) {
-                    Ok(_) => None,
-                    Err(_) => Some(name),
-                })
-                .collect();
-            let unset_var_names = unset_vars.join(", ");
-
-            let force = std::env::var("TEST_INTEGRATION");
-
-            if force.is_ok() && !unset_var_names.is_empty() {
-                panic!(
-                    "TEST_INTEGRATION is set, \
-                            but variable(s) {} need to be set",
-                    unset_var_names
-                )
-            } else if force.is_err() {
-                eprintln!(
-                    "skipping Google Cloud integration test - set {}TEST_INTEGRATION to run",
-                    if unset_var_names.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{} and ", unset_var_names)
-                    }
-                );
-                return;
-            } else {
-                GoogleCloudStorageBuilder::new()
-                    .with_bucket_name(
-                        env::var("OBJECT_STORE_BUCKET")
-                            .expect("already checked OBJECT_STORE_BUCKET")
-                    )
-                    .with_service_account_path(
-                        env::var("GOOGLE_SERVICE_ACCOUNT")
-                            .expect("already checked GOOGLE_SERVICE_ACCOUNT")
-                    )
-            }
-        }};
-    }
-
     #[tokio::test]
     async fn gcs_test() {
-        let integration = maybe_skip_integration!().build().unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
 
         put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
@@ -1173,7 +1123,8 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_get_nonexistent_location() {
-        let integration = maybe_skip_integration!().build().unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1187,10 +1138,9 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_get_nonexistent_bucket() {
-        let integration = maybe_skip_integration!()
-            .with_bucket_name(NON_EXISTENT_NAME)
-            .build()
-            .unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let config = GoogleCloudStorageBuilder::from_env();
+        let integration = config.with_bucket_name(NON_EXISTENT_NAME).build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1206,7 +1156,8 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_delete_nonexistent_location() {
-        let integration = maybe_skip_integration!().build().unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1219,10 +1170,9 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_delete_nonexistent_bucket() {
-        let integration = maybe_skip_integration!()
-            .with_bucket_name(NON_EXISTENT_NAME)
-            .build()
-            .unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let config = GoogleCloudStorageBuilder::from_env();
+        let integration = config.with_bucket_name(NON_EXISTENT_NAME).build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1235,10 +1185,9 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_put_nonexistent_bucket() {
-        let integration = maybe_skip_integration!()
-            .with_bucket_name(NON_EXISTENT_NAME)
-            .build()
-            .unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let config = GoogleCloudStorageBuilder::from_env();
+        let integration = config.with_bucket_name(NON_EXISTENT_NAME).build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
         let data = Bytes::from("arbitrary data");

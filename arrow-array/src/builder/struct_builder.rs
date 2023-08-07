@@ -52,11 +52,6 @@ impl ArrayBuilder for StructBuilder {
         self.null_buffer_builder.len()
     }
 
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     /// Builds the array.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())

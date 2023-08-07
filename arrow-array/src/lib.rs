@@ -192,6 +192,9 @@ pub use arithmetic::ArrowNativeTypeOp;
 mod numeric;
 pub use numeric::*;
 
+mod scalar;
+pub use scalar::*;
+
 pub mod builder;
 pub mod cast;
 mod delta;

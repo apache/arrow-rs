@@ -100,3 +100,27 @@ jobs:
         run: rustup component add rustfmt
       - name: Run
         run: cargo fmt --all -- --check
+
+  msrv:
+    name: Verify MSRV
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Install cargo-msrv
+        run: cargo install cargo-msrv
+      - name: Check arrow
+        working-directory: arrow
+        run: cargo msrv verify
+      - name: Check parquet
+        working-directory: parquet
+        run: cargo msrv verify
+      - name: Check arrow-flight
+        working-directory: arrow-flight
+        run: cargo msrv verify
+      - name: Check object_store
+        working-directory: object_store
+        run: cargo msrv verify

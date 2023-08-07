@@ -17,8 +17,8 @@
 
 //! Defines kernel for length of string arrays and binary arrays
 
-use arrow_array::types::*;
 use arrow_array::*;
+use arrow_array::{cast::AsArray, types::*};
 use arrow_buffer::Buffer;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
@@ -88,6 +88,14 @@ where
     unary_offsets!(array, T::DATA_TYPE, |x| x)
 }
 
+fn length_list_fixed_size(array: &dyn Array, length: i32) -> ArrayRef {
+    let array = array.as_fixed_size_list();
+    let length_list = array.len();
+    let buffer = Buffer::from_vec(vec![length; length_list]);
+    let data = Int32Array::new(buffer.into(), array.nulls().cloned());
+    Arc::new(data)
+}
+
 fn length_binary<O, T>(array: &dyn Array) -> ArrayRef
 where
     O: OffsetSizeTrait,
@@ -146,7 +154,7 @@ where
 /// For list array, length is the number of elements in each list.
 /// For string array and binary array, length is the number of bytes of each value.
 ///
-/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray and BinaryArray/LargeBinaryArray,
+/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray, BinaryArray/LargeBinaryArray, and FixedSizeListArray,
 ///   or DictionaryArray with above Arrays as values
 /// * length of null is null.
 pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
@@ -172,6 +180,7 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::LargeUtf8 => Ok(length_string::<i64, Int64Type>(array)),
         DataType::Binary => Ok(length_binary::<i32, Int32Type>(array)),
         DataType::LargeBinary => Ok(length_binary::<i64, Int64Type>(array)),
+        DataType::FixedSizeList(_, len) => Ok(length_list_fixed_size(array, *len)),
         other => Err(ArrowError::ComputeError(format!(
             "length not supported for {other:?}"
         ))),
@@ -215,6 +224,8 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 mod tests {
     use super::*;
     use arrow_array::cast::AsArray;
+    use arrow_buffer::NullBuffer;
+    use arrow_schema::Field;
 
     fn double_vec<T: Clone>(v: Vec<T>) -> Vec<T> {
         [&v[..], &v[..]].concat()
@@ -695,5 +706,35 @@ mod tests {
         for i in 0..TOTAL as usize {
             assert_eq!(expected[i], actual[i],);
         }
+    }
+
+    #[test]
+    fn test_fixed_size_list_length() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(9)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8]))
+            .build()
+            .unwrap();
+        let list_data_type = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int32, false)),
+            3,
+        );
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        let list_data = ArrayData::builder(list_data_type)
+            .len(3)
+            .add_child_data(value_data)
+            .nulls(Some(nulls))
+            .build()
+            .unwrap();
+        let list_array = FixedSizeListArray::from(list_data);
+
+        let lengths = length(&list_array).unwrap();
+        let lengths = lengths.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        assert_eq!(lengths.len(), 3);
+        assert_eq!(lengths.value(0), 3);
+        assert!(lengths.is_null(1));
+        assert_eq!(lengths.value(2), 3);
     }
 }

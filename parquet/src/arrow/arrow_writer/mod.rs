@@ -1651,6 +1651,27 @@ mod tests {
     }
 
     #[test]
+    fn check_page_offset_index_with_nan() {
+        let values = Arc::new(Float64Array::from(vec![f64::NAN; 10]));
+        let schema = Schema::new(vec![Field::new("col", DataType::Float64, true)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
+
+        let mut out = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut out, batch.schema(), None)
+            .expect("Unable to write file");
+        writer.write(&batch).unwrap();
+        let file_meta_data = writer.close().unwrap();
+        for row_group in file_meta_data.row_groups {
+            for column in row_group.columns {
+                assert!(column.offset_index_offset.is_some());
+                assert!(column.offset_index_length.is_some());
+                assert!(column.column_index_offset.is_none());
+                assert!(column.column_index_length.is_none());
+            }
+        }
+    }
+
+    #[test]
     fn i8_single_column() {
         required_and_optional::<Int8Array, _>(0..SMALL_SIZE as i8);
     }

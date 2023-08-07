@@ -74,7 +74,7 @@ impl Buffer {
     /// Create a [`Buffer`] from the provided [`Vec`] without copying
     #[inline]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
-        MutableBuffer::from_vec(vec).into()
+        MutableBuffer::from(vec).into()
     }
 
     /// Initializes a [Buffer] from a slice of items.
