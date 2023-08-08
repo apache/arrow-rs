@@ -4764,6 +4764,26 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_bool_to_utf8() {
+        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!("true", c.value(0));
+        assert_eq!("false", c.value(1));
+        assert!(!c.is_valid(2));
+    }
+
+    #[test]
+    fn test_cast_bool_to_large_utf8() {
+        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let b = cast(&array, &DataType::LargeUtf8).unwrap();
+        let c = b.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!("true", c.value(0));
+        assert_eq!("false", c.value(1));
+        assert!(!c.is_valid(2));
+    }
+
+    #[test]
     fn test_cast_bool_to_f64() {
         let array = BooleanArray::from(vec![Some(true), Some(false), None]);
         let b = cast(&array, &DataType::Float64).unwrap();
