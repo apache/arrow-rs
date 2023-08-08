@@ -17,7 +17,9 @@
 
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
-use crate::aws::{AwsCredentialProvider, STORE, STRICT_PATH_ENCODE_SET};
+use crate::aws::{
+    AwsCredentialProvider, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET,
+};
 use crate::client::get::GetClient;
 use crate::client::list::ListClient;
 use crate::client::list_response::ListResponse;
@@ -37,7 +39,7 @@ use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
 use reqwest::{
     header::{CONTENT_LENGTH, CONTENT_TYPE},
-    Client as ReqwestClient, Method, Response,
+    Client as ReqwestClient, Method, Response, StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
@@ -206,6 +208,7 @@ pub struct S3Config {
     pub client_options: ClientOptions,
     pub sign_payload: bool,
     pub checksum: Option<Checksum>,
+    pub copy_if_not_exists: Option<S3CopyIfNotExists>,
 }
 
 impl S3Config {
@@ -424,14 +427,37 @@ impl S3Client {
     }
 
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>
-    pub async fn copy_request(&self, from: &Path, to: &Path) -> Result<()> {
+    pub async fn copy_request(
+        &self,
+        from: &Path,
+        to: &Path,
+        overwrite: bool,
+    ) -> Result<()> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(to);
         let source = format!("{}/{}", self.config.bucket, encode_path(from));
 
-        self.client
+        let mut builder = self
+            .client
             .request(Method::PUT, url)
-            .header("x-amz-copy-source", source)
+            .header("x-amz-copy-source", source);
+
+        if !overwrite {
+            match &self.config.copy_if_not_exists {
+                Some(S3CopyIfNotExists::Header(k, v)) => {
+                    builder = builder.header(k, v);
+                }
+                None => {
+                    return Err(crate::Error::NotSupported {
+                        source: "S3 does not support copy-if-not-exists"
+                            .to_string()
+                            .into(),
+                    })
+                }
+            }
+        }
+
+        builder
             .with_aws_sigv4(
                 credential.as_ref(),
                 &self.config.region,
@@ -441,8 +467,16 @@ impl S3Client {
             )
             .send_retry(&self.config.retry_config)
             .await
-            .context(CopyRequestSnafu {
-                path: from.as_ref(),
+            .map_err(|source| match source.status() {
+                Some(StatusCode::PRECONDITION_FAILED) => crate::Error::AlreadyExists {
+                    source: Box::new(source),
+                    path: to.to_string(),
+                },
+                _ => Error::CopyRequest {
+                    source,
+                    path: from.to_string(),
+                }
+                .into(),
             })?;
 
         Ok(())

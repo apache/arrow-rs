@@ -44,7 +44,6 @@ use tokio::io::AsyncWrite;
 use tracing::info;
 use url::Url;
 
-pub use crate::aws::checksum::Checksum;
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
     InstanceCredentialProvider, TaskCredentialProvider, WebIdentityProvider,
@@ -64,7 +63,11 @@ use crate::{
 
 mod checksum;
 mod client;
+mod copy;
 mod credential;
+
+pub use checksum::Checksum;
+pub use copy::S3CopyIfNotExists;
 
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 //
@@ -292,12 +295,11 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client.copy_request(from, to).await
+        self.client.copy_request(from, to, true).await
     }
 
-    async fn copy_if_not_exists(&self, _source: &Path, _dest: &Path) -> Result<()> {
-        // Will need dynamodb_lock
-        Err(crate::Error::NotImplemented)
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        self.client.copy_request(from, to, false).await
     }
 }
 
@@ -390,6 +392,8 @@ pub struct AmazonS3Builder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AwsCredentialProvider>,
+    /// Copy if not exists
+    copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -521,6 +525,11 @@ pub enum AmazonS3ConfigKey {
     /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     ContainerCredentialsRelativeUri,
 
+    /// Configure how to provide [`ObjectStore::copy_if_not_exists`]
+    ///
+    /// See [`S3CopyIfNotExists`]
+    CopyIfNotExists,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -543,6 +552,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::ContainerCredentialsRelativeUri => {
                 "aws_container_credentials_relative_uri"
             }
+            Self::CopyIfNotExists => "copy_if_not_exists",
             Self::Client(opt) => opt.as_ref(),
         }
     }
@@ -576,6 +586,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_container_credentials_relative_uri" => {
                 Ok(Self::ContainerCredentialsRelativeUri)
             }
+            "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.parse() {
@@ -686,6 +697,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
+            AmazonS3ConfigKey::CopyIfNotExists => {
+                self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
+            }
         };
         self
     }
@@ -752,6 +766,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Client(key) => self.client_options.get_config_value(key),
             AmazonS3ConfigKey::ContainerCredentialsRelativeUri => {
                 self.container_credentials_relative_uri.clone()
+            }
+            AmazonS3ConfigKey::CopyIfNotExists => {
+                self.copy_if_not_exists.as_ref().map(ToString::to_string)
             }
         }
     }
@@ -935,6 +952,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Configure how to provide [`ObjectStore::copy_if_not_exists`]
+    pub fn with_copy_if_not_exists(mut self, config: S3CopyIfNotExists) -> Self {
+        self.copy_if_not_exists = Some(config.into());
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -945,6 +968,7 @@ impl AmazonS3Builder {
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
         let region = self.region.context(MissingRegionSnafu)?;
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
+        let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
 
         let credentials = if let Some(credentials) = self.credentials {
             credentials
@@ -1050,6 +1074,7 @@ impl AmazonS3Builder {
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
             checksum,
+            copy_if_not_exists,
         };
 
         let client = Arc::new(S3Client::new(config)?);
@@ -1062,8 +1087,9 @@ impl AmazonS3Builder {
 mod tests {
     use super::*;
     use crate::tests::{
-        get_nonexistent_object, get_opts, list_uses_directories_correctly,
-        list_with_delimiter, put_get_delete_list_opts, rename_and_copy, stream_get,
+        copy_if_not_exists, get_nonexistent_object, get_opts,
+        list_uses_directories_correctly, list_with_delimiter, put_get_delete_list_opts,
+        rename_and_copy, stream_get,
     };
     use bytes::Bytes;
     use std::collections::HashMap;
@@ -1164,6 +1190,7 @@ mod tests {
         let config = AmazonS3Builder::from_env();
 
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
+        let test_not_exists = config.copy_if_not_exists.is_some();
         let integration = config.build().unwrap();
 
         // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
@@ -1173,6 +1200,9 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
+        if test_not_exists {
+            copy_if_not_exists(&integration).await;
+        }
 
         // run integration test with unsigned payload enabled
         let config = AmazonS3Builder::from_env().with_unsigned_payload(true);
