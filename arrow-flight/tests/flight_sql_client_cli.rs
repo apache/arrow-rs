@@ -144,9 +144,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
             "part_2" => batch.slice(2, 1),
             ticket => panic!("Invalid ticket: {ticket:?}"),
         };
-        let schema = (*batch.schema()).clone();
+        let schema = batch.schema();
         let batches = vec![batch];
-        let flight_data = batches_to_flight_data(schema, batches)
+        let flight_data = batches_to_flight_data(schema.as_ref(), batches)
             .unwrap()
             .into_iter()
             .map(Ok);

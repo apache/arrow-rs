@@ -147,11 +147,11 @@ pub fn ipc_message_from_arrow_schema(
 
 /// Convert `RecordBatch`es to wire protocol `FlightData`s
 pub fn batches_to_flight_data(
-    schema: Schema,
+    schema: &Schema,
     batches: Vec<RecordBatch>,
 ) -> Result<Vec<FlightData>, ArrowError> {
     let options = IpcWriteOptions::default();
-    let schema_flight_data: FlightData = SchemaAsIpc::new(&schema, &options).into();
+    let schema_flight_data: FlightData = SchemaAsIpc::new(schema, &options).into();
     let mut dictionaries = vec![];
     let mut flight_data = vec![];
 
