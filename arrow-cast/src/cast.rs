@@ -1220,7 +1220,7 @@ pub fn cast_with_options(
                 Ok(Arc::new(
                     array
                         .iter()
-                        .map(|value| value.map(|value| if value { "1" } else { "0" }))
+                        .map(|value| value.map(|value| if value { "true" } else { "false" }))
                         .collect::<StringArray>(),
                 ))
             }
@@ -1229,7 +1229,7 @@ pub fn cast_with_options(
                 Ok(Arc::new(
                     array
                         .iter()
-                        .map(|value| value.map(|value| if value { "1" } else { "0" }))
+                        .map(|value| value.map(|value| if value { "true" } else { "false" }))
                         .collect::<LargeStringArray>(),
                 ))
             }
