@@ -459,7 +459,7 @@ mod tests {
         // Figure out the expected size (this is a second
         // implementation of size()) as a double check
         let min_expected = BucketWalker::new()
-            .visit_bucket(&interner.bucket.as_ref())
+            .visit_bucket(interner.bucket.as_ref())
             .memory_estimate()
             // hash table  size
             + interner.lookup.capacity() *  std::mem::size_of::<Interned>()
