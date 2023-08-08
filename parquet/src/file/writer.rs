@@ -183,7 +183,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// previous row group must be finalised and closed using `RowGroupWriter::close` method.
     pub fn next_row_group(&mut self) -> Result<SerializedRowGroupWriter<'_, W>> {
         self.assert_previous_writer_closed()?;
-        let file_offset = self.buf.bytes_written();
         let ordinal = self.row_group_index;
 
         self.row_group_index += 1;
@@ -615,8 +614,8 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 .set_total_byte_size(self.total_uncompressed_bytes)
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
                 .set_sorting_columns(self.props.sorting_columns().cloned())
-                .set_ordinal(self.row_group_index as i16)
-                .set_file_offset(self.file_offset as i64)
+                .set_ordinal(self.row_group_index)
+                .set_file_offset(self.file_offset)
                 .build()?;
 
             let metadata = Arc::new(row_group_metadata);
