@@ -97,6 +97,14 @@ pub fn concat_batches<'a>(
     schema: &SchemaRef,
     input_batches: impl IntoIterator<Item = &'a RecordBatch>,
 ) -> Result<RecordBatch, ArrowError> {
+    // When schema is empty, sum the number of the rows of all batches
+    if schema.fields().is_empty() {
+        let num_rows: usize = input_batches.into_iter().map(RecordBatch::num_rows).sum();
+        let mut options = RecordBatchOptions::default();
+        options.row_count = Some(num_rows);
+        return RecordBatch::try_new_with_options(schema.clone(), vec![], &options);
+    }
+
     let batches: Vec<&RecordBatch> = input_batches.into_iter().collect();
     if batches.is_empty() {
         return Ok(RecordBatch::new_empty(schema.clone()));
@@ -140,6 +148,21 @@ mod tests {
     fn test_concat_empty_vec() {
         let re = concat(&[]);
         assert!(re.is_err());
+    }
+
+    #[test]
+    fn test_concat_batches_no_columns() {
+        // Test concat using empty schema / batches without columns
+        let schema = Arc::new(Schema::empty());
+
+        let mut options = RecordBatchOptions::default();
+        options.row_count = Some(100);
+        let batch =
+            RecordBatch::try_new_with_options(schema.clone(), vec![], &options).unwrap();
+        // put in 2 batches of 100 rows each
+        let re = concat_batches(&schema, &[batch.clone(), batch]).unwrap();
+
+        assert_eq!(re.num_rows(), 200);
     }
 
     #[test]
