@@ -70,8 +70,8 @@ pub struct XdbcTypeInfo {
 /// [`CommandGetXdbcTypeInfo`] are metadata requests used by a Flight SQL
 /// server to communicate supported capabilities to Flight SQL clients.
 ///
-/// Servers constuct - usually static - [`XdbcTypeInfoData`] via the [XdbcTypeInfoDataBuilder`],
-/// and build responses by passing the [`GetXdbcTypeInfoBuilder`].
+/// Servers constuct - usually static - [`XdbcTypeInfoData`] via the [`XdbcTypeInfoDataBuilder`],
+/// and build responses using [`CommandGetXdbcTypeInfo::into_builder`].
 pub struct XdbcTypeInfoData {
     batch: RecordBatch,
 }

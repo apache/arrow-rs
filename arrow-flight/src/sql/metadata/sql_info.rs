@@ -334,8 +334,8 @@ impl SqlInfoUnionBuilder {
 /// [`CommandGetSqlInfo`] are metadata requests used by a Flight SQL
 /// server to communicate supported capabilities to Flight SQL clients.
 ///
-/// Servers constuct - usually static - [`SqlInfoData`] via the [SqlInfoDataBuilder`],
-/// and build responses by passing the [`GetSqlInfoBuilder`].
+/// Servers constuct - usually static - [`SqlInfoData`] via the [`SqlInfoDataBuilder`],
+/// and build responses using [`CommandGetSqlInfo::into_builder`]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SqlInfoDataBuilder {
     /// Use BTreeMap to ensure the values are sorted by value as

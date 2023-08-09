@@ -21,10 +21,14 @@
 //! - [`GetCatalogsBuilder`] for building responses to [`CommandGetCatalogs`] queries.
 //! - [`GetDbSchemasBuilder`] for building responses to [`CommandGetDbSchemas`] queries.
 //! - [`GetTablesBuilder`]for building responses to [`CommandGetTables`] queries.
+//! - [`SqlInfoDataBuilder`]for building responses to [`CommandGetSqlInfo`] queries.
+//! - [`XdbcTypeInfoDataBuilder`]for building responses to [`CommandGetXdbcTypeInfo`] queries.
 //!
 //! [`CommandGetCatalogs`]: crate::sql::CommandGetCatalogs
 //! [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
 //! [`CommandGetTables`]: crate::sql::CommandGetTables
+//! [`CommandGetSqlInfo`]: crate::sql::CommandGetSqlInfo
+//! [`CommandGetXdbcTypeInfo`]: crate::sql::CommandGetXdbcTypeInfo
 
 mod catalogs;
 mod db_schemas;
