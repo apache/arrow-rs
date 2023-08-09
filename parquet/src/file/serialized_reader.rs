@@ -442,9 +442,10 @@ pub(crate) fn decode_page(
 
     let result = match page_header.type_ {
         PageType::DICTIONARY_PAGE => {
-            let dict_header = page_header.dictionary_page_header.as_ref().ok_or(
-                ParquetError::General("Missing dictionary page header".to_string()),
-            )?;
+            let dict_header =
+                page_header.dictionary_page_header.as_ref().ok_or_else(|| {
+                    ParquetError::General("Missing dictionary page header".to_string())
+                })?;
             let is_sorted = dict_header.is_sorted.unwrap_or(false);
             Page::DictionaryPage {
                 buf: buffer,
@@ -454,9 +455,9 @@ pub(crate) fn decode_page(
             }
         }
         PageType::DATA_PAGE => {
-            let header = page_header.data_page_header.ok_or(ParquetError::General(
-                "Missing V1 data page header".to_string(),
-            ))?;
+            let header = page_header.data_page_header.ok_or_else(|| {
+                ParquetError::General("Missing V1 data page header".to_string())
+            })?;
             Page::DataPage {
                 buf: buffer,
                 num_values: header.num_values as u32,
@@ -467,11 +468,9 @@ pub(crate) fn decode_page(
             }
         }
         PageType::DATA_PAGE_V2 => {
-            let header = page_header
-                .data_page_header_v2
-                .ok_or(ParquetError::General(
-                    "Missing V2 data page header".to_string(),
-                ))?;
+            let header = page_header.data_page_header_v2.ok_or_else(|| {
+                ParquetError::General("Missing V2 data page header".to_string())
+            })?;
             let is_compressed = header.is_compressed.unwrap_or(true);
             Page::DataPageV2 {
                 buf: buffer,
