@@ -7334,14 +7334,10 @@ mod tests {
 
     /// Print the `DictionaryArray` `array` as a vector of strings
     fn array_to_strings(array: &ArrayRef) -> Vec<String> {
+        let options = FormatOptions::new().with_null("null");
+        let formatter = ArrayFormatter::try_new(array.as_ref(), &options).unwrap();
         (0..array.len())
-            .map(|i| {
-                if array.is_null(i) {
-                    "null".to_string()
-                } else {
-                    array_value_to_string(array, i).expect("Convert array to String")
-                }
-            })
+            .map(|i| formatter.value(i).to_string())
             .collect()
     }
 
@@ -8953,5 +8949,20 @@ mod tests {
     #[test]
     fn test_const_options() {
         assert!(CAST_OPTIONS.safe)
+    }
+
+    #[test]
+    fn test_list_format_options() {
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default().with_null("null"),
+        };
+        let array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![Some(0), None, Some(2)]),
+        ]);
+        let a = cast_with_options(&array, &DataType::Utf8, &options).unwrap();
+        let r: Vec<_> = a.as_string::<i32>().iter().map(|x| x.unwrap()).collect();
+        assert_eq!(r, &["[0, 1, 2]", "[0, null, 2]"]);
     }
 }
