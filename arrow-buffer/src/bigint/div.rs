@@ -201,7 +201,7 @@ fn full_shl<const N: usize>(v: &[u64; N], shift: u32) -> ArrayPlusOne<u64, N> {
         out[i] = v[i - 1] >> (64 - shift) | v[i] << shift
     }
     let carry = v[N - 1] >> (64 - shift);
-    return ArrayPlusOne(out, carry);
+    ArrayPlusOne(out, carry)
 }
 
 /// Narrowing right shift of an (N+1)-digit array by at most 63 bits
