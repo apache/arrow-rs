@@ -785,8 +785,8 @@ pub fn cast_with_options(
             }
         }
         (List(_) | LargeList(_), _) => match to_type {
-            Utf8 => value_to_string::<i32>(array, &cast_options),
-            LargeUtf8 => value_to_string::<i64>(array, &cast_options),
+            Utf8 => value_to_string::<i32>(array, cast_options),
+            LargeUtf8 => value_to_string::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(
                 "Cannot cast list to non-list data types".to_string(),
             )),
@@ -909,8 +909,8 @@ pub fn cast_with_options(
                         x as f64 / 10_f64.powi(*scale as i32)
                     })
                 }
-                Utf8 => value_to_string::<i32>(array, &cast_options),
-                LargeUtf8 => value_to_string::<i64>(array, &cast_options),
+                Utf8 => value_to_string::<i32>(array, cast_options),
+                LargeUtf8 => value_to_string::<i64>(array, cast_options),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {from_type:?} to {to_type:?} not supported"
@@ -978,8 +978,8 @@ pub fn cast_with_options(
                         x.to_f64().unwrap() / 10_f64.powi(*scale as i32)
                     })
                 }
-                Utf8 => value_to_string::<i32>(array, &cast_options),
-                LargeUtf8 => value_to_string::<i64>(array, &cast_options),
+                Utf8 => value_to_string::<i32>(array, cast_options),
+                LargeUtf8 => value_to_string::<i64>(array, cast_options),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {from_type:?} to {to_type:?} not supported"
@@ -1200,8 +1200,8 @@ pub fn cast_with_options(
             Float16 => cast_bool_to_numeric::<Float16Type>(array, cast_options),
             Float32 => cast_bool_to_numeric::<Float32Type>(array, cast_options),
             Float64 => cast_bool_to_numeric::<Float64Type>(array, cast_options),
-            Utf8 => value_to_string::<i32>(array, &cast_options),
-            LargeUtf8 => value_to_string::<i64>(array, &cast_options),
+            Utf8 => value_to_string::<i32>(array, cast_options),
+            LargeUtf8 => value_to_string::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -1343,8 +1343,8 @@ pub fn cast_with_options(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
-        (from_type, LargeUtf8) if from_type.is_primitive() => value_to_string::<i64>(array, &cast_options),
-        (from_type, Utf8) if from_type.is_primitive() => value_to_string::<i32>(array, &cast_options),
+        (from_type, LargeUtf8) if from_type.is_primitive() => value_to_string::<i64>(array, cast_options),
+        (from_type, Utf8) if from_type.is_primitive() => value_to_string::<i32>(array, cast_options),
         // start numeric casts
         (UInt8, UInt16) => {
             cast_numeric_arrays::<UInt8Type, UInt16Type>(array, cast_options)
