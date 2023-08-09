@@ -161,7 +161,7 @@ fn div_rem_word(hi: u64, lo: u64, divisor: u64) -> (u64, u64) {
     #[cfg(not(target_arch = "x86_64"))]
     {
         let x = (u128::from(hi) << 64) + u128::from(lo);
-        let y = u128::from(y);
+        let y = u128::from(divisor);
         ((x / y) as u64, (x % y) as u64)
     }
 }
