@@ -1220,7 +1220,7 @@ pub fn cast_with_options(
                 Ok(Arc::new(
                     array
                         .iter()
-                        .map(|value| value.map(|value| if value { "1" } else { "0" }))
+                        .map(|value| value.map(|value| if value { "true" } else { "false" }))
                         .collect::<StringArray>(),
                 ))
             }
@@ -1229,7 +1229,7 @@ pub fn cast_with_options(
                 Ok(Arc::new(
                     array
                         .iter()
-                        .map(|value| value.map(|value| if value { "1" } else { "0" }))
+                        .map(|value| value.map(|value| if value { "true" } else { "false" }))
                         .collect::<LargeStringArray>(),
                 ))
             }
@@ -4760,6 +4760,26 @@ mod tests {
         let c = b.as_primitive::<Int32Type>();
         assert_eq!(1, c.value(0));
         assert_eq!(0, c.value(1));
+        assert!(!c.is_valid(2));
+    }
+
+    #[test]
+    fn test_cast_bool_to_utf8() {
+        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!("true", c.value(0));
+        assert_eq!("false", c.value(1));
+        assert!(!c.is_valid(2));
+    }
+
+    #[test]
+    fn test_cast_bool_to_large_utf8() {
+        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let b = cast(&array, &DataType::LargeUtf8).unwrap();
+        let c = b.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!("true", c.value(0));
+        assert_eq!("false", c.value(1));
         assert!(!c.is_valid(2));
     }
 
