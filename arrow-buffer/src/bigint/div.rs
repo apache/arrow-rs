@@ -139,11 +139,31 @@ fn div_rem_knuth<const N: usize>(
 }
 
 /// Divide a u128 by a u64 divisor, returning the quotient and remainder
-fn div_rem_word(hi: u64, lo: u64, y: u64) -> (u64, u64) {
-    debug_assert!(hi < y);
-    let x = (u128::from(hi) << 64) + u128::from(lo);
-    let y = u128::from(y);
-    ((x / y) as u64, (x % y) as u64)
+fn div_rem_word(hi: u64, lo: u64, divisor: u64) -> (u64, u64) {
+    debug_assert!(hi < divisor);
+    debug_assert_ne!(divisor, 0);
+
+    // LLVM fails to use the div instruction as it is not able to prove
+    // that hi < divisor, and therefore the result will fit into 64-bits
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        let mut quot = lo;
+        let mut rem = hi;
+        std::arch::asm!(
+            "div {divisor}",
+            divisor = in(reg) divisor,
+            inout("rax") quot,
+            inout("rdx") rem,
+            options(pure, nomem, nostack)
+        );
+        (quot, rem)
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let x = (u128::from(hi) << 64) + u128::from(lo);
+        let y = u128::from(y);
+        ((x / y) as u64, (x % y) as u64)
+    }
 }
 
 /// Perform `a += b`
