@@ -80,7 +80,7 @@ pub(super) fn fixed_binary_equal(
                 lhs_start + lhs_nulls.offset(),
                 len,
             );
-            let rhs_nulls = lhs.nulls().unwrap();
+            let rhs_nulls = rhs.nulls().unwrap();
             let rhs_slices_iter = BitSliceIterator::new(
                 rhs_nulls.validity(),
                 rhs_start + rhs_nulls.offset(),
