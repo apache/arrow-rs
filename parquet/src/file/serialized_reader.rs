@@ -242,11 +242,6 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
             })
         }
     }
-
-    #[cfg(feature = "arrow")]
-    pub(crate) fn metadata_ref(&self) -> &Arc<ParquetMetaData> {
-        &self.metadata
-    }
 }
 
 /// Get midpoint offset for a row group

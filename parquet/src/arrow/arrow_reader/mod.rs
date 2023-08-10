@@ -26,19 +26,21 @@ use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 
-use crate::arrow::array_reader::{build_array_reader, ArrayReader, FileReaderRowGroups};
+use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{FieldLevels, ProjectionMask};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ParquetMetaData;
-use crate::file::reader::{ChunkReader, SerializedFileReader};
-use crate::file::serialized_reader::ReadOptionsBuilder;
+use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
 mod filter;
 mod selection;
 
 pub use crate::arrow::array_reader::RowGroups;
+use crate::column::page::{PageIterator, PageReader};
+use crate::file::footer;
+use crate::file::page_index::index_reader;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 
@@ -75,27 +77,12 @@ pub struct ArrowReaderBuilder<T> {
 }
 
 impl<T> ArrowReaderBuilder<T> {
-    pub(crate) fn new_builder(
-        input: T,
-        metadata: Arc<ParquetMetaData>,
-        options: ArrowReaderOptions,
-    ) -> Result<Self> {
-        let kv_metadata = match options.skip_arrow_metadata {
-            true => None,
-            false => metadata.file_metadata().key_value_metadata(),
-        };
-
-        let (schema, fields) = parquet_to_arrow_schema_and_fields(
-            metadata.file_metadata().schema_descr(),
-            ProjectionMask::all(),
-            kv_metadata,
-        )?;
-
-        Ok(Self {
+    pub(crate) fn new_builder(input: T, metadata: ArrowReaderMetadata) -> Self {
+        Self {
             input,
-            metadata,
-            schema: Arc::new(schema),
-            fields,
+            metadata: metadata.metadata,
+            schema: metadata.schema,
+            fields: metadata.fields,
             batch_size: 1024,
             row_groups: None,
             projection: ProjectionMask::all(),
@@ -103,7 +90,7 @@ impl<T> ArrowReaderBuilder<T> {
             selection: None,
             limit: None,
             offset: None,
-        })
+        }
     }
 
     /// Returns a reference to the [`ParquetMetaData`] for this parquet file
@@ -234,48 +221,187 @@ impl ArrowReaderOptions {
     }
 }
 
+/// The clone-able metadata necessary to construct a [`ArrowReaderBuilder`]
+///
+/// This allows loading the metadata for a file once and then using this to construct
+/// multiple separate readers, for example, to distribute readers across multiple threads
+#[derive(Debug, Clone)]
+pub struct ArrowReaderMetadata {
+    pub(crate) metadata: Arc<ParquetMetaData>,
+
+    pub(crate) schema: SchemaRef,
+
+    pub(crate) fields: Option<ParquetField>,
+}
+
+impl ArrowReaderMetadata {
+    pub(crate) fn try_new(
+        metadata: Arc<ParquetMetaData>,
+        options: ArrowReaderOptions,
+    ) -> Result<Self> {
+        let kv_metadata = match options.skip_arrow_metadata {
+            true => None,
+            false => metadata.file_metadata().key_value_metadata(),
+        };
+
+        let (schema, fields) = parquet_to_arrow_schema_and_fields(
+            metadata.file_metadata().schema_descr(),
+            ProjectionMask::all(),
+            kv_metadata,
+        )?;
+
+        Ok(Self {
+            metadata,
+            schema: Arc::new(schema),
+            fields,
+        })
+    }
+
+    /// Returns a reference to the [`ParquetMetaData`] for this parquet file
+    pub fn metadata(&self) -> &Arc<ParquetMetaData> {
+        &self.metadata
+    }
+
+    /// Returns the parquet [`SchemaDescriptor`] for this parquet file
+    pub fn parquet_schema(&self) -> &SchemaDescriptor {
+        self.metadata.file_metadata().schema_descr()
+    }
+
+    /// Returns the arrow [`SchemaRef`] for this parquet file
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+}
+
 #[doc(hidden)]
 /// A newtype used within [`ReaderOptionsBuilder`] to distinguish sync readers from async
-pub struct SyncReader<T: ChunkReader>(SerializedFileReader<T>);
+pub struct SyncReader<T: ChunkReader>(T);
 
 /// A synchronous builder used to construct [`ParquetRecordBatchReader`] for a file
 ///
 /// For an async API see [`crate::arrow::async_reader::ParquetRecordBatchStreamBuilder`]
 pub type ParquetRecordBatchReaderBuilder<T> = ArrowReaderBuilder<SyncReader<T>>;
 
-impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
+impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// Create a new [`ParquetRecordBatchReaderBuilder`]
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::{Int32Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    /// # use parquet::arrow::ArrowWriter;
+    /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
+    /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
+    /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
+    /// # let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
+    /// # writer.write(&batch).unwrap();
+    /// # writer.close().unwrap();
+    /// # let file = Bytes::from(file);
+    /// #
+    /// let mut builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+    ///
+    /// // Inspect metadata
+    /// assert_eq!(builder.metadata().num_row_groups(), 1);
+    ///
+    /// // Construct reader
+    /// let mut reader: ParquetRecordBatchReader = builder.with_row_groups(vec![0]).build().unwrap();
+    ///
+    /// // Read data
+    /// let _batch = reader.next().unwrap().unwrap();
+    /// ```
     pub fn try_new(reader: T) -> Result<Self> {
         Self::try_new_with_options(reader, Default::default())
     }
 
     /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`]
     pub fn try_new_with_options(reader: T, options: ArrowReaderOptions) -> Result<Self> {
-        let reader = match options.page_index {
-            true => {
-                let read_options = ReadOptionsBuilder::new().with_page_index().build();
-                SerializedFileReader::new_with_options(reader, read_options)?
-            }
-            false => SerializedFileReader::new(reader)?,
-        };
+        let metadata = Self::load_metadata(&reader, options)?;
+        Ok(Self::new_with_metadata(reader, metadata))
+    }
 
-        let metadata = Arc::clone(reader.metadata_ref());
-        Self::new_builder(SyncReader(reader), metadata, options)
+    /// Loads [`ArrowReaderMetadata`] from the provided [`ChunkReader`]
+    ///
+    /// See [`Self::new_with_metadata`] for how this can be used
+    pub fn load_metadata(
+        reader: &T,
+        options: ArrowReaderOptions,
+    ) -> Result<ArrowReaderMetadata> {
+        let mut metadata = footer::parse_metadata(reader)?;
+        if options.page_index {
+            let column_index = metadata
+                .row_groups()
+                .iter()
+                .map(|rg| index_reader::read_columns_indexes(reader, rg.columns()))
+                .collect::<Result<Vec<_>>>()?;
+            metadata.set_column_index(Some(column_index));
+
+            let offset_index = metadata
+                .row_groups()
+                .iter()
+                .map(|rg| index_reader::read_pages_locations(reader, rg.columns()))
+                .collect::<Result<Vec<_>>>()?;
+
+            metadata.set_offset_index(Some(offset_index))
+        }
+        ArrowReaderMetadata::try_new(Arc::new(metadata), options)
+    }
+
+    /// Create a [`ParquetRecordBatchReaderBuilder`] from the provided [`ArrowReaderMetadata`]
+    ///
+    /// This allows loading metadata once and using it to create multiple builders with
+    /// potentially different row selections
+    ///
+    /// ```
+    /// # use std::fs::metadata;
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::{Int32Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    /// # use parquet::arrow::ArrowWriter;
+    /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
+    /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
+    /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
+    /// # let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
+    /// # writer.write(&batch).unwrap();
+    /// # writer.close().unwrap();
+    /// # let file = Bytes::from(file);
+    /// #
+    /// let metadata = ParquetRecordBatchReaderBuilder::load_metadata(&file, Default::default()).unwrap();
+    /// let mut a = ParquetRecordBatchReaderBuilder::new_with_metadata(file.clone(), metadata.clone()).build().unwrap();
+    /// let mut b = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata).build().unwrap();
+    ///
+    /// // Should be able to read from both in parallel
+    /// assert_eq!(a.next().unwrap().unwrap(), b.next().unwrap().unwrap());
+    /// ```
+    pub fn new_with_metadata(input: T, metadata: ArrowReaderMetadata) -> Self {
+        Self::new_builder(SyncReader(input), metadata)
     }
 
     /// Build a [`ParquetRecordBatchReader`]
     ///
     /// Note: this will eagerly evaluate any `RowFilter` before returning
     pub fn build(self) -> Result<ParquetRecordBatchReader> {
-        let reader = FileReaderRowGroups::new(Arc::new(self.input.0), self.row_groups);
-
-        let mut filter = self.filter;
-        let mut selection = self.selection;
-
         // Try to avoid allocate large buffer
         let batch_size = self
             .batch_size
             .min(self.metadata.file_metadata().num_rows() as usize);
+
+        let row_groups = self
+            .row_groups
+            .unwrap_or_else(|| (0..self.metadata.num_row_groups()).collect());
+
+        let reader = ReaderRowGroups {
+            reader: Arc::new(self.input.0),
+            metadata: self.metadata,
+            row_groups,
+        };
+
+        let mut filter = self.filter;
+        let mut selection = self.selection;
+
         if let Some(filter) = filter.as_mut() {
             for predicate in filter.predicates.iter_mut() {
                 if !selects_any(selection.as_ref()) {
@@ -312,6 +438,59 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
         ))
     }
 }
+
+struct ReaderRowGroups<T: ChunkReader> {
+    reader: Arc<T>,
+
+    metadata: Arc<ParquetMetaData>,
+    /// Optional list of row group indices to scan
+    row_groups: Vec<usize>,
+}
+
+impl<T: ChunkReader + 'static> RowGroups for ReaderRowGroups<T> {
+    fn num_rows(&self) -> usize {
+        let meta = self.metadata.row_groups();
+        self.row_groups
+            .iter()
+            .map(|x| meta[*x].num_rows() as usize)
+            .sum()
+    }
+
+    fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
+        Ok(Box::new(ReaderPageIterator {
+            column_idx: i,
+            reader: self.reader.clone(),
+            metadata: self.metadata.clone(),
+            row_groups: self.row_groups.clone().into_iter(),
+        }))
+    }
+}
+
+struct ReaderPageIterator<T: ChunkReader> {
+    reader: Arc<T>,
+    column_idx: usize,
+    row_groups: std::vec::IntoIter<usize>,
+    metadata: Arc<ParquetMetaData>,
+}
+
+impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
+    type Item = Result<Box<dyn PageReader>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rg_idx = self.row_groups.next()?;
+        let rg = self.metadata.row_group(rg_idx);
+        let meta = rg.column(self.column_idx);
+        let offset_index = self.metadata.offset_index();
+        let page_locations = offset_index.map(|i| i[rg_idx][self.column_idx].clone());
+        let total_rows = rg.num_rows() as usize;
+        let reader = self.reader.clone();
+
+        let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
+        Some(ret.map(|x| Box::new(x) as _))
+    }
+}
+
+impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 
 /// An `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]
 /// read from a parquet data source
