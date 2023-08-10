@@ -206,6 +206,29 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     }
 }
 
+impl ArrowReaderMetadata {
+    /// Returns a new [`ArrowReaderMetadata`] for this builder
+    ///
+    /// See [`ParquetRecordBatchStreamBuilder::new_with_metadata`] for how this can be used
+    pub async fn load_async<T: AsyncFileReader>(
+        input: &mut T,
+        options: ArrowReaderOptions,
+    ) -> Result<Self> {
+        let mut metadata = input.get_metadata().await?;
+
+        if options.page_index
+            && metadata.column_index().is_none()
+            && metadata.offset_index().is_none()
+        {
+            let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
+            let mut loader = MetadataLoader::new(input, m);
+            loader.load_page_index(true, true).await?;
+            metadata = Arc::new(loader.finish())
+        }
+        Self::try_new(metadata, options)
+    }
+}
+
 #[doc(hidden)]
 /// A newtype used within [`ReaderOptionsBuilder`] to distinguish sync readers from async
 ///
@@ -232,29 +255,8 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         mut input: T,
         options: ArrowReaderOptions,
     ) -> Result<Self> {
-        let metadata = Self::load_metadata(&mut input, options).await?;
+        let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
         Ok(Self::new_with_metadata(input, metadata))
-    }
-
-    /// Returns a new [`ArrowReaderMetadata`] for this builder
-    ///
-    /// See [`Self::new_with_metadata`] for how this can be used
-    pub async fn load_metadata(
-        input: &mut T,
-        options: ArrowReaderOptions,
-    ) -> Result<ArrowReaderMetadata> {
-        let mut metadata = input.get_metadata().await?;
-
-        if options.page_index
-            && metadata.column_index().is_none()
-            && metadata.offset_index().is_none()
-        {
-            let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
-            let mut loader = MetadataLoader::new(input, m);
-            loader.load_page_index(true, true).await?;
-            metadata = Arc::new(loader.finish())
-        }
-        ArrowReaderMetadata::try_new(metadata, options)
     }
 
     /// Create a [`ParquetRecordBatchStreamBuilder`] from the provided [`ArrowReaderMetadata`]

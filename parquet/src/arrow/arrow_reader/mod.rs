@@ -235,6 +235,30 @@ pub struct ArrowReaderMetadata {
 }
 
 impl ArrowReaderMetadata {
+    /// Loads [`ArrowReaderMetadata`] from the provided [`ChunkReader`]
+    ///
+    /// See [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for how this can be used
+    pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
+        let mut metadata = footer::parse_metadata(reader)?;
+        if options.page_index {
+            let column_index = metadata
+                .row_groups()
+                .iter()
+                .map(|rg| index_reader::read_columns_indexes(reader, rg.columns()))
+                .collect::<Result<Vec<_>>>()?;
+            metadata.set_column_index(Some(column_index));
+
+            let offset_index = metadata
+                .row_groups()
+                .iter()
+                .map(|rg| index_reader::read_pages_locations(reader, rg.columns()))
+                .collect::<Result<Vec<_>>>()?;
+
+            metadata.set_offset_index(Some(offset_index))
+        }
+        Self::try_new(Arc::new(metadata), options)
+    }
+
     pub(crate) fn try_new(
         metadata: Arc<ParquetMetaData>,
         options: ArrowReaderOptions,
@@ -317,35 +341,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
     /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`]
     pub fn try_new_with_options(reader: T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = Self::load_metadata(&reader, options)?;
+        let metadata = ArrowReaderMetadata::load(&reader, options)?;
         Ok(Self::new_with_metadata(reader, metadata))
-    }
-
-    /// Loads [`ArrowReaderMetadata`] from the provided [`ChunkReader`]
-    ///
-    /// See [`Self::new_with_metadata`] for how this can be used
-    pub fn load_metadata(
-        reader: &T,
-        options: ArrowReaderOptions,
-    ) -> Result<ArrowReaderMetadata> {
-        let mut metadata = footer::parse_metadata(reader)?;
-        if options.page_index {
-            let column_index = metadata
-                .row_groups()
-                .iter()
-                .map(|rg| index_reader::read_columns_indexes(reader, rg.columns()))
-                .collect::<Result<Vec<_>>>()?;
-            metadata.set_column_index(Some(column_index));
-
-            let offset_index = metadata
-                .row_groups()
-                .iter()
-                .map(|rg| index_reader::read_pages_locations(reader, rg.columns()))
-                .collect::<Result<Vec<_>>>()?;
-
-            metadata.set_offset_index(Some(offset_index))
-        }
-        ArrowReaderMetadata::try_new(Arc::new(metadata), options)
     }
 
     /// Create a [`ParquetRecordBatchReaderBuilder`] from the provided [`ArrowReaderMetadata`]
@@ -359,7 +356,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # use bytes::Bytes;
     /// # use arrow_array::{Int32Array, RecordBatch};
     /// # use arrow_schema::{DataType, Field, Schema};
-    /// # use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    /// # use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     /// # use parquet::arrow::ArrowWriter;
     /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
     /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
@@ -369,7 +366,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # writer.close().unwrap();
     /// # let file = Bytes::from(file);
     /// #
-    /// let metadata = ParquetRecordBatchReaderBuilder::load_metadata(&file, Default::default()).unwrap();
+    /// let metadata = ArrowReaderMetadata::load(&file, Default::default()).unwrap();
     /// let mut a = ParquetRecordBatchReaderBuilder::new_with_metadata(file.clone(), metadata.clone()).build().unwrap();
     /// let mut b = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata).build().unwrap();
     ///
