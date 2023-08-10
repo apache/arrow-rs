@@ -128,7 +128,6 @@ fn div_rem_knuth<const N: usize>(
         let a1 = numerator[j + n - 1];
 
         let mut q_hat = if a0 < b0 {
-
             // The first estimate is [a1, a0] / b0, it may be too large by at most 2
             let (mut q_hat, mut r_hat) = div_rem_word(a0, a1, b0);
 
