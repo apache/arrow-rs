@@ -89,7 +89,28 @@ async fn test_fabric() {
     let daily_store = AzureStore(
         MicrosoftAzureBuilder::new()
         .with_container_name("86bc63cf-5086-42e0-b16d-6bc580d1dc87")
-        .with_account("onelake")
+        .with_account("daily-onelake")
+        .with_use_fabric(true)
+        .with_bearer_token_authorization("jwt-token")
+        .build()
+        .unwrap());
+    
+    let path = Path::from("17d3977c-d46e-4bae-8fed-ff467e674aed/Files/SampleCustomerList.csv");
+
+    read_write_test(&daily_store, &path).await;
+}
+
+#[tokio::test]
+async fn test_fabric_url() {        
+    //Format:https://onelake.dfs.fabric.microsoft.com/<workspaceGUID>/<itemGUID>/Files/test.csv
+    //Example:https://onelake.dfs.fabric.microsoft.com/86bc63cf-5086-42e0-b16d-6bc580d1dc87/17d3977c-d46e-4bae-8fed-ff467e674aed/Files/SampleCustomerList.csv
+    //Account Name : onelake
+    //Container Name : workspaceGUID
+
+    let daily_store = AzureStore(
+        MicrosoftAzureBuilder::new()
+        .with_url("https://daily-onelake.dfs.fabric.microsoft.com/86bc63cf-5086-42e0-b16d-6bc580d1dc87")
+        .with_use_fabric(true)
         .with_bearer_token_authorization("jwt-token")
         .build()
         .unwrap());

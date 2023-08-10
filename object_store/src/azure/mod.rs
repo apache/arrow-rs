@@ -346,6 +346,8 @@ pub struct MicrosoftAzureBuilder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AzureCredentialProvider>,
+    /// When set to true , fabric url scheme https://onelake.dfs.fabric.microsoft.com will be used
+    use_fabric: ConfigValue<bool>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -435,6 +437,13 @@ pub enum AzureConfigKey {
     /// - `use_emulator`
     UseEmulator,
 
+    /// Use object store with url scheme account.dfs.fabric.microsoft.com
+    ///
+    /// Supported keys:        
+    /// - `object_store_use_fabric`
+    /// - `use_fabric`
+    UseFabric,
+
     /// Endpoint to request a imds managed identity token
     ///
     /// Supported keys:
@@ -487,6 +496,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::SasKey => "azure_storage_sas_key",
             Self::Token => "azure_storage_token",
             Self::UseEmulator => "azure_storage_use_emulator",
+            Self::UseFabric => "object_store_use_fabric",
             Self::MsiEndpoint => "azure_msi_endpoint",
             Self::ObjectId => "azure_object_id",
             Self::MsiResourceId => "azure_msi_resource_id",
@@ -535,6 +545,9 @@ impl FromStr for AzureConfigKey {
             "azure_msi_resource_id" | "msi_resource_id" => Ok(Self::MsiResourceId),
             "azure_federated_token_file" | "federated_token_file" => {
                 Ok(Self::FederatedTokenFile)
+            }
+            "use_fabric" | "object_store_use_fabric" => {
+                Ok(Self::UseFabric)
             }
             "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
             // Backwards compatibility
@@ -605,12 +618,13 @@ impl MicrosoftAzureBuilder {
     ///
     /// - `abfs[s]://<container>/<path>` (according to [fsspec](https://github.com/fsspec/adlfs))
     /// - `abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>`
+    /// - `abfs[s]://<file_system>@<account_name>.dfs.fabric.microsoft.com/<path>`
     /// - `az://<container>/<path>` (according to [fsspec](https://github.com/fsspec/adlfs))
     /// - `adl://<container>/<path>` (according to [fsspec](https://github.com/fsspec/adlfs))
     /// - `azure://<container>/<path>` (custom)
     /// - `https://<account>.dfs.core.windows.net`
     /// - `https://<account>.blob.core.windows.net`
-    ///
+    /// - `https://<account>.dfs.fabric.microsoft.com`
     /// Note: Settings derived from the URL will override any others set on this builder
     ///
     /// # Example
@@ -644,6 +658,7 @@ impl MicrosoftAzureBuilder {
             }
             AzureConfigKey::UseAzureCli => self.use_azure_cli.parse(value),
             AzureConfigKey::UseEmulator => self.use_emulator.parse(value),
+            AzureConfigKey::UseFabric => self.use_fabric.parse(value),
             AzureConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
@@ -697,6 +712,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::SasKey => self.sas_key.clone(),
             AzureConfigKey::Token => self.bearer_token.clone(),
             AzureConfigKey::UseEmulator => Some(self.use_emulator.to_string()),
+            AzureConfigKey::UseFabric => Some(self.use_fabric.to_string()),
             AzureConfigKey::MsiEndpoint => self.msi_endpoint.clone(),
             AzureConfigKey::ObjectId => self.object_id.clone(),
             AzureConfigKey::MsiResourceId => self.msi_resource_id.clone(),
@@ -744,6 +760,18 @@ impl MicrosoftAzureBuilder {
                 Some((a, "dfs.fabric.microsoft.com"))
                 | Some((a, "blob.fabric.microsoft.com")) =>{
                     self.account_name = Some(validate(a)?);
+                    // if the container_name i.e the workspaceGUID is not set for fabric try to infer this 
+                    // from the url scheme https://onelake.dfs.fabric.microsoft.com/<workspaceGUID>/<itemGUID>/Files/test.csv
+                    if self.container_name.is_none()   {
+                        let path_segments: Vec<_> = parsed.path_segments().unwrap().collect();
+                        if let Some(storage_name) = path_segments.first() {
+                            self.container_name =  if !storage_name.is_empty() {
+                                Some(storage_name.to_string())
+                            } else {
+                                None
+                            };
+                        }
+                    }
                 }
                 _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
             },
@@ -831,6 +859,15 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Set if Fabric url should be used (defaults to false)
+    /// Default http://mystorageaccount.blob.core.windows.net
+    /// When set to true url scheme https://onelake.dfs.fabric.microsoft.com/ will be used
+    pub fn with_use_fabric(mut self, use_fabric: bool) -> Self {
+        self.use_fabric = use_fabric.into();
+        self
+    }
+
+
     /// Sets what protocol is allowed. If `allow_http` is :
     /// * false (default):  Only HTTPS are allowed
     /// * true:  HTTP and HTTPS are allowed
@@ -896,16 +933,7 @@ impl MicrosoftAzureBuilder {
             self.parse_url(&url)?;
         }
 
-        let use_ok_or = match &self.account_name {
-            Some(account_name) => !account_name.contains("onelake"),
-            None => true,
-        };
-
-        let container = if use_ok_or {
-            self.container_name.ok_or(Error::MissingContainerName {})?
-        } else {
-            self.container_name.unwrap_or_default()
-        };
+        let container = self.container_name.ok_or(Error::MissingContainerName {})?;
 
         let static_creds = |credential: AzureCredential| -> AzureCredentialProvider {
             Arc::new(StaticCredentialProvider::new(credential))
@@ -928,12 +956,11 @@ impl MicrosoftAzureBuilder {
             (true, url, credential, account_name)
         } else {
             let account_name = self.account_name.ok_or(Error::MissingAccount {})?;
-            let account_url = if account_name.contains("onelake") {
+            let account_url = if self.use_fabric.get()? {
                 format!("https://{}.blob.fabric.microsoft.com", &account_name)
             } else {
                 format!("https://{}.blob.core.windows.net", &account_name)
             };
-
 
             let url = Url::parse(&account_url)
                 .context(UnableToParseUrlSnafu { url: account_url })?;
