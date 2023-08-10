@@ -118,49 +118,6 @@ impl RowGroups for Arc<dyn FileReader> {
     }
 }
 
-pub(crate) struct FileReaderRowGroups {
-    /// The underling file reader
-    reader: Arc<dyn FileReader>,
-    /// Optional list of row group indices to scan
-    row_groups: Option<Vec<usize>>,
-}
-
-impl FileReaderRowGroups {
-    /// Creates a new [`RowGroups`] from a `FileReader` and an optional
-    /// list of row group indexes to scan
-    pub fn new(reader: Arc<dyn FileReader>, row_groups: Option<Vec<usize>>) -> Self {
-        Self { reader, row_groups }
-    }
-}
-
-impl RowGroups for FileReaderRowGroups {
-    fn num_rows(&self) -> usize {
-        match &self.row_groups {
-            None => self.reader.metadata().file_metadata().num_rows() as usize,
-            Some(row_groups) => {
-                let meta = self.reader.metadata().row_groups();
-                row_groups
-                    .iter()
-                    .map(|x| meta[*x].num_rows() as usize)
-                    .sum()
-            }
-        }
-    }
-
-    fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
-        let iterator = match &self.row_groups {
-            Some(row_groups) => FilePageIterator::with_row_groups(
-                i,
-                Box::new(row_groups.clone().into_iter()),
-                Arc::clone(&self.reader),
-            )?,
-            None => FilePageIterator::new(i, Arc::clone(&self.reader))?,
-        };
-
-        Ok(Box::new(iterator))
-    }
-}
-
 /// Uses `record_reader` to read up to `batch_size` records from `pages`
 ///
 /// Returns the number of records read, which can be less than `batch_size` if
