@@ -16,7 +16,9 @@
 // under the License.
 
 //! An in-memory object store implementation
-use crate::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore, Result};
+use crate::{
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, Result,
+};
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -136,17 +138,28 @@ impl ObjectStore for InMemory {
         }
         let (data, last_modified) = self.entry(location).await?;
         options.check_modified(location, last_modified)?;
+        let meta = ObjectMeta {
+            location: location.clone(),
+            last_modified,
+            size: data.len(),
+            e_tag: None,
+        };
 
+        let (range, data) = match options.range {
+            Some(range) => {
+                ensure!(range.end <= data.len(), OutOfRangeSnafu);
+                ensure!(range.start <= range.end, BadRangeSnafu);
+                (range.clone(), data.slice(range))
+            }
+            None => (0..data.len(), data),
+        };
         let stream = futures::stream::once(futures::future::ready(Ok(data)));
-        Ok(GetResult::Stream(stream.boxed()))
-    }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let data = self.entry(location).await?;
-        ensure!(range.end <= data.0.len(), OutOfRangeSnafu);
-        ensure!(range.start <= range.end, BadRangeSnafu);
-
-        Ok(data.0.slice(range))
+        Ok(GetResult {
+            payload: GetResultPayload::Stream(stream.boxed()),
+            meta,
+            range,
+        })
     }
 
     async fn get_ranges(
