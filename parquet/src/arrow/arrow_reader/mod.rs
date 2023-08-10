@@ -59,7 +59,7 @@ pub struct ArrowReaderBuilder<T> {
 
     pub(crate) schema: SchemaRef,
 
-    pub(crate) fields: Option<ParquetField>,
+    pub(crate) fields: Option<Arc<ParquetField>>,
 
     pub(crate) batch_size: usize,
 
@@ -221,7 +221,7 @@ impl ArrowReaderOptions {
     }
 }
 
-/// The clone-able metadata necessary to construct a [`ArrowReaderBuilder`]
+/// The cheaply clone-able metadata necessary to construct a [`ArrowReaderBuilder`]
 ///
 /// This allows loading the metadata for a file once and then using this to construct
 /// multiple separate readers, for example, to distribute readers across multiple threads
@@ -231,7 +231,7 @@ pub struct ArrowReaderMetadata {
 
     pub(crate) schema: SchemaRef,
 
-    pub(crate) fields: Option<ParquetField>,
+    pub(crate) fields: Option<Arc<ParquetField>>,
 }
 
 impl ArrowReaderMetadata {
@@ -253,7 +253,7 @@ impl ArrowReaderMetadata {
         Ok(Self {
             metadata,
             schema: Arc::new(schema),
-            fields,
+            fields: fields.map(Arc::new),
         })
     }
 
@@ -409,7 +409,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 }
 
                 let array_reader = build_array_reader(
-                    self.fields.as_ref(),
+                    self.fields.as_deref(),
                     predicate.projection(),
                     &reader,
                 )?;
@@ -424,7 +424,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         }
 
         let array_reader =
-            build_array_reader(self.fields.as_ref(), &self.projection, &reader)?;
+            build_array_reader(self.fields.as_deref(), &self.projection, &reader)?;
 
         // If selection is empty, truncate
         if !selects_any(selection.as_ref()) {

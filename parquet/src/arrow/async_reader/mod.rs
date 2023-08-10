@@ -316,7 +316,7 @@ type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)
 struct ReaderFactory<T> {
     metadata: Arc<ParquetMetaData>,
 
-    fields: Option<ParquetField>,
+    fields: Option<Arc<ParquetField>>,
 
     input: T,
 
@@ -369,7 +369,7 @@ where
                     .await?;
 
                 let array_reader = build_array_reader(
-                    self.fields.as_ref(),
+                    self.fields.as_deref(),
                     predicate_projection,
                     &row_group,
                 )?;
@@ -422,7 +422,7 @@ where
 
         let reader = ParquetRecordBatchReader::new(
             batch_size,
-            build_array_reader(self.fields.as_ref(), &projection, &row_group)?,
+            build_array_reader(self.fields.as_deref(), &projection, &row_group)?,
             selection,
         );
 
@@ -1428,7 +1428,7 @@ mod tests {
 
         let reader_factory = ReaderFactory {
             metadata,
-            fields,
+            fields: fields.map(Arc::new),
             input: async_reader,
             filter: None,
             limit: None,
