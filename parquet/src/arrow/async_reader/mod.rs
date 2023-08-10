@@ -258,6 +258,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     }
 
     /// Create a [`ParquetRecordBatchStreamBuilder`] from the provided [`ArrowReaderMetadata`]
+    ///
+    /// This allows loading metadata once and using it to create multiple builders with
+    /// potentially different settings
     pub fn new_with_metadata(input: T, metadata: ArrowReaderMetadata) -> Self {
         Self::new_builder(AsyncReader(input), metadata)
     }

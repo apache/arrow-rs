@@ -351,7 +351,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// Create a [`ParquetRecordBatchReaderBuilder`] from the provided [`ArrowReaderMetadata`]
     ///
     /// This allows loading metadata once and using it to create multiple builders with
-    /// potentially different row selections
+    /// potentially different settings
     ///
     /// ```
     /// # use std::fs::metadata;
