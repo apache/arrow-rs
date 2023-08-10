@@ -78,6 +78,14 @@ fn div_rem_small<const N: usize>(
     (numerator, rem_padded)
 }
 
+/// Use Knuth Algorithm D to compute `numerator / divisor` returning the
+/// quotient and remainder
+///
+/// `n` is the number of non-zero 64-bit words in `divisor`
+/// `m` is the number of non-zero 64-bit words present in `numerator` beyond `divisor`, and
+/// therefore the number of words in the quotient
+///
+/// A good explanation of the algorithm can be found [here](https://ridiculousfish.com/blog/posts/labor-of-division-episode-iv.html)
 fn div_rem_knuth<const N: usize>(
     numerator: &[u64; N],
     divisor: &[u64; N],
@@ -86,29 +94,62 @@ fn div_rem_knuth<const N: usize>(
 ) -> ([u64; N], [u64; N]) {
     assert!(n + m <= N);
 
+    // The algorithm works by incrementally generating guesses `q_hat`, for the next digit
+    // of the quotient, starting from the most significant digit.
+    //
+    // This relies on the property that for any `q_hat` where
+    //
+    //      (q_hat << (j * 64)) * divisor <= numerator`
+    //
+    // We can set
+    //
+    //      q += q_hat << (j * 64)
+    //      numerator -= (q_hat << (j * 64)) * divisor
+    //
+    // And then iterate until `numerator < divisor`
+
+    // We normalize the divisor so that the highest bit in the highest digit of the
+    // divisor is set, this ensures our initial guess of `q_hat` is at most 2 off from
+    // the correct value for q[j]
     let shift = divisor[n - 1].leading_zeros();
+    // As the shift is computed based on leading zeros, don't need to perform full_shl
     let divisor = shl_word(divisor, shift);
-    let mut u = full_shl(numerator, shift);
+    // numerator may have fewer leading zeros than divisor, so must add another digit
+    let mut numerator = full_shl(numerator, shift);
+
+    // The two most significant digits of the divisor
+    let b0 = divisor[n - 1];
+    let b1 = divisor[n - 2];
 
     let mut q = [0; N];
-    let v_n_1 = divisor[n - 1];
-    let v_n_2 = divisor[n - 2];
 
     for j in (0..=m).rev() {
-        let u_jn = u[j + n];
+        let a0 = numerator[j + n];
+        let a1 = numerator[j + n - 1];
 
-        let mut q_hat = if u_jn < v_n_1 {
-            let (mut q_hat, mut r_hat) = div_rem_word(u_jn, u[j + n - 1], v_n_1);
+        let mut q_hat = if a0 < b0 {
 
+            // The first estimate is [a1, a0] / b0, it may be too large by at most 2
+            let (mut q_hat, mut r_hat) = div_rem_word(a0, a1, b0);
+
+            // r_hat = [a1, a0] - q_hat * b0
+            //
+            // Now we want to compute a more precise estimate [a2,a1,a0] / [b1,b0]
+            // which can only be less or equal to the current q_hat
+            //
+            // q_hat is too large if:
+            // [a2,a1,a0] < q_hat * [b1,b0]
+            // [a2,r_hat] < q_hat * b1
+            let a2 = numerator[j + n - 2];
             loop {
-                let r = u128::from(q_hat) * u128::from(v_n_2);
+                let r = u128::from(q_hat) * u128::from(b1);
                 let (lo, hi) = (r as u64, (r >> 64) as u64);
-                if (hi, lo) <= (r_hat, u[j + n - 2]) {
+                if (hi, lo) <= (r_hat, a2) {
                     break;
                 }
 
                 q_hat -= 1;
-                let (new_r_hat, overflow) = r_hat.overflowing_add(v_n_1);
+                let (new_r_hat, overflow) = r_hat.overflowing_add(b0);
                 r_hat = new_r_hat;
 
                 if overflow {
@@ -120,25 +161,35 @@ fn div_rem_knuth<const N: usize>(
             u64::MAX
         };
 
+        // q_hat is now either the correct quotient digit, or in rare cases 1 too large
+
+        // Compute numerator -= (q_hat * divisor) << (j * 64)
         let q_hat_v = full_mul_u64(&divisor, q_hat);
+        let c = sub_assign(&mut numerator[j..], &q_hat_v[..n + 1]);
 
-        let c = sub_assign(&mut u[j..], &q_hat_v[..n + 1]);
-
+        // If underflow, q_hat was too large by 1
         if c {
+            // Reduce q_hat by 1
             q_hat -= 1;
 
-            let c = add_assign(&mut u[j..], &divisor[..n]);
-            u[j + n] = u[j + n].wrapping_add(u64::from(c));
+            // Add back one multiple of divisor
+            let c = add_assign(&mut numerator[j..], &divisor[..n]);
+            numerator[j + n] = numerator[j + n].wrapping_add(u64::from(c));
         }
 
+        // q_hat is the correct value for q[j]
         q[j] = q_hat;
     }
 
-    let remainder = full_shr(&u, shift);
+    // The remainder is what is left in numerator, with the initial normalization shl reversed
+    let remainder = full_shr(&numerator, shift);
     (q, remainder)
 }
 
-/// Divide a u128 by a u64 divisor, returning the quotient and remainder
+/// Perform narrowing division of a u128 by a u64 divisor, returning the quotient and remainder
+///
+/// This method may trap or panic if hi >= divisor, i.e. the quotient would not fit
+/// into a 64-bit integer
 fn div_rem_word(hi: u64, lo: u64, divisor: u64) -> (u64, u64) {
     debug_assert!(hi < divisor);
     debug_assert_ne!(divisor, 0);
