@@ -22,13 +22,13 @@
 //! # #[tokio::main(flavor="current_thread")]
 //! # async fn main() {
 //! #
-//! use arrow_array::RecordBatch;
-//! use arrow::util::pretty::pretty_format_batches;
-//! use futures::TryStreamExt;
-//! use tokio::fs::File;
-//!
-//! use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-//!
+//! # use arrow_array::RecordBatch;
+//! # use arrow::util::pretty::pretty_format_batches;
+//! # use futures::TryStreamExt;
+//! # use tokio::fs::File;
+//! #
+//! # use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+//! #
 //! # fn assert_batches_eq(batches: &[RecordBatch], expected_lines: &[&str]) {
 //! #     let formatted = pretty_format_batches(batches).unwrap().to_string();
 //! #     let actual_lines: Vec<_> = formatted.trim().lines().collect();
@@ -38,7 +38,7 @@
 //! #          expected_lines, actual_lines
 //! #      );
 //! #  }
-//!
+//! #
 //! let testdata = arrow::util::test_util::parquet_test_data();
 //! let path = format!("{}/alltypes_plain.parquet", testdata);
 //! let file = File::open(path).await.unwrap();
@@ -241,6 +241,8 @@ pub struct AsyncReader<T>(T);
 /// In particular, this handles reading the parquet file metadata, allowing consumers
 /// to use this information to select what specific columns, row groups, etc...
 /// they wish to be read by the resulting stream
+///
+/// See [`ArrowReaderBuilder`] for additional member functions
 pub type ParquetRecordBatchStreamBuilder<T> = ArrowReaderBuilder<AsyncReader<T>>;
 
 impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
@@ -263,6 +265,39 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     ///
     /// This allows loading metadata once and using it to create multiple builders with
     /// potentially different settings
+    ///
+    /// ```
+    /// # use std::fs::metadata;
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::{Int32Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use parquet::arrow::arrow_reader::ArrowReaderMetadata;
+    /// # use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder};
+    /// # use tempfile::tempfile;
+    /// # use futures::StreamExt;
+    /// # #[tokio::main(flavor="current_thread")]
+    /// # async fn main() {
+    /// #
+    /// let mut file = tempfile().unwrap();
+    /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
+    /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
+    /// # let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
+    /// # writer.write(&batch).unwrap();
+    /// # writer.close().unwrap();
+    /// #
+    /// let mut file = tokio::fs::File::from_std(file);
+    /// let meta = ArrowReaderMetadata::load_async(&mut file, Default::default()).await.unwrap();
+    /// let mut a = ParquetRecordBatchStreamBuilder::new_with_metadata(
+    ///     file.try_clone().await.unwrap(),
+    ///     meta.clone()
+    /// ).build().unwrap();
+    /// let mut b = ParquetRecordBatchStreamBuilder::new_with_metadata(file, meta).build().unwrap();
+    ///
+    /// // Should be able to read from both in parallel
+    /// assert_eq!(a.next().await.unwrap().unwrap(), b.next().await.unwrap().unwrap());
+    /// # }
+    /// ```
     pub fn new_with_metadata(input: T, metadata: ArrowReaderMetadata) -> Self {
         Self::new_builder(AsyncReader(input), metadata)
     }
