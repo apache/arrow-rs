@@ -241,6 +241,7 @@ fn full_shr<const N: usize>(a: &ArrayPlusOne<u64, N>, shift: u32) -> [u64; N] {
 /// An array of N + 1 elements
 ///
 /// This is a hack around lack of support for const arithmetic
+#[repr(C)]
 struct ArrayPlusOne<T, const N: usize>([T; N], T);
 
 impl<T, const N: usize> std::ops::Deref for ArrayPlusOne<T, N> {
