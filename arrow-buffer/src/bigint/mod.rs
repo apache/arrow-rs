@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::bigint::div::div_rem;
 use num::cast::AsPrimitive;
 use num::{BigInt, FromPrimitive, ToPrimitive};
 use std::cmp::Ordering;
 use std::num::ParseIntError;
 use std::ops::{BitAnd, BitOr, BitXor, Neg, Shl, Shr};
 use std::str::FromStr;
+
+mod div;
 
 /// An opaque error similar to [`std::num::ParseIntError`]
 #[derive(Debug)]
@@ -428,25 +431,6 @@ impl i256 {
             .then_some(Self { low, high })
     }
 
-    /// Return the least number of bits needed to represent the number
-    #[inline]
-    fn bits_required(&self) -> usize {
-        let le_bytes = self.to_le_bytes();
-        let arr: [u128; 2] = [
-            u128::from_le_bytes(le_bytes[0..16].try_into().unwrap()),
-            u128::from_le_bytes(le_bytes[16..32].try_into().unwrap()),
-        ];
-
-        let iter = arr.iter().rev().take(2 - 1);
-        if self.is_negative() {
-            let ctr = iter.take_while(|&&b| b == ::core::u128::MAX).count();
-            (128 * (2 - ctr)) + 1 - (!arr[2 - ctr - 1]).leading_zeros() as usize
-        } else {
-            let ctr = iter.take_while(|&&b| b == ::core::u128::MIN).count();
-            (128 * (2 - ctr)) + 1 - arr[2 - ctr - 1].leading_zeros() as usize
-        }
-    }
-
     /// Division operation, returns (quotient, remainder).
     /// This basically implements [Long division]: `<https://en.wikipedia.org/wiki/Division_algorithm>`
     #[inline]
@@ -458,39 +442,43 @@ impl i256 {
             return Err(DivRemError::DivideOverflow);
         }
 
-        if self == Self::MIN || other == Self::MIN {
-            let l = BigInt::from_signed_bytes_le(&self.to_le_bytes());
-            let r = BigInt::from_signed_bytes_le(&other.to_le_bytes());
-            let d = i256::from_bigint_with_overflow(&l / &r).0;
-            let r = i256::from_bigint_with_overflow(&l % &r).0;
-            return Ok((d, r));
-        }
+        let a = self.wrapping_abs();
+        let b = other.wrapping_abs();
 
-        let mut me = self.checked_abs().unwrap();
-        let mut you = other.checked_abs().unwrap();
-        let mut ret = [0u128; 2];
-        if me < you {
-            return Ok((Self::from_parts(ret[0], ret[1] as i128), self));
-        }
-
-        let shift = me.bits_required() - you.bits_required();
-        you = you.shl(shift as u8);
-        for i in (0..=shift).rev() {
-            if me >= you {
-                ret[i / 128] |= 1 << (i % 128);
-                me = me.checked_sub(you).unwrap();
-            }
-            you = you.shr(1);
-        }
+        let (div, rem) = div_rem(&a.as_digits(), &b.as_digits());
+        let div = Self::from_digits(div);
+        let rem = Self::from_digits(rem);
 
         Ok((
             if self.is_negative() == other.is_negative() {
-                Self::from_parts(ret[0], ret[1] as i128)
+                div
             } else {
-                -Self::from_parts(ret[0], ret[1] as i128)
+                div.wrapping_neg()
             },
-            if self.is_negative() { -me } else { me },
+            if self.is_negative() {
+                rem.wrapping_neg()
+            } else {
+                rem
+            },
         ))
+    }
+
+    /// Interpret this [`i256`] as 4 `u64` digits, least significant first
+    fn as_digits(self) -> [u64; 4] {
+        [
+            self.low as u64,
+            (self.low >> 64) as u64,
+            self.high as u64,
+            (self.high as u128 >> 64) as u64,
+        ]
+    }
+
+    /// Interpret 4 `u64` digits, least significant first, as a [`i256`]
+    fn from_digits(digits: [u64; 4]) -> Self {
+        Self::from_parts(
+            digits[0] as u128 | (digits[1] as u128) << 64,
+            digits[2] as i128 | (digits[3] as i128) << 64,
+        )
     }
 
     /// Performs wrapping division
@@ -969,7 +957,7 @@ mod tests {
             let expected = bl.clone() % br.clone();
             let checked = il.checked_rem(ir);
 
-            assert_eq!(actual.to_string(), expected.to_string());
+            assert_eq!(actual.to_string(), expected.to_string(), "{il} % {ir}");
 
             if ir == i256::MINUS_ONE && il == i256::MIN {
                 assert!(checked.is_none());
