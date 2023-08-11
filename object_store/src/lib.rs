@@ -959,8 +959,7 @@ mod test_util {
 mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
-    use bytes::{BufMut, BytesMut};
-    use itertools::Itertools;
+    use rand::{thread_rng, Rng};
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
@@ -1380,27 +1379,27 @@ mod tests {
         }
     }
 
-    fn get_random_bytes(len: usize) -> Bytes {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let mut bytes = BytesMut::with_capacity(len);
-        for _ in 0..len {
-            bytes.put_u8(rng.gen());
+    /// Returns a chunk of length `chunk_length`
+    fn get_chunk(chunk_length: usize) -> Bytes {
+        let mut data = vec![0_u8; chunk_length];
+        let mut rng = thread_rng();
+        // Set a random selection of bytes
+        for _ in 0..1000 {
+            data[rng.gen_range(0..chunk_length)] = rng.gen();
         }
-        bytes.freeze()
+        data.into()
     }
 
-    fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
-        std::iter::repeat(get_random_bytes(chunk_length))
-            .take(num_chunks)
-            .collect()
+    /// Returns `num_chunks` of length `chunks`
+    fn get_chunks(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
+        (0..num_chunks).map(|_| get_chunk(chunk_length)).collect()
     }
 
     pub(crate) async fn stream_get(storage: &DynObjectStore) {
         let location = Path::from("test_dir/test_upload_file.txt");
 
         // Can write to storage
-        let data = get_vec_of_bytes(5_000, 10);
+        let data = get_chunks(5_000, 10);
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {
@@ -1427,7 +1426,7 @@ mod tests {
 
         // Can overwrite some storage
         // Sizes chosen to ensure we write three parts
-        let data = (0..7).map(|_| get_random_bytes(3_200_000)).collect_vec();
+        let data = get_chunks(3_200_000, 7);
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {
