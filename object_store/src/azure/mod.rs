@@ -341,7 +341,9 @@ pub struct MicrosoftAzureBuilder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AzureCredentialProvider>,
-    /// When set to true , fabric url scheme https://onelake.dfs.fabric.microsoft.com will be used
+    /// When set to true , fabric url scheme will be used
+    ///
+    /// i.e. https://{account_name}.dfs.fabric.microsoft.com
     use_fabric: ConfigValue<bool>,
 }
 
@@ -435,7 +437,7 @@ pub enum AzureConfigKey {
     /// Use object store with url scheme account.dfs.fabric.microsoft.com
     ///
     /// Supported keys:        
-    /// - `object_store_use_fabric`
+    /// - `azure_use_fabric`
     /// - `use_fabric`
     UseFabric,
 
@@ -491,7 +493,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::SasKey => "azure_storage_sas_key",
             Self::Token => "azure_storage_token",
             Self::UseEmulator => "azure_storage_use_emulator",
-            Self::UseFabric => "object_store_use_fabric",
+            Self::UseFabric => "azure_use_fabric",
             Self::MsiEndpoint => "azure_msi_endpoint",
             Self::ObjectId => "azure_object_id",
             Self::MsiResourceId => "azure_msi_resource_id",
@@ -541,9 +543,7 @@ impl FromStr for AzureConfigKey {
             "azure_federated_token_file" | "federated_token_file" => {
                 Ok(Self::FederatedTokenFile)
             }
-            "use_fabric" | "object_store_use_fabric" => {
-                Ok(Self::UseFabric)
-            }
+            "use_fabric" | "azure_use_fabric" => Ok(Self::UseFabric),
             "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
@@ -620,6 +620,9 @@ impl MicrosoftAzureBuilder {
     /// - `https://<account>.dfs.core.windows.net`
     /// - `https://<account>.blob.core.windows.net`
     /// - `https://<account>.dfs.fabric.microsoft.com`
+    /// - `https://<account>.dfs.fabric.microsoft.com/<container>`
+    /// - `https://<account>.blob.fabric.microsoft.com`
+    /// - `https://<account>.blob.fabric.microsoft.com/<container>`
     /// Note: Settings derived from the URL will override any others set on this builder
     ///
     /// # Example
@@ -737,8 +740,9 @@ impl MicrosoftAzureBuilder {
                 // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
                 if parsed.username().is_empty() {
                     self.container_name = Some(validate(host)?);
-                } else if let Some(a) = host.strip_suffix(".dfs.core.windows.net") 
-                                .or_else(|| host.strip_suffix(".dfs.fabric.microsoft.com"))
+                } else if let Some(a) = host
+                    .strip_suffix(".dfs.core.windows.net")
+                    .or_else(|| host.strip_suffix(".dfs.fabric.microsoft.com"))
                 {
                     self.container_name = Some(validate(parsed.username())?);
                     self.account_name = Some(validate(a)?);
@@ -748,23 +752,23 @@ impl MicrosoftAzureBuilder {
             }
             "https" => match host.split_once('.') {
                 Some((a, "dfs.core.windows.net"))
-                | Some((a, "blob.core.windows.net"))              
-                => {
+                | Some((a, "blob.core.windows.net")) => {
                     self.account_name = Some(validate(a)?);
                 }
                 Some((a, "dfs.fabric.microsoft.com"))
-                | Some((a, "blob.fabric.microsoft.com")) =>{
+                | Some((a, "blob.fabric.microsoft.com")) => {
                     self.account_name = Some(validate(a)?);
-                    // if the container_name i.e the workspaceGUID is not set for fabric try to infer this 
+                    // if the container_name i.e the workspaceGUID is not set for fabric try to infer this
                     // from the url scheme https://onelake.dfs.fabric.microsoft.com/<workspaceGUID>/<itemGUID>/Files/test.csv
-                    if self.container_name.is_none()   {
-                        let path_segments: Vec<_> = parsed.path_segments().unwrap().collect();
-                        if let Some(storage_name) = path_segments.first() {
-                            self.container_name =  if !storage_name.is_empty() {
-                                Some(storage_name.to_string())
-                            } else {
-                                None
-                            };
+                    // or https://onelake.dfs.fabric.microsoft.com/<workspace>/<item>.<itemtype>/<path>/<fileName>
+                    //
+                    // See <https://learn.microsoft.com/en-us/fabric/onelake/onelake-access-api>
+
+                    if self.container_name.is_none() {
+                        if let Some(workspace) = parsed.path_segments().unwrap().next() {
+                            if !workspace.is_empty() {
+                                self.container_name = Some(workspace.to_string())
+                            }
                         }
                     }
                 }
@@ -854,14 +858,13 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Set if Fabric url should be used (defaults to false)
-    /// Default http://mystorageaccount.blob.core.windows.net
-    /// When set to true url scheme https://onelake.dfs.fabric.microsoft.com/ will be used
+    /// Set if Microsoft Fabric url scheme should be used (defaults to false)
+    /// When disabled the url scheme used is `https://{account}.blob.core.windows.net`
+    /// When enabled the url scheme used is `https://{account}.dfs.fabric.microsoft.com`
     pub fn with_use_fabric(mut self, use_fabric: bool) -> Self {
         self.use_fabric = use_fabric.into();
         self
     }
-
 
     /// Sets what protocol is allowed. If `allow_http` is :
     /// * false (default):  Only HTTPS are allowed
@@ -951,10 +954,9 @@ impl MicrosoftAzureBuilder {
             (true, url, credential, account_name)
         } else {
             let account_name = self.account_name.ok_or(Error::MissingAccount {})?;
-            let account_url = if self.use_fabric.get()? {
-                format!("https://{}.blob.fabric.microsoft.com", &account_name)
-            } else {
-                format!("https://{}.blob.core.windows.net", &account_name)
+            let account_url = match self.use_fabric.get()? {
+                true => format!("https://{}.blob.fabric.microsoft.com", &account_name),
+                false => format!("https://{}.blob.core.windows.net", &account_name),
             };
 
             let url = Url::parse(&account_url)
@@ -1109,7 +1111,7 @@ mod tests {
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder.parse_url("abfs://container/path").unwrap();
-        assert_eq!(builder.container_name, Some("container".to_string()));   
+        assert_eq!(builder.container_name, Some("container".to_string()));
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder.parse_url("az://container").unwrap();
@@ -1136,13 +1138,29 @@ mod tests {
             .parse_url("https://account.dfs.fabric.microsoft.com/")
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
+        assert_eq!(builder.container_name, None);
+
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("https://account.dfs.fabric.microsoft.com/container")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("account".to_string()));
+        assert_eq!(builder.container_name.as_deref(), Some("container"));
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
             .parse_url("https://account.blob.fabric.microsoft.com/")
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
-        
+        assert_eq!(builder.container_name, None);
+
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("https://account.blob.fabric.microsoft.com/container")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("account".to_string()));
+        assert_eq!(builder.container_name.as_deref(), Some("container"));
+
         let err_cases = [
             "mailto://account.blob.core.windows.net/",
             "az://blob.mydomain/",
