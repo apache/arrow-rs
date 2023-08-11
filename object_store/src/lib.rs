@@ -374,8 +374,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 
     /// Perform a get request with options
-    ///
-    /// Note: options.range will be ignored if [`GetResult::File`]
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 
     /// Return the bytes that are stored at the specified location
@@ -806,8 +804,8 @@ impl GetResult {
 
     /// Converts this into a byte stream
     ///
-    /// If the result is [`Self::File`] will perform chunked reads of the file, otherwise
-    /// will return the [`Self::Stream`].
+    /// If the `self.kind` is [`GetResultPayload::File`] will perform chunked reads of the file,
+    /// otherwise will return the [`GetResultPayload::Stream`].
     ///
     /// # Tokio Compatibility
     ///
