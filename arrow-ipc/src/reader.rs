@@ -20,7 +20,6 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
-use arrow_buffer::i256;
 use flatbuffers::VectorIter;
 use std::collections::HashMap;
 use std::fmt;
@@ -129,7 +128,7 @@ fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, Arr
                 .offset(0)
                 .add_child_data(run_ends.into_data())
                 .add_child_data(values.into_data())
-                .build()?;
+                .build_aligned()?;
 
             Ok(make_array(data))
         }
@@ -202,7 +201,7 @@ fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, Arr
             let data = ArrayData::builder(data_type.clone())
                 .len(length as usize)
                 .offset(0)
-                .build()
+                .build_aligned()
                 .unwrap();
             // no buffer increases
             Ok(Arc::new(NullArray::from(data)))
@@ -231,54 +230,17 @@ fn create_primitive_array(
                 .len(length)
                 .buffers(buffers[1..3].to_vec())
                 .null_bit_buffer(null_buffer)
-                .build()?
+                .build_aligned()?
         }
-        Int8
-        | Int16
-        | Int32
-        | UInt8
-        | UInt16
-        | UInt32
-        | Time32(_)
-        | Date32
-        | Interval(IntervalUnit::YearMonth)
-        | Interval(IntervalUnit::DayTime)
-        | FixedSizeBinary(_)
-        | Boolean
-        | Int64
-        | UInt64
-        | Float32
-        | Float64
-        | Time64(_)
-        | Timestamp(_, _)
-        | Date64
-        | Duration(_) => {
+        _ if data_type.is_primitive()
+            || matches!(data_type, Boolean | FixedSizeBinary(_)) =>
+        {
             // read 2 buffers: null buffer (optional) and data buffer
             ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffers[1].clone())
                 .null_bit_buffer(null_buffer)
-                .build()?
-        }
-        Interval(IntervalUnit::MonthDayNano) | Decimal128(_, _) => {
-            let buffer = get_aligned_buffer::<i128>(&buffers[1], length);
-
-            // read 2 buffers: null buffer (optional) and data buffer
-            ArrayData::builder(data_type.clone())
-                .len(length)
-                .add_buffer(buffer)
-                .null_bit_buffer(null_buffer)
-                .build()?
-        }
-        Decimal256(_, _) => {
-            let buffer = get_aligned_buffer::<i256>(&buffers[1], length);
-
-            // read 2 buffers: null buffer (optional) and data buffer
-            ArrayData::builder(data_type.clone())
-                .len(length)
-                .add_buffer(buffer)
-                .null_bit_buffer(null_buffer)
-                .build()?
+                .build_aligned()?
         }
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
@@ -286,28 +248,10 @@ fn create_primitive_array(
     Ok(make_array(array_data))
 }
 
-/// Checks if given `Buffer` is properly aligned with `T`.
-/// If not, copying the data and padded it for alignment.
-fn get_aligned_buffer<T>(buffer: &Buffer, length: usize) -> Buffer {
-    let ptr = buffer.as_ptr();
-    let align_req = std::mem::align_of::<T>();
-    let align_offset = ptr.align_offset(align_req);
-    // The buffer is not aligned properly. The writer might use a smaller alignment
-    // e.g. 8 bytes, but on some platform (e.g. ARM) i128 requires 16 bytes alignment.
-    // We need to copy the buffer as fallback.
-    if align_offset != 0 {
-        let len_in_bytes = (length * std::mem::size_of::<T>()).min(buffer.len());
-        let slice = &buffer.as_slice()[0..len_in_bytes];
-        Buffer::from_slice_ref(slice)
-    } else {
-        buffer.clone()
-    }
-}
-
 /// Reads the correct number of buffers based on list type and null_count, and creates a
 /// list array ref
 fn create_list_array(
-    field_node: &crate::FieldNode,
+    field_node: &FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
     child_array: ArrayRef,
@@ -329,13 +273,13 @@ fn create_list_array(
 
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
-    Ok(make_array(builder.build()?))
+    Ok(make_array(builder.build_aligned()?))
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
 /// list array ref
 fn create_dictionary_array(
-    field_node: &crate::FieldNode,
+    field_node: &FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
     value_array: ArrayRef,
@@ -348,7 +292,7 @@ fn create_dictionary_array(
             .add_child_data(value_array.into_data())
             .null_bit_buffer(null_buffer);
 
-        Ok(make_array(builder.build()?))
+        Ok(make_array(builder.build_aligned()?))
     } else {
         unreachable!("Cannot create dictionary array from {:?}", data_type)
     }
@@ -1097,10 +1041,11 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use crate::writer::unslice_run_array;
+    use crate::writer::{unslice_run_array, DictionaryTracker, IpcDataGenerator};
 
     use super::*;
 
+    use crate::root_as_message;
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
     use arrow_buffer::ArrowNativeType;
@@ -1357,8 +1302,7 @@ mod tests {
         writer.finish().unwrap();
         drop(writer);
 
-        let mut reader =
-            crate::reader::FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
+        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
         reader.next().unwrap().unwrap()
     }
 
@@ -1703,5 +1647,41 @@ mod tests {
             RecordBatch::try_new_with_options(schema, vec![], &options).unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
         assert_eq!(input_batch, output_batch);
+    }
+
+    #[test]
+    fn test_unaligned() {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "i32",
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _,
+        )])
+        .unwrap();
+
+        let gen = IpcDataGenerator {};
+        let mut dict_tracker = DictionaryTracker::new(false);
+        let (_, encoded) = gen
+            .encoded_batch(&batch, &mut dict_tracker, &Default::default())
+            .unwrap();
+
+        let message = root_as_message(&encoded.ipc_message).unwrap();
+
+        // Construct an unaligned buffer
+        let mut buffer = MutableBuffer::with_capacity(encoded.arrow_data.len() + 1);
+        buffer.push(0_u8);
+        buffer.extend_from_slice(&encoded.arrow_data);
+        let b = Buffer::from(buffer).slice(1);
+        assert_ne!(b.as_ptr().align_offset(8), 0);
+
+        let ipc_batch = message.header_as_record_batch().unwrap();
+        let roundtrip = read_record_batch(
+            &b,
+            ipc_batch,
+            batch.schema(),
+            &Default::default(),
+            None,
+            &message.version(),
+        )
+        .unwrap();
+        assert_eq!(batch, roundtrip);
     }
 }
