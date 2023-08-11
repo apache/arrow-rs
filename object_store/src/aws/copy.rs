@@ -18,9 +18,10 @@
 use crate::config::Parse;
 
 /// Configure how to provide [`ObjectStore::copy_if_not_exists`] for
-/// `AmazonS3`.
+/// [`AmazonS3`].
 ///
 /// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
+/// [`AmazonS3`]: super::AmazonS3
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum S3CopyIfNotExists {
