@@ -41,7 +41,7 @@ jobs:
     container:
       image: ${{ matrix.arch }}/rust
       env:
-        RUSTDOCFLAGS: "-Dwarnings"
+        RUSTDOCFLAGS: "-Dwarnings --enable-index-page -Zunstable-options"
     steps:
       - uses: actions/checkout@v3
         with:

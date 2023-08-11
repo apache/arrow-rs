@@ -73,7 +73,7 @@ jobs:
       run:
         working-directory: object_store
     env:
-      RUSTDOCFLAGS: "-Dwarnings --enable-index-page -Zunstable-options"
+      RUSTDOCFLAGS: "-Dwarnings"
     steps:
       - uses: actions/checkout@v3
       - name: Run cargo doc
