@@ -28,10 +28,32 @@
 
 //! # object_store
 //!
-//! This crate provides a uniform API for interacting with object storage services and
-//! local files via the the [`ObjectStore`] trait.
+//! This crate provides a uniform API for interacting with object
+//! storage services and local files via the [`ObjectStore`]
+//! trait.
 //!
-//! # Create an [`ObjectStore`] implementation:
+//! Using this crate, the same binary and code can run in multiple
+//! clouds and local test environments, via a simple runtime
+//! configuration change.
+//!
+//! # Features:
+//!
+//! 1. A focused, easy to use, idiomatic, well documented, high
+//! performance, `async` API.
+//!
+//! 2. Production quality, leading this crate to be used in large
+//! scale production systems, such as [crates.io] and [InfluxDB IOx].
+//!
+//! 3. Stable and predictable governance via the [Apache Arrow] project.
+//!
+//! Originally developed for [InfluxDB IOx] and subsequently donated
+//! to [Apache Arrow].
+//!
+//! [Apache Arrow]: https://arrow.apache.org/
+//! [InfluxDB IOx]: https://github.com/influxdata/influxdb_iox/
+//! [crates.io]: https://github.com/rust-lang/crates.io
+//!
+//! # Example: Create an [`ObjectStore`] implementation:
 //!
 #![cfg_attr(
     feature = "gcp",

@@ -65,6 +65,24 @@ jobs:
       - name: Run clippy with all features and all targets
         run: cargo clippy --all-features --all-targets -- -D warnings
 
+  # test doc links still work
+  #
+  # Note that since object_store is not part of the main workspace,
+  # this needs a separate docs job as it is not covered by
+  # `cargo doc --workspace`
+  docs:
+    name: Rustdocs
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: object_store
+    env:
+      RUSTDOCFLAGS: "-Dwarnings"
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run cargo doc
+        run: cargo doc --document-private-items --no-deps --workspace --all-features
+
   # test the crate
   # This runs outside a container to workaround lack of support for passing arguments
   # to service containers - https://github.com/orgs/community/discussions/26688

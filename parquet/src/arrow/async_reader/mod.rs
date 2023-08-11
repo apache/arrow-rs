@@ -96,8 +96,9 @@ use arrow_schema::SchemaRef;
 
 use crate::arrow::array_reader::{build_array_reader, RowGroups};
 use crate::arrow::arrow_reader::{
-    apply_range, evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderOptions,
-    ParquetRecordBatchReader, RowFilter, RowSelection,
+    apply_range, evaluate_predicate, selects_any, ArrowReaderBuilder,
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader, RowFilter,
+    RowSelection,
 };
 use crate::arrow::ProjectionMask;
 
@@ -205,6 +206,29 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     }
 }
 
+impl ArrowReaderMetadata {
+    /// Returns a new [`ArrowReaderMetadata`] for this builder
+    ///
+    /// See [`ParquetRecordBatchStreamBuilder::new_with_metadata`] for how this can be used
+    pub async fn load_async<T: AsyncFileReader>(
+        input: &mut T,
+        options: ArrowReaderOptions,
+    ) -> Result<Self> {
+        let mut metadata = input.get_metadata().await?;
+
+        if options.page_index
+            && metadata.column_index().is_none()
+            && metadata.offset_index().is_none()
+        {
+            let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
+            let mut loader = MetadataLoader::new(input, m);
+            loader.load_page_index(true, true).await?;
+            metadata = Arc::new(loader.finish())
+        }
+        Self::try_new(metadata, options)
+    }
+}
+
 #[doc(hidden)]
 /// A newtype used within [`ReaderOptionsBuilder`] to distinguish sync readers from async
 ///
@@ -217,33 +241,30 @@ pub struct AsyncReader<T>(T);
 /// In particular, this handles reading the parquet file metadata, allowing consumers
 /// to use this information to select what specific columns, row groups, etc...
 /// they wish to be read by the resulting stream
-///
 pub type ParquetRecordBatchStreamBuilder<T> = ArrowReaderBuilder<AsyncReader<T>>;
 
-impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
+impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
-    pub async fn new(mut input: T) -> Result<Self> {
-        let metadata = input.get_metadata().await?;
-        Self::new_builder(AsyncReader(input), metadata, Default::default())
+    pub async fn new(input: T) -> Result<Self> {
+        Self::new_with_options(input, Default::default()).await
     }
 
+    /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
+    /// and [`ArrowReaderOptions`]
     pub async fn new_with_options(
         mut input: T,
         options: ArrowReaderOptions,
     ) -> Result<Self> {
-        let mut metadata = input.get_metadata().await?;
+        let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
+        Ok(Self::new_with_metadata(input, metadata))
+    }
 
-        if options.page_index
-            && metadata.column_index().is_none()
-            && metadata.offset_index().is_none()
-        {
-            let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
-            let mut loader = MetadataLoader::new(&mut input, m);
-            loader.load_page_index(true, true).await?;
-            metadata = Arc::new(loader.finish())
-        }
-
-        Self::new_builder(AsyncReader(input), metadata, options)
+    /// Create a [`ParquetRecordBatchStreamBuilder`] from the provided [`ArrowReaderMetadata`]
+    ///
+    /// This allows loading metadata once and using it to create multiple builders with
+    /// potentially different settings
+    pub fn new_with_metadata(input: T, metadata: ArrowReaderMetadata) -> Self {
+        Self::new_builder(AsyncReader(input), metadata)
     }
 
     /// Build a new [`ParquetRecordBatchStream`]
@@ -297,7 +318,7 @@ type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)
 struct ReaderFactory<T> {
     metadata: Arc<ParquetMetaData>,
 
-    fields: Option<ParquetField>,
+    fields: Option<Arc<ParquetField>>,
 
     input: T,
 
@@ -350,7 +371,7 @@ where
                     .await?;
 
                 let array_reader = build_array_reader(
-                    self.fields.as_ref(),
+                    self.fields.as_deref(),
                     predicate_projection,
                     &row_group,
                 )?;
@@ -403,7 +424,7 @@ where
 
         let reader = ParquetRecordBatchReader::new(
             batch_size,
-            build_array_reader(self.fields.as_ref(), &projection, &row_group)?,
+            build_array_reader(self.fields.as_deref(), &projection, &row_group)?,
             selection,
         );
 
@@ -1409,7 +1430,7 @@ mod tests {
 
         let reader_factory = ReaderFactory {
             metadata,
-            fields,
+            fields: fields.map(Arc::new),
             input: async_reader,
             filter: None,
             limit: None,

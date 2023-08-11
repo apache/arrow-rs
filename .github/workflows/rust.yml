@@ -98,7 +98,10 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Setup rustfmt
         run: rustup component add rustfmt
-      - name: Run
+      - name: Format arrow
+        run: cargo fmt --all -- --check
+      - name: Format object_store
+        working-directory: object_store
         run: cargo fmt --all -- --check
 
   msrv:

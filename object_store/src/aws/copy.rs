@@ -17,7 +17,11 @@
 
 use crate::config::Parse;
 
-/// Configure how to provide [`ObjectStore::copy_if_not_exists`] for [`AmazonS3`]
+/// Configure how to provide [`ObjectStore::copy_if_not_exists`] for
+/// [`AmazonS3`].
+///
+/// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
+/// [`AmazonS3`]: super::AmazonS3
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum S3CopyIfNotExists {
@@ -32,6 +36,8 @@ pub enum S3CopyIfNotExists {
     ///
     /// For example `header: cf-copy-destination-if-none-match: *`, would set
     /// the header `cf-copy-destination-if-none-match` to `*`
+    ///
+    /// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
     Header(String, String),
 }
 
