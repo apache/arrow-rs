@@ -341,10 +341,10 @@ pub struct MicrosoftAzureBuilder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AzureCredentialProvider>,
-    /// When set to true , fabric url scheme will be used
+    /// When set to true, fabric url scheme will be used
     ///
     /// i.e. https://{account_name}.dfs.fabric.microsoft.com
-    use_fabric: ConfigValue<bool>,
+    use_fabric_endpoint: ConfigValue<bool>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -437,9 +437,9 @@ pub enum AzureConfigKey {
     /// Use object store with url scheme account.dfs.fabric.microsoft.com
     ///
     /// Supported keys:        
-    /// - `azure_use_fabric`
-    /// - `use_fabric`
-    UseFabric,
+    /// - `azure_use_fabric_endpoint`
+    /// - `use_fabric_endpoint`
+    UseFabricEndpoint,
 
     /// Endpoint to request a imds managed identity token
     ///
@@ -493,7 +493,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::SasKey => "azure_storage_sas_key",
             Self::Token => "azure_storage_token",
             Self::UseEmulator => "azure_storage_use_emulator",
-            Self::UseFabric => "azure_use_fabric",
+            Self::UseFabricEndpoint => "azure_use_fabric_endpoint",
             Self::MsiEndpoint => "azure_msi_endpoint",
             Self::ObjectId => "azure_object_id",
             Self::MsiResourceId => "azure_msi_resource_id",
@@ -543,7 +543,9 @@ impl FromStr for AzureConfigKey {
             "azure_federated_token_file" | "federated_token_file" => {
                 Ok(Self::FederatedTokenFile)
             }
-            "use_fabric" | "azure_use_fabric" => Ok(Self::UseFabric),
+            "azure_use_fabric_endpoint" | "use_fabric_endpoint" => {
+                Ok(Self::UseFabricEndpoint)
+            }
             "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
@@ -623,6 +625,7 @@ impl MicrosoftAzureBuilder {
     /// - `https://<account>.dfs.fabric.microsoft.com/<container>`
     /// - `https://<account>.blob.fabric.microsoft.com`
     /// - `https://<account>.blob.fabric.microsoft.com/<container>`
+    ///
     /// Note: Settings derived from the URL will override any others set on this builder
     ///
     /// # Example
@@ -656,7 +659,7 @@ impl MicrosoftAzureBuilder {
             }
             AzureConfigKey::UseAzureCli => self.use_azure_cli.parse(value),
             AzureConfigKey::UseEmulator => self.use_emulator.parse(value),
-            AzureConfigKey::UseFabric => self.use_fabric.parse(value),
+            AzureConfigKey::UseFabricEndpoint => self.use_fabric_endpoint.parse(value),
             AzureConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
@@ -710,7 +713,9 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::SasKey => self.sas_key.clone(),
             AzureConfigKey::Token => self.bearer_token.clone(),
             AzureConfigKey::UseEmulator => Some(self.use_emulator.to_string()),
-            AzureConfigKey::UseFabric => Some(self.use_fabric.to_string()),
+            AzureConfigKey::UseFabricEndpoint => {
+                Some(self.use_fabric_endpoint.to_string())
+            }
             AzureConfigKey::MsiEndpoint => self.msi_endpoint.clone(),
             AzureConfigKey::ObjectId => self.object_id.clone(),
             AzureConfigKey::MsiResourceId => self.msi_resource_id.clone(),
@@ -764,11 +769,9 @@ impl MicrosoftAzureBuilder {
                     //
                     // See <https://learn.microsoft.com/en-us/fabric/onelake/onelake-access-api>
 
-                    if self.container_name.is_none() {
-                        if let Some(workspace) = parsed.path_segments().unwrap().next() {
-                            if !workspace.is_empty() {
-                                self.container_name = Some(workspace.to_string())
-                            }
+                    if let Some(workspace) = parsed.path_segments().unwrap().next() {
+                        if !workspace.is_empty() {
+                            self.container_name = Some(workspace.to_string())
                         }
                     }
                 }
@@ -861,8 +864,8 @@ impl MicrosoftAzureBuilder {
     /// Set if Microsoft Fabric url scheme should be used (defaults to false)
     /// When disabled the url scheme used is `https://{account}.blob.core.windows.net`
     /// When enabled the url scheme used is `https://{account}.dfs.fabric.microsoft.com`
-    pub fn with_use_fabric(mut self, use_fabric: bool) -> Self {
-        self.use_fabric = use_fabric.into();
+    pub fn with_use_fabric_endpoint(mut self, use_fabric_endpoint: bool) -> Self {
+        self.use_fabric_endpoint = use_fabric_endpoint.into();
         self
     }
 
@@ -954,7 +957,7 @@ impl MicrosoftAzureBuilder {
             (true, url, credential, account_name)
         } else {
             let account_name = self.account_name.ok_or(Error::MissingAccount {})?;
-            let account_url = match self.use_fabric.get()? {
+            let account_url = match self.use_fabric_endpoint.get()? {
                 true => format!("https://{}.blob.fabric.microsoft.com", &account_name),
                 false => format!("https://{}.blob.core.windows.net", &account_name),
             };
