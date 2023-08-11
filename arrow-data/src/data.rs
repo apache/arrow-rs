@@ -766,10 +766,11 @@ impl ArrayData {
                         )));
                     }
 
-                    if buffer.as_ptr().align_offset(*alignment) != 0 {
+                    let align_offset = buffer.as_ptr().align_offset(*alignment);
+                    if align_offset != 0 {
                         return Err(ArrowError::InvalidArgumentError(format!(
-                            "Misaligned buffers[{i}] in array of type {:?}, expected {alignment}",
-                            self.data_type,
+                            "Misaligned buffers[{i}] in array of type {:?}, offset from expected alignment of {alignment} by {}",
+                            self.data_type, align_offset.min(alignment - align_offset)
                         )));
                     }
                 }
@@ -2116,7 +2117,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Invalid argument error: Misaligned buffers[0] in array of type Int32, expected 4"
+            "Invalid argument error: Misaligned buffers[0] in array of type Int32, offset from expected alignment of 4 by 1"
         );
 
         data.align_buffers();
