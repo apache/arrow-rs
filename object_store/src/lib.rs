@@ -800,7 +800,8 @@ impl GetResult {
         match self.payload {
             #[cfg(not(target_arch = "wasm32"))]
             GetResultPayload::File(file, path) => {
-                local::chunked_stream(file, path, self.range, 8 * 1024)
+                const CHUNK_SIZE: usize = 8 * 1024;
+                local::chunked_stream(file, path, self.range, CHUNK_SIZE)
             }
             GetResultPayload::Stream(s) => s,
             #[cfg(target_arch = "wasm32")]
