@@ -44,7 +44,6 @@ use tokio::io::AsyncWrite;
 use tracing::info;
 use url::Url;
 
-pub use crate::aws::checksum::Checksum;
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
     InstanceCredentialProvider, TaskCredentialProvider, WebIdentityProvider,
@@ -56,7 +55,7 @@ use crate::client::{
     TokenCredentialProvider,
 };
 use crate::config::ConfigValue;
-use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
+use crate::multipart::{PartId, PutPart, WriteMultiPart};
 use crate::{
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Path, Result, RetryConfig,
@@ -64,7 +63,11 @@ use crate::{
 
 mod checksum;
 mod client;
+mod copy;
 mod credential;
+
+pub use checksum::Checksum;
+pub use copy::S3CopyIfNotExists;
 
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 //
@@ -227,7 +230,7 @@ impl ObjectStore for AmazonS3 {
             client: Arc::clone(&self.client),
         };
 
-        Ok((id, Box::new(CloudMultiPartUpload::new(upload, 8))))
+        Ok((id, Box::new(WriteMultiPart::new(upload, 8))))
     }
 
     async fn abort_multipart(
@@ -292,12 +295,11 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client.copy_request(from, to).await
+        self.client.copy_request(from, to, true).await
     }
 
-    async fn copy_if_not_exists(&self, _source: &Path, _dest: &Path) -> Result<()> {
-        // Will need dynamodb_lock
-        Err(crate::Error::NotImplemented)
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        self.client.copy_request(from, to, false).await
     }
 }
 
@@ -308,12 +310,8 @@ struct S3MultiPartUpload {
 }
 
 #[async_trait]
-impl CloudMultiPartUploadImpl for S3MultiPartUpload {
-    async fn put_multipart_part(
-        &self,
-        buf: Vec<u8>,
-        part_idx: usize,
-    ) -> Result<UploadPart, std::io::Error> {
+impl PutPart for S3MultiPartUpload {
+    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
         use reqwest::header::ETAG;
         let part = (part_idx + 1).to_string();
 
@@ -326,26 +324,16 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
             )
             .await?;
 
-        let etag = response
-            .headers()
-            .get(ETAG)
-            .context(MissingEtagSnafu)
-            .map_err(crate::Error::from)?;
+        let etag = response.headers().get(ETAG).context(MissingEtagSnafu)?;
 
-        let etag = etag
-            .to_str()
-            .context(BadHeaderSnafu)
-            .map_err(crate::Error::from)?;
+        let etag = etag.to_str().context(BadHeaderSnafu)?;
 
-        Ok(UploadPart {
+        Ok(PartId {
             content_id: etag.to_string(),
         })
     }
 
-    async fn complete(
-        &self,
-        completed_parts: Vec<UploadPart>,
-    ) -> Result<(), std::io::Error> {
+    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
         self.client
             .complete_multipart(&self.location, &self.upload_id, completed_parts)
             .await?;
@@ -404,6 +392,8 @@ pub struct AmazonS3Builder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AwsCredentialProvider>,
+    /// Copy if not exists
+    copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -535,6 +525,11 @@ pub enum AmazonS3ConfigKey {
     /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     ContainerCredentialsRelativeUri,
 
+    /// Configure how to provide [`ObjectStore::copy_if_not_exists`]
+    ///
+    /// See [`S3CopyIfNotExists`]
+    CopyIfNotExists,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -557,6 +552,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::ContainerCredentialsRelativeUri => {
                 "aws_container_credentials_relative_uri"
             }
+            Self::CopyIfNotExists => "copy_if_not_exists",
             Self::Client(opt) => opt.as_ref(),
         }
     }
@@ -590,6 +586,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_container_credentials_relative_uri" => {
                 Ok(Self::ContainerCredentialsRelativeUri)
             }
+            "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.parse() {
@@ -700,6 +697,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
+            AmazonS3ConfigKey::CopyIfNotExists => {
+                self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
+            }
         };
         self
     }
@@ -766,6 +766,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Client(key) => self.client_options.get_config_value(key),
             AmazonS3ConfigKey::ContainerCredentialsRelativeUri => {
                 self.container_credentials_relative_uri.clone()
+            }
+            AmazonS3ConfigKey::CopyIfNotExists => {
+                self.copy_if_not_exists.as_ref().map(ToString::to_string)
             }
         }
     }
@@ -949,6 +952,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Configure how to provide [`ObjectStore::copy_if_not_exists`]
+    pub fn with_copy_if_not_exists(mut self, config: S3CopyIfNotExists) -> Self {
+        self.copy_if_not_exists = Some(config.into());
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -959,6 +968,7 @@ impl AmazonS3Builder {
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
         let region = self.region.context(MissingRegionSnafu)?;
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
+        let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
 
         let credentials = if let Some(credentials) = self.credentials {
             credentials
@@ -1064,6 +1074,7 @@ impl AmazonS3Builder {
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
             checksum,
+            copy_if_not_exists,
         };
 
         let client = Arc::new(S3Client::new(config)?);
@@ -1076,157 +1087,14 @@ impl AmazonS3Builder {
 mod tests {
     use super::*;
     use crate::tests::{
-        get_nonexistent_object, get_opts, list_uses_directories_correctly,
-        list_with_delimiter, put_get_delete_list_opts, rename_and_copy, stream_get,
+        copy_if_not_exists, get_nonexistent_object, get_opts,
+        list_uses_directories_correctly, list_with_delimiter, put_get_delete_list_opts,
+        rename_and_copy, stream_get,
     };
     use bytes::Bytes;
     use std::collections::HashMap;
-    use std::env;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
-
-    // Helper macro to skip tests if TEST_INTEGRATION and the AWS
-    // environment variables are not set. Returns a configured
-    // AmazonS3Builder
-    macro_rules! maybe_skip_integration {
-        () => {{
-            dotenv::dotenv().ok();
-
-            let required_vars = [
-                "OBJECT_STORE_AWS_DEFAULT_REGION",
-                "OBJECT_STORE_BUCKET",
-                "OBJECT_STORE_AWS_ACCESS_KEY_ID",
-                "OBJECT_STORE_AWS_SECRET_ACCESS_KEY",
-            ];
-            let unset_vars: Vec<_> = required_vars
-                .iter()
-                .filter_map(|&name| match env::var(name) {
-                    Ok(_) => None,
-                    Err(_) => Some(name),
-                })
-                .collect();
-            let unset_var_names = unset_vars.join(", ");
-
-            let force = env::var("TEST_INTEGRATION");
-
-            if force.is_ok() && !unset_var_names.is_empty() {
-                panic!(
-                    "TEST_INTEGRATION is set, \
-                            but variable(s) {} need to be set",
-                    unset_var_names
-                );
-            } else if force.is_err() {
-                eprintln!(
-                    "skipping AWS integration test - set {}TEST_INTEGRATION to run",
-                    if unset_var_names.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{} and ", unset_var_names)
-                    }
-                );
-                return;
-            } else {
-                let config = AmazonS3Builder::new()
-                    .with_access_key_id(
-                        env::var("OBJECT_STORE_AWS_ACCESS_KEY_ID")
-                            .expect("already checked OBJECT_STORE_AWS_ACCESS_KEY_ID"),
-                    )
-                    .with_secret_access_key(
-                        env::var("OBJECT_STORE_AWS_SECRET_ACCESS_KEY")
-                            .expect("already checked OBJECT_STORE_AWS_SECRET_ACCESS_KEY"),
-                    )
-                    .with_region(
-                        env::var("OBJECT_STORE_AWS_DEFAULT_REGION")
-                            .expect("already checked OBJECT_STORE_AWS_DEFAULT_REGION"),
-                    )
-                    .with_bucket_name(
-                        env::var("OBJECT_STORE_BUCKET")
-                            .expect("already checked OBJECT_STORE_BUCKET"),
-                    )
-                    .with_allow_http(true);
-
-                let config = if let Ok(endpoint) = env::var("OBJECT_STORE_AWS_ENDPOINT") {
-                    config.with_endpoint(endpoint)
-                } else {
-                    config
-                };
-
-                let config = if let Ok(token) = env::var("OBJECT_STORE_AWS_SESSION_TOKEN")
-                {
-                    config.with_token(token)
-                } else {
-                    config
-                };
-
-                let config = if let Ok(virtual_hosted_style_request) =
-                    env::var("OBJECT_STORE_VIRTUAL_HOSTED_STYLE_REQUEST")
-                {
-                    config.with_virtual_hosted_style_request(
-                        virtual_hosted_style_request.trim().parse().unwrap(),
-                    )
-                } else {
-                    config
-                };
-
-                config
-            }
-        }};
-    }
-
-    #[test]
-    fn s3_test_config_from_env() {
-        let aws_access_key_id = env::var("AWS_ACCESS_KEY_ID")
-            .unwrap_or_else(|_| "object_store:fake_access_key_id".into());
-        let aws_secret_access_key = env::var("AWS_SECRET_ACCESS_KEY")
-            .unwrap_or_else(|_| "object_store:fake_secret_key".into());
-
-        let aws_default_region = env::var("AWS_DEFAULT_REGION")
-            .unwrap_or_else(|_| "object_store:fake_default_region".into());
-
-        let aws_endpoint = env::var("AWS_ENDPOINT")
-            .unwrap_or_else(|_| "object_store:fake_endpoint".into());
-        let aws_session_token = env::var("AWS_SESSION_TOKEN")
-            .unwrap_or_else(|_| "object_store:fake_session_token".into());
-
-        let container_creds_relative_uri =
-            env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
-                .unwrap_or_else(|_| "/object_store/fake_credentials_uri".into());
-
-        // required
-        env::set_var("AWS_ACCESS_KEY_ID", &aws_access_key_id);
-        env::set_var("AWS_SECRET_ACCESS_KEY", &aws_secret_access_key);
-        env::set_var("AWS_DEFAULT_REGION", &aws_default_region);
-
-        // optional
-        env::set_var("AWS_ENDPOINT", &aws_endpoint);
-        env::set_var("AWS_SESSION_TOKEN", &aws_session_token);
-        env::set_var(
-            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-            &container_creds_relative_uri,
-        );
-        env::set_var("AWS_UNSIGNED_PAYLOAD", "true");
-        env::set_var("AWS_CHECKSUM_ALGORITHM", "sha256");
-
-        let builder = AmazonS3Builder::from_env();
-        assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
-        assert_eq!(
-            builder.secret_access_key.unwrap(),
-            aws_secret_access_key.as_str()
-        );
-        assert_eq!(builder.region.unwrap(), aws_default_region);
-
-        assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
-        assert_eq!(builder.token.unwrap(), aws_session_token);
-        assert_eq!(
-            builder.container_credentials_relative_uri.unwrap(),
-            container_creds_relative_uri
-        );
-        assert_eq!(
-            builder.checksum_algorithm.unwrap().get().unwrap(),
-            Checksum::SHA256
-        );
-        assert!(builder.unsigned_payload.get().unwrap());
-    }
 
     #[test]
     fn s3_test_config_from_map() {
@@ -1318,8 +1186,11 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test() {
-        let config = maybe_skip_integration!();
+        crate::test_util::maybe_skip_integration!();
+        let config = AmazonS3Builder::from_env();
+
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
+        let test_not_exists = config.copy_if_not_exists.is_some();
         let integration = config.build().unwrap();
 
         // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
@@ -1329,15 +1200,19 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
+        if test_not_exists {
+            copy_if_not_exists(&integration).await;
+        }
 
         // run integration test with unsigned payload enabled
-        let config = maybe_skip_integration!().with_unsigned_payload(true);
+        let config = AmazonS3Builder::from_env().with_unsigned_payload(true);
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
         let integration = config.build().unwrap();
         put_get_delete_list_opts(&integration, is_local).await;
 
         // run integration test with checksum set to sha256
-        let config = maybe_skip_integration!().with_checksum_algorithm(Checksum::SHA256);
+        let config =
+            AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
         let integration = config.build().unwrap();
         put_get_delete_list_opts(&integration, is_local).await;
@@ -1345,8 +1220,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_get_nonexistent_location() {
-        let config = maybe_skip_integration!();
-        let integration = config.build().unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let integration = AmazonS3Builder::from_env().build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1358,7 +1233,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_get_nonexistent_bucket() {
-        let config = maybe_skip_integration!().with_bucket_name(NON_EXISTENT_NAME);
+        crate::test_util::maybe_skip_integration!();
+        let config = AmazonS3Builder::from_env().with_bucket_name(NON_EXISTENT_NAME);
         let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
@@ -1369,8 +1245,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_put_nonexistent_bucket() {
-        let config = maybe_skip_integration!().with_bucket_name(NON_EXISTENT_NAME);
-
+        crate::test_util::maybe_skip_integration!();
+        let config = AmazonS3Builder::from_env().with_bucket_name(NON_EXISTENT_NAME);
         let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
@@ -1382,8 +1258,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_delete_nonexistent_location() {
-        let config = maybe_skip_integration!();
-        let integration = config.build().unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let integration = AmazonS3Builder::from_env().build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1392,7 +1268,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_delete_nonexistent_bucket() {
-        let config = maybe_skip_integration!().with_bucket_name(NON_EXISTENT_NAME);
+        crate::test_util::maybe_skip_integration!();
+        let config = AmazonS3Builder::from_env().with_bucket_name(NON_EXISTENT_NAME);
         let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);

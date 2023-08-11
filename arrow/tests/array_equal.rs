@@ -1295,3 +1295,25 @@ fn test_struct_equal_slice() {
 
     test_equal(&a, &b, true);
 }
+
+#[test]
+fn test_list_excess_children_equal() {
+    let mut a = ListBuilder::new(FixedSizeBinaryBuilder::new(5));
+    a.values().append_value(b"11111").unwrap(); // Masked value
+    a.append_null();
+    a.values().append_value(b"22222").unwrap();
+    a.values().append_null();
+    a.append(true);
+    let a = a.finish();
+
+    let mut b = ListBuilder::new(FixedSizeBinaryBuilder::new(5));
+    b.append_null();
+    b.values().append_value(b"22222").unwrap();
+    b.values().append_null();
+    b.append(true);
+    let b = b.finish();
+
+    assert_eq!(a.value_offsets(), &[0, 1, 3]);
+    assert_eq!(b.value_offsets(), &[0, 0, 2]);
+    assert_eq!(a, b);
+}

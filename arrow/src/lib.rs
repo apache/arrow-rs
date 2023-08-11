@@ -184,11 +184,11 @@
 //!
 //! This module also implements many common vertical operations:
 //!
-//! * All mathematical binary operators, such as [`subtract`](compute::kernels::arithmetic::subtract)
+//! * All mathematical binary operators, such as [`sub`](compute::kernels::numeric::sub)
 //! * All boolean binary operators such as [`equality`](compute::kernels::comparison::eq)
 //! * [`cast`](compute::kernels::cast::cast)
 //! * [`filter`](compute::kernels::filter::filter)
-//! * [`take`](compute::kernels::take::take) and [`limit`](compute::kernels::limit::limit)
+//! * [`take`](compute::kernels::take::take)
 //! * [`sort`](compute::kernels::sort::sort)
 //! * some string operators such as [`substring`](compute::kernels::substring::substring) and [`length`](compute::kernels::length::length)
 //!

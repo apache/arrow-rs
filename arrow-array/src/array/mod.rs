@@ -841,6 +841,8 @@ mod tests {
                 assert_eq!(a.null_count(), 1);
                 assert!(a.is_null(0))
             }
+
+            array.to_data().validate_full().unwrap();
         }
     }
 

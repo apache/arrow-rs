@@ -155,13 +155,13 @@ impl ParquetMetaData {
     }
 
     /// Override the column index
-    #[allow(dead_code)]
+    #[cfg(feature = "arrow")]
     pub(crate) fn set_column_index(&mut self, index: Option<ParquetColumnIndex>) {
         self.column_index = index;
     }
 
     /// Override the offset index
-    #[allow(dead_code)]
+    #[cfg(feature = "arrow")]
     pub(crate) fn set_offset_index(&mut self, index: Option<ParquetOffsetIndex>) {
         self.offset_index = index;
     }
@@ -279,6 +279,9 @@ pub struct RowGroupMetaData {
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
+    // We can't infer from file offset of first column since there may empty columns in row group.
+    file_offset: Option<i64>,
+    ordinal: Option<i16>,
 }
 
 impl RowGroupMetaData {
@@ -332,6 +335,18 @@ impl RowGroupMetaData {
         self.schema_descr.clone()
     }
 
+    /// Returns ordinal of this row group in file
+    #[inline(always)]
+    pub fn ordinal(&self) -> Option<i16> {
+        self.ordinal
+    }
+
+    /// Returns file offset of this row group in file.
+    #[inline(always)]
+    pub fn file_offset(&self) -> Option<i64> {
+        self.file_offset
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(
         schema_descr: SchemaDescPtr,
@@ -352,6 +367,8 @@ impl RowGroupMetaData {
             sorting_columns,
             total_byte_size,
             schema_descr,
+            file_offset: rg.file_offset,
+            ordinal: rg.ordinal,
         })
     }
 
@@ -362,9 +379,9 @@ impl RowGroupMetaData {
             total_byte_size: self.total_byte_size,
             num_rows: self.num_rows,
             sorting_columns: self.sorting_columns().cloned(),
-            file_offset: None,
-            total_compressed_size: None,
-            ordinal: None,
+            file_offset: self.file_offset(),
+            total_compressed_size: Some(self.compressed_size()),
+            ordinal: self.ordinal,
         }
     }
 
@@ -383,9 +400,11 @@ impl RowGroupMetaDataBuilder {
         Self(RowGroupMetaData {
             columns: Vec::with_capacity(schema_descr.num_columns()),
             schema_descr,
+            file_offset: None,
             num_rows: 0,
             sorting_columns: None,
             total_byte_size: 0,
+            ordinal: None,
         })
     }
 
@@ -410,6 +429,17 @@ impl RowGroupMetaDataBuilder {
     /// Sets column metadata for this row group.
     pub fn set_column_metadata(mut self, value: Vec<ColumnChunkMetaData>) -> Self {
         self.0.columns = value;
+        self
+    }
+
+    /// Sets ordinal for this row group.
+    pub fn set_ordinal(mut self, value: i16) -> Self {
+        self.0.ordinal = Some(value);
+        self
+    }
+
+    pub fn set_file_offset(mut self, value: i64) -> Self {
+        self.0.file_offset = Some(value);
         self
     }
 
@@ -616,7 +646,7 @@ impl ColumnChunkMetaData {
         let data_page_offset = col_metadata.data_page_offset;
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
-        let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
+        let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
         let encoding_stats = col_metadata
             .encoding_stats
             .as_ref()
@@ -968,6 +998,7 @@ mod tests {
             .set_num_rows(1000)
             .set_total_byte_size(2000)
             .set_column_metadata(columns)
+            .set_ordinal(1)
             .build()
             .unwrap();
 

@@ -242,11 +242,6 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
             })
         }
     }
-
-    #[cfg(feature = "arrow")]
-    pub(crate) fn metadata_ref(&self) -> &Arc<ParquetMetaData> {
-        &self.metadata
-    }
 }
 
 /// Get midpoint offset for a row group
@@ -442,8 +437,10 @@ pub(crate) fn decode_page(
 
     let result = match page_header.type_ {
         PageType::DICTIONARY_PAGE => {
-            assert!(page_header.dictionary_page_header.is_some());
-            let dict_header = page_header.dictionary_page_header.as_ref().unwrap();
+            let dict_header =
+                page_header.dictionary_page_header.as_ref().ok_or_else(|| {
+                    ParquetError::General("Missing dictionary page header".to_string())
+                })?;
             let is_sorted = dict_header.is_sorted.unwrap_or(false);
             Page::DictionaryPage {
                 buf: buffer,
@@ -453,20 +450,22 @@ pub(crate) fn decode_page(
             }
         }
         PageType::DATA_PAGE => {
-            assert!(page_header.data_page_header.is_some());
-            let header = page_header.data_page_header.unwrap();
+            let header = page_header.data_page_header.ok_or_else(|| {
+                ParquetError::General("Missing V1 data page header".to_string())
+            })?;
             Page::DataPage {
                 buf: buffer,
                 num_values: header.num_values as u32,
                 encoding: Encoding::try_from(header.encoding)?,
                 def_level_encoding: Encoding::try_from(header.definition_level_encoding)?,
                 rep_level_encoding: Encoding::try_from(header.repetition_level_encoding)?,
-                statistics: statistics::from_thrift(physical_type, header.statistics),
+                statistics: statistics::from_thrift(physical_type, header.statistics)?,
             }
         }
         PageType::DATA_PAGE_V2 => {
-            assert!(page_header.data_page_header_v2.is_some());
-            let header = page_header.data_page_header_v2.unwrap();
+            let header = page_header.data_page_header_v2.ok_or_else(|| {
+                ParquetError::General("Missing V2 data page header".to_string())
+            })?;
             let is_compressed = header.is_compressed.unwrap_or(true);
             Page::DataPageV2 {
                 buf: buffer,
@@ -477,7 +476,7 @@ pub(crate) fn decode_page(
                 def_levels_byte_len: header.definition_levels_byte_length as u32,
                 rep_levels_byte_len: header.repetition_levels_byte_length as u32,
                 is_compressed,
-                statistics: statistics::from_thrift(physical_type, header.statistics),
+                statistics: statistics::from_thrift(physical_type, header.statistics)?,
             }
         }
         _ => {

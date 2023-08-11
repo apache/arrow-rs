@@ -54,11 +54,77 @@ impl OffsetSizeTrait for i64 {
     const PREFIX: &'static str = "Large";
 }
 
-/// An array of [variable length arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout)
+/// An array of [variable length lists], similar to JSON arrays
+/// (e.g. `["A", "B", "C"]`).
 ///
-/// See [`ListArray`] and [`LargeListArray`]`
+/// Lists are represented using `offsets` into a `values` child
+/// array. Offsets are stored in two adjacent entries of an
+/// [`OffsetBuffer`].
 ///
-/// See [`GenericListBuilder`](crate::builder::GenericListBuilder) for how to construct a [`GenericListArray`]
+/// Arrow defines [`ListArray`] with `i32` offsets and
+/// [`LargeListArray`] with `i64` offsets.
+///
+/// Use [`GenericListBuilder`](crate::builder::GenericListBuilder) to
+/// construct a [`GenericListArray`].
+///
+/// # Representation
+///
+/// A [`ListArray`] can represent a list of values of any other
+/// supported Arrow type. Each element of the `ListArray` itself is
+/// a list which may be empty, may contain NULL and non-null values,
+/// or may itself be NULL.
+///
+/// For example, the `ListArray` shown in the following diagram stores
+/// lists of strings. Note that `[]` represents an empty (length
+/// 0), but non NULL list.
+///
+/// ```text
+/// ┌─────────────┐
+/// │   [A,B,C]   │
+/// ├─────────────┤
+/// │     []      │
+/// ├─────────────┤
+/// │    NULL     │
+/// ├─────────────┤
+/// │     [D]     │
+/// ├─────────────┤
+/// │  [NULL, F]  │
+/// └─────────────┘
+/// ```
+///
+/// The `values` are stored in a child [`StringArray`] and the offsets
+/// are stored in an [`OffsetBuffer`] as shown in the following
+/// diagram. The logical values and offsets are shown on the left, and
+/// the actual `ListArray` encoding on the right.
+///
+/// ```text
+///                                         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///                                                                 ┌ ─ ─ ─ ─ ─ ─ ┐    │
+///  ┌─────────────┐  ┌───────┐             │     ┌───┐   ┌───┐       ┌───┐ ┌───┐
+///  │   [A,B,C]   │  │ (0,3) │                   │ 1 │   │ 0 │     │ │ 1 │ │ A │ │ 0  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │      []     │  │ (3,3) │                   │ 1 │   │ 3 │     │ │ 1 │ │ B │ │ 1  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │    NULL     │  │ (3,4) │                   │ 0 │   │ 3 │     │ │ 1 │ │ C │ │ 2  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │     [D]     │  │ (4,5) │                   │ 1 │   │ 4 │     │ │ ? │ │ ? │ │ 3  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │  [NULL, F]  │  │ (5,7) │                   │ 1 │   │ 5 │     │ │ 1 │ │ D │ │ 4  │
+///  └─────────────┘  └───────┘             │     └───┘   ├───┤       ├───┤ ├───┤
+///                                                       │ 7 │     │ │ 0 │ │ ? │ │ 5  │
+///                                         │  Validity   └───┘       ├───┤ ├───┤
+///     Logical       Logical                  (nulls)   Offsets    │ │ 1 │ │ F │ │ 6  │
+///      Values       Offsets               │                         └───┘ └───┘
+///                                                                 │    Values   │    │
+///                 (offsets[i],            │   ListArray               (Array)
+///                offsets[i+1])                                    └ ─ ─ ─ ─ ─ ─ ┘    │
+///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///
+///
+/// ```
+///
+/// [`StringArray`]: crate::array::StringArray
+/// [variable length lists]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout
 pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,

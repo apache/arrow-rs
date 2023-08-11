@@ -19,7 +19,43 @@ use crate::buffer::ScalarBuffer;
 use crate::{ArrowNativeType, MutableBuffer};
 use std::ops::Deref;
 
-/// A non-empty buffer of monotonically increasing, positive integers
+/// A non-empty buffer of monotonically increasing, positive integers.
+///
+/// [`OffsetBuffer`] are used to represent ranges of offsets. An
+/// `OffsetBuffer` of `N+1` items contains `N` such ranges. The start
+/// offset for element `i` is `offsets[i]` and the end offset is
+/// `offsets[i+1]`. Equal offsets represent an empty range.
+///
+/// # Example
+///
+/// This example shows how 5 distinct ranges, are represented using a
+/// 6 entry `OffsetBuffer`. The first entry `(0, 3)` represents the
+/// three offsets `0, 1, 2`. The entry `(3,3)` represent no offsets
+/// (e.g. an empty list).
+///
+/// ```text
+///   ┌───────┐                ┌───┐
+///   │ (0,3) │                │ 0 │
+///   ├───────┤                ├───┤
+///   │ (3,3) │                │ 3 │
+///   ├───────┤                ├───┤
+///   │ (3,4) │                │ 3 │
+///   ├───────┤                ├───┤
+///   │ (4,5) │                │ 4 │
+///   ├───────┤                ├───┤
+///   │ (5,7) │                │ 5 │
+///   └───────┘                ├───┤
+///                            │ 7 │
+///                            └───┘
+///
+///                        Offsets Buffer
+///    Logical
+///    Offsets
+///
+///  (offsets[i],
+///   offsets[i+1])
+/// ```
+
 #[derive(Debug, Clone)]
 pub struct OffsetBuffer<O: ArrowNativeType>(ScalarBuffer<O>);
 

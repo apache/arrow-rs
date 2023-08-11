@@ -19,7 +19,6 @@ use crate::types::{ByteArrayType, GenericBinaryType};
 use crate::{
     Array, GenericByteArray, GenericListArray, GenericStringArray, OffsetSizeTrait,
 };
-use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 
@@ -81,42 +80,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)
-    }
-
-    /// Creates a [`GenericBinaryArray`] based on an iterator of values without nulls
-    pub fn from_iter_values<Ptr, I>(iter: I) -> Self
-    where
-        Ptr: AsRef<[u8]>,
-        I: IntoIterator<Item = Ptr>,
-    {
-        let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
-
-        let mut offsets =
-            MutableBuffer::new((data_len + 1) * std::mem::size_of::<OffsetSize>());
-        let mut values = MutableBuffer::new(0);
-
-        let mut length_so_far = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        for s in iter {
-            let s = s.as_ref();
-            length_so_far += OffsetSize::from_usize(s.len()).unwrap();
-            offsets.push(length_so_far);
-            values.extend_from_slice(s);
-        }
-
-        // iterator size hint may not be correct so compute the actual number of offsets
-        assert!(!offsets.is_empty()); // wrote at least one
-        let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
-
-        let array_data = ArrayData::builder(Self::DATA_TYPE)
-            .len(actual_len)
-            .add_buffer(offsets.into())
-            .add_buffer(values.into());
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
     }
 
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`

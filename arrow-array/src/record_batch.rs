@@ -158,7 +158,6 @@ impl RecordBatch {
             )));
         }
 
-        // check that all columns have the same row count
         let row_count = options
             .row_count
             .or_else(|| columns.first().map(|col| col.len()))
@@ -177,6 +176,7 @@ impl RecordBatch {
             }
         }
 
+        // check that all columns have the same row count
         if columns.iter().any(|c| c.len() != row_count) {
             let err = match options.row_count {
                 Some(_) => {
