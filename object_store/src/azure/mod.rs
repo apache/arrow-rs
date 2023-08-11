@@ -745,12 +745,13 @@ impl MicrosoftAzureBuilder {
                 // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
                 if parsed.username().is_empty() {
                     self.container_name = Some(validate(host)?);
-                } else if let Some(a) = host
-                    .strip_suffix(".dfs.core.windows.net")
-                    .or_else(|| host.strip_suffix(".dfs.fabric.microsoft.com"))
-                {
+                } else if let Some(a) = host.strip_suffix(".dfs.core.windows.net") {
                     self.container_name = Some(validate(parsed.username())?);
                     self.account_name = Some(validate(a)?);
+                } else if let Some(a) = host.strip_suffix(".dfs.fabric.microsoft.com") {
+                    self.container_name = Some(validate(parsed.username())?);
+                    self.account_name = Some(validate(a)?);
+                    self.use_fabric_endpoint = true.into();
                 } else {
                     return Err(UrlNotRecognisedSnafu { url }.build().into());
                 }
@@ -763,17 +764,17 @@ impl MicrosoftAzureBuilder {
                 Some((a, "dfs.fabric.microsoft.com"))
                 | Some((a, "blob.fabric.microsoft.com")) => {
                     self.account_name = Some(validate(a)?);
-                    // if the container_name i.e the workspaceGUID is not set for fabric try to infer this
-                    // from the url scheme https://onelake.dfs.fabric.microsoft.com/<workspaceGUID>/<itemGUID>/Files/test.csv
-                    // or https://onelake.dfs.fabric.microsoft.com/<workspace>/<item>.<itemtype>/<path>/<fileName>
+                    // Attempt to infer the container name from the URL
+                    // - https://onelake.dfs.fabric.microsoft.com/<workspaceGUID>/<itemGUID>/Files/test.csv
+                    // - https://onelake.dfs.fabric.microsoft.com/<workspace>/<item>.<itemtype>/<path>/<fileName>
                     //
                     // See <https://learn.microsoft.com/en-us/fabric/onelake/onelake-access-api>
-
                     if let Some(workspace) = parsed.path_segments().unwrap().next() {
                         if !workspace.is_empty() {
                             self.container_name = Some(workspace.to_string())
                         }
                     }
+                    self.use_fabric_endpoint = true.into();
                 }
                 _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
             },
@@ -1104,6 +1105,7 @@ mod tests {
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name, Some("file_system".to_string()));
+        assert!(!builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
@@ -1111,6 +1113,7 @@ mod tests {
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name, Some("file_system".to_string()));
+        assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder.parse_url("abfs://container/path").unwrap();
@@ -1129,12 +1132,14 @@ mod tests {
             .parse_url("https://account.dfs.core.windows.net/")
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
+        assert!(!builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
             .parse_url("https://account.blob.core.windows.net/")
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
+        assert!(!builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
@@ -1142,6 +1147,7 @@ mod tests {
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name, None);
+        assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
@@ -1149,6 +1155,7 @@ mod tests {
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name.as_deref(), Some("container"));
+        assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
@@ -1156,6 +1163,7 @@ mod tests {
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name, None);
+        assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
@@ -1163,6 +1171,7 @@ mod tests {
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name.as_deref(), Some("container"));
+        assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let err_cases = [
             "mailto://account.blob.core.windows.net/",
