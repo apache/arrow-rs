@@ -7233,9 +7233,8 @@ mod tests {
         assert_eq!(array.data_type(), &data_type);
         let cast_array = cast(&array, &DataType::Null).expect("cast failed");
         assert_eq!(cast_array.data_type(), &DataType::Null);
-        for i in 0..4 {
-            assert!(cast_array.is_null(i));
-        }
+        assert_eq!(cast_array.len(), 4);
+        assert_eq!(cast_array.logical_nulls().unwrap().null_count(), 4);
     }
 
     #[test]

@@ -203,6 +203,12 @@ impl BooleanBufferBuilder {
         );
     }
 
+    /// Append [`BooleanBuffer`] to this [`BooleanBufferBuilder`]
+    pub fn append_buffer(&mut self, buffer: &BooleanBuffer) {
+        let range = buffer.offset()..buffer.offset() + buffer.len();
+        self.append_packed_range(range, buffer.values())
+    }
+
     /// Returns the packed bits
     pub fn as_slice(&self) -> &[u8] {
         self.buffer.as_slice()

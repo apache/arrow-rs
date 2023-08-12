@@ -25,7 +25,7 @@
 use arrow_array::*;
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 
 /// Logical 'and' boolean values with Kleene logic
 ///
@@ -311,11 +311,7 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
 /// assert_eq!(a_is_null, BooleanArray::from(vec![false, false, true]));
 /// ```
 pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    let values = match input.nulls() {
-        // NullArray has no nulls buffer yet all values are null
-        None if input.data_type() == &DataType::Null => {
-            BooleanBuffer::new_set(input.len())
-        }
+    let values = match input.logical_nulls() {
         None => BooleanBuffer::new_unset(input.len()),
         Some(nulls) => !nulls.inner(),
     };
@@ -335,11 +331,7 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
 /// assert_eq!(a_is_not_null, BooleanArray::from(vec![true, true, false]));
 /// ```
 pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    let values = match input.nulls() {
-        // NullArray has no nulls buffer yet all values are null
-        None if input.data_type() == &DataType::Null => {
-            BooleanBuffer::new_unset(input.len())
-        }
+    let values = match input.logical_nulls() {
         None => BooleanBuffer::new_set(input.len()),
         Some(n) => n.inner().clone(),
     };

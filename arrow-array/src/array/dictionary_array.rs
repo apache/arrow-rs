@@ -729,6 +729,31 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self.keys.nulls()
     }
 
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        match self.values.nulls() {
+            None => self.nulls().cloned(),
+            Some(value_nulls) => {
+                let mut builder = BooleanBufferBuilder::new(self.len());
+                match self.keys.nulls() {
+                    Some(n) => builder.append_buffer(n.inner()),
+                    None => builder.append_n(self.len(), true),
+                }
+                for (idx, k) in self.keys.values().iter().enumerate() {
+                    let k = k.as_usize();
+                    // Check range to allow for nulls
+                    if k < value_nulls.len() && value_nulls.is_null(k) {
+                        builder.set_bit(idx, false);
+                    }
+                }
+                Some(builder.finish().into())
+            }
+        }
+    }
+
+    fn is_nullable(&self) -> bool {
+        !self.is_empty() && (self.nulls().is_some() || self.values.is_nullable())
+    }
+
     fn get_buffer_memory_size(&self) -> usize {
         self.keys.get_buffer_memory_size() + self.values.get_buffer_memory_size()
     }
@@ -841,6 +866,14 @@ impl<'a, K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'a, 
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.dictionary.nulls()
+    }
+
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        self.dictionary.logical_nulls()
+    }
+
+    fn is_nullable(&self) -> bool {
+        self.dictionary.is_nullable()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -1252,5 +1285,21 @@ mod tests {
             let expected = idx % 4 == 0 && idx < 100;
             assert_eq!(v, expected, "{idx}");
         }
+    }
+
+    #[test]
+    fn test_iterator_nulls() {
+        let keys = Int32Array::new(
+            vec![0, 700, 1, 2].into(),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+        let values = Int32Array::from(vec![Some(50), None, Some(2)]);
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+        let values: Vec<_> = dict
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(values, &[Some(50), None, None, Some(2)])
     }
 }

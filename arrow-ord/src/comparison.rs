@@ -6352,4 +6352,18 @@ mod tests {
             .to_string()
             .contains("Could not convert ToType with to_i128"));
     }
+
+    #[test]
+    #[cfg(feature = "dyn_cmp_dict")]
+    fn test_dictionary_nested_nulls() {
+        let keys = Int32Array::from(vec![0, 1, 2]);
+        let v1 = Arc::new(Int32Array::from(vec![Some(0), None, Some(2)]));
+        let a = DictionaryArray::new(keys.clone(), v1);
+        let v2 = Arc::new(Int32Array::from(vec![None, Some(0), Some(2)]));
+        let b = DictionaryArray::new(keys, v2);
+
+        let r = eq_dyn(&a, &b).unwrap();
+        assert_eq!(r.null_count(), 2);
+        assert!(r.is_valid(2));
+    }
 }

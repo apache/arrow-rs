@@ -1965,7 +1965,7 @@ mod tests {
 
         assert_eq!(a.value(0).len(), 0);
         assert_eq!(a.value(2).len(), 2);
-        assert_eq!(a.value(2).null_count(), 2);
+        assert_eq!(a.value(2).logical_nulls().unwrap().null_count(), 2);
 
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
         roundtrip(batch, None);
