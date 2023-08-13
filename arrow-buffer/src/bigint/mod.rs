@@ -1237,6 +1237,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::op_ref)]
     fn test_reference_op(il: i256, ir: i256) {
         let r1 = il + ir;
         let r2 = &il + ir;
