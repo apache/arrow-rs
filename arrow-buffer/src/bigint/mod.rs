@@ -659,6 +659,48 @@ macro_rules! derive_op {
                 self.$wrapping(rhs)
             }
         }
+
+        impl<'a> std::ops::$t<i256> for &'a i256 {
+            type Output = i256;
+
+            #[cfg(debug_assertions)]
+            fn $op(self, rhs: i256) -> Self::Output {
+                self.$checked(rhs).expect("i256 overflow")
+            }
+
+            #[cfg(not(debug_assertions))]
+            fn $op(self, rhs: i256) -> Self::Output {
+                self.$wrapping(rhs)
+            }
+        }
+
+        impl<'a> std::ops::$t<&'a i256> for i256 {
+            type Output = i256;
+
+            #[cfg(debug_assertions)]
+            fn $op(self, rhs: &'a i256) -> Self::Output {
+                self.$checked(*rhs).expect("i256 overflow")
+            }
+
+            #[cfg(not(debug_assertions))]
+            fn $op(self, rhs: &'a i256) -> Self::Output {
+                self.$wrapping(*rhs)
+            }
+        }
+
+        impl<'a, 'b> std::ops::$t<&'b i256> for &'a i256 {
+            type Output = i256;
+
+            #[cfg(debug_assertions)]
+            fn $op(self, rhs: &'b i256) -> Self::Output {
+                self.$checked(*rhs).expect("i256 overflow")
+            }
+
+            #[cfg(not(debug_assertions))]
+            fn $op(self, rhs: &'b i256) -> Self::Output {
+                self.$wrapping(*rhs)
+            }
+        }
     };
 }
 
@@ -1192,6 +1234,58 @@ mod tests {
         ];
         for (case, expected) in cases {
             assert_eq!(i256::from_string(case), expected)
+        }
+    }
+
+    fn test_reference_op(il: i256, ir: i256) {
+        let r1 = il + ir;
+        let r2 = &il + ir;
+        let r3 = il + &ir;
+        let r4 = &il + &ir;
+        assert_eq!(r1, r2);
+        assert_eq!(r1, r3);
+        assert_eq!(r1, r4);
+
+        let r1 = il - ir;
+        let r2 = &il - ir;
+        let r3 = il - &ir;
+        let r4 = &il - &ir;
+        assert_eq!(r1, r2);
+        assert_eq!(r1, r3);
+        assert_eq!(r1, r4);
+
+        let r1 = il * ir;
+        let r2 = &il * ir;
+        let r3 = il * &ir;
+        let r4 = &il * &ir;
+        assert_eq!(r1, r2);
+        assert_eq!(r1, r3);
+        assert_eq!(r1, r4);
+
+        let r1 = il / ir;
+        let r2 = &il / ir;
+        let r3 = il / &ir;
+        let r4 = &il / &ir;
+        assert_eq!(r1, r2);
+        assert_eq!(r1, r3);
+        assert_eq!(r1, r4);
+    }
+
+    #[test]
+    fn test_i256_reference_op() {
+        let candidates = [
+            i256::ONE,
+            i256::MINUS_ONE,
+            i256::from_i128(2),
+            i256::from_i128(-2),
+            i256::from_i128(3),
+            i256::from_i128(-3),
+        ];
+
+        for il in candidates {
+            for ir in candidates {
+                test_reference_op(il, ir)
+            }
         }
     }
 }
