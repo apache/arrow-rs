@@ -663,42 +663,24 @@ macro_rules! derive_op {
         impl<'a> std::ops::$t<i256> for &'a i256 {
             type Output = i256;
 
-            #[cfg(debug_assertions)]
             fn $op(self, rhs: i256) -> Self::Output {
-                self.$checked(rhs).expect("i256 overflow")
-            }
-
-            #[cfg(not(debug_assertions))]
-            fn $op(self, rhs: i256) -> Self::Output {
-                self.$wrapping(rhs)
+                (*self).$op(rhs)
             }
         }
 
         impl<'a> std::ops::$t<&'a i256> for i256 {
             type Output = i256;
 
-            #[cfg(debug_assertions)]
             fn $op(self, rhs: &'a i256) -> Self::Output {
-                self.$checked(*rhs).expect("i256 overflow")
-            }
-
-            #[cfg(not(debug_assertions))]
-            fn $op(self, rhs: &'a i256) -> Self::Output {
-                self.$wrapping(*rhs)
+                self.$op(*rhs)
             }
         }
 
         impl<'a, 'b> std::ops::$t<&'b i256> for &'a i256 {
             type Output = i256;
 
-            #[cfg(debug_assertions)]
             fn $op(self, rhs: &'b i256) -> Self::Output {
-                self.$checked(*rhs).expect("i256 overflow")
-            }
-
-            #[cfg(not(debug_assertions))]
-            fn $op(self, rhs: &'b i256) -> Self::Output {
-                self.$wrapping(*rhs)
+                (*self).$op(*rhs)
             }
         }
     };
