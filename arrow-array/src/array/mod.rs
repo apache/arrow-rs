@@ -173,11 +173,32 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn offset(&self) -> usize;
 
-    /// Returns the null buffers of this array if any
+    /// Returns the null buffer of this array if any
+    ///
+    /// Note: some arrays can encode their nullability in their children, for example,
+    /// [`DictionaryArray::values`] values or [`RunArray::values`], or without a null buffer,
+    /// such as [`NullArray`]. Use [`Array::logical_nulls`] to obtain a computed mask encoding this
     fn nulls(&self) -> Option<&NullBuffer>;
+
+    /// Returns the logical null buffer of this array if any
+    ///
+    /// In most cases this will be the same as [`Array::nulls`], except for:
+    ///
+    /// * DictionaryArray where [`DictionaryArray::values`] contains nulls
+    /// * RunArray where [`RunArray::values`] contains nulls
+    /// * NullArray where all indices are nulls
+    ///
+    /// In these cases a logical [`NullBuffer`] will be computed, encoding the logical nullability
+    /// of these arrays, beyond what is encoded in [`Array::nulls`]
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        self.nulls().cloned()
+    }
 
     /// Returns whether the element at `index` is null.
     /// When using this function on a slice, the index is relative to the slice.
+    ///
+    /// Note: this method returns the physical nullability, i.e. that encoded in [`Array::nulls`]
+    /// see [`Array::logical_nulls`] for logical nullability
     ///
     /// # Example:
     ///
@@ -196,6 +217,9 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// Returns whether the element at `index` is not null.
     /// When using this function on a slice, the index is relative to the slice.
     ///
+    /// Note: this method returns the physical nullability, i.e. that encoded in [`Array::nulls`]
+    /// see [`Array::logical_nulls`] for logical nullability
+    ///
     /// # Example:
     ///
     /// ```
@@ -210,7 +234,10 @@ pub trait Array: std::fmt::Debug + Send + Sync {
         !self.is_null(index)
     }
 
-    /// Returns the total number of null values in this array.
+    /// Returns the total number of physical null values in this array.
+    ///
+    /// Note: this method returns the physical null count, i.e. that encoded in [`Array::nulls`],
+    /// see [`Array::logical_nulls`] for logical nullability
     ///
     /// # Example:
     ///
@@ -224,6 +251,19 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn null_count(&self) -> usize {
         self.nulls().map(|n| n.null_count()).unwrap_or_default()
+    }
+
+    /// Returns `false` if the array is guaranteed to not contain any logical nulls
+    ///
+    /// In general this will be equivalent to `Array::null_count() != 0` but may differ in the
+    /// presence of logical nullability, see [`Array::logical_nulls`].
+    ///
+    /// Implementations will return `true` unless they can cheaply prove no logical nulls
+    /// are present. For example a [`DictionaryArray`] with nullable values will still return true,
+    /// even if the nulls present in [`DictionaryArray::values`] are not referenced by any key,
+    /// and therefore would not appear in [`Array::logical_nulls`].
+    fn is_nullable(&self) -> bool {
+        self.null_count() != 0
     }
 
     /// Returns the total number of bytes of memory pointed to by this array.
@@ -277,6 +317,10 @@ impl Array for ArrayRef {
         self.as_ref().nulls()
     }
 
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        self.as_ref().logical_nulls()
+    }
+
     fn is_null(&self, index: usize) -> bool {
         self.as_ref().is_null(index)
     }
@@ -287,6 +331,10 @@ impl Array for ArrayRef {
 
     fn null_count(&self) -> usize {
         self.as_ref().null_count()
+    }
+
+    fn is_nullable(&self) -> bool {
+        self.as_ref().is_nullable()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -335,6 +383,10 @@ impl<'a, T: Array> Array for &'a T {
         T::nulls(self)
     }
 
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        T::logical_nulls(self)
+    }
+
     fn is_null(&self, index: usize) -> bool {
         T::is_null(self, index)
     }
@@ -345,6 +397,10 @@ impl<'a, T: Array> Array for &'a T {
 
     fn null_count(&self) -> usize {
         T::null_count(self)
+    }
+
+    fn is_nullable(&self) -> bool {
+        T::is_nullable(self)
     }
 
     fn get_buffer_memory_size(&self) -> usize {

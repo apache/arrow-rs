@@ -719,19 +719,19 @@ where
     }
 }
 
-type LexicographicalCompareItem<'a> = (
-    Option<&'a NullBuffer>, // nulls
-    DynComparator,          // comparator
-    SortOptions,            // sort_option
+type LexicographicalCompareItem = (
+    Option<NullBuffer>, // nulls
+    DynComparator,      // comparator
+    SortOptions,        // sort_option
 );
 
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
 /// at given two indices. The lifetime is the same at the data wrapped.
-pub struct LexicographicalComparator<'a> {
-    compare_items: Vec<LexicographicalCompareItem<'a>>,
+pub struct LexicographicalComparator {
+    compare_items: Vec<LexicographicalCompareItem>,
 }
 
-impl LexicographicalComparator<'_> {
+impl LexicographicalComparator {
     /// lexicographically compare values at the wrapped columns with given indices.
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for (nulls, comparator, sort_option) in &self.compare_items {
@@ -780,14 +780,14 @@ impl LexicographicalComparator<'_> {
     /// results with two indices.
     pub fn try_new(
         columns: &[SortColumn],
-    ) -> Result<LexicographicalComparator<'_>, ArrowError> {
+    ) -> Result<LexicographicalComparator, ArrowError> {
         let compare_items = columns
             .iter()
             .map(|column| {
                 // flatten and convert build comparators
                 let values = column.values.as_ref();
                 Ok((
-                    values.nulls(),
+                    values.logical_nulls(),
                     build_compare(values, values)?,
                     column.options.unwrap_or_default(),
                 ))
@@ -4015,5 +4015,31 @@ mod tests {
             None,
             vec![None, None, None, Some(5.1), Some(5.1), Some(3.0), Some(1.2)],
         );
+    }
+
+    #[test]
+    fn test_lexicographic_comparator_null_dict_values() {
+        let values = Int32Array::new(
+            vec![1, 2, 3, 4].into(),
+            Some(NullBuffer::from(vec![true, false, false, true])),
+        );
+        let keys = Int32Array::new(
+            vec![0, 1, 53, 3].into(),
+            Some(NullBuffer::from(vec![true, true, false, true])),
+        );
+        // [1, NULL, NULL, 4]
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+
+        let comparator = LexicographicalComparator::try_new(&[SortColumn {
+            values: Arc::new(dict),
+            options: None,
+        }])
+        .unwrap();
+        // 1.cmp(NULL)
+        assert_eq!(comparator.compare(0, 1), Ordering::Greater);
+        // NULL.cmp(NULL)
+        assert_eq!(comparator.compare(2, 1), Ordering::Equal);
+        // NULL.cmp(4)
+        assert_eq!(comparator.compare(2, 3), Ordering::Less);
     }
 }

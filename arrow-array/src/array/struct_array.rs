@@ -143,15 +143,14 @@ impl StructArray {
                 )));
             }
 
-            if let Some(a) = a.nulls() {
-                let nulls_valid = f.is_nullable()
-                    || nulls.as_ref().map(|n| n.contains(a)).unwrap_or_default();
-
-                if !nulls_valid {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Found unmasked nulls for non-nullable StructArray field {:?}",
-                        f.name()
-                    )));
+            if !f.is_nullable() {
+                if let Some(a) = a.logical_nulls() {
+                    if !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default() {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Found unmasked nulls for non-nullable StructArray field {:?}",
+                            f.name()
+                        )));
+                    }
                 }
             }
         }
@@ -314,7 +313,7 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
             .into_iter()
             .map(|(name, array)| {
                 (
-                    Field::new(name, array.data_type().clone(), array.nulls().is_some()),
+                    Field::new(name, array.data_type().clone(), array.is_nullable()),
                     array,
                 )
             })

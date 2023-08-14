@@ -147,7 +147,7 @@ impl FixedSizeListArray {
     /// * `size < 0`
     /// * `values.len() / size != nulls.len()`
     /// * `values.data_type() != field.data_type()`
-    /// * `!field.is_nullable() && !nulls.expand(size).contains(values.nulls())`
+    /// * `!field.is_nullable() && !nulls.expand(size).contains(values.logical_nulls())`
     pub fn try_new(
         field: FieldRef,
         size: i32,
@@ -181,11 +181,11 @@ impl FixedSizeListArray {
             )));
         }
 
-        if let Some(a) = values.nulls() {
+        if let Some(a) = values.logical_nulls() {
             let nulls_valid = field.is_nullable()
                 || nulls
                     .as_ref()
-                    .map(|n| n.expand(size as _).contains(a))
+                    .map(|n| n.expand(size as _).contains(&a))
                     .unwrap_or_default();
 
             if !nulls_valid {

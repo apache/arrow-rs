@@ -494,7 +494,7 @@ impl LevelInfoBuilder {
                 def_levels.reserve(len);
                 info.non_null_indices.reserve(len);
 
-                match array.nulls() {
+                match array.logical_nulls() {
                     Some(nulls) => {
                         // TODO: Faster bitmask iteration (#1757)
                         for i in range {
@@ -1751,7 +1751,6 @@ mod tests {
         builder.write(&a, 0..4);
         let levels = builder.finish();
 
-        let list_level = levels.get(0).unwrap();
         let expected_level = LevelInfo {
             def_levels: Some(vec![5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0]),
             rep_levels: Some(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
@@ -1760,6 +1759,35 @@ mod tests {
             max_rep_level: 2,
         };
 
-        assert_eq!(list_level, &expected_level);
+        assert_eq!(levels[0], expected_level);
+    }
+
+    #[test]
+    fn test_null_dictionary_values() {
+        let values = Int32Array::new(
+            vec![1, 2, 3, 4].into(),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+        let keys = Int32Array::new(
+            vec![1, 54, 2, 0].into(),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+        // [NULL, NULL, 3, 0]
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+
+        let item_field = Field::new("item", dict.data_type().clone(), true);
+
+        let mut builder =
+            LevelInfoBuilder::try_new(&item_field, Default::default()).unwrap();
+        builder.write(&dict, 0..4);
+        let levels = builder.finish();
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![0, 0, 1, 1]),
+            rep_levels: None,
+            non_null_indices: vec![2, 3],
+            max_def_level: 1,
+            max_rep_level: 0,
+        };
+        assert_eq!(levels[0], expected_level);
     }
 }

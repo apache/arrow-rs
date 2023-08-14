@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_buffer::{ArrowNativeType, NullBuffer, RunEndBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
@@ -349,6 +349,43 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         None
     }
 
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        let len = self.len();
+        let nulls = self.values.logical_nulls()?;
+        let mut out = BooleanBufferBuilder::new(len);
+        let offset = self.run_ends.offset();
+        let mut valid_start = 0;
+        let mut last_end = 0;
+        for (idx, end) in self.run_ends.values().iter().enumerate() {
+            let end = end.as_usize();
+            if end < offset {
+                continue;
+            }
+            let end = (end - offset).min(len);
+            if nulls.is_null(idx) {
+                if valid_start < last_end {
+                    out.append_n(last_end - valid_start, true);
+                }
+                out.append_n(end - last_end, false);
+                valid_start = end;
+            }
+            last_end = end;
+            if end == len {
+                break;
+            }
+        }
+        if valid_start < len {
+            out.append_n(len - valid_start, true)
+        }
+        // Sanity check
+        assert_eq!(out.len(), len);
+        Some(out.finish().into())
+    }
+
+    fn is_nullable(&self) -> bool {
+        !self.is_empty() && self.values.is_nullable()
+    }
+
     fn get_buffer_memory_size(&self) -> usize {
         self.run_ends.inner().inner().capacity() + self.values.get_buffer_memory_size()
     }
@@ -567,6 +604,14 @@ impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.run_array.nulls()
+    }
+
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        self.run_array.logical_nulls()
+    }
+
+    fn is_nullable(&self) -> bool {
+        self.run_array.is_nullable()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -1039,6 +1084,28 @@ mod tests {
                 &physical_indices,
                 physical_values_array,
             );
+        }
+    }
+
+    #[test]
+    fn test_logical_nulls() {
+        let run = Int32Array::from(vec![3, 6, 9, 12]);
+        let values = Int32Array::from(vec![Some(0), None, Some(1), None]);
+        let array = RunArray::try_new(&run, &values).unwrap();
+
+        let expected = vec![
+            true, true, true, false, false, false, true, true, true, false, false, false,
+        ];
+
+        let n = array.logical_nulls().unwrap();
+        assert_eq!(n.null_count(), 6);
+
+        let slices = [(0, 12), (0, 2), (2, 5), (3, 0), (3, 3), (3, 4), (4, 8)];
+        for (offset, length) in slices {
+            let a = array.slice(offset, length);
+            let n = a.logical_nulls().unwrap();
+            let n = n.into_iter().collect::<Vec<_>>();
+            assert_eq!(&n, &expected[offset..offset + length], "{offset} {length}");
         }
     }
 }

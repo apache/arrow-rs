@@ -161,7 +161,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     ///
     /// * `offsets.len() - 1 != nulls.len()`
     /// * `offsets.last() > values.len()`
-    /// * `!field.is_nullable() && values.null_count() != 0`
+    /// * `!field.is_nullable() && values.is_nullable()`
     /// * `field.data_type() != values.data_type()`
     pub fn try_new(
         field: FieldRef,
@@ -189,7 +189,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
                 )));
             }
         }
-        if !field.is_nullable() && values.null_count() != 0 {
+        if !field.is_nullable() && values.is_nullable() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Non-nullable field of {}ListArray {:?} cannot contain nulls",
                 OffsetSize::PREFIX,

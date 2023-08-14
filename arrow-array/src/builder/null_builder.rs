@@ -40,7 +40,7 @@ use std::sync::Arc;
 /// let arr = b.finish();
 ///
 /// assert_eq!(8, arr.len());
-/// assert_eq!(8, arr.null_count());
+/// assert_eq!(0, arr.null_count());
 /// ```
 #[derive(Debug)]
 pub struct NullBuilder {
@@ -160,7 +160,8 @@ mod tests {
         let arr = builder.finish();
         assert_eq!(20, arr.len());
         assert_eq!(0, arr.offset());
-        assert_eq!(20, arr.null_count());
+        assert_eq!(0, arr.null_count());
+        assert!(arr.is_nullable());
     }
 
     #[test]
@@ -170,10 +171,10 @@ mod tests {
         builder.append_empty_value();
         builder.append_empty_values(3);
         let mut array = builder.finish_cloned();
-        assert_eq!(21, array.null_count());
+        assert_eq!(21, array.len());
 
         builder.append_empty_values(5);
         array = builder.finish();
-        assert_eq!(26, array.null_count());
+        assert_eq!(26, array.len());
     }
 }
