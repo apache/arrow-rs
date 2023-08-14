@@ -478,6 +478,13 @@ pub enum AzureConfigKey {
     /// - `use_azure_cli`
     UseAzureCli,
 
+    /// Container name
+    ///
+    /// Supported keys:
+    /// - `azure_container_name`
+    /// - `container_name`
+    ContainerName,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -499,6 +506,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::MsiResourceId => "azure_msi_resource_id",
             Self::FederatedTokenFile => "azure_federated_token_file",
             Self::UseAzureCli => "azure_use_azure_cli",
+            Self::ContainerName => "azure_container_name",
             Self::Client(key) => key.as_ref(),
         }
     }
@@ -547,6 +555,7 @@ impl FromStr for AzureConfigKey {
                 Ok(Self::UseFabricEndpoint)
             }
             "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
+            "azure_container_name" | "container_name" => Ok(Self::ContainerName),
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.parse() {
@@ -663,6 +672,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
+            AzureConfigKey::ContainerName => self.container_name = Some(value.into()),
         };
         self
     }
@@ -722,6 +732,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FederatedTokenFile => self.federated_token_file.clone(),
             AzureConfigKey::UseAzureCli => Some(self.use_azure_cli.to_string()),
             AzureConfigKey::Client(key) => self.client_options.get_config_value(key),
+            AzureConfigKey::ContainerName => self.container_name.clone(),
         }
     }
 
@@ -1084,9 +1095,7 @@ mod tests {
     #[tokio::test]
     async fn azure_blob_test() {
         crate::test_util::maybe_skip_integration!();
-        let container_name = std::env::var("AZURE_CONTAINER_NAME").unwrap(); // (#4629)
-        let config = MicrosoftAzureBuilder::from_env();
-        let integration = config.with_container_name(container_name).build().unwrap();
+        let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
 
         put_get_delete_list_opts(&integration, false).await;
         get_opts(&integration).await;
