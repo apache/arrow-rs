@@ -18,8 +18,8 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
-    Path, Result, StreamExt,
+    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
+    ObjectMeta, ObjectStore, Path, Result, StreamExt,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -106,22 +106,14 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
-        match self.inner.get(location).await? {
-            r @ GetResult::File(_, _) => Ok(r),
-            GetResult::Stream(s) => {
-                Ok(GetResult::Stream(PermitWrapper::new(s, permit).boxed()))
-            }
-        }
+        let r = self.inner.get(location).await?;
+        Ok(permit_get_result(r, permit))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
-        match self.inner.get_opts(location, options).await? {
-            r @ GetResult::File(_, _) => Ok(r),
-            GetResult::Stream(s) => {
-                Ok(GetResult::Stream(PermitWrapper::new(s, permit).boxed()))
-            }
-        }
+        let r = self.inner.get_opts(location, options).await?;
+        Ok(permit_get_result(r, permit))
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
@@ -198,6 +190,16 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.rename_if_not_exists(from, to).await
     }
+}
+
+fn permit_get_result(r: GetResult, permit: OwnedSemaphorePermit) -> GetResult {
+    let payload = match r.payload {
+        v @ GetResultPayload::File(_, _) => v,
+        GetResultPayload::Stream(s) => {
+            GetResultPayload::Stream(PermitWrapper::new(s, permit).boxed())
+        }
+    };
+    GetResult { payload, ..r }
 }
 
 /// Combines an [`OwnedSemaphorePermit`] with some other type

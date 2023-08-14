@@ -17,8 +17,8 @@
 
 use crate::client::header::header_meta;
 use crate::path::Path;
-use crate::Result;
 use crate::{Error, GetOptions, GetResult, ObjectMeta};
+use crate::{GetResultPayload, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Response;
@@ -47,7 +47,14 @@ pub trait GetClientExt {
 #[async_trait]
 impl<T: GetClient> GetClientExt for T {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let range = options.range.clone();
         let response = self.get_request(location, options, false).await?;
+        let meta =
+            header_meta(location, response.headers()).map_err(|e| Error::Generic {
+                store: T::STORE,
+                source: Box::new(e),
+            })?;
+
         let stream = response
             .bytes_stream()
             .map_err(|source| Error::Generic {
@@ -56,7 +63,11 @@ impl<T: GetClient> GetClientExt for T {
             })
             .boxed();
 
-        Ok(GetResult::Stream(stream))
+        Ok(GetResult {
+            range: range.unwrap_or(0..meta.size),
+            payload: GetResultPayload::Stream(stream),
+            meta,
+        })
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {

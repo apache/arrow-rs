@@ -374,8 +374,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 
     /// Perform a get request with options
-    ///
-    /// Note: options.range will be ignored if [`GetResult::File`]
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 
     /// Return the bytes that are stored at the specified location
@@ -385,17 +383,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
             range: Some(range.clone()),
             ..Default::default()
         };
-        // Temporary until GetResult::File supports range (#4352)
-        match self.get_opts(location, options).await? {
-            GetResult::Stream(s) => collect_bytes(s, None).await,
-            #[cfg(not(target_arch = "wasm32"))]
-            GetResult::File(mut file, path) => {
-                maybe_spawn_blocking(move || local::read_range(&mut file, &path, range))
-                    .await
-            }
-            #[cfg(target_arch = "wasm32")]
-            _ => unimplemented!("File IO not implemented on wasm32."),
-        }
+        self.get_opts(location, options).await?.bytes().await
     }
 
     /// Return the bytes that are stored at the specified location
@@ -751,21 +739,32 @@ impl GetOptions {
 }
 
 /// Result for a get request
+#[derive(Debug)]
+pub struct GetResult {
+    /// The [`GetResultPayload`]
+    pub payload: GetResultPayload,
+    /// The [`ObjectMeta`] for this object
+    pub meta: ObjectMeta,
+    /// The range of bytes returned by this request
+    pub range: Range<usize>,
+}
+
+/// The kind of a [`GetResult`]
 ///
 /// This special cases the case of a local file, as some systems may
 /// be able to optimise the case of a file already present on local disk
-pub enum GetResult {
-    /// A file and its path on the local filesystem
+pub enum GetResultPayload {
+    /// The file, path
     File(std::fs::File, std::path::PathBuf),
-    /// An asynchronous stream
+    /// An opaque stream of bytes
     Stream(BoxStream<'static, Result<Bytes>>),
 }
 
-impl Debug for GetResult {
+impl Debug for GetResultPayload {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::File(_, _) => write!(f, "GetResult(File)"),
-            Self::Stream(_) => write!(f, "GetResult(Stream)"),
+            Self::File(_, _) => write!(f, "GetResultPayload(File)"),
+            Self::Stream(_) => write!(f, "GetResultPayload(Stream)"),
         }
     }
 }
@@ -773,32 +772,31 @@ impl Debug for GetResult {
 impl GetResult {
     /// Collects the data into a [`Bytes`]
     pub async fn bytes(self) -> Result<Bytes> {
-        match self {
+        let len = self.range.end - self.range.start;
+        match self.payload {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::File(mut file, path) => {
+            GetResultPayload::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
-                    let len = file.seek(SeekFrom::End(0)).map_err(|source| {
-                        local::Error::Seek {
+                    file.seek(SeekFrom::Start(self.range.start as _)).map_err(
+                        |source| local::Error::Seek {
                             source,
                             path: path.clone(),
-                        }
-                    })?;
+                        },
+                    )?;
 
-                    file.rewind().map_err(|source| local::Error::Seek {
-                        source,
-                        path: path.clone(),
-                    })?;
-
-                    let mut buffer = Vec::with_capacity(len as usize);
-                    file.read_to_end(&mut buffer).map_err(|source| {
-                        local::Error::UnableToReadBytes { source, path }
-                    })?;
+                    let mut buffer = Vec::with_capacity(len);
+                    file.take(len as _)
+                        .read_to_end(&mut buffer)
+                        .map_err(|source| local::Error::UnableToReadBytes {
+                            source,
+                            path,
+                        })?;
 
                     Ok(buffer.into())
                 })
                 .await
             }
-            Self::Stream(s) => collect_bytes(s, None).await,
+            GetResultPayload::Stream(s) => collect_bytes(s, Some(len)).await,
             #[cfg(target_arch = "wasm32")]
             _ => unimplemented!("File IO not implemented on wasm32."),
         }
@@ -806,8 +804,8 @@ impl GetResult {
 
     /// Converts this into a byte stream
     ///
-    /// If the result is [`Self::File`] will perform chunked reads of the file, otherwise
-    /// will return the [`Self::Stream`].
+    /// If the `self.kind` is [`GetResultPayload::File`] will perform chunked reads of the file,
+    /// otherwise will return the [`GetResultPayload::Stream`].
     ///
     /// # Tokio Compatibility
     ///
@@ -819,36 +817,13 @@ impl GetResult {
     /// If not called from a tokio context, this will perform IO on the current thread with
     /// no additional complexity or overheads
     pub fn into_stream(self) -> BoxStream<'static, Result<Bytes>> {
-        match self {
+        match self.payload {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::File(file, path) => {
+            GetResultPayload::File(file, path) => {
                 const CHUNK_SIZE: usize = 8 * 1024;
-
-                futures::stream::try_unfold(
-                    (file, path, false),
-                    |(mut file, path, finished)| {
-                        maybe_spawn_blocking(move || {
-                            if finished {
-                                return Ok(None);
-                            }
-
-                            let mut buffer = Vec::with_capacity(CHUNK_SIZE);
-                            let read = file
-                                .by_ref()
-                                .take(CHUNK_SIZE as u64)
-                                .read_to_end(&mut buffer)
-                                .map_err(|e| local::Error::UnableToReadBytes {
-                                    source: e,
-                                    path: path.clone(),
-                                })?;
-
-                            Ok(Some((buffer.into(), (file, path, read != CHUNK_SIZE))))
-                        })
-                    },
-                )
-                .boxed()
+                local::chunked_stream(file, path, self.range, CHUNK_SIZE)
             }
-            Self::Stream(s) => s,
+            GetResultPayload::Stream(s) => s,
             #[cfg(target_arch = "wasm32")]
             _ => unimplemented!("File IO not implemented on wasm32."),
         }

@@ -19,16 +19,17 @@
 use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
+    GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
-use futures::FutureExt;
 use futures::{stream::BoxStream, StreamExt};
+use futures::{FutureExt, TryStreamExt};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
-use std::fs::{metadata, symlink_metadata, File, OpenOptions};
+use std::fs::{metadata, symlink_metadata, File, Metadata, OpenOptions};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::pin::Pin;
@@ -370,18 +371,20 @@ impl ObjectStore for LocalFileSystem {
         let location = location.clone();
         let path = self.config.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
-            let file = open_file(&path)?;
+            let (file, metadata) = open_file(&path)?;
             if options.if_unmodified_since.is_some()
                 || options.if_modified_since.is_some()
             {
-                let metadata = file.metadata().map_err(|e| Error::Metadata {
-                    source: e.into(),
-                    path: location.to_string(),
-                })?;
                 options.check_modified(&location, last_modified(&metadata))?;
             }
 
-            Ok(GetResult::File(file, path))
+            let meta = convert_metadata(metadata, location)?;
+
+            Ok(GetResult {
+                payload: GetResultPayload::File(file, path),
+                range: options.range.unwrap_or(0..meta.size),
+                meta,
+            })
         })
         .await
     }
@@ -389,7 +392,7 @@ impl ObjectStore for LocalFileSystem {
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let path = self.config.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
-            let mut file = open_file(&path)?;
+            let (mut file, _) = open_file(&path)?;
             read_range(&mut file, &path, range)
         })
         .await
@@ -404,7 +407,7 @@ impl ObjectStore for LocalFileSystem {
         let ranges = ranges.to_vec();
         maybe_spawn_blocking(move || {
             // Vectored IO might be faster
-            let mut file = open_file(&path)?;
+            let (mut file, _) = open_file(&path)?;
             ranges
                 .into_iter()
                 .map(|r| read_range(&mut file, &path, r))
@@ -863,6 +866,51 @@ impl AsyncWrite for LocalUpload {
     }
 }
 
+pub(crate) fn chunked_stream(
+    mut file: File,
+    path: PathBuf,
+    range: Range<usize>,
+    chunk_size: usize,
+) -> BoxStream<'static, Result<Bytes, super::Error>> {
+    futures::stream::once(async move {
+        let (file, path) = maybe_spawn_blocking(move || {
+            file.seek(SeekFrom::Start(range.start as _))
+                .map_err(|source| Error::Seek {
+                    source,
+                    path: path.clone(),
+                })?;
+            Ok((file, path))
+        })
+        .await?;
+
+        let stream = futures::stream::try_unfold(
+            (file, path, range.end - range.start),
+            move |(mut file, path, remaining)| {
+                maybe_spawn_blocking(move || {
+                    if remaining == 0 {
+                        return Ok(None);
+                    }
+
+                    let to_read = remaining.min(chunk_size);
+                    let mut buffer = Vec::with_capacity(to_read);
+                    let read = (&mut file)
+                        .take(to_read as u64)
+                        .read_to_end(&mut buffer)
+                        .map_err(|e| Error::UnableToReadBytes {
+                            source: e,
+                            path: path.clone(),
+                        })?;
+
+                    Ok(Some((buffer.into(), (file, path, remaining - read))))
+                })
+            },
+        );
+        Ok::<_, super::Error>(stream)
+    })
+    .try_flatten()
+    .boxed()
+}
+
 pub(crate) fn read_range(
     file: &mut File,
     path: &PathBuf,
@@ -889,8 +937,8 @@ pub(crate) fn read_range(
     Ok(buf.into())
 }
 
-fn open_file(path: &PathBuf) -> Result<File> {
-    let file = match File::open(path).and_then(|f| Ok((f.metadata()?, f))) {
+fn open_file(path: &PathBuf) -> Result<(File, Metadata)> {
+    let ret = match File::open(path).and_then(|f| Ok((f.metadata()?, f))) {
         Err(e) => Err(match e.kind() {
             ErrorKind::NotFound => Error::NotFound {
                 path: path.clone(),
@@ -902,14 +950,14 @@ fn open_file(path: &PathBuf) -> Result<File> {
             },
         }),
         Ok((metadata, file)) => match !metadata.is_dir() {
-            true => Ok(file),
+            true => Ok((file, metadata)),
             false => Err(Error::NotFound {
                 path: path.clone(),
                 source: io::Error::new(ErrorKind::NotFound, "is directory"),
             }),
         },
     }?;
-    Ok(file)
+    Ok(ret)
 }
 
 fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
@@ -927,7 +975,7 @@ fn last_modified(metadata: &std::fs::Metadata) -> DateTime<Utc> {
         .into()
 }
 
-fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<ObjectMeta> {
+fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
     let last_modified = last_modified(&metadata);
     let size = usize::try_from(metadata.len()).context(FileSizeOverflowedUsizeSnafu {
         path: location.as_ref(),

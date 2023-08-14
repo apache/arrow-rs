@@ -40,11 +40,12 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
+use crate::client::header::header_meta;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, GetResultPayload, ListResult,
+    MultipartId, ObjectMeta, ObjectStore, Result, RetryConfig,
 };
 
 mod client;
@@ -58,6 +59,11 @@ enum Error {
     UnableToParseUrl {
         source: url::ParseError,
         url: String,
+    },
+
+    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    Metadata {
+        source: crate::client::header::Error,
     },
 
     #[snafu(display("Request error: {}", source))]
@@ -109,13 +115,20 @@ impl ObjectStore for HttpStore {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let range = options.range.clone();
         let response = self.client.get(location, options).await?;
+        let meta = header_meta(location, response.headers()).context(MetadataSnafu)?;
+
         let stream = response
             .bytes_stream()
             .map_err(|source| Error::Reqwest { source }.into())
             .boxed();
 
-        Ok(GetResult::Stream(stream))
+        Ok(GetResult {
+            payload: GetResultPayload::Stream(stream),
+            range: range.unwrap_or(0..meta.size),
+            meta,
+        })
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {

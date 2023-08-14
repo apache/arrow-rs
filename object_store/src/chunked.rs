@@ -18,7 +18,6 @@
 //! A [`ChunkedStore`] that can be used to test streaming behaviour
 
 use std::fmt::{Debug, Display, Formatter};
-use std::io::{BufReader, Read};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -29,8 +28,9 @@ use futures::StreamExt;
 use tokio::io::AsyncWrite;
 
 use crate::path::Path;
-use crate::util::maybe_spawn_blocking;
-use crate::{GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore};
+use crate::{
+    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+};
 use crate::{MultipartId, Result};
 
 /// Wraps a [`ObjectStore`] and makes its get response return chunks
@@ -82,77 +82,57 @@ impl ObjectStore for ChunkedStore {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        match self.inner.get_opts(location, options).await? {
-            GetResult::File(std_file, ..) => {
-                let reader = BufReader::new(std_file);
-                let chunk_size = self.chunk_size;
-                Ok(GetResult::Stream(
-                    futures::stream::try_unfold(reader, move |mut reader| async move {
-                        let (r, out, reader) = maybe_spawn_blocking(move || {
-                            let mut out = Vec::with_capacity(chunk_size);
-                            let r = (&mut reader)
-                                .take(chunk_size as u64)
-                                .read_to_end(&mut out)
-                                .map_err(|err| crate::Error::Generic {
-                                    store: "ChunkedStore",
-                                    source: Box::new(err),
-                                })?;
-                            Ok((r, out, reader))
-                        })
-                        .await?;
-
-                        match r {
-                            0 => Ok(None),
-                            _ => Ok(Some((out.into(), reader))),
-                        }
-                    })
-                    .boxed(),
-                ))
+        let r = self.inner.get_opts(location, options).await?;
+        let stream = match r.payload {
+            GetResultPayload::File(file, path) => {
+                crate::local::chunked_stream(file, path, r.range.clone(), self.chunk_size)
             }
-            GetResult::Stream(stream) => {
+            GetResultPayload::Stream(stream) => {
                 let buffer = BytesMut::new();
-                Ok(GetResult::Stream(
-                    futures::stream::unfold(
-                        (stream, buffer, false, self.chunk_size),
-                        |(mut stream, mut buffer, mut exhausted, chunk_size)| async move {
-                            // Keep accumulating bytes until we reach capacity as long as
-                            // the stream can provide them:
-                            if exhausted {
-                                return None;
-                            }
-                            while buffer.len() < chunk_size {
-                                match stream.next().await {
-                                    None => {
-                                        exhausted = true;
-                                        let slice = buffer.split_off(0).freeze();
-                                        return Some((
-                                            Ok(slice),
-                                            (stream, buffer, exhausted, chunk_size),
-                                        ));
-                                    }
-                                    Some(Ok(bytes)) => {
-                                        buffer.put(bytes);
-                                    }
-                                    Some(Err(e)) => {
-                                        return Some((
-                                            Err(crate::Error::Generic {
-                                                store: "ChunkedStore",
-                                                source: Box::new(e),
-                                            }),
-                                            (stream, buffer, exhausted, chunk_size),
-                                        ))
-                                    }
-                                };
-                            }
-                            // Return the chunked values as the next value in the stream
-                            let slice = buffer.split_to(chunk_size).freeze();
-                            Some((Ok(slice), (stream, buffer, exhausted, chunk_size)))
-                        },
-                    )
-                    .boxed(),
-                ))
+                futures::stream::unfold(
+                    (stream, buffer, false, self.chunk_size),
+                    |(mut stream, mut buffer, mut exhausted, chunk_size)| async move {
+                        // Keep accumulating bytes until we reach capacity as long as
+                        // the stream can provide them:
+                        if exhausted {
+                            return None;
+                        }
+                        while buffer.len() < chunk_size {
+                            match stream.next().await {
+                                None => {
+                                    exhausted = true;
+                                    let slice = buffer.split_off(0).freeze();
+                                    return Some((
+                                        Ok(slice),
+                                        (stream, buffer, exhausted, chunk_size),
+                                    ));
+                                }
+                                Some(Ok(bytes)) => {
+                                    buffer.put(bytes);
+                                }
+                                Some(Err(e)) => {
+                                    return Some((
+                                        Err(crate::Error::Generic {
+                                            store: "ChunkedStore",
+                                            source: Box::new(e),
+                                        }),
+                                        (stream, buffer, exhausted, chunk_size),
+                                    ))
+                                }
+                            };
+                        }
+                        // Return the chunked values as the next value in the stream
+                        let slice = buffer.split_to(chunk_size).freeze();
+                        Some((Ok(slice), (stream, buffer, exhausted, chunk_size)))
+                    },
+                )
+                .boxed()
             }
-        }
+        };
+        Ok(GetResult {
+            payload: GetResultPayload::Stream(stream),
+            ..r
+        })
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
@@ -217,8 +197,8 @@ mod tests {
 
         for chunk_size in [10, 20, 31] {
             let store = ChunkedStore::new(Arc::clone(&store), chunk_size);
-            let mut s = match store.get(&location).await.unwrap() {
-                GetResult::Stream(s) => s,
+            let mut s = match store.get(&location).await.unwrap().payload {
+                GetResultPayload::Stream(s) => s,
                 _ => unreachable!(),
             };
 

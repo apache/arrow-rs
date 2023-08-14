@@ -16,7 +16,9 @@
 // under the License.
 
 //! An in-memory object store implementation
-use crate::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore, Result};
+use crate::{
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, Result,
+};
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -43,11 +45,13 @@ enum Error {
     #[snafu(display("No data in memory found. Location: {path}"))]
     NoDataInMemory { path: String },
 
-    #[snafu(display("Out of range"))]
-    OutOfRange,
+    #[snafu(display(
+        "Requested range {}..{} is out of bounds for object with length {}", range.start, range.end, len
+    ))]
+    OutOfRange { range: Range<usize>, len: usize },
 
-    #[snafu(display("Bad range"))]
-    BadRange,
+    #[snafu(display("Invalid range: {}..{}", range.start, range.end))]
+    BadRange { range: Range<usize> },
 
     #[snafu(display("Object already exists at that location: {path}"))]
     AlreadyExists { path: String },
@@ -136,17 +140,29 @@ impl ObjectStore for InMemory {
         }
         let (data, last_modified) = self.entry(location).await?;
         options.check_modified(location, last_modified)?;
+        let meta = ObjectMeta {
+            location: location.clone(),
+            last_modified,
+            size: data.len(),
+            e_tag: None,
+        };
 
+        let (range, data) = match options.range {
+            Some(range) => {
+                let len = data.len();
+                ensure!(range.end <= len, OutOfRangeSnafu { range, len });
+                ensure!(range.start <= range.end, BadRangeSnafu { range });
+                (range.clone(), data.slice(range))
+            }
+            None => (0..data.len(), data),
+        };
         let stream = futures::stream::once(futures::future::ready(Ok(data)));
-        Ok(GetResult::Stream(stream.boxed()))
-    }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let data = self.entry(location).await?;
-        ensure!(range.end <= data.0.len(), OutOfRangeSnafu);
-        ensure!(range.start <= range.end, BadRangeSnafu);
-
-        Ok(data.0.slice(range))
+        Ok(GetResult {
+            payload: GetResultPayload::Stream(stream.boxed()),
+            meta,
+            range,
+        })
     }
 
     async fn get_ranges(
@@ -158,9 +174,11 @@ impl ObjectStore for InMemory {
         ranges
             .iter()
             .map(|range| {
-                ensure!(range.end <= data.0.len(), OutOfRangeSnafu);
-                ensure!(range.start <= range.end, BadRangeSnafu);
-                Ok(data.0.slice(range.clone()))
+                let range = range.clone();
+                let len = data.0.len();
+                ensure!(range.end <= data.0.len(), OutOfRangeSnafu { range, len });
+                ensure!(range.start <= range.end, BadRangeSnafu { range });
+                Ok(data.0.slice(range))
             })
             .collect()
     }

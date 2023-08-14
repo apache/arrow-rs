@@ -20,7 +20,9 @@ use parking_lot::Mutex;
 use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
-use crate::{path::Path, GetResult, ListResult, ObjectMeta, ObjectStore, Result};
+use crate::{
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, Result,
+};
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -301,15 +303,20 @@ fn usize_to_u32_saturate(x: usize) -> u32 {
 }
 
 fn throttle_get(result: GetResult, wait_get_per_byte: Duration) -> GetResult {
-    let s = match result {
-        GetResult::Stream(s) => s,
-        GetResult::File(_, _) => unimplemented!(),
+    let s = match result.payload {
+        GetResultPayload::Stream(s) => s,
+        GetResultPayload::File(_, _) => unimplemented!(),
     };
 
-    GetResult::Stream(throttle_stream(s, move |bytes| {
+    let stream = throttle_stream(s, move |bytes| {
         let bytes_len: u32 = usize_to_u32_saturate(bytes.len());
         wait_get_per_byte * bytes_len
-    }))
+    });
+
+    GetResult {
+        payload: GetResultPayload::Stream(stream),
+        ..result
+    }
 }
 
 fn throttle_stream<T: Send + 'static, E: Send + 'static, F>(
@@ -330,7 +337,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{memory::InMemory, tests::*};
+    use crate::{memory::InMemory, tests::*, GetResultPayload};
     use bytes::Bytes;
     use futures::TryStreamExt;
     use tokio::time::Duration;
@@ -550,9 +557,9 @@ mod tests {
         let res = store.get(&path).await;
         if n_bytes.is_some() {
             // need to consume bytes to provoke sleep times
-            let s = match res.unwrap() {
-                GetResult::Stream(s) => s,
-                GetResult::File(_, _) => unimplemented!(),
+            let s = match res.unwrap().payload {
+                GetResultPayload::Stream(s) => s,
+                GetResultPayload::File(_, _) => unimplemented!(),
             };
 
             s.map_ok(|b| bytes::BytesMut::from(&b[..]))
