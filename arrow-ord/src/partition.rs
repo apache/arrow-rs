@@ -23,7 +23,7 @@ use arrow_array::{Array, ArrayRef};
 use arrow_buffer::BooleanBuffer;
 use arrow_schema::ArrowError;
 
-use crate::comparison::neq_dyn;
+use crate::cmp::neq;
 use crate::sort::SortColumn;
 
 /// A computed set of partitions, see [`partition`]
@@ -158,7 +158,7 @@ fn find_boundaries(v: &dyn Array) -> Result<BooleanBuffer, ArrowError> {
     let v1 = v.slice(0, slice_len);
     let v2 = v.slice(1, slice_len);
 
-    let array_ne = neq_dyn(v1.as_ref(), v2.as_ref())?;
+    let array_ne = neq(&v1, &v2)?;
     // Set if values have different non-NULL values
     let values_ne = match array_ne.nulls().filter(|n| n.null_count() > 0) {
         Some(n) => n.inner() & array_ne.values(),

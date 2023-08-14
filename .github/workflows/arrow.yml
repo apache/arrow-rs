@@ -80,8 +80,8 @@ jobs:
         run: cargo test -p arrow-json --all-features
       - name: Test arrow-string with all features
         run: cargo test -p arrow-string --all-features
-      - name: Test arrow-ord with all features except SIMD
-        run: cargo test -p arrow-ord --features dyn_cmp_dict
+      - name: Test arrow-ord with all features
+        run: cargo test -p arrow-ord --all-features
       - name: Test arrow-arith with all features except SIMD
         run: cargo test -p arrow-arith
       - name: Test arrow-row with all features
@@ -145,8 +145,6 @@ jobs:
           rust-version: nightly
       - name: Test arrow-array with SIMD
         run: cargo test -p arrow-array --features simd
-      - name: Test arrow-ord with SIMD
-        run: cargo test -p arrow-ord --features simd
       - name: Test arrow-arith with SIMD
         run: cargo test -p arrow-arith --features simd
       - name: Test arrow with SIMD
@@ -206,8 +204,8 @@ jobs:
         run: cargo clippy -p arrow-json --all-targets --all-features -- -D warnings
       - name: Clippy arrow-string with all features
         run: cargo clippy -p arrow-string --all-targets --all-features -- -D warnings
-      - name: Clippy arrow-ord with all features except SIMD
-        run: cargo clippy -p arrow-ord --all-targets --features dyn_cmp_dict -- -D warnings
+      - name: Clippy arrow-ord with all features
+        run: cargo clippy -p arrow-ord --all-targets --all-features -- -D warnings
       - name: Clippy arrow-arith with all features except SIMD
         run: cargo clippy -p arrow-arith --all-targets -- -D warnings
       - name: Clippy arrow-row with all features

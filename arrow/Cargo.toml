@@ -71,7 +71,7 @@ ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
 csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]
 json = ["arrow-json"]
-simd = ["arrow-array/simd", "arrow-ord/simd", "arrow-arith/simd"]
+simd = ["arrow-array/simd", "arrow-arith/simd"]
 prettyprint = ["arrow-cast/prettyprint"]
 # The test utils feature enables code used in benchmarks and tests but
 # not the core arrow code itself. Be aware that `rand` must be kept as
@@ -87,7 +87,7 @@ force_validate = ["arrow-data/force_validate"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
 # Enable dyn-comparison of dictionary arrays with other arrays
 # Note: this does not impact comparison against scalars
-dyn_cmp_dict = ["arrow-string/dyn_cmp_dict", "arrow-ord/dyn_cmp_dict"]
+dyn_cmp_dict = ["arrow-string/dyn_cmp_dict"]
 chrono-tz = ["arrow-array/chrono-tz"]
 
 [dev-dependencies]

@@ -43,6 +43,8 @@
 //! ```
 //!
 
+pub mod cmp;
+#[doc(hidden)]
 pub mod comparison;
 pub mod ord;
 pub mod partition;
