@@ -218,11 +218,11 @@ fn apply<T: ArrayOrd>(
         }
     } else {
         // Handle empty dictionaries
-        if l_v.is_some() && l.len() == 0 {
-            return BooleanBuffer::new_unset(l_v.unwrap().len());
+        if let Some(l_v) = l_v.as_ref().filter(|_| l.len() == 0) {
+            return BooleanBuffer::new_unset(l_v.len());
         }
-        if r_v.is_some() && r.len() == 0 {
-            return BooleanBuffer::new_unset(r_v.unwrap().len());
+        if let Some(r_v) = r_v.as_ref().filter(|_| r.len() == 0) {
+            return BooleanBuffer::new_unset(r_v.len());
         }
 
         let l_s = l_s.then(|| l_v.as_ref().map(|x| x[0]).unwrap_or_default());
@@ -385,7 +385,7 @@ impl<'a> ArrayOrd for &'a BooleanArray {
     }
 
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
-        l < r
+        !l & r
     }
 }
 
