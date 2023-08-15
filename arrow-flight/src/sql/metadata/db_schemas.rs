@@ -22,8 +22,8 @@
 use std::sync::Arc;
 
 use arrow_arith::boolean::and;
-use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch};
-use arrow_ord::comparison::eq_utf8_scalar;
+use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch, Scalar, StringArray};
+use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
 use arrow_string::like::like_utf8_scalar;
@@ -129,7 +129,8 @@ impl GetDbSchemasBuilder {
         }
 
         if let Some(catalog_filter_name) = catalog_filter {
-            filters.push(eq_utf8_scalar(&catalog_name, &catalog_filter_name)?);
+            let scalar = StringArray::from_iter_values([catalog_filter_name]);
+            filters.push(eq(&catalog_name, &Scalar::new(&scalar))?);
         }
 
         // `AND` any filters together

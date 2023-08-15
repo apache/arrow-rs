@@ -27,9 +27,8 @@
 use std::sync::Arc;
 
 use arrow_array::builder::{BooleanBuilder, Int32Builder, ListBuilder, StringBuilder};
-use arrow_array::cast::downcast_array;
-use arrow_array::{ArrayRef, Int32Array, ListArray, RecordBatch};
-use arrow_ord::comparison::eq_scalar;
+use arrow_array::{ArrayRef, Int32Array, ListArray, RecordBatch, Scalar};
+use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
 use arrow_select::take::take;
@@ -81,8 +80,8 @@ impl XdbcTypeInfoData {
     /// from [`CommandGetXdbcTypeInfo`]
     pub fn record_batch(&self, data_type: impl Into<Option<i32>>) -> Result<RecordBatch> {
         if let Some(dt) = data_type.into() {
-            let arr: Int32Array = downcast_array(self.batch.column(1).as_ref());
-            let filter = eq_scalar(&arr, dt)?;
+            let scalar = Int32Array::from(vec![dt]);
+            let filter = eq(self.batch.column(1), &Scalar::new(&scalar))?;
             Ok(filter_record_batch(&self.batch, &filter)?)
         } else {
             Ok(self.batch.clone())
