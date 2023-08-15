@@ -776,10 +776,11 @@ mod tests {
     use crate::file::footer::parse_metadata;
     use crate::file::page_index::index_reader;
     use crate::file::properties::WriterProperties;
+    use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
+    use arrow_array::{Array, ArrayRef, Int32Array, Scalar, StringArray};
     use futures::TryStreamExt;
     use rand::{thread_rng, Rng};
     use std::sync::Mutex;
@@ -1188,14 +1189,16 @@ mod tests {
         };
         let requests = test.requests.clone();
 
+        let a_scalar = StringArray::from_iter_values(["b"]);
         let a_filter = ArrowPredicateFn::new(
             ProjectionMask::leaves(&parquet_schema, vec![0]),
-            |batch| arrow::compute::eq_dyn_utf8_scalar(batch.column(0), "b"),
+            move |batch| eq(batch.column(0), &Scalar::new(&a_scalar)),
         );
 
+        let b_scalar = StringArray::from_iter_values(["4"]);
         let b_filter = ArrowPredicateFn::new(
             ProjectionMask::leaves(&parquet_schema, vec![1]),
-            |batch| arrow::compute::eq_dyn_utf8_scalar(batch.column(0), "4"),
+            move |batch| eq(batch.column(0), &Scalar::new(&b_scalar)),
         );
 
         let filter = RowFilter::new(vec![Box::new(a_filter), Box::new(b_filter)]);
@@ -1353,12 +1356,13 @@ mod tests {
 
         let a_filter = ArrowPredicateFn::new(
             ProjectionMask::leaves(&parquet_schema, vec![1]),
-            |batch| arrow::compute::eq_dyn_bool_scalar(batch.column(0), true),
+            |batch| Ok(batch.column(0).as_boolean().clone()),
         );
 
+        let b_scalar = Int32Array::from(vec![2]);
         let b_filter = ArrowPredicateFn::new(
             ProjectionMask::leaves(&parquet_schema, vec![2]),
-            |batch| arrow::compute::eq_dyn_scalar(batch.column(0), 2_i32),
+            move |batch| eq(batch.column(0), &Scalar::new(&b_scalar)),
         );
 
         let filter = RowFilter::new(vec![Box::new(a_filter), Box::new(b_filter)]);
