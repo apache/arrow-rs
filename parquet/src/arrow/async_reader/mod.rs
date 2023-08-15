@@ -780,7 +780,7 @@ mod tests {
     use arrow::error::Result as ArrowResult;
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Array, ArrayRef, Int32Array, Scalar, StringArray};
+    use arrow_array::{Array, ArrayRef, Int32Array, Int8Array, Scalar, StringArray};
     use futures::TryStreamExt;
     use rand::{thread_rng, Rng};
     use std::sync::Mutex;
@@ -1359,7 +1359,7 @@ mod tests {
             |batch| Ok(batch.column(0).as_boolean().clone()),
         );
 
-        let b_scalar = Int32Array::from(vec![2]);
+        let b_scalar = Int8Array::from(vec![2]);
         let b_filter = ArrowPredicateFn::new(
             ProjectionMask::leaves(&parquet_schema, vec![2]),
             move |batch| eq(batch.column(0), &Scalar::new(&b_scalar)),

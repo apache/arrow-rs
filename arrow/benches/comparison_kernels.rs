@@ -22,7 +22,7 @@ use criterion::Criterion;
 extern crate arrow;
 
 use arrow::compute::kernels::cmp::*;
-use arrow::datatypes::{ArrowNativeTypeOp, ArrowNumericType, IntervalMonthDayNanoType};
+use arrow::datatypes::IntervalMonthDayNanoType;
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
 use arrow_array::Scalar;
