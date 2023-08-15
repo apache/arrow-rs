@@ -147,7 +147,7 @@ lazy_static! {
     /// Order should match [`InferredDataType`]
     static ref REGEX_SET: RegexSet = RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?(\d+)$", //INTEGER
+        r"^-?\d{1,19}$", //INTEGER
         r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
         r"^\d{4}-\d\d-\d\d$", //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
