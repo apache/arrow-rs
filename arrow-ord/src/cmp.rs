@@ -164,10 +164,10 @@ fn compare_op(
         },
     };
 
-    let l_v = as_dictionary(l);
+    let l_v = as_any_dictionary(l);
     let l = l_v.map(|x| x.values().as_ref()).unwrap_or(l);
 
-    let r_v = as_dictionary(r);
+    let r_v = as_any_dictionary(r);
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
 
     let values = downcast_primitive_array! {
@@ -189,14 +189,16 @@ fn compare_op(
     Ok(BooleanArray::new(values, nulls))
 }
 
-fn as_dictionary(a: &dyn Array) -> Option<&dyn Dictionary> {
+/// Returns a [`AnyDictionary`] if `a` is a dictionary
+fn as_any_dictionary(a: &dyn Array) -> Option<&dyn AnyDictionary> {
     downcast_dictionary_array! {
         a => Some(a),
         _ => None
     }
 }
 
-trait Dictionary: Array {
+/// A [`DictionaryArray`] with the key type erased
+trait AnyDictionary: Array {
     /// Returns the keys of this dictionary, clamped to be in the range `0..values.len()`
     ///
     /// # Panic
@@ -211,7 +213,7 @@ trait Dictionary: Array {
     fn take(&self, array: &dyn Array) -> Result<ArrayRef, ArrowError>;
 }
 
-impl<K: ArrowDictionaryKeyType> Dictionary for DictionaryArray<K> {
+impl<K: ArrowDictionaryKeyType> AnyDictionary for DictionaryArray<K> {
     fn normalized_keys(&self) -> Vec<usize> {
         let v_len = self.values().len();
         assert_ne!(v_len, 0);
@@ -233,10 +235,10 @@ fn apply<T: ArrayOrd>(
     op: Op,
     l: T,
     l_s: bool,
-    l_v: Option<&dyn Dictionary>,
+    l_v: Option<&dyn AnyDictionary>,
     r: T,
     r_s: bool,
-    r_v: Option<&dyn Dictionary>,
+    r_v: Option<&dyn AnyDictionary>,
 ) -> Option<BooleanBuffer> {
     if l.len() == 0 || r.len() == 0 {
         return None; // Handle empty dictionaries
@@ -285,7 +287,7 @@ fn apply<T: ArrayOrd>(
 }
 
 /// Perform a take operation on `buffer` with the given dictionary
-fn take_bits(v: &dyn Dictionary, buffer: BooleanBuffer) -> BooleanBuffer {
+fn take_bits(v: &dyn AnyDictionary, buffer: BooleanBuffer) -> BooleanBuffer {
     let array = v.take(&BooleanArray::new(buffer, None)).unwrap();
     array.as_boolean().values().clone()
 }
