@@ -274,7 +274,7 @@ impl TreeBuilder {
                     let required_field = Type::group_type_builder(field.name())
                         .with_repetition(Repetition::REQUIRED)
                         .with_converted_type(field.get_basic_info().converted_type())
-                        .with_fields(&mut Vec::from(field.get_fields()))
+                        .with_fields(field.get_fields().to_vec())
                         .build()?;
 
                     path.pop();

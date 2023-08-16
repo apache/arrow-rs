@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn test_metadata_column_orders_parse() {
         // Define simple schema, we do not need to provide logical types.
-        let mut fields = vec![
+        let fields = vec![
             Arc::new(
                 SchemaType::primitive_type_builder("col1", Type::INT32)
                     .build()
@@ -197,7 +197,7 @@ mod tests {
             ),
         ];
         let schema = SchemaType::group_type_builder("schema")
-            .with_fields(&mut fields)
+            .with_fields(fields)
             .build()
             .unwrap();
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));

@@ -1669,7 +1669,7 @@ mod tests {
             _ => -1,
         };
 
-        let mut fields = vec![Arc::new(
+        let fields = vec![Arc::new(
             Type::primitive_type_builder("leaf", T::get_physical_type())
                 .with_repetition(repetition)
                 .with_converted_type(converted_type)
@@ -1680,7 +1680,7 @@ mod tests {
 
         let schema = Arc::new(
             Type::group_type_builder("test_schema")
-                .with_fields(&mut fields)
+                .with_fields(fields)
                 .build()
                 .unwrap(),
         );
@@ -2026,7 +2026,7 @@ mod tests {
 
     #[test]
     fn test_dictionary_preservation() {
-        let mut fields = vec![Arc::new(
+        let fields = vec![Arc::new(
             Type::primitive_type_builder("leaf", PhysicalType::BYTE_ARRAY)
                 .with_repetition(Repetition::OPTIONAL)
                 .with_converted_type(ConvertedType::UTF8)
@@ -2036,7 +2036,7 @@ mod tests {
 
         let schema = Arc::new(
             Type::group_type_builder("test_schema")
-                .with_fields(&mut fields)
+                .with_fields(fields)
                 .build()
                 .unwrap(),
         );

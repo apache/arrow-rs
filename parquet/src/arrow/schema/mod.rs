@@ -37,7 +37,7 @@ use crate::basic::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::{metadata::KeyValue, properties::WriterProperties};
-use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type, TypePtr};
+use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type};
 
 mod complex;
 mod primitive;
@@ -230,13 +230,13 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(
 
 /// Convert arrow schema to parquet schema
 pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
-    let fields: Result<Vec<TypePtr>> = schema
+    let fields = schema
         .fields()
         .iter()
         .map(|field| arrow_to_parquet_type(field).map(Arc::new))
-        .collect();
+        .collect::<Result<_>>()?;
     let group = Type::group_type_builder("arrow_schema")
-        .with_fields(&mut fields?)
+        .with_fields(fields)
         .build()?;
     Ok(SchemaDescriptor::new(Arc::new(group)))
 }
@@ -476,9 +476,9 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         }
         DataType::List(f) | DataType::FixedSizeList(f, _) | DataType::LargeList(f) => {
             Type::group_type_builder(name)
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     Type::group_type_builder("list")
-                        .with_fields(&mut vec![Arc::new(arrow_to_parquet_type(f)?)])
+                        .with_fields(vec![Arc::new(arrow_to_parquet_type(f)?)])
                         .with_repetition(Repetition::REPEATED)
                         .build()?,
                 )])
@@ -493,21 +493,21 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 );
             }
             // recursively convert children to types/nodes
-            let fields: Result<Vec<TypePtr>> = fields
+            let fields = fields
                 .iter()
                 .map(|f| arrow_to_parquet_type(f).map(Arc::new))
-                .collect();
+                .collect::<Result<_>>()?;
             Type::group_type_builder(name)
-                .with_fields(&mut fields?)
+                .with_fields(fields)
                 .with_repetition(repetition)
                 .build()
         }
         DataType::Map(field, _) => {
             if let DataType::Struct(struct_fields) = field.data_type() {
                 Type::group_type_builder(name)
-                    .with_fields(&mut vec![Arc::new(
+                    .with_fields(vec![Arc::new(
                         Type::group_type_builder(field.name())
-                            .with_fields(&mut vec![
+                            .with_fields(vec![
                                 Arc::new(arrow_to_parquet_type(&Field::new(
                                     struct_fields[0].name(),
                                     struct_fields[0].data_type().clone(),
@@ -534,7 +534,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         DataType::Union(_, _) => unimplemented!("See ARROW-8817."),
         DataType::Dictionary(_, ref value) => {
             // Dictionary encoding not handled at the schema level
-            let dict_field = Field::new(name, *value.clone(), field.is_nullable());
+            let dict_field = field.clone().with_data_type(value.as_ref().clone());
             arrow_to_parquet_type(&dict_field)
         }
         DataType::RunEndEncoded(_, _) => Err(arrow_err!(
