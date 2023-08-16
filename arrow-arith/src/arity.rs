@@ -82,7 +82,7 @@ where
 {
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = unary::<T, F, T>(dict_values, op);
-    Ok(Arc::new(array.with_values(&values)))
+    Ok(Arc::new(array.with_values(Arc::new(values))))
 }
 
 /// A helper function that applies a fallible unary function to a dictionary array with primitive value type.
@@ -105,7 +105,7 @@ where
 
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = try_unary::<T, F, T>(dict_values, op)?;
-    Ok(Arc::new(array.with_values(&values)))
+    Ok(Arc::new(array.with_values(Arc::new(values))))
 }
 
 /// Applies an infallible unary function to an array with primitive values.

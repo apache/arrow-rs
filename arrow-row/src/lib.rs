@@ -1642,7 +1642,7 @@ mod tests {
         // Construct dictionary with a timezone
         let dict = a.finish();
         let values = TimestampNanosecondArray::from(dict.values().to_data());
-        let dict_with_tz = dict.with_values(&values.with_timezone("+02:00"));
+        let dict_with_tz = dict.with_values(Arc::new(values.with_timezone("+02:00")));
         let d = DataType::Dictionary(
             Box::new(DataType::Int32),
             Box::new(DataType::Timestamp(

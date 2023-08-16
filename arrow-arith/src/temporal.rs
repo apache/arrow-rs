@@ -462,7 +462,7 @@ where
             downcast_dictionary_array!(
                 array => {
                     let values = time_fraction_dyn(array.values(), name, op)?;
-                    Ok(Arc::new(array.with_values(&values)))
+                    Ok(Arc::new(array.with_values(values)))
                 }
                 dt => return_compute_error_with!(format!("{name} does not support"), dt),
             )
