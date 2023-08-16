@@ -46,5 +46,4 @@
 pub mod comparison;
 pub mod ord;
 pub mod partition;
-pub mod rank;
 pub mod sort;
