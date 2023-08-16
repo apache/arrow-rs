@@ -932,6 +932,44 @@ where
 ///
 /// This can be used to efficiently implement kernels for all possible dictionary
 /// keys without needing to create specialized implementations for each key type
+///
+/// For example
+///
+/// ```
+/// # use arrow_array::*;
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_array::builder::PrimitiveDictionaryBuilder;
+/// # use arrow_array::types::*;
+/// # use arrow_schema::ArrowError;
+/// # use std::sync::Arc;
+///
+/// fn to_string(a: &dyn Array) -> Result<ArrayRef, ArrowError> {
+///     if let Some(d) = as_any_dictionary_array(a) {
+///         // Recursively handle dictionary input
+///         let r = to_string(d.values().as_ref())?;
+///         return Ok(d.with_values(r));
+///     }
+///     downcast_primitive_array! {
+///         a => Ok(Arc::new(a.iter().map(|x| x.map(|x| x.to_string())).collect::<StringArray>())),
+///         d => Err(ArrowError::InvalidArgumentError(format!("{d:?} not supported")))
+///     }
+/// }
+///
+/// let result = to_string(&Int32Array::from(vec![1, 2, 3])).unwrap();
+/// let actual = result.as_string::<i32>().iter().map(Option::unwrap).collect::<Vec<_>>();
+/// assert_eq!(actual, &["1", "2", "3"]);
+///
+/// let mut dict = PrimitiveDictionaryBuilder::<Int32Type, UInt16Type>::new();
+/// dict.extend([Some(1), Some(1), Some(2), Some(3), Some(2)]);
+/// let dict = dict.finish();
+///
+/// let r = to_string(&dict).unwrap();
+/// let r = r.as_dictionary::<Int32Type>().downcast_dict::<StringArray>().unwrap();
+/// assert_eq!(r.keys(), dict.keys()); // Keys are the same
+///
+/// let actual = r.into_iter().map(Option::unwrap).collect::<Vec<_>>();
+/// assert_eq!(actual, &["1", "1", "2", "3", "2"]);
+/// ```
 pub fn as_any_dictionary_array(array: &dyn Array) -> Option<&dyn AnyDictionaryArray> {
     downcast_dictionary_array! {
         array => Some(array),
