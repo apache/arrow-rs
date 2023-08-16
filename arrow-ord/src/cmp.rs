@@ -24,14 +24,16 @@
 //!
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::ByteArrayType;
+use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::{
-    downcast_dictionary_array, downcast_primitive_array, Array, ArrowNativeTypeOp,
-    BooleanArray, Datum, FixedSizeBinaryArray, GenericByteArray,
+    downcast_dictionary_array, downcast_primitive_array, Array, ArrayRef,
+    ArrowNativeTypeOp, BooleanArray, Datum, DictionaryArray, FixedSizeBinaryArray,
+    GenericByteArray,
 };
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_schema::ArrowError;
+use arrow_select::take::take;
 
 #[derive(Debug, Copy, Clone)]
 enum Op {
@@ -162,8 +164,11 @@ fn compare_op(
         },
     };
 
-    let (l_v, l) = values(l);
-    let (r_v, r) = values(r);
+    let l_v = as_dictionary(l);
+    let l = l_v.map(|x| x.values().as_ref()).unwrap_or(l);
+
+    let r_v = as_dictionary(r);
+    let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
 
     let values = downcast_primitive_array! {
         (l, r) => apply(op, l.values().as_ref(), l_s, l_v, r.values().as_ref(), r_s, r_v),
@@ -174,21 +179,52 @@ fn compare_op(
         (LargeBinary, LargeBinary) => apply(op, l.as_binary::<i64>(), l_s, l_v, r.as_binary::<i64>(), r_s, r_v),
         (FixedSizeBinary(_), FixedSizeBinary(_)) => apply(op, l.as_fixed_size_binary(), l_s, l_v, r.as_fixed_size_binary(), r_s, r_v),
         (l_t, r_t) => return Err(ArrowError::InvalidArgumentError(format!("Invalid comparison operation: {l_t} {op} {r_t}"))),
-    };
+    }.unwrap_or_else(|| {
+        let count = nulls.as_ref().map(|x| x.null_count()).unwrap_or_default();
+        assert_eq!(count, len); // Sanity check
+        BooleanBuffer::new_unset(len)
+    });
 
     assert_eq!(values.len(), len); // Sanity check
     Ok(BooleanArray::new(values, nulls))
 }
 
-fn values(a: &dyn Array) -> (Option<Vec<usize>>, &dyn Array) {
+fn as_dictionary(a: &dyn Array) -> Option<&dyn Dictionary> {
     downcast_dictionary_array! {
-        a => {
-            let v = a.values().as_ref();
-            let v_len = v.len();
-            let keys = a.keys().values().iter().map(|x| x.as_usize().min(v_len)).collect();
-            (Some(keys), v)
-        }
-        _ => (None, a)
+        a => Some(a),
+        _ => None
+    }
+}
+
+trait Dictionary: Array {
+    /// Returns the keys of this dictionary, clamped to be in the range `0..values.len()`
+    ///
+    /// # Panic
+    ///
+    /// Panics if `values.len() == 0`
+    fn normalized_keys(&self) -> Vec<usize>;
+
+    /// Returns the values of this dictionary
+    fn values(&self) -> &ArrayRef;
+
+    /// Applies the `keys` of this dictionary to the provided array
+    fn take(&self, array: &dyn Array) -> Result<ArrayRef, ArrowError>;
+}
+
+impl<K: ArrowDictionaryKeyType> Dictionary for DictionaryArray<K> {
+    fn normalized_keys(&self) -> Vec<usize> {
+        let v_len = self.values().len();
+        assert_ne!(v_len, 0);
+        let iter = self.keys().values().iter();
+        iter.map(|x| x.as_usize().min(v_len)).collect()
+    }
+
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn take(&self, array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+        take(array, &self.keys(), None)
     }
 }
 
@@ -197,36 +233,38 @@ fn apply<T: ArrayOrd>(
     op: Op,
     l: T,
     l_s: bool,
-    l_v: Option<Vec<usize>>,
+    l_v: Option<&dyn Dictionary>,
     r: T,
     r_s: bool,
-    r_v: Option<Vec<usize>>,
-) -> BooleanBuffer {
+    r_v: Option<&dyn Dictionary>,
+) -> Option<BooleanBuffer> {
+    if l.len() == 0 || r.len() == 0 {
+        return None; // Handle empty dictionaries
+    }
+
     if !l_s && !r_s && (l_v.is_some() || r_v.is_some()) {
         // Not scalar and at least one side has a dictionary, need to perform vectored comparison
-        let l_v = l_v.unwrap_or_else(|| (0..l.len()).collect());
-        let r_v = r_v.unwrap_or_else(|| (0..r.len()).collect());
+        let l_v = l_v
+            .map(|x| x.normalized_keys())
+            .unwrap_or_else(|| (0..l.len()).collect());
+
+        let r_v = r_v
+            .map(|x| x.normalized_keys())
+            .unwrap_or_else(|| (0..r.len()).collect());
+
         assert_eq!(l_v.len(), r_v.len()); // Sanity check
 
-        match op {
+        Some(match op {
             Op::Equal => apply_op_vectored(l, &l_v, r, &r_v, false, T::is_eq),
             Op::NotEqual => apply_op_vectored(l, &l_v, r, &r_v, true, T::is_eq),
             Op::Less => apply_op_vectored(l, &l_v, r, &r_v, false, T::is_lt),
             Op::LessEqual => apply_op_vectored(r, &r_v, l, &l_v, true, T::is_lt),
             Op::Greater => apply_op_vectored(r, &r_v, l, &l_v, false, T::is_lt),
             Op::GreaterEqual => apply_op_vectored(l, &l_v, r, &r_v, true, T::is_lt),
-        }
+        })
     } else {
-        // Handle empty dictionaries
-        if let Some(l_v) = l_v.as_ref().filter(|_| l.len() == 0) {
-            return BooleanBuffer::new_unset(l_v.len());
-        }
-        if let Some(r_v) = r_v.as_ref().filter(|_| r.len() == 0) {
-            return BooleanBuffer::new_unset(r_v.len());
-        }
-
-        let l_s = l_s.then(|| l_v.as_ref().map(|x| x[0]).unwrap_or_default());
-        let r_s = r_s.then(|| r_v.as_ref().map(|x| x[0]).unwrap_or_default());
+        let l_s = l_s.then(|| l_v.map(|x| x.normalized_keys()[0]).unwrap_or_default());
+        let r_s = r_s.then(|| r_v.map(|x| x.normalized_keys()[0]).unwrap_or_default());
 
         let buffer = match op {
             Op::Equal => apply_op(l, l_s, r, r_s, false, T::is_eq),
@@ -238,24 +276,18 @@ fn apply<T: ArrayOrd>(
         };
 
         // If a side had a dictionary, and was not scalar, we need to materialize this
-        match (l_v, r_v) {
-            (Some(l_v), _) if l_s.is_none() => take_bits(buffer, &l_v),
-            (_, Some(r_v)) if r_s.is_none() => take_bits(buffer, &r_v),
+        Some(match (l_v, r_v) {
+            (Some(l_v), _) if l_s.is_none() => take_bits(l_v, buffer),
+            (_, Some(r_v)) if r_s.is_none() => take_bits(r_v, buffer),
             _ => buffer,
-        }
+        })
     }
 }
 
-/// Perform a take operation on `buffer` with indices `v`
-fn take_bits(buffer: BooleanBuffer, v: &[usize]) -> BooleanBuffer {
-    let mut output_buffer = MutableBuffer::new_null(v.len());
-    let output_slice = output_buffer.as_slice_mut();
-    v.iter().enumerate().for_each(|(i, index)| {
-        if buffer.value(*index) {
-            bit_util::set_bit(output_slice, i);
-        }
-    });
-    BooleanBuffer::new(output_buffer.into(), 0, v.len())
+/// Perform a take operation on `buffer` with the given dictionary
+fn take_bits(v: &dyn Dictionary, buffer: BooleanBuffer) -> BooleanBuffer {
+    let array = v.take(&BooleanArray::new(buffer, None)).unwrap();
+    array.as_boolean().values().clone()
 }
 
 /// Invokes `f` with values `0..len` collecting the boolean results into a new `BooleanBuffer`
@@ -446,5 +478,50 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
         l < r
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::{Int32Array, Scalar};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_null_dict() {
+        let a = DictionaryArray::new(
+            Int32Array::new_null(10),
+            Arc::new(Int32Array::new_null(0)),
+        );
+        let r = eq(&a, &a).unwrap();
+        assert_eq!(r.null_count(), 10);
+
+        let a = DictionaryArray::new(
+            Int32Array::from(vec![1, 2, 3, 4, 5, 6]),
+            Arc::new(Int32Array::new_null(10)),
+        );
+        let r = eq(&a, &a).unwrap();
+        assert_eq!(r.null_count(), 6);
+
+        let scalar = DictionaryArray::new(
+            Int32Array::new_null(1),
+            Arc::new(Int32Array::new_null(0)),
+        );
+        let r = eq(&a, &Scalar::new(&scalar)).unwrap();
+        assert_eq!(r.null_count(), 6);
+
+        let scalar = DictionaryArray::new(
+            Int32Array::new_null(1),
+            Arc::new(Int32Array::new_null(0)),
+        );
+        let r = eq(&Scalar::new(&scalar), &Scalar::new(&scalar)).unwrap();
+        assert_eq!(r.null_count(), 1);
+
+        let a = DictionaryArray::new(
+            Int32Array::from(vec![0, 1, 2]),
+            Arc::new(Int32Array::from(vec![3, 2, 1])),
+        );
+        let r = eq(&a, &Scalar::new(&scalar)).unwrap();
+        assert_eq!(r.null_count(), 3);
     }
 }
