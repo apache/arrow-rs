@@ -20,8 +20,8 @@ use crate::cast::AsArray;
 use crate::iterator::ArrayIter;
 use crate::types::*;
 use crate::{
-    downcast_dictionary_array, make_array, Array, ArrayAccessor, ArrayRef,
-    ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray, StringArray,
+    make_array, Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType,
+    PrimitiveArray, StringArray,
 };
 use arrow_buffer::bit_util::set_bit;
 use arrow_buffer::buffer::NullBuffer;
@@ -928,7 +928,7 @@ where
     }
 }
 
-/// Returns a [`AnyDictionaryArray`] if `array` is a dictionary
+/// A [`DictionaryArray`] with the key type erased
 ///
 /// This can be used to efficiently implement kernels for all possible dictionary
 /// keys without needing to create specialized implementations for each key type
@@ -944,7 +944,7 @@ where
 /// # use std::sync::Arc;
 ///
 /// fn to_string(a: &dyn Array) -> Result<ArrayRef, ArrowError> {
-///     if let Some(d) = as_any_dictionary_array(a) {
+///     if let Some(d) = a.as_any_dictionary_opt() {
 ///         // Recursively handle dictionary input
 ///         let r = to_string(d.values().as_ref())?;
 ///         return Ok(d.with_values(r));
@@ -970,16 +970,8 @@ where
 /// let actual = r.into_iter().map(Option::unwrap).collect::<Vec<_>>();
 /// assert_eq!(actual, &["1", "1", "2", "3", "2"]);
 /// ```
-pub fn as_any_dictionary_array(array: &dyn Array) -> Option<&dyn AnyDictionaryArray> {
-    downcast_dictionary_array! {
-        array => Some(array),
-        _ => None
-    }
-}
-
-/// A [`DictionaryArray`] with the key type erased
 ///
-/// See [`as_any_dictionary_array`]
+/// See [`AsArray::as_any_dictionary_opt`] and [`AsArray::as_any_dictionary`]
 pub trait AnyDictionaryArray: Array {
     /// Returns the primitive keys of this dictionary as an [`Array`]
     fn keys(&self) -> &dyn Array;

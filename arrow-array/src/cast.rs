@@ -833,6 +833,14 @@ pub trait AsArray: private::Sealed {
     fn as_dictionary<K: ArrowDictionaryKeyType>(&self) -> &DictionaryArray<K> {
         self.as_dictionary_opt().expect("dictionary array")
     }
+
+    /// Downcasts this to a [`AnyDictionaryArray`] returning `None` if not possible
+    fn as_any_dictionary_opt(&self) -> Option<&dyn AnyDictionaryArray>;
+
+    /// Downcasts this to a [`AnyDictionaryArray`] panicking if not possible
+    fn as_any_dictionary(&self) -> &dyn AnyDictionaryArray {
+        self.as_any_dictionary_opt().expect("any dictionary array")
+    }
 }
 
 impl private::Sealed for dyn Array + '_ {}
@@ -874,6 +882,14 @@ impl AsArray for dyn Array + '_ {
     ) -> Option<&DictionaryArray<K>> {
         self.as_any().downcast_ref()
     }
+
+    fn as_any_dictionary_opt(&self) -> Option<&dyn AnyDictionaryArray> {
+        let array = self;
+        downcast_dictionary_array! {
+            array => Some(array),
+            _ => None
+        }
+    }
 }
 
 impl private::Sealed for ArrayRef {}
@@ -914,6 +930,10 @@ impl AsArray for ArrayRef {
         &self,
     ) -> Option<&DictionaryArray<K>> {
         self.as_ref().as_dictionary_opt()
+    }
+
+    fn as_any_dictionary_opt(&self) -> Option<&dyn AnyDictionaryArray> {
+        self.as_ref().as_any_dictionary_opt()
     }
 }
 
