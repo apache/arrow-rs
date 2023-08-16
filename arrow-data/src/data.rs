@@ -705,7 +705,7 @@ impl ArrayData {
     ///
     /// This can be useful for when interacting with data sent over IPC or FFI, that may
     /// not meet the minimum alignment requirements
-    pub fn align_buffers(&mut self) {
+    fn align_buffers(&mut self) {
         let layout = layout(&self.data_type);
         for (buffer, spec) in self.buffers.iter_mut().zip(&layout.buffers) {
             if let BufferSpec::FixedWidth { alignment, .. } = spec {
@@ -1655,7 +1655,17 @@ impl DataTypeLayout {
 /// Layout specification for a single data type buffer
 #[derive(Debug, PartialEq, Eq)]
 pub enum BufferSpec {
-    /// each element has a fixed width
+    /// Each element is a fixed width primitive, with the given `byte_width` and `alignment`
+    ///
+    /// `alignment` is the alignment required by Rust for an array of the corresponding primitive,
+    /// see [`Layout::array`](std::alloc::Layout::array) and [`std::mem::align_of`].
+    ///
+    /// Arrow-rs requires that all buffers are have at least this alignment, to allow for
+    /// [slice](std::slice) based APIs. We do not require alignment in excess of this to allow
+    /// for array slicing, and interoperability with `Vec` which in the absence of support
+    /// for custom allocators, cannot be over-aligned.
+    ///
+    /// Note that these alignment requirements will vary between architectures
     FixedWidth { byte_width: usize, alignment: usize },
     /// Variable width, such as string data for utf8 data
     VariableWidth,
@@ -1805,7 +1815,19 @@ impl ArrayDataBuilder {
 
     /// Creates an array data, validating all inputs, and aligning any buffers
     ///
-    /// See [`ArrayData::align_buffers`]
+    /// Rust requires that arrays are aligned to their corresponding primitive,
+    /// see [`Layout::array`](std::alloc::Layout::array) and [`std::mem::align_of`].
+    ///
+    /// [`ArrayData`] therefore requires that all buffers are have at least this alignment,
+    /// to allow for [slice](std::slice) based APIs. See [`BufferSpec::FixedWidth`].
+    ///
+    /// As this alignment is architecture specific, and not guaranteed by all arrow implementations,
+    /// this method is provided to automatically copy buffers to a new correctly aligned allocation
+    /// when necessary, making it useful when interacting with buffers produced by other systems,
+    /// e.g. IPC or FFI.
+    ///
+    /// This is unlike `[Self::build`] which will instead return an error on encountering
+    /// insufficiently aligned buffers.
     pub fn build_aligned(self) -> Result<ArrayData, ArrowError> {
         let mut data = unsafe { self.build_impl() };
         data.align_buffers();
