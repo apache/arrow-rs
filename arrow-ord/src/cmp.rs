@@ -224,7 +224,7 @@ impl<K: ArrowDictionaryKeyType> Dictionary for DictionaryArray<K> {
     }
 
     fn take(&self, array: &dyn Array) -> Result<ArrayRef, ArrowError> {
-        take(array, &self.keys(), None)
+        take(array, self.keys(), None)
     }
 }
 
