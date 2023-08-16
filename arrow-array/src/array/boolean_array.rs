@@ -18,7 +18,7 @@
 use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
-use crate::{Array, ArrayAccessor, ArrayRef};
+use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
 use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
@@ -99,6 +99,15 @@ impl BooleanArray {
             values: BooleanBuffer::new_unset(len),
             nulls: Some(NullBuffer::new_null(len)),
         }
+    }
+
+    /// Create a new [`Scalar`] from `value`
+    pub fn new_scalar(value: bool) -> Scalar<Self> {
+        let values = match value {
+            true => BooleanBuffer::new_set(1),
+            false => BooleanBuffer::new_unset(1),
+        };
+        Scalar::new(Self::new(values, None))
     }
 
     /// Returns the length of this array.
