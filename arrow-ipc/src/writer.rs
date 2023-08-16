@@ -1146,7 +1146,7 @@ fn buffer_need_truncate(
 #[inline]
 fn get_buffer_element_width(spec: &BufferSpec) -> usize {
     match spec {
-        BufferSpec::FixedWidth { byte_width } => *byte_width,
+        BufferSpec::FixedWidth { byte_width, .. } => *byte_width,
         _ => 0,
     }
 }

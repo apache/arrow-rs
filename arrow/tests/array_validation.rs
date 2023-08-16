@@ -56,7 +56,9 @@ fn test_bad_number_of_buffers() {
 }
 
 #[test]
-#[should_panic(expected = "integer overflow computing min buffer size")]
+#[should_panic(
+    expected = "Need at least 18446744073709551615 bytes in buffers[0] in array of type Int64, but got 8"
+)]
 fn test_fixed_width_overflow() {
     let buffer = Buffer::from_slice_ref([0i32, 2i32]);
     ArrayData::try_new(DataType::Int64, usize::MAX, None, 0, vec![buffer], vec![])

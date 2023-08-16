@@ -1494,7 +1494,6 @@ pub type LargeBinaryType = GenericBinaryType<i64>;
 mod tests {
     use super::*;
     use arrow_data::{layout, BufferSpec};
-    use std::mem::size_of;
 
     #[test]
     fn month_day_nano_should_roundtrip() {
@@ -1541,7 +1540,8 @@ mod tests {
         assert_eq!(
             spec,
             &BufferSpec::FixedWidth {
-                byte_width: size_of::<T::Native>()
+                byte_width: std::mem::size_of::<T::Native>(),
+                alignment: std::mem::align_of::<T::Native>(),
             }
         );
     }

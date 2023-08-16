@@ -1037,13 +1037,17 @@ mod tests {
     #[should_panic(
         expected = "Memory pointer is not aligned with the specified scalar type"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_primitive_array_alignment() {
         let buf = Buffer::from_slice_ref([0_u64]);
         let buf2 = buf.slice(1);
-        let array_data = ArrayData::builder(DataType::Int32)
-            .add_buffer(buf2)
-            .build()
-            .unwrap();
+        let array_data = unsafe {
+            ArrayData::builder(DataType::Int32)
+                .add_buffer(buf2)
+                .build_unchecked()
+        };
         drop(Int32Array::from(array_data));
     }
 
