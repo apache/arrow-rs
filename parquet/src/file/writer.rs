@@ -775,7 +775,7 @@ mod tests {
         let file = tempfile::tempfile().unwrap();
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", Type::INT32)
                         .build()
                         .unwrap(),
@@ -801,7 +801,7 @@ mod tests {
         let file = tempfile::tempfile().unwrap();
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![
+                .with_fields(vec![
                     Arc::new(
                         types::Type::primitive_type_builder("col1", Type::INT32)
                             .with_repetition(Repetition::REQUIRED)
@@ -848,7 +848,7 @@ mod tests {
 
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", Type::INT32)
                         .build()
                         .unwrap(),
@@ -871,7 +871,7 @@ mod tests {
 
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", Type::INT32)
                         .build()
                         .unwrap(),
@@ -920,7 +920,7 @@ mod tests {
         );
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![field.clone()])
+                .with_fields(vec![field.clone()])
                 .build()
                 .unwrap(),
         );
@@ -963,7 +963,7 @@ mod tests {
 
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![
+                .with_fields(vec![
                     Arc::new(
                         types::Type::primitive_type_builder("col1", Type::INT32)
                             .build()
@@ -1310,7 +1310,7 @@ mod tests {
     {
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", D::get_physical_type())
                         .with_repetition(Repetition::REQUIRED)
                         .build()
@@ -1468,7 +1468,7 @@ mod tests {
     ) {
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
-                .with_fields(&mut vec![Arc::new(
+                .with_fields(vec![Arc::new(
                     types::Type::primitive_type_builder("col1", Type::INT32)
                         .with_repetition(Repetition::REQUIRED)
                         .build()

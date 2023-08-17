@@ -130,7 +130,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
           #field_types
         );*;
         let group = ParquetType::group_type_builder("rust_schema")
-          .with_fields(&mut fields)
+          .with_fields(fields)
           .build()?;
         Ok(group.into())
       }

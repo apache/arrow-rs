@@ -1112,7 +1112,7 @@ mod tests {
     /// Returns sample schema descriptor so we can create column metadata.
     fn get_test_schema_descr() -> SchemaDescPtr {
         let schema = SchemaType::group_type_builder("schema")
-            .with_fields(&mut vec![
+            .with_fields(vec![
                 Arc::new(
                     SchemaType::primitive_type_builder("a", Type::INT32)
                         .build()
