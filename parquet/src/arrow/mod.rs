@@ -130,6 +130,13 @@ pub use self::schema::{
 /// Schema metadata key used to store serialized Arrow IPC schema
 pub const ARROW_SCHEMA_META_KEY: &str = "ARROW:schema";
 
+/// The value of this metadata key, if present on [`Field::metadata`], will be used
+/// to populate [`BasicTypeInfo::id`]
+///
+/// [`Field::metadata`]: arrow_schema::Field::metadata
+/// [`BasicTypeInfo::id`]: crate::schema::types::BasicTypeInfo::id
+pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
+
 /// A [`ProjectionMask`] identifies a set of columns within a potentially nested schema to project
 ///
 /// In particular, a [`ProjectionMask`] can be constructed from a list of leaf column indices
