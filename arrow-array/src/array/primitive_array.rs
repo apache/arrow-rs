@@ -24,7 +24,7 @@ use crate::temporal_conversions::{
 use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
-use crate::{Array, ArrayAccessor, ArrayRef};
+use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
 use arrow_buffer::{i256, ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -550,6 +550,15 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             data_type: T::DATA_TYPE,
             values,
             nulls,
+        })
+    }
+
+    /// Create a new [`Scalar`] from `value`
+    pub fn new_scalar(value: T::Native) -> Scalar<Self> {
+        Scalar::new(Self {
+            data_type: T::DATA_TYPE,
+            values: vec![value].into(),
+            nulls: None,
         })
     }
 

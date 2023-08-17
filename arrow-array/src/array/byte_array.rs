@@ -20,7 +20,7 @@ use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
-use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait};
+use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait, Scalar};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -180,6 +180,11 @@ impl<T: ByteArrayType> GenericByteArray<T> {
             value_data: MutableBuffer::new(0).into(),
             nulls: Some(NullBuffer::new_null(len)),
         }
+    }
+
+    /// Create a new [`Scalar`] from `v`
+    pub fn new_scalar(value: impl AsRef<T::Native>) -> Scalar<Self> {
+        Scalar::new(Self::from_iter_values(std::iter::once(value)))
     }
 
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
