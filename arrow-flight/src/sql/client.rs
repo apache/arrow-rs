@@ -538,7 +538,7 @@ pub fn arrow_data_from_flight_data(
 
             let dictionaries_by_field = HashMap::new();
             let record_batch = read_record_batch(
-                &Buffer::from(&flight_data.data_body),
+                &Buffer::from_bytes(flight_data.data_body.into()),
                 ipc_record_batch,
                 arrow_schema_ref.clone(),
                 &dictionaries_by_field,

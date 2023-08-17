@@ -205,9 +205,8 @@ impl<'a> Parser<'a> {
                     .tokenizer
                     .next()
                     .ok_or_else(|| general_err!("Expected name, found None"))?;
-                let mut fields = self.parse_child_types()?;
                 Type::group_type_builder(name)
-                    .with_fields(&mut fields)
+                    .with_fields(self.parse_child_types()?)
                     .build()
             }
             _ => Err(general_err!("Message type does not start with 'message'")),
@@ -290,16 +289,13 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let mut fields = self.parse_child_types()?;
         let mut builder = Type::group_type_builder(name)
             .with_logical_type(logical_type)
             .with_converted_type(converted_type)
-            .with_fields(&mut fields);
+            .with_fields(self.parse_child_types()?)
+            .with_id(id);
         if let Some(rep) = repetition {
             builder = builder.with_repetition(rep);
-        }
-        if let Some(id) = id {
-            builder = builder.with_id(id);
         }
         builder.build()
     }
@@ -516,17 +512,15 @@ impl<'a> Parser<'a> {
         };
         assert_token(self.tokenizer.next(), ";")?;
 
-        let mut builder = Type::primitive_type_builder(name, physical_type)
+        Type::primitive_type_builder(name, physical_type)
             .with_repetition(repetition)
             .with_logical_type(logical_type)
             .with_converted_type(converted_type)
             .with_length(length)
             .with_precision(precision)
-            .with_scale(scale);
-        if let Some(id) = id {
-            builder = builder.with_id(id);
-        }
-        builder.build()
+            .with_scale(scale)
+            .with_id(id)
+            .build()
     }
 }
 
@@ -845,7 +839,7 @@ mod tests {
         let message = parse(schema).unwrap();
 
         let expected = Type::group_type_builder("root")
-            .with_fields(&mut vec![
+            .with_fields(vec![
                 Arc::new(
                     Type::primitive_type_builder(
                         "f1",
@@ -906,16 +900,16 @@ mod tests {
         let message = parse(schema).unwrap();
 
         let expected = Type::group_type_builder("root")
-            .with_fields(&mut vec![Arc::new(
+            .with_fields(vec![Arc::new(
                 Type::group_type_builder("a0")
                     .with_repetition(Repetition::REQUIRED)
-                    .with_fields(&mut vec![
+                    .with_fields(vec![
                         Arc::new(
                             Type::group_type_builder("a1")
                                 .with_repetition(Repetition::OPTIONAL)
                                 .with_logical_type(Some(LogicalType::List))
                                 .with_converted_type(ConvertedType::LIST)
-                                .with_fields(&mut vec![Arc::new(
+                                .with_fields(vec![Arc::new(
                                     Type::primitive_type_builder(
                                         "a2",
                                         PhysicalType::BYTE_ARRAY,
@@ -933,10 +927,10 @@ mod tests {
                                 .with_repetition(Repetition::OPTIONAL)
                                 .with_logical_type(Some(LogicalType::List))
                                 .with_converted_type(ConvertedType::LIST)
-                                .with_fields(&mut vec![Arc::new(
+                                .with_fields(vec![Arc::new(
                                     Type::group_type_builder("b2")
                                         .with_repetition(Repetition::REPEATED)
-                                        .with_fields(&mut vec![
+                                        .with_fields(vec![
                                             Arc::new(
                                                 Type::primitive_type_builder(
                                                     "b3",
@@ -984,7 +978,7 @@ mod tests {
         ";
         let message = parse(schema).unwrap();
 
-        let mut fields = vec![
+        let fields = vec![
             Arc::new(
                 Type::primitive_type_builder("_1", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
@@ -1027,7 +1021,7 @@ mod tests {
         ];
 
         let expected = Type::group_type_builder("root")
-            .with_fields(&mut fields)
+            .with_fields(fields)
             .build()
             .unwrap();
         assert_eq!(message, expected);
@@ -1051,7 +1045,7 @@ mod tests {
         ";
         let message = parse(schema).unwrap();
 
-        let mut fields = vec![
+        let fields = vec![
             Arc::new(
                 Type::primitive_type_builder("_1", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
@@ -1135,7 +1129,7 @@ mod tests {
         ];
 
         let expected = Type::group_type_builder("root")
-            .with_fields(&mut fields)
+            .with_fields(fields)
             .build()
             .unwrap();
         assert_eq!(message, expected);

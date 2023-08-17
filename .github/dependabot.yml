@@ -6,10 +6,17 @@ updates:
       interval: daily
     open-pull-requests-limit: 10
     target-branch: master
-    labels: [auto-dependencies]
+    labels: [ auto-dependencies, arrow ]
+  - package-ecosystem: cargo
+    directory: "/object_store"
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 10
+    target-branch: master
+    labels: [ auto-dependencies, object_store ]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
-    labels: [auto-dependencies]
+    labels: [ auto-dependencies ]

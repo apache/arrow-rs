@@ -434,6 +434,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// Panics if `values` has a length less than the current values
     ///
     /// ```
+    /// # use std::sync::Arc;
     /// # use arrow_array::builder::PrimitiveDictionaryBuilder;
     /// # use arrow_array::{Int8Array, Int64Array, ArrayAccessor};
     /// # use arrow_array::types::{Int32Type, Int8Type};
@@ -451,7 +452,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// let values: Int64Array = typed_dictionary.values().unary(|x| x as i64);
     ///
     /// // Create a Dict(Int32,
-    /// let new = dictionary.with_values(&values);
+    /// let new = dictionary.with_values(Arc::new(values));
     ///
     /// // Verify values are as expected
     /// let new_typed = new.downcast_dict::<Int64Array>().unwrap();
@@ -460,21 +461,18 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// }
     /// ```
     ///
-    pub fn with_values(&self, values: &dyn Array) -> Self {
+    pub fn with_values(&self, values: ArrayRef) -> Self {
         assert!(values.len() >= self.values.len());
-
-        let builder = self
-            .to_data()
-            .into_builder()
-            .data_type(DataType::Dictionary(
-                Box::new(K::DATA_TYPE),
-                Box::new(values.data_type().clone()),
-            ))
-            .child_data(vec![values.to_data()]);
-
-        // SAFETY:
-        // Offsets were valid before and verified length is greater than or equal
-        Self::from(unsafe { builder.build_unchecked() })
+        let data_type = DataType::Dictionary(
+            Box::new(K::DATA_TYPE),
+            Box::new(values.data_type().clone()),
+        );
+        Self {
+            data_type,
+            keys: self.keys.clone(),
+            values,
+            is_ordered: false,
+        }
     }
 
     /// Returns `PrimitiveDictionaryBuilder` of this dictionary array for mutating
@@ -927,6 +925,94 @@ where
             true => self.values.value_unchecked(value_idx),
             false => Default::default(),
         }
+    }
+}
+
+/// A [`DictionaryArray`] with the key type erased
+///
+/// This can be used to efficiently implement kernels for all possible dictionary
+/// keys without needing to create specialized implementations for each key type
+///
+/// For example
+///
+/// ```
+/// # use arrow_array::*;
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_array::builder::PrimitiveDictionaryBuilder;
+/// # use arrow_array::types::*;
+/// # use arrow_schema::ArrowError;
+/// # use std::sync::Arc;
+///
+/// fn to_string(a: &dyn Array) -> Result<ArrayRef, ArrowError> {
+///     if let Some(d) = a.as_any_dictionary_opt() {
+///         // Recursively handle dictionary input
+///         let r = to_string(d.values().as_ref())?;
+///         return Ok(d.with_values(r));
+///     }
+///     downcast_primitive_array! {
+///         a => Ok(Arc::new(a.iter().map(|x| x.map(|x| x.to_string())).collect::<StringArray>())),
+///         d => Err(ArrowError::InvalidArgumentError(format!("{d:?} not supported")))
+///     }
+/// }
+///
+/// let result = to_string(&Int32Array::from(vec![1, 2, 3])).unwrap();
+/// let actual = result.as_string::<i32>().iter().map(Option::unwrap).collect::<Vec<_>>();
+/// assert_eq!(actual, &["1", "2", "3"]);
+///
+/// let mut dict = PrimitiveDictionaryBuilder::<Int32Type, UInt16Type>::new();
+/// dict.extend([Some(1), Some(1), Some(2), Some(3), Some(2)]);
+/// let dict = dict.finish();
+///
+/// let r = to_string(&dict).unwrap();
+/// let r = r.as_dictionary::<Int32Type>().downcast_dict::<StringArray>().unwrap();
+/// assert_eq!(r.keys(), dict.keys()); // Keys are the same
+///
+/// let actual = r.into_iter().map(Option::unwrap).collect::<Vec<_>>();
+/// assert_eq!(actual, &["1", "1", "2", "3", "2"]);
+/// ```
+///
+/// See [`AsArray::as_any_dictionary_opt`] and [`AsArray::as_any_dictionary`]
+pub trait AnyDictionaryArray: Array {
+    /// Returns the primitive keys of this dictionary as an [`Array`]
+    fn keys(&self) -> &dyn Array;
+
+    /// Returns the values of this dictionary
+    fn values(&self) -> &ArrayRef;
+
+    /// Returns the keys of this dictionary as usize
+    ///
+    /// The values for nulls will be arbitrary, but are guaranteed
+    /// to be in the range `0..self.values.len()`
+    ///
+    /// # Panic
+    ///
+    /// Panics if `values.len() == 0`
+    fn normalized_keys(&self) -> Vec<usize>;
+
+    /// Create a new [`DictionaryArray`] replacing `values` with the new values
+    ///
+    /// See [`DictionaryArray::with_values`]
+    fn with_values(&self, values: ArrayRef) -> ArrayRef;
+}
+
+impl<K: ArrowDictionaryKeyType> AnyDictionaryArray for DictionaryArray<K> {
+    fn keys(&self) -> &dyn Array {
+        &self.keys
+    }
+
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn normalized_keys(&self) -> Vec<usize> {
+        let v_len = self.values().len();
+        assert_ne!(v_len, 0);
+        let iter = self.keys().values().iter();
+        iter.map(|x| x.as_usize().min(v_len)).collect()
+    }
+
+    fn with_values(&self, values: ArrayRef) -> ArrayRef {
+        Arc::new(self.with_values(values))
     }
 }
 

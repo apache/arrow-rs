@@ -82,7 +82,7 @@ where
 {
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = unary::<T, F, T>(dict_values, op);
-    Ok(Arc::new(array.with_values(&values)))
+    Ok(Arc::new(array.with_values(Arc::new(values))))
 }
 
 /// A helper function that applies a fallible unary function to a dictionary array with primitive value type.
@@ -105,10 +105,11 @@ where
 
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = try_unary::<T, F, T>(dict_values, op)?;
-    Ok(Arc::new(array.with_values(&values)))
+    Ok(Arc::new(array.with_values(Arc::new(values))))
 }
 
 /// Applies an infallible unary function to an array with primitive values.
+#[deprecated(note = "Use arrow_array::AnyDictionaryArray")]
 pub fn unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
@@ -134,6 +135,7 @@ where
 }
 
 /// Applies a fallible unary function to an array with primitive values.
+#[deprecated(note = "Use arrow_array::AnyDictionaryArray")]
 pub fn try_unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
@@ -436,6 +438,7 @@ mod tests {
     use arrow_array::types::*;
 
     #[test]
+    #[allow(deprecated)]
     fn test_unary_f64_slice() {
         let input =
             Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
@@ -455,6 +458,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_unary_dict_and_unary_dyn() {
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();

@@ -148,3 +148,31 @@ impl Debug for Bytes {
         write!(f, " }}")
     }
 }
+
+impl From<bytes::Bytes> for Bytes {
+    fn from(value: bytes::Bytes) -> Self {
+        Self {
+            len: value.len(),
+            ptr: NonNull::new(value.as_ptr() as _).unwrap(),
+            deallocation: Deallocation::Custom(std::sync::Arc::new(value)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_bytes() {
+        let bytes = bytes::Bytes::from(vec![1, 2, 3, 4]);
+        let arrow_bytes: Bytes = bytes.clone().into();
+
+        assert_eq!(bytes.as_ptr(), arrow_bytes.as_ptr());
+
+        drop(bytes);
+        drop(arrow_bytes);
+
+        let _ = Bytes::from(bytes::Bytes::new());
+    }
+}

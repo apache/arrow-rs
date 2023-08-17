@@ -34,6 +34,7 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
+bytes = { version = "1.4" }
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false }
 
