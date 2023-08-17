@@ -1660,10 +1660,9 @@ pub enum BufferSpec {
     /// `alignment` is the alignment required by Rust for an array of the corresponding primitive,
     /// see [`Layout::array`](std::alloc::Layout::array) and [`std::mem::align_of`].
     ///
-    /// Arrow-rs requires that all buffers are have at least this alignment, to allow for
-    /// [slice](std::slice) based APIs. We do not require alignment in excess of this to allow
-    /// for array slicing, and interoperability with `Vec` which in the absence of support
-    /// for custom allocators, cannot be over-aligned.
+    /// Arrow-rs requires that all buffers have at least this alignment, to allow for
+    /// [slice](std::slice) based APIs. Alignment in excess of this is not required to allow
+    /// for array slicing and interoperability with `Vec`, which cannot be over-aligned.
     ///
     /// Note that these alignment requirements will vary between architectures
     FixedWidth { byte_width: usize, alignment: usize },
@@ -1818,7 +1817,7 @@ impl ArrayDataBuilder {
     /// Rust requires that arrays are aligned to their corresponding primitive,
     /// see [`Layout::array`](std::alloc::Layout::array) and [`std::mem::align_of`].
     ///
-    /// [`ArrayData`] therefore requires that all buffers are have at least this alignment,
+    /// [`ArrayData`] therefore requires that all buffers have at least this alignment,
     /// to allow for [slice](std::slice) based APIs. See [`BufferSpec::FixedWidth`].
     ///
     /// As this alignment is architecture specific, and not guaranteed by all arrow implementations,
