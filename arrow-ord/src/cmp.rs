@@ -24,14 +24,13 @@
 //!
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
+use arrow_array::types::ByteArrayType;
 use arrow_array::{
-    downcast_dictionary_array, downcast_primitive_array, Array, ArrayRef,
-    ArrowNativeTypeOp, BooleanArray, Datum, DictionaryArray, FixedSizeBinaryArray,
-    GenericByteArray,
+    downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray,
+    Datum, FixedSizeBinaryArray, GenericByteArray,
 };
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 use arrow_select::take::take;
 
@@ -164,10 +163,10 @@ fn compare_op(
         },
     };
 
-    let l_v = as_any_dictionary(l);
+    let l_v = l.as_any_dictionary_opt();
     let l = l_v.map(|x| x.values().as_ref()).unwrap_or(l);
 
-    let r_v = as_any_dictionary(r);
+    let r_v = r.as_any_dictionary_opt();
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
 
     let values = downcast_primitive_array! {
@@ -189,56 +188,15 @@ fn compare_op(
     Ok(BooleanArray::new(values, nulls))
 }
 
-/// Returns a [`AnyDictionary`] if `a` is a dictionary
-fn as_any_dictionary(a: &dyn Array) -> Option<&dyn AnyDictionary> {
-    downcast_dictionary_array! {
-        a => Some(a),
-        _ => None
-    }
-}
-
-/// A [`DictionaryArray`] with the key type erased
-trait AnyDictionary: Array {
-    /// Returns the keys of this dictionary, clamped to be in the range `0..values.len()`
-    ///
-    /// # Panic
-    ///
-    /// Panics if `values.len() == 0`
-    fn normalized_keys(&self) -> Vec<usize>;
-
-    /// Returns the values of this dictionary
-    fn values(&self) -> &ArrayRef;
-
-    /// Applies the `keys` of this dictionary to the provided array
-    fn take(&self, array: &dyn Array) -> Result<ArrayRef, ArrowError>;
-}
-
-impl<K: ArrowDictionaryKeyType> AnyDictionary for DictionaryArray<K> {
-    fn normalized_keys(&self) -> Vec<usize> {
-        let v_len = self.values().len();
-        assert_ne!(v_len, 0);
-        let iter = self.keys().values().iter();
-        iter.map(|x| x.as_usize().min(v_len)).collect()
-    }
-
-    fn values(&self) -> &ArrayRef {
-        self.values()
-    }
-
-    fn take(&self, array: &dyn Array) -> Result<ArrayRef, ArrowError> {
-        take(array, self.keys(), None)
-    }
-}
-
 /// Perform a potentially vectored `op` on the provided `ArrayOrd`
 fn apply<T: ArrayOrd>(
     op: Op,
     l: T,
     l_s: bool,
-    l_v: Option<&dyn AnyDictionary>,
+    l_v: Option<&dyn AnyDictionaryArray>,
     r: T,
     r_s: bool,
-    r_v: Option<&dyn AnyDictionary>,
+    r_v: Option<&dyn AnyDictionaryArray>,
 ) -> Option<BooleanBuffer> {
     if l.len() == 0 || r.len() == 0 {
         return None; // Handle empty dictionaries
@@ -287,8 +245,8 @@ fn apply<T: ArrayOrd>(
 }
 
 /// Perform a take operation on `buffer` with the given dictionary
-fn take_bits(v: &dyn AnyDictionary, buffer: BooleanBuffer) -> BooleanBuffer {
-    let array = v.take(&BooleanArray::new(buffer, None)).unwrap();
+fn take_bits(v: &dyn AnyDictionaryArray, buffer: BooleanBuffer) -> BooleanBuffer {
+    let array = take(&BooleanArray::new(buffer, None), v.keys(), None).unwrap();
     array.as_boolean().values().clone()
 }
 
@@ -485,9 +443,11 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow_array::{Int32Array, Scalar};
     use std::sync::Arc;
+
+    use arrow_array::{DictionaryArray, Int32Array, Scalar};
+
+    use super::*;
 
     #[test]
     fn test_null_dict() {
