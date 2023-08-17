@@ -547,9 +547,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "assertion failed: `(left == right)`\n  left: `UInt32`,\n \
-                    right: `UInt8`: BinaryArray can only be created from List<u8> arrays, \
-                    mismatched data types."
+        expected = "BinaryArray can only be created from List<u8> arrays, mismatched data types."
     )]
     fn test_binary_array_from_incorrect_list_array() {
         let values: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
