@@ -437,6 +437,15 @@ impl<Ptr: std::borrow::Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray 
     }
 }
 
+impl From<BooleanBuffer> for BooleanArray {
+    fn from(values: BooleanBuffer) -> Self {
+        Self {
+            values,
+            nulls: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
