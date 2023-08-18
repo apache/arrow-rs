@@ -209,6 +209,7 @@ fn compare_op(
             (Binary, Binary) => apply(op, l.as_binary::<i32>(), l_s, l_v, r.as_binary::<i32>(), r_s, r_v),
             (LargeBinary, LargeBinary) => apply(op, l.as_binary::<i64>(), l_s, l_v, r.as_binary::<i64>(), r_s, r_v),
             (FixedSizeBinary(_), FixedSizeBinary(_)) => apply(op, l.as_fixed_size_binary(), l_s, l_v, r.as_fixed_size_binary(), r_s, r_v),
+            (_, Null) | (Null, _) => None,
             _ => unreachable!(),
         };
         d.unwrap_or_else(|| BooleanBuffer::new_unset(len))
