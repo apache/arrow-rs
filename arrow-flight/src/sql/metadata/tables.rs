@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use arrow_arith::boolean::{and, or};
 use arrow_array::builder::{BinaryBuilder, StringBuilder};
-use arrow_array::{ArrayRef, RecordBatch};
-use arrow_ord::comparison::eq_utf8_scalar;
+use arrow_array::{ArrayRef, RecordBatch, Scalar, StringArray};
+use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
 use arrow_string::like::like_utf8_scalar;
@@ -184,12 +184,16 @@ impl GetTablesBuilder {
         let mut filters = vec![];
 
         if let Some(catalog_filter_name) = catalog_filter {
-            filters.push(eq_utf8_scalar(&catalog_name, &catalog_filter_name)?);
+            let scalar = StringArray::from_iter_values([catalog_filter_name]);
+            filters.push(eq(&catalog_name, &Scalar::new(&scalar))?);
         }
 
         let tt_filter = table_types_filter
             .into_iter()
-            .map(|tt| eq_utf8_scalar(&table_type, &tt))
+            .map(|tt| {
+                let scalar = StringArray::from_iter_values([tt]);
+                eq(&table_type, &Scalar::new(&scalar))
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?
             .into_iter()
             // We know the arrays are of same length as they are produced fromn the same root array

@@ -21,60 +21,15 @@ use criterion::Criterion;
 
 extern crate arrow;
 
-use arrow::compute::*;
-use arrow::datatypes::{ArrowNativeTypeOp, ArrowNumericType, IntervalMonthDayNanoType};
+use arrow::compute::kernels::cmp::*;
+use arrow::datatypes::IntervalMonthDayNanoType;
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
+use arrow_array::Scalar;
+use arrow_string::like::*;
+use arrow_string::regexp::regexp_is_match_utf8_scalar;
 
 const SIZE: usize = 65536;
-
-fn bench_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    eq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
-fn bench_neq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    neq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
-fn bench_lt<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    lt(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
-fn bench_lt_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    lt_eq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
-fn bench_gt<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    gt(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
-fn bench_gt_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    gt_eq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
 
 fn bench_like_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     like_utf8_scalar(criterion::black_box(arr_a), criterion::black_box(value_b)).unwrap();
@@ -104,27 +59,6 @@ fn bench_regexp_is_match_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     .unwrap();
 }
 
-#[cfg(not(feature = "dyn_cmp_dict"))]
-fn dyn_cmp_dict_benchmarks(_c: &mut Criterion) {}
-
-#[cfg(feature = "dyn_cmp_dict")]
-fn dyn_cmp_dict_benchmarks(c: &mut Criterion) {
-    let strings = create_string_array::<i32>(20, 0.);
-    let dict_arr_a = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
-    let dict_arr_b = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
-
-    c.bench_function("eq dictionary[10] string[4])", |b| {
-        b.iter(|| {
-            cmp_dict_utf8::<_, i32, _>(
-                criterion::black_box(&dict_arr_a),
-                criterion::black_box(&dict_arr_b),
-                |a, b| a == b,
-            )
-            .unwrap()
-        })
-    });
-}
-
 fn add_benchmark(c: &mut Criterion) {
     let arr_a = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 42);
     let arr_b = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 43);
@@ -135,105 +69,79 @@ fn add_benchmark(c: &mut Criterion) {
         create_primitive_array_with_seed::<IntervalMonthDayNanoType>(SIZE, 0.0, 43);
 
     let arr_string = create_string_array::<i32>(SIZE, 0.0);
+    let scalar = Float32Array::from(vec![1.0]);
 
-    c.bench_function("eq Float32", |b| b.iter(|| bench_eq(&arr_a, &arr_b)));
+    c.bench_function("eq Float32", |b| b.iter(|| eq(&arr_a, &arr_b)));
     c.bench_function("eq scalar Float32", |b| {
-        b.iter(|| {
-            eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| eq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("neq Float32", |b| b.iter(|| bench_neq(&arr_a, &arr_b)));
+    c.bench_function("neq Float32", |b| b.iter(|| neq(&arr_a, &arr_b)));
     c.bench_function("neq scalar Float32", |b| {
-        b.iter(|| {
-            neq_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| neq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("lt Float32", |b| b.iter(|| bench_lt(&arr_a, &arr_b)));
+    c.bench_function("lt Float32", |b| b.iter(|| lt(&arr_a, &arr_b)));
     c.bench_function("lt scalar Float32", |b| {
-        b.iter(|| {
-            lt_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| lt(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("lt_eq Float32", |b| b.iter(|| bench_lt_eq(&arr_a, &arr_b)));
+    c.bench_function("lt_eq Float32", |b| b.iter(|| lt_eq(&arr_a, &arr_b)));
     c.bench_function("lt_eq scalar Float32", |b| {
-        b.iter(|| {
-            lt_eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| lt_eq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("gt Float32", |b| b.iter(|| bench_gt(&arr_a, &arr_b)));
+    c.bench_function("gt Float32", |b| b.iter(|| gt(&arr_a, &arr_b)));
     c.bench_function("gt scalar Float32", |b| {
-        b.iter(|| {
-            gt_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| gt(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("gt_eq Float32", |b| b.iter(|| bench_gt_eq(&arr_a, &arr_b)));
+    c.bench_function("gt_eq Float32", |b| b.iter(|| gt_eq(&arr_a, &arr_b)));
     c.bench_function("gt_eq scalar Float32", |b| {
-        b.iter(|| {
-            gt_eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| gt_eq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
     let arr_a = create_primitive_array_with_seed::<Int32Type>(SIZE, 0.0, 42);
     let arr_b = create_primitive_array_with_seed::<Int32Type>(SIZE, 0.0, 43);
+    let scalar = Int32Array::from(vec![1]);
 
-    c.bench_function("eq Int32", |b| b.iter(|| bench_eq(&arr_a, &arr_b)));
+    c.bench_function("eq Int32", |b| b.iter(|| eq(&arr_a, &arr_b)));
     c.bench_function("eq scalar Int32", |b| {
-        b.iter(|| {
-            eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| eq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("neq Int32", |b| b.iter(|| bench_neq(&arr_a, &arr_b)));
+    c.bench_function("neq Int32", |b| b.iter(|| neq(&arr_a, &arr_b)));
     c.bench_function("neq scalar Int32", |b| {
-        b.iter(|| {
-            neq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| neq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("lt Int32", |b| b.iter(|| bench_lt(&arr_a, &arr_b)));
+    c.bench_function("lt Int32", |b| b.iter(|| lt(&arr_a, &arr_b)));
     c.bench_function("lt scalar Int32", |b| {
-        b.iter(|| {
-            lt_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| lt(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("lt_eq Int32", |b| b.iter(|| bench_lt_eq(&arr_a, &arr_b)));
+    c.bench_function("lt_eq Int32", |b| b.iter(|| lt_eq(&arr_a, &arr_b)));
     c.bench_function("lt_eq scalar Int32", |b| {
-        b.iter(|| {
-            lt_eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| lt_eq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("gt Int32", |b| b.iter(|| bench_gt(&arr_a, &arr_b)));
+    c.bench_function("gt Int32", |b| b.iter(|| gt(&arr_a, &arr_b)));
     c.bench_function("gt scalar Int32", |b| {
-        b.iter(|| {
-            gt_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| gt(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("gt_eq Int32", |b| b.iter(|| bench_gt_eq(&arr_a, &arr_b)));
+    c.bench_function("gt_eq Int32", |b| b.iter(|| gt_eq(&arr_a, &arr_b)));
     c.bench_function("gt_eq scalar Int32", |b| {
-        b.iter(|| {
-            gt_eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| gt_eq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
     c.bench_function("eq MonthDayNano", |b| {
-        b.iter(|| bench_eq(&arr_month_day_nano_a, &arr_month_day_nano_b))
+        b.iter(|| eq(&arr_month_day_nano_a, &arr_month_day_nano_b))
     });
+    let scalar = IntervalMonthDayNanoArray::from(vec![123]);
+
     c.bench_function("eq scalar MonthDayNano", |b| {
-        b.iter(|| {
-            eq_scalar(
-                criterion::black_box(&arr_month_day_nano_a),
-                criterion::black_box(123),
-            )
-            .unwrap()
-        })
+        b.iter(|| eq(&arr_month_day_nano_b, &Scalar::new(&scalar)).unwrap())
     });
 
     c.bench_function("like_utf8 scalar equals", |b| {
@@ -326,14 +234,15 @@ fn add_benchmark(c: &mut Criterion) {
 
     let strings = create_string_array::<i32>(20, 0.);
     let dict_arr_a = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
+    let scalar = StringArray::from(vec!["test"]);
 
     c.bench_function("eq_dyn_utf8_scalar dictionary[10] string[4])", |b| {
-        b.iter(|| eq_dyn_utf8_scalar(&dict_arr_a, "test"))
+        b.iter(|| eq(&dict_arr_a, &Scalar::new(&scalar)))
     });
 
     c.bench_function(
         "gt_eq_dyn_utf8_scalar scalar dictionary[10] string[4])",
-        |b| b.iter(|| gt_eq_dyn_utf8_scalar(&dict_arr_a, "test")),
+        |b| b.iter(|| gt_eq(&dict_arr_a, &Scalar::new(&scalar))),
     );
 
     c.bench_function("like_utf8_scalar_dyn dictionary[10] string[4])", |b| {
@@ -344,7 +253,13 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| ilike_utf8_scalar_dyn(&dict_arr_a, "test"))
     });
 
-    dyn_cmp_dict_benchmarks(c);
+    let strings = create_string_array::<i32>(20, 0.);
+    let dict_arr_a = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
+    let dict_arr_b = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
+
+    c.bench_function("eq dictionary[10] string[4])", |b| {
+        b.iter(|| eq(&dict_arr_a, &dict_arr_b).unwrap())
+    });
 }
 
 criterion_group!(benches, add_benchmark);
