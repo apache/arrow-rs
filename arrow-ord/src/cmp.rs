@@ -406,7 +406,7 @@ fn apply_op<T: ArrayOrd>(
         (Some(l_s), Some(r_s)) => {
             let a = l.value(l_s);
             let b = r.value(r_s);
-            std::iter::once(op(a, b)).collect()
+            std::iter::once(op(a, b) ^ neg).collect()
         }
         (Some(l_s), None) => {
             let v = l.value(l_s);
@@ -580,5 +580,57 @@ mod tests {
         );
         let r = eq(&a, &Scalar::new(&scalar)).unwrap();
         assert_eq!(r.null_count(), 3);
+    }
+
+    #[test]
+    fn is_distinct_from_non_nulls() {
+        let left_int_array = Int32Array::from(vec![0, 1, 2, 3, 4]);
+        let right_int_array = Int32Array::from(vec![4, 3, 2, 1, 0]);
+
+        assert_eq!(
+            BooleanArray::from(vec![true, true, false, true, true,]),
+            distinct(&left_int_array, &right_int_array).unwrap()
+        );
+        assert_eq!(
+            BooleanArray::from(vec![false, false, true, false, false,]),
+            not_distinct(&left_int_array, &right_int_array).unwrap()
+        );
+    }
+
+    #[test]
+    fn is_distinct_from_nulls() {
+        // [0, 0, NULL, 0, 0, 0]
+        let left_int_array = Int32Array::new(
+            vec![0, 0, 1, 3, 0, 0].into(),
+            Some(NullBuffer::from(vec![true, true, false, true, true, true])),
+        );
+        // [0, NULL, NULL, NULL, 0, NULL]
+        let right_int_array = Int32Array::new(
+            vec![0; 6].into(),
+            Some(NullBuffer::from(vec![
+                true, false, false, false, true, false,
+            ])),
+        );
+
+        assert_eq!(
+            BooleanArray::from(vec![false, true, false, true, false, true,]),
+            distinct(&left_int_array, &right_int_array).unwrap()
+        );
+
+        assert_eq!(
+            BooleanArray::from(vec![true, false, true, false, true, false,]),
+            not_distinct(&left_int_array, &right_int_array).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_scalar_negation() {
+        let a = Int32Array::new_scalar(54);
+        let b = Int32Array::new_scalar(54);
+        let r = eq(&a, &b).unwrap();
+        assert!(r.value(0));
+
+        let r = neq(&a, &b).unwrap();
+        assert!(!r.value(0))
     }
 }
