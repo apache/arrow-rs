@@ -41,6 +41,7 @@
 //!
 //! let file = tempfile().unwrap();
 //!
+//! // WriterProperties can be used to set Parquet file options
 //! let props = WriterProperties::builder()
 //!     .set_compression(Compression::SNAPPY)
 //!     .build();
