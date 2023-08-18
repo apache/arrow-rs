@@ -624,6 +624,56 @@ mod tests {
     }
 
     #[test]
+    fn test_distinct_scalar() {
+        let a = Int32Array::new_scalar(12);
+        let b = Int32Array::new_scalar(12);
+        assert!(!distinct(&a, &b).unwrap().value(0));
+        assert!(not_distinct(&a, &b).unwrap().value(0));
+
+        let a = Int32Array::new_scalar(12);
+        let b = Int32Array::new_null(1);
+        assert!(distinct(&a, &b).unwrap().value(0));
+        assert!(!not_distinct(&a, &b).unwrap().value(0));
+        assert!(distinct(&b, &a).unwrap().value(0));
+        assert!(!not_distinct(&b, &a).unwrap().value(0));
+
+        let b = Scalar::new(b);
+        assert!(distinct(&a, &b).unwrap().value(0));
+        assert!(!not_distinct(&a, &b).unwrap().value(0));
+
+        assert!(!distinct(&b, &b).unwrap().value(0));
+        assert!(not_distinct(&b, &b).unwrap().value(0));
+
+        let a = Int32Array::new(
+            vec![0, 1, 2, 3].into(),
+            Some(vec![false, false, true, true].into()),
+        );
+        let expected = BooleanArray::from(vec![false, false, true, true]);
+        assert_eq!(distinct(&a, &b).unwrap(), expected);
+        assert_eq!(distinct(&b, &a).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![true, true, false, false]);
+        assert_eq!(not_distinct(&a, &b).unwrap(), expected);
+        assert_eq!(not_distinct(&b, &a).unwrap(), expected);
+
+        let b = Int32Array::new_scalar(1);
+        let expected = BooleanArray::from(vec![true; 4]);
+        assert_eq!(distinct(&a, &b).unwrap(), expected);
+        assert_eq!(distinct(&b, &a).unwrap(), expected);
+        let expected = BooleanArray::from(vec![false; 4]);
+        assert_eq!(not_distinct(&a, &b).unwrap(), expected);
+        assert_eq!(not_distinct(&b, &a).unwrap(), expected);
+
+        let b = Int32Array::new_scalar(3);
+        let expected = BooleanArray::from(vec![true, true, true, false]);
+        assert_eq!(distinct(&a, &b).unwrap(), expected);
+        assert_eq!(distinct(&b, &a).unwrap(), expected);
+        let expected = BooleanArray::from(vec![false, false, false, true]);
+        assert_eq!(not_distinct(&a, &b).unwrap(), expected);
+        assert_eq!(not_distinct(&b, &a).unwrap(), expected);
+    }
+
+    #[test]
     fn test_scalar_negation() {
         let a = Int32Array::new_scalar(54);
         let b = Int32Array::new_scalar(54);
