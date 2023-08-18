@@ -304,6 +304,8 @@ pub struct SyncReader<T: ChunkReader>(T);
 /// A synchronous builder used to construct [`ParquetRecordBatchReader`] for a file
 ///
 /// For an async API see [`crate::arrow::async_reader::ParquetRecordBatchStreamBuilder`]
+///
+/// See [`ArrowReaderBuilder`] for additional member functions
 pub type ParquetRecordBatchReaderBuilder<T> = ArrowReaderBuilder<SyncReader<T>>;
 
 impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {

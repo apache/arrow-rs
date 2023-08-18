@@ -25,12 +25,13 @@
 //!# Example of writing Arrow record batch to Parquet file
 //!
 //!```rust
-//! use arrow_array::{Int32Array, ArrayRef};
-//! use arrow_array::RecordBatch;
-//! use parquet::arrow::arrow_writer::ArrowWriter;
-//! use parquet::file::properties::WriterProperties;
-//! use std::fs::File;
-//! use std::sync::Arc;
+//! # use arrow_array::{Int32Array, ArrayRef};
+//! # use arrow_array::RecordBatch;
+//! # use parquet::arrow::arrow_writer::ArrowWriter;
+//! # use parquet::file::properties::WriterProperties;
+//! # use tempfile::tempfile;
+//! # use std::sync::Arc;
+//! # use parquet::basic::Compression;
 //! let ids = Int32Array::from(vec![1, 2, 3, 4]);
 //! let vals = Int32Array::from(vec![5, 6, 7, 8]);
 //! let batch = RecordBatch::try_from_iter(vec![
@@ -38,9 +39,14 @@
 //!   ("val", Arc::new(vals) as ArrayRef),
 //! ]).unwrap();
 //!
-//! let file = File::create("data.parquet").unwrap();
+//! let file = tempfile().unwrap();
 //!
-//! let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+//! // WriterProperties can be used to set Parquet file options
+//! let props = WriterProperties::builder()
+//!     .set_compression(Compression::SNAPPY)
+//!     .build();
+//!
+//! let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
 //!
 //! writer.write(&batch).expect("Writing batch");
 //!
@@ -48,24 +54,11 @@
 //! writer.close().unwrap();
 //! ```
 //!
-//! `WriterProperties` can be used to set Parquet file options
-//! ```rust
-//! use parquet::file::properties::WriterProperties;
-//! use parquet::basic::{ Compression, Encoding };
-//! use parquet::file::properties::WriterVersion;
-//!
-//! // File compression
-//! let props = WriterProperties::builder()
-//!     .set_compression(Compression::SNAPPY)
-//!     .build();
-//! ```
-//!
 //! # Example of reading parquet file into arrow record batch
 //!
 //! ```rust
-//! use std::fs::File;
-//! use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-//!
+//! # use std::fs::File;
+//! # use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 //! # use std::sync::Arc;
 //! # use arrow_array::Int32Array;
 //! # use arrow::datatypes::{DataType, Field, Schema};
@@ -88,7 +81,7 @@
 //! #     writer.write(&batch).expect("Writing batch");
 //! # }
 //! # writer.close().unwrap();
-//!
+//! #
 //! let file = File::open("data.parquet").unwrap();
 //!
 //! let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
