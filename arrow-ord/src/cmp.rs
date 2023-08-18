@@ -182,8 +182,7 @@ fn compare_op(
             "Cannot compare arrays of different lengths, got {l_len} vs {r_len}"
         )));
     }
-
-    let len = r_len.max(l_len);
+    let len = (!l_s).then_some(l_len).unwrap_or(r_len);
 
     let l_v = l.as_any_dictionary_opt();
     let l = l_v.map(|x| x.values().as_ref()).unwrap_or(l);
@@ -209,7 +208,7 @@ fn compare_op(
             (Binary, Binary) => apply(op, l.as_binary::<i32>(), l_s, l_v, r.as_binary::<i32>(), r_s, r_v),
             (LargeBinary, LargeBinary) => apply(op, l.as_binary::<i64>(), l_s, l_v, r.as_binary::<i64>(), r_s, r_v),
             (FixedSizeBinary(_), FixedSizeBinary(_)) => apply(op, l.as_fixed_size_binary(), l_s, l_v, r.as_fixed_size_binary(), r_s, r_v),
-            (_, Null) | (Null, _) => None,
+            (Null, Null) => None,
             _ => unreachable!(),
         };
         d.unwrap_or_else(|| BooleanBuffer::new_unset(len))
@@ -683,5 +682,15 @@ mod tests {
 
         let r = neq(&a, &b).unwrap();
         assert!(!r.value(0))
+    }
+
+    #[test]
+    fn test_scalar_empty() {
+        let a = Int32Array::new_null(0);
+        let b = Int32Array::new_scalar(23);
+        let r = eq(&a, &b).unwrap();
+        assert_eq!(r.len(), 0);
+        let r = eq(&b, &a).unwrap();
+        assert_eq!(r.len(), 0);
     }
 }
