@@ -174,15 +174,20 @@ fn compare_op(
 
     let l_len = l.len();
     let r_len = r.len();
-    let l_nulls = l.logical_nulls();
-    let r_nulls = r.logical_nulls();
 
     if l_len != r_len && !l_s && !r_s {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Cannot compare arrays of different lengths, got {l_len} vs {r_len}"
         )));
     }
-    let len = (!l_s).then_some(l_len).unwrap_or(r_len);
+
+    let len = match l_s {
+        true => r_len,
+        false => l_len,
+    };
+
+    let l_nulls = l.logical_nulls();
+    let r_nulls = r.logical_nulls();
 
     let l_v = l.as_any_dictionary_opt();
     let l = l_v.map(|x| x.values().as_ref()).unwrap_or(l);
