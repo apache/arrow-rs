@@ -48,7 +48,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, Proxy, RequestBuilder};
+use reqwest::{Client, ClientBuilder, NoProxy, Proxy, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{fmt_duration, ConfigValue};
@@ -168,6 +168,8 @@ pub struct ClientOptions {
     default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
+    proxy_auth: Option<(String, String)>,
+    proxy_exclude: Vec<String>,
     allow_http: ConfigValue<bool>,
     allow_insecure: ConfigValue<bool>,
     timeout: Option<ConfigValue<Duration>>,
@@ -429,7 +431,19 @@ impl ClientOptions {
         }
 
         if let Some(proxy) = &self.proxy_url {
-            let proxy = Proxy::all(proxy).map_err(map_client_error)?;
+            let mut proxy = Proxy::all(proxy).map_err(map_client_error)?;
+
+            if let Some((username, password)) = &self.proxy_auth {
+                proxy = proxy.basic_auth(username, password);
+            }
+
+            if !self.proxy_exclude.is_empty() {
+                let no_proxy_list = self.proxy_exclude.join(", ");
+                let no_proxy = NoProxy::from_string(&no_proxy_list);
+
+                proxy = proxy.no_proxy(no_proxy);
+            }
+
             builder = builder.proxy(proxy);
         }
 
