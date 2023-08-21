@@ -136,6 +136,10 @@ pub fn gt_eq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowErro
 
 /// Perform `left IS DISTINCT FROM right` operation on two [`Datum`]
 ///
+/// [`distinct`] is similar to [`neq`], only differing in null handling. In particular, two
+/// operands are considered DISTINCT if they have a different value or if one of them is NULL
+/// and the other isn't. The result of [`distinct`] is never NULL.
+///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
 /// Note that totalOrder treats positive and negative zeros as different. If it is necessary
@@ -147,6 +151,10 @@ pub fn distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowE
 }
 
 /// Perform `left IS NOT DISTINCT FROM right` operation on two [`Datum`]
+///
+/// [`not_distinct`] is similar to [`eq`], only differing in null handling. In particular, two
+/// operands are considered `NOT DISTINCT` if they have the same value or if both of them
+/// is NULL. The result of [`not_distinct`] is never NULL.
 ///
 /// For floating values like f32 and f64, this comparison produces an ordering in accordance to
 /// the totalOrder predicate as defined in the IEEE 754 (2008 revision) floating point standard.
@@ -393,6 +401,8 @@ fn collect_bool(len: usize, neg: bool, f: impl Fn(usize) -> bool) -> BooleanBuff
 ///
 /// If l is scalar `l_s` will be `Some(idx)` where `idx` is the index of the scalar value in `l`
 /// If r is scalar `r_s` will be `Some(idx)` where `idx` is the index of the scalar value in `r`
+///
+/// If `neg` is true the result of `op` will be negated
 fn apply_op<T: ArrayOrd>(
     l: T,
     l_s: Option<usize>,
