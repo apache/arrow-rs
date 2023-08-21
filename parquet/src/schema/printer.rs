@@ -51,8 +51,7 @@ use crate::file::metadata::{
 };
 use crate::schema::types::Type;
 
-/// Prints Parquet metadata [`ParquetMetaData`](crate::file::metadata::ParquetMetaData)
-/// information.
+/// Prints Parquet metadata [`ParquetMetaData`] information.
 #[allow(unused_must_use)]
 pub fn print_parquet_metadata(out: &mut dyn io::Write, metadata: &ParquetMetaData) {
     print_file_metadata(out, metadata.file_metadata());
@@ -68,8 +67,7 @@ pub fn print_parquet_metadata(out: &mut dyn io::Write, metadata: &ParquetMetaDat
     }
 }
 
-/// Prints file metadata [`FileMetaData`](crate::file::metadata::FileMetaData)
-/// information.
+/// Prints file metadata [`FileMetaData`] information.
 #[allow(unused_must_use)]
 pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData) {
     writeln!(out, "version: {}", file_metadata.version());
@@ -92,7 +90,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
     print_schema(out, schema);
 }
 
-/// Prints Parquet [`Type`](crate::schema::types::Type) information.
+/// Prints Parquet [`Type`] information.
 #[allow(unused_must_use)]
 pub fn print_schema(out: &mut dyn io::Write, tp: &Type) {
     // TODO: better if we can pass fmt::Write to Printer.

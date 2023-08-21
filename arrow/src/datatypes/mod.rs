@@ -18,9 +18,9 @@
 //! Defines the logical data types of Arrow arrays.
 //!
 //! The most important things you might be looking for are:
-//!  * [`Schema`](crate::datatypes::Schema) to describe a schema.
-//!  * [`Field`](crate::datatypes::Field) to describe one field within a schema.
-//!  * [`DataType`](crate::datatypes::DataType) to describe the type of a field.
+//!  * [`Schema`] to describe a schema.
+//!  * [`Field`] to describe one field within a schema.
+//!  * [`DataType`] to describe the type of a field.
 
 pub use arrow_array::types::*;
 pub use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType};

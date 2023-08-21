@@ -24,7 +24,7 @@ use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{ready, stream::BoxStream, Stream, StreamExt};
 
-/// Creates a [`Stream`](futures::Stream) of [`FlightData`]s from a
+/// Creates a [`Stream`] of [`FlightData`]s from a
 /// `Stream` of [`Result`]<[`RecordBatch`], [`FlightError`]>.
 ///
 /// This can be used to implement [`FlightService::do_get`] in an
@@ -146,7 +146,7 @@ impl FlightDataEncoderBuilder {
         self
     }
 
-    /// Return a [`Stream`](futures::Stream) of [`FlightData`],
+    /// Return a [`Stream`] of [`FlightData`],
     /// consuming self. More details on [`FlightDataEncoder`]
     pub fn build<S>(self, input: S) -> FlightDataEncoder
     where
