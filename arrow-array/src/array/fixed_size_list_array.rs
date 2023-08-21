@@ -32,8 +32,7 @@ use std::sync::Arc;
 /// Lists are represented using a `values` child
 /// array where each list has a fixed size of `value_length`.
 ///
-/// Use [`FixedSizeListBuilder`](crate::builder::FixedSizeListBuilder) to
-/// construct a [`FixedSizeListArray`].
+/// Use [`FixedSizeListBuilder`] to construct a [`FixedSizeListArray`].
 ///
 /// # Representation
 ///

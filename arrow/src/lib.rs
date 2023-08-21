@@ -160,7 +160,7 @@
 //!
 //! # Compute Kernels
 //!
-//! The [`compute`](compute) module provides optimised implementations of many common operations,
+//! The [`compute`] module provides optimised implementations of many common operations,
 //! for example the `parse_strings` operation above could also be implemented as follows:
 //!
 //! ```

@@ -238,7 +238,7 @@ impl RecordBatch {
         })
     }
 
-    /// Returns the [`Schema`](arrow_schema::Schema) of the record batch.
+    /// Returns the [`Schema`] of the record batch.
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
