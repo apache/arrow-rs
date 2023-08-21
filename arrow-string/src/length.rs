@@ -19,8 +19,7 @@
 
 use arrow_array::*;
 use arrow_array::{cast::AsArray, types::*};
-use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer};
-use arrow_data::ArrayData;
+use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::sync::Arc;
 
@@ -143,7 +142,8 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 mod tests {
     use super::*;
     use arrow_array::cast::AsArray;
-    use arrow_buffer::NullBuffer;
+    use arrow_buffer::{Buffer, NullBuffer};
+    use arrow_data::ArrayData;
     use arrow_schema::Field;
 
     fn double_vec<T: Clone>(v: Vec<T>) -> Vec<T> {
