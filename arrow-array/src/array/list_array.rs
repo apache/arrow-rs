@@ -64,8 +64,7 @@ impl OffsetSizeTrait for i64 {
 /// Arrow defines [`ListArray`] with `i32` offsets and
 /// [`LargeListArray`] with `i64` offsets.
 ///
-/// Use [`GenericListBuilder`](crate::builder::GenericListBuilder) to
-/// construct a [`GenericListArray`].
+/// Use [`GenericListBuilder`] to construct a [`GenericListArray`].
 ///
 /// # Representation
 ///

@@ -69,7 +69,7 @@ pub use run_array::*;
 
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
-    /// Returns the array as [`Any`](std::any::Any) so that it can be
+    /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
     ///
     /// # Example:
@@ -101,7 +101,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// Unlike [`Array::to_data`] this consumes self, allowing it avoid unnecessary clones
     fn into_data(self) -> ArrayData;
 
-    /// Returns a reference to the [`DataType`](arrow_schema::DataType) of this array.
+    /// Returns a reference to the [`DataType`] of this array.
     ///
     /// # Example:
     ///

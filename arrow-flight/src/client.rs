@@ -74,7 +74,7 @@ pub struct FlightClient {
 }
 
 impl FlightClient {
-    /// Creates a client client with the provided [`Channel`](tonic::transport::Channel)
+    /// Creates a client client with the provided [`Channel`]
     pub fn new(channel: Channel) -> Self {
         Self::new_from_inner(FlightServiceClient::new(channel))
     }
@@ -262,7 +262,7 @@ impl FlightClient {
     }
 
     /// Make a `DoPut` call to the server with the provided
-    /// [`Stream`](futures::Stream) of [`FlightData`] and returning a
+    /// [`Stream`] of [`FlightData`] and returning a
     /// stream of [`PutResult`].
     ///
     /// # Note
@@ -340,7 +340,7 @@ impl FlightClient {
     }
 
     /// Make a `DoExchange` call to the server with the provided
-    /// [`Stream`](futures::Stream) of [`FlightData`] and returning a
+    /// [`Stream`] of [`FlightData`] and returning a
     /// stream of [`FlightData`].
     ///
     /// # Example:
@@ -391,7 +391,7 @@ impl FlightClient {
     }
 
     /// Make a `ListFlights` call to the server with the provided
-    /// criteria and returning a [`Stream`](futures::Stream) of [`FlightInfo`].
+    /// criteria and returning a [`Stream`] of [`FlightInfo`].
     ///
     /// # Example:
     /// ```no_run
@@ -469,7 +469,7 @@ impl FlightClient {
     }
 
     /// Make a `ListActions` call to the server and returning a
-    /// [`Stream`](futures::Stream) of [`ActionType`].
+    /// [`Stream`] of [`ActionType`].
     ///
     /// # Example:
     /// ```no_run
@@ -506,7 +506,7 @@ impl FlightClient {
     }
 
     /// Make a `DoAction` call to the server and returning a
-    /// [`Stream`](futures::Stream) of opaque [`Bytes`].
+    /// [`Stream`] of opaque [`Bytes`].
     ///
     /// # Example:
     /// ```no_run
