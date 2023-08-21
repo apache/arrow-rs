@@ -19,135 +19,30 @@
 
 use arrow_array::*;
 use arrow_array::{cast::AsArray, types::*};
-use arrow_buffer::Buffer;
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::sync::Arc;
 
-macro_rules! unary_offsets {
-    ($array: expr, $data_type: expr, $op: expr) => {{
-        let slice = $array.value_offsets();
-
-        let lengths = slice.windows(2).map(|offset| $op(offset[1] - offset[0]));
-
-        // JUSTIFICATION
-        //  Benefit
-        //      ~60% speedup
-        //  Soundness
-        //      `values` come from a slice iterator with a known size.
-        let buffer = unsafe { Buffer::from_trusted_len_iter(lengths) };
-
-        let null_bit_buffer = $array.nulls().map(|b| b.inner().sliced());
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                $data_type,
-                $array.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![buffer],
-                vec![],
-            )
-        };
-        make_array(data)
-    }};
+fn length_impl<P: ArrowPrimitiveType>(
+    offsets: &OffsetBuffer<P::Native>,
+    nulls: Option<&NullBuffer>,
+) -> ArrayRef {
+    let v: Vec<_> = offsets
+        .windows(2)
+        .map(|w| w[1].sub_wrapping(w[0]))
+        .collect();
+    Arc::new(PrimitiveArray::<P>::new(v.into(), nulls.cloned()))
 }
 
-macro_rules! kernel_dict {
-    ($array: ident, $kernel: expr, $kt: ident, $($t: ident: $gt: ident), *) => {
-        match $kt.as_ref() {
-            $(&DataType::$t => {
-                let dict = $array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<$gt>>()
-                    .unwrap_or_else(|| {
-                        panic!("Expect 'DictionaryArray<{}>' but got array of data type {:?}",
-                            stringify!($gt), $array.data_type())
-                    });
-                let values = $kernel(dict.values())?;
-                let result = DictionaryArray::try_new(dict.keys().clone(), values)?;
-                    Ok(Arc::new(result))
-                },
-            )*
-            t => panic!("Unsupported dictionary key type: {}", t)
-        }
-    }
-}
-
-fn length_list<O, T>(array: &dyn Array) -> ArrayRef
-where
-    O: OffsetSizeTrait,
-    T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
-{
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericListArray<O>>()
-        .unwrap();
-    unary_offsets!(array, T::DATA_TYPE, |x| x)
-}
-
-fn length_list_fixed_size(array: &dyn Array, length: i32) -> ArrayRef {
-    let array = array.as_fixed_size_list();
-    let length_list = array.len();
-    let buffer = Buffer::from_vec(vec![length; length_list]);
-    let data = Int32Array::new(buffer.into(), array.nulls().cloned());
-    Arc::new(data)
-}
-
-fn length_binary<O, T>(array: &dyn Array) -> ArrayRef
-where
-    O: OffsetSizeTrait,
-    T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
-{
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericBinaryArray<O>>()
-        .unwrap();
-    unary_offsets!(array, T::DATA_TYPE, |x| x)
-}
-
-fn length_string<O, T>(array: &dyn Array) -> ArrayRef
-where
-    O: OffsetSizeTrait,
-    T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
-{
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<O>>()
-        .unwrap();
-    unary_offsets!(array, T::DATA_TYPE, |x| x)
-}
-
-fn bit_length_binary<O, T>(array: &dyn Array) -> ArrayRef
-where
-    O: OffsetSizeTrait,
-    T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
-{
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericBinaryArray<O>>()
-        .unwrap();
-    let bits_in_bytes = O::from_usize(8).unwrap();
-    unary_offsets!(array, T::DATA_TYPE, |x| x * bits_in_bytes)
-}
-
-fn bit_length_string<O, T>(array: &dyn Array) -> ArrayRef
-where
-    O: OffsetSizeTrait,
-    T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
-{
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<O>>()
-        .unwrap();
-    let bits_in_bytes = O::from_usize(8).unwrap();
-    unary_offsets!(array, T::DATA_TYPE, |x| x * bits_in_bytes)
+fn bit_length_impl<P: ArrowPrimitiveType>(
+    offsets: &OffsetBuffer<P::Native>,
+    nulls: Option<&NullBuffer>,
+) -> ArrayRef {
+    let bits = P::Native::usize_as(8);
+    let c = |w: &[P::Native]| w[1].sub_wrapping(w[0]).mul_wrapping(bits);
+    let v: Vec<_> = offsets.windows(2).map(c).collect();
+    Arc::new(PrimitiveArray::<P>::new(v.into(), nulls.cloned()))
 }
 
 /// Returns an array of Int32/Int64 denoting the length of each value in the array.
@@ -158,29 +53,39 @@ where
 ///   or DictionaryArray with above Arrays as values
 /// * length of null is null.
 pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    if let Some(d) = array.as_any_dictionary_opt() {
+        let lengths = length(d.values().as_ref())?;
+        return Ok(d.with_values(lengths));
+    }
+
     match array.data_type() {
-        DataType::Dictionary(kt, _) => {
-            kernel_dict!(
-                array,
-                |a| { length(a) },
-                kt,
-                Int8: Int8Type,
-                Int16: Int16Type,
-                Int32: Int32Type,
-                Int64: Int64Type,
-                UInt8: UInt8Type,
-                UInt16: UInt16Type,
-                UInt32: UInt32Type,
-                UInt64: UInt64Type
-            )
+        DataType::List(_) => {
+            let list = array.as_list::<i32>();
+            Ok(length_impl::<Int32Type>(list.offsets(), list.nulls()))
         }
-        DataType::List(_) => Ok(length_list::<i32, Int32Type>(array)),
-        DataType::LargeList(_) => Ok(length_list::<i64, Int64Type>(array)),
-        DataType::Utf8 => Ok(length_string::<i32, Int32Type>(array)),
-        DataType::LargeUtf8 => Ok(length_string::<i64, Int64Type>(array)),
-        DataType::Binary => Ok(length_binary::<i32, Int32Type>(array)),
-        DataType::LargeBinary => Ok(length_binary::<i64, Int64Type>(array)),
-        DataType::FixedSizeList(_, len) => Ok(length_list_fixed_size(array, *len)),
+        DataType::LargeList(_) => {
+            let list = array.as_list::<i64>();
+            Ok(length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::Utf8 => {
+            let list = array.as_string::<i32>();
+            Ok(length_impl::<Int32Type>(list.offsets(), list.nulls()))
+        }
+        DataType::LargeUtf8 => {
+            let list = array.as_string::<i64>();
+            Ok(length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::Binary => {
+            let list = array.as_binary::<i32>();
+            Ok(length_impl::<Int32Type>(list.offsets(), list.nulls()))
+        }
+        DataType::LargeBinary => {
+            let list = array.as_binary::<i64>();
+            Ok(length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::FixedSizeBinary(len) | DataType::FixedSizeList(_, len) => Ok(Arc::new(
+            Int32Array::new(vec![*len; array.len()].into(), array.nulls().cloned()),
+        )),
         other => Err(ArrowError::ComputeError(format!(
             "length not supported for {other:?}"
         ))),
@@ -194,28 +99,42 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 /// * bit_length of null is null.
 /// * bit_length is in number of bits
 pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    if let Some(d) = array.as_any_dictionary_opt() {
+        let lengths = bit_length(d.values().as_ref())?;
+        return Ok(d.with_values(lengths));
+    }
+
     match array.data_type() {
-        DataType::Dictionary(kt, _) => {
-            kernel_dict!(
-                array,
-                |a| { bit_length(a) },
-                kt,
-                Int8: Int8Type,
-                Int16: Int16Type,
-                Int32: Int32Type,
-                Int64: Int64Type,
-                UInt8: UInt8Type,
-                UInt16: UInt16Type,
-                UInt32: UInt32Type,
-                UInt64: UInt64Type
-            )
+        DataType::List(_) => {
+            let list = array.as_list::<i32>();
+            Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
         }
-        DataType::Utf8 => Ok(bit_length_string::<i32, Int32Type>(array)),
-        DataType::LargeUtf8 => Ok(bit_length_string::<i64, Int64Type>(array)),
-        DataType::Binary => Ok(bit_length_binary::<i32, Int32Type>(array)),
-        DataType::LargeBinary => Ok(bit_length_binary::<i64, Int64Type>(array)),
+        DataType::LargeList(_) => {
+            let list = array.as_list::<i64>();
+            Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::Utf8 => {
+            let list = array.as_string::<i32>();
+            Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
+        }
+        DataType::LargeUtf8 => {
+            let list = array.as_string::<i64>();
+            Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::Binary => {
+            let list = array.as_binary::<i32>();
+            Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
+        }
+        DataType::LargeBinary => {
+            let list = array.as_binary::<i64>();
+            Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::FixedSizeBinary(len) => Ok(Arc::new(Int32Array::new(
+            vec![*len * 8; array.len()].into(),
+            array.nulls().cloned(),
+        ))),
         other => Err(ArrowError::ComputeError(format!(
-            "bit_length not supported for {other:?}"
+            "length not supported for {other:?}"
         ))),
     }
 }
