@@ -1004,8 +1004,8 @@ impl GoogleCloudStorageBuilder {
     }
 
     /// Set a list of hosts to exclude from proxy connections
-    pub fn with_proxy_exclude(mut self, proxy_exclude: impl Into<String>) -> Self {
-        self.client_options = self.client_options.with_proxy_exclude(proxy_exclude);
+    pub fn with_proxy_excludes(mut self, proxy_excludes: impl Into<String>) -> Self {
+        self.client_options = self.client_options.with_proxy_excludes(proxy_excludes);
         self
     }
 

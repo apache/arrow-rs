@@ -106,7 +106,7 @@ pub enum ClientConfigKey {
     /// PEM-formatted CA certificate for proxy connections
     ProxyCaCertificate,
     /// List of hosts that bypass proxy
-    ProxyExclude,
+    ProxyExcludes,
     /// Request timeout
     ///
     /// The timeout is applied from when the request starts connecting until the
@@ -132,7 +132,7 @@ impl AsRef<str> for ClientConfigKey {
             Self::PoolMaxIdlePerHost => "pool_max_idle_per_host",
             Self::ProxyUrl => "proxy_url",
             Self::ProxyCaCertificate => "proxy_ca_certificate",
-            Self::ProxyExclude => "proxy_exclude",
+            Self::ProxyExcludes => "proxy_excludes",
             Self::Timeout => "timeout",
             Self::UserAgent => "user_agent",
         }
@@ -175,7 +175,7 @@ pub struct ClientOptions {
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
     proxy_ca_certificate: Option<String>,
-    proxy_exclude: Option<String>,
+    proxy_excludes: Option<String>,
     allow_http: ConfigValue<bool>,
     allow_insecure: ConfigValue<bool>,
     timeout: Option<ConfigValue<Duration>>,
@@ -227,7 +227,7 @@ impl ClientOptions {
             ClientConfigKey::ProxyCaCertificate => {
                 self.proxy_ca_certificate = Some(value.into())
             }
-            ClientConfigKey::ProxyExclude => self.proxy_exclude = Some(value.into()),
+            ClientConfigKey::ProxyExcludes => self.proxy_excludes = Some(value.into()),
             ClientConfigKey::Timeout => {
                 self.timeout = Some(ConfigValue::Deferred(value.into()))
             }
@@ -268,7 +268,7 @@ impl ClientOptions {
             }
             ClientConfigKey::ProxyUrl => self.proxy_url.clone(),
             ClientConfigKey::ProxyCaCertificate => self.proxy_ca_certificate.clone(),
-            ClientConfigKey::ProxyExclude => self.proxy_exclude.clone(),
+            ClientConfigKey::ProxyExcludes => self.proxy_excludes.clone(),
             ClientConfigKey::Timeout => self.timeout.as_ref().map(fmt_duration),
             ClientConfigKey::UserAgent => self
                 .user_agent
@@ -359,8 +359,8 @@ impl ClientOptions {
     }
 
     /// Set a list of hosts to exclude from proxy connections
-    pub fn with_proxy_exclude(mut self, proxy_exclude: impl Into<String>) -> Self {
-        self.proxy_exclude = Some(proxy_exclude.into());
+    pub fn with_proxy_excludes(mut self, proxy_excludes: impl Into<String>) -> Self {
+        self.proxy_excludes = Some(proxy_excludes.into());
         self
     }
 
@@ -468,8 +468,8 @@ impl ClientOptions {
                 builder = builder.add_root_certificate(certificate);
             }
 
-            if let Some(proxy_exclude) = &self.proxy_exclude {
-                let no_proxy = NoProxy::from_string(&proxy_exclude);
+            if let Some(proxy_excludes) = &self.proxy_excludes {
+                let no_proxy = NoProxy::from_string(&proxy_excludes);
 
                 proxy = proxy.no_proxy(no_proxy);
             }
