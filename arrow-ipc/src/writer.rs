@@ -759,6 +759,7 @@ impl<W: Write> FileWriter<W> {
         if self.finished {
             return Err(ArrowError::IoError(
                 "Cannot write record batch to file writer as it is closed".to_string(),
+                std::io::ErrorKind::UnexpectedEof.into(),
             ));
         }
 
@@ -796,6 +797,7 @@ impl<W: Write> FileWriter<W> {
         if self.finished {
             return Err(ArrowError::IoError(
                 "Cannot write footer to file writer as it is closed".to_string(),
+                std::io::ErrorKind::UnexpectedEof.into(),
             ));
         }
 
@@ -911,6 +913,7 @@ impl<W: Write> StreamWriter<W> {
         if self.finished {
             return Err(ArrowError::IoError(
                 "Cannot write record batch to stream writer as it is closed".to_string(),
+                std::io::ErrorKind::UnexpectedEof.into(),
             ));
         }
 
@@ -932,6 +935,7 @@ impl<W: Write> StreamWriter<W> {
         if self.finished {
             return Err(ArrowError::IoError(
                 "Cannot write footer to stream writer as it is closed".to_string(),
+                std::io::ErrorKind::UnexpectedEof.into(),
             ));
         }
 
