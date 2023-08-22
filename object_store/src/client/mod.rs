@@ -343,9 +343,24 @@ impl ClientOptions {
         self
     }
 
-    /// Set an HTTP proxy to use for requests
+    /// Set a proxy URL to use for requests
     pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
         self.proxy_url = Some(proxy_url.into());
+        self
+    }
+
+    /// Set a trusted proxy CA certificate
+    pub fn with_proxy_ca_certificate(
+        mut self,
+        proxy_ca_certificate: impl Into<String>,
+    ) -> Self {
+        self.proxy_ca_certificate = Some(proxy_ca_certificate.into());
+        self
+    }
+
+    /// Set a list of hosts to exclude from proxy connections
+    pub fn with_proxy_exclude(mut self, proxy_exclude: impl Into<String>) -> Self {
+        self.proxy_exclude = Some(proxy_exclude.into());
         self
     }
 
