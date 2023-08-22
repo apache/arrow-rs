@@ -103,6 +103,10 @@ pub enum ClientConfigKey {
     PoolMaxIdlePerHost,
     /// HTTP proxy to use for requests
     ProxyUrl,
+    /// PEM-formatted CA certificate for proxy connections
+    ProxyCaCertificate,
+    /// List of hosts that bypass proxy
+    ProxyExclude,
     /// Request timeout
     ///
     /// The timeout is applied from when the request starts connecting until the
@@ -127,6 +131,8 @@ impl AsRef<str> for ClientConfigKey {
             Self::PoolIdleTimeout => "pool_idle_timeout",
             Self::PoolMaxIdlePerHost => "pool_max_idle_per_host",
             Self::ProxyUrl => "proxy_url",
+            Self::ProxyCaCertificate => "proxy_ca_certificate",
+            Self::ProxyExclude => "proxy_exclude",
             Self::Timeout => "timeout",
             Self::UserAgent => "user_agent",
         }
@@ -168,8 +174,8 @@ pub struct ClientOptions {
     default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
-    proxy_auth: Option<(String, String)>,
-    proxy_exclude: Vec<String>,
+    proxy_ca_certificate: Option<String>,
+    proxy_exclude: Option<String>,
     allow_http: ConfigValue<bool>,
     allow_insecure: ConfigValue<bool>,
     timeout: Option<ConfigValue<Duration>>,
@@ -218,6 +224,10 @@ impl ClientOptions {
                 self.pool_max_idle_per_host = Some(ConfigValue::Deferred(value.into()))
             }
             ClientConfigKey::ProxyUrl => self.proxy_url = Some(value.into()),
+            ClientConfigKey::ProxyCaCertificate => {
+                self.proxy_ca_certificate = Some(value.into())
+            }
+            ClientConfigKey::ProxyExclude => self.proxy_exclude = Some(value.into()),
             ClientConfigKey::Timeout => {
                 self.timeout = Some(ConfigValue::Deferred(value.into()))
             }
@@ -257,6 +267,8 @@ impl ClientOptions {
                 self.pool_max_idle_per_host.as_ref().map(|v| v.to_string())
             }
             ClientConfigKey::ProxyUrl => self.proxy_url.clone(),
+            ClientConfigKey::ProxyCaCertificate => self.proxy_ca_certificate.clone(),
+            ClientConfigKey::ProxyExclude => self.proxy_exclude.clone(),
             ClientConfigKey::Timeout => self.timeout.as_ref().map(fmt_duration),
             ClientConfigKey::UserAgent => self
                 .user_agent
@@ -433,13 +445,16 @@ impl ClientOptions {
         if let Some(proxy) = &self.proxy_url {
             let mut proxy = Proxy::all(proxy).map_err(map_client_error)?;
 
-            if let Some((username, password)) = &self.proxy_auth {
-                proxy = proxy.basic_auth(username, password);
+            if let Some(certificate) = &self.proxy_ca_certificate {
+                let certificate =
+                    reqwest::tls::Certificate::from_pem(certificate.as_bytes())
+                        .map_err(map_client_error)?;
+
+                builder = builder.add_root_certificate(certificate);
             }
 
-            if !self.proxy_exclude.is_empty() {
-                let no_proxy_list = self.proxy_exclude.join(", ");
-                let no_proxy = NoProxy::from_string(&no_proxy_list);
+            if let Some(proxy_exclude) = &self.proxy_exclude {
+                let no_proxy = NoProxy::from_string(&proxy_exclude);
 
                 proxy = proxy.no_proxy(no_proxy);
             }
