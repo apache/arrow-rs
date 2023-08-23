@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{utils::flight_data_to_arrow_batch, FlightData};
+use crate::{trailers::LazyTrailers, utils::flight_data_to_arrow_batch, FlightData};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
 use arrow_schema::{Schema, SchemaRef};
@@ -24,6 +24,7 @@ use futures::{ready, stream::BoxStream, Stream, StreamExt};
 use std::{
     collections::HashMap, convert::TryFrom, fmt::Debug, pin::Pin, sync::Arc, task::Poll,
 };
+use tonic::metadata::MetadataMap;
 
 use crate::error::{FlightError, Result};
 
@@ -82,13 +83,23 @@ use crate::error::{FlightError, Result};
 /// ```
 #[derive(Debug)]
 pub struct FlightRecordBatchStream {
+    /// Optional grpc header metadata.
+    headers: MetadataMap,
+
+    /// Optional grpc trailer metadata.
+    trailers: Option<LazyTrailers>,
+
     inner: FlightDataDecoder,
 }
 
 impl FlightRecordBatchStream {
     /// Create a new [`FlightRecordBatchStream`] from a decoded stream
     pub fn new(inner: FlightDataDecoder) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            headers: MetadataMap::default(),
+            trailers: None,
+        }
     }
 
     /// Create a new [`FlightRecordBatchStream`] from a stream of [`FlightData`]
@@ -98,7 +109,34 @@ impl FlightRecordBatchStream {
     {
         Self {
             inner: FlightDataDecoder::new(inner),
+            headers: MetadataMap::default(),
+            trailers: None,
         }
+    }
+
+    /// Record response headers.
+    pub fn with_headers(self, headers: MetadataMap) -> Self {
+        Self { headers, ..self }
+    }
+
+    /// Record response trailers.
+    pub fn with_trailers(self, trailers: LazyTrailers) -> Self {
+        Self {
+            trailers: Some(trailers),
+            ..self
+        }
+    }
+
+    /// Headers attached to this stream.
+    pub fn headers(&self) -> &MetadataMap {
+        &self.headers
+    }
+
+    /// Trailers attached to this stream.
+    ///
+    /// This is only filled when the entire stream was consumed.
+    pub fn trailers(&self) -> Option<MetadataMap> {
+        self.trailers.as_ref().and_then(|trailers| trailers.get())
     }
 
     /// Has a message defining the schema been received yet?
@@ -117,6 +155,7 @@ impl FlightRecordBatchStream {
         self.inner
     }
 }
+
 impl futures::Stream for FlightRecordBatchStream {
     type Item = Result<RecordBatch>;
 
