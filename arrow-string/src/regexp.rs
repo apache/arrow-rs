@@ -398,7 +398,7 @@ mod tests {
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
         vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
         regexp_is_match_utf8,
-        vec![true, false, true, false, false, true]
+        [true, false, true, false, false, true]
     );
     test_flag_utf8!(
         test_utf8_array_regexp_is_match_insensitive,
@@ -406,7 +406,7 @@ mod tests {
         vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
         vec!["i"; 6],
         regexp_is_match_utf8,
-        vec![true, true, true, true, false, true]
+        [true, true, true, true, false, true]
     );
 
     test_flag_utf8_scalar!(
@@ -414,14 +414,14 @@ mod tests {
         vec!["arrow", "ARROW", "parquet", "PARQUET"],
         "^ar",
         regexp_is_match_utf8_scalar,
-        vec![true, false, false, false]
+        [true, false, false, false]
     );
     test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_empty_scalar,
         vec!["arrow", "ARROW", "parquet", "PARQUET"],
         "",
         regexp_is_match_utf8_scalar,
-        vec![true, true, true, true]
+        [true, true, true, true]
     );
     test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_insensitive_scalar,
@@ -429,6 +429,6 @@ mod tests {
         "^ar",
         "i",
         regexp_is_match_utf8_scalar,
-        vec![true, true, false, false]
+        [true, true, false, false]
     );
 }

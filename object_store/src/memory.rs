@@ -393,7 +393,7 @@ impl AsyncWrite for InMemoryAppend {
 
         if let Some((bytes, _)) = writer.remove(&self.location) {
             let buf = std::mem::take(&mut self.data);
-            let concat = Bytes::from_iter(bytes.into_iter().chain(buf.into_iter()));
+            let concat = Bytes::from_iter(bytes.into_iter().chain(buf));
             writer.insert(self.location.clone(), (concat, Utc::now()));
         } else {
             writer.insert(

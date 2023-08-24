@@ -636,7 +636,7 @@ mod tests {
 
             assert_eq!(decoder.read(&mut output, 4..8).unwrap(), 0);
 
-            let valid = vec![false, false, true, true, false, true, true, false, false];
+            let valid = [false, false, true, true, false, true, true, false, false];
             let valid_buffer = Buffer::from_iter(valid.iter().cloned());
 
             output.pad_nulls(0, 4, valid.len(), valid_buffer.as_slice());
@@ -690,7 +690,7 @@ mod tests {
 
             assert_eq!(decoder.read(&mut output, 4..8).unwrap(), 0);
 
-            let valid = vec![false, false, true, true, false, false];
+            let valid = [false, false, true, true, false, false];
             let valid_buffer = Buffer::from_iter(valid.iter().cloned());
 
             output.pad_nulls(0, 2, valid.len(), valid_buffer.as_slice());

@@ -537,10 +537,7 @@ pub struct TypedRunArray<'a, R: RunEndIndexType, V> {
 // Manually implement `Clone` to avoid `V: Clone` type constraint
 impl<'a, R: RunEndIndexType, V> Clone for TypedRunArray<'a, R, V> {
     fn clone(&self) -> Self {
-        Self {
-            run_array: self.run_array,
-            values: self.values,
-        }
+        *self
     }
 }
 
@@ -1093,7 +1090,7 @@ mod tests {
         let values = Int32Array::from(vec![Some(0), None, Some(1), None]);
         let array = RunArray::try_new(&run, &values).unwrap();
 
-        let expected = vec![
+        let expected = [
             true, true, true, false, false, false, true, true, true, false, false, false,
         ];
 

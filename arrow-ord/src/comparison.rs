@@ -2187,25 +2187,17 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
+                let expected = BooleanArray::from($expected);
+
                 let left = BinaryArray::from_vec($left);
                 let right = BinaryArray::from_vec($right);
                 let res = $op(&left, &right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
+                assert_eq!(res, expected);
 
                 let left = LargeBinaryArray::from_vec($left);
                 let right = LargeBinaryArray::from_vec($right);
                 let res = $op(&left, &right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
+                assert_eq!(res, expected);
             }
         };
     }
@@ -2228,37 +2220,15 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
+                let expected = BooleanArray::from($expected);
+
                 let left = BinaryArray::from_vec($left);
                 let res = $op(&left, $right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(
-                        v,
-                        expected[i],
-                        "unexpected result when comparing {:?} at position {} to {:?} ",
-                        left.value(i),
-                        i,
-                        $right
-                    );
-                }
+                assert_eq!(res, expected);
 
                 let left = LargeBinaryArray::from_vec($left);
                 let res = $op(&left, $right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(
-                        v,
-                        expected[i],
-                        "unexpected result when comparing {:?} at position {} to {:?} ",
-                        left.value(i),
-                        i,
-                        $right
-                    );
-                }
+                assert_eq!(res, expected);
             }
         };
     }
@@ -2492,14 +2462,14 @@ mod tests {
         vec!["arrow", "arrow", "arrow", "arrow"],
         vec!["arrow", "parquet", "datafusion", "flight"],
         eq_utf8,
-        vec![true, false, false, false]
+        [true, false, false, false]
     );
     test_utf8_scalar!(
         test_utf8_array_eq_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "arrow",
         eq_utf8_scalar,
-        vec![true, false, false, false]
+        [true, false, false, false]
     );
 
     test_utf8!(
@@ -2507,14 +2477,14 @@ mod tests {
         vec!["arrow", "arrow", "arrow", "arrow"],
         vec!["arrow", "parquet", "datafusion", "flight"],
         neq_utf8,
-        vec![false, true, true, true]
+        [false, true, true, true]
     );
     test_utf8_scalar!(
         test_utf8_array_neq_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "arrow",
         neq_utf8_scalar,
-        vec![false, true, true, true]
+        [false, true, true, true]
     );
 
     test_utf8!(
@@ -2522,14 +2492,14 @@ mod tests {
         vec!["arrow", "datafusion", "flight", "parquet"],
         vec!["flight", "flight", "flight", "flight"],
         lt_utf8,
-        vec![true, true, false, false]
+        [true, true, false, false]
     );
     test_utf8_scalar!(
         test_utf8_array_lt_scalar,
         vec!["arrow", "datafusion", "flight", "parquet"],
         "flight",
         lt_utf8_scalar,
-        vec![true, true, false, false]
+        [true, true, false, false]
     );
 
     test_utf8!(
@@ -2537,14 +2507,14 @@ mod tests {
         vec!["arrow", "datafusion", "flight", "parquet"],
         vec!["flight", "flight", "flight", "flight"],
         lt_eq_utf8,
-        vec![true, true, true, false]
+        [true, true, true, false]
     );
     test_utf8_scalar!(
         test_utf8_array_lt_eq_scalar,
         vec!["arrow", "datafusion", "flight", "parquet"],
         "flight",
         lt_eq_utf8_scalar,
-        vec![true, true, true, false]
+        [true, true, true, false]
     );
 
     test_utf8!(
@@ -2552,14 +2522,14 @@ mod tests {
         vec!["arrow", "datafusion", "flight", "parquet"],
         vec!["flight", "flight", "flight", "flight"],
         gt_utf8,
-        vec![false, false, false, true]
+        [false, false, false, true]
     );
     test_utf8_scalar!(
         test_utf8_array_gt_scalar,
         vec!["arrow", "datafusion", "flight", "parquet"],
         "flight",
         gt_utf8_scalar,
-        vec![false, false, false, true]
+        [false, false, false, true]
     );
 
     test_utf8!(
@@ -2567,14 +2537,14 @@ mod tests {
         vec!["arrow", "datafusion", "flight", "parquet"],
         vec!["flight", "flight", "flight", "flight"],
         gt_eq_utf8,
-        vec![false, false, true, true]
+        [false, false, true, true]
     );
     test_utf8_scalar!(
         test_utf8_array_gt_eq_scalar,
         vec!["arrow", "datafusion", "flight", "parquet"],
         "flight",
         gt_eq_utf8_scalar,
-        vec![false, false, true, true]
+        [false, false, true, true]
     );
 
     #[test]
@@ -3365,8 +3335,8 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_neq_dyn_dictionary_utf8_array() {
-        let test1 = vec!["a", "a", "b", "c"];
-        let test2 = vec!["a", "b", "b", "c"];
+        let test1 = ["a", "a", "b", "c"];
+        let test2 = ["a", "b", "b", "c"];
 
         let dict_array1: DictionaryArray<Int8Type> = test1
             .iter()
@@ -3535,7 +3505,7 @@ mod tests {
     #[test]
     fn test_unary_cmp() {
         let a = Int32Array::from(vec![Some(1), None, Some(2), Some(3)]);
-        let values = vec![1_i32, 3];
+        let values = [1_i32, 3];
 
         let a_eq = unary_cmp(&a, |a| values.contains(&a)).unwrap();
         assert_eq!(
@@ -3638,14 +3608,8 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_neq_dyn_float_nan() {
-        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
-            .into_iter()
-            .map(Some)
-            .collect();
-        let array2: Float16Array = vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
+        let array2 = Float16Array::from(vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
@@ -3660,14 +3624,8 @@ mod tests {
 
         assert_eq!(neq(&array1, &array2).unwrap(), expected);
 
-        let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
-            .into_iter()
-            .map(Some)
-            .collect();
-        let array2: Float32Array = vec![f32::NAN, f32::NAN, 8.0, 8.0, 10.0]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
+        let array2 = Float32Array::from(vec![f32::NAN, f32::NAN, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
@@ -3682,14 +3640,8 @@ mod tests {
 
         assert_eq!(neq(&array1, &array2).unwrap(), expected);
 
-        let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
-            .into_iter()
-            .map(Some)
-            .collect();
-        let array2: Float64Array = vec![f64::NAN, f64::NAN, 8.0, 8.0, 10.0]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
+        let array2 = Float64Array::from(vec![f64::NAN, f64::NAN, 8.0, 8.0, 10.0]);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
@@ -3708,14 +3660,8 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_lt_eq_dyn_float_nan() {
-        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
-            .into_iter()
-            .map(Some)
-            .collect();
-        let array2: Float16Array = vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]);
+        let array2 = Float16Array::from(vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
@@ -3731,14 +3677,8 @@ mod tests {
 
         assert_eq!(lt_eq(&array1, &array2).unwrap(), expected);
 
-        let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
-            .into_iter()
-            .map(Some)
-            .collect();
-        let array2: Float32Array = vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]);
+        let array2 = Float32Array::from(vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0]);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
@@ -3780,14 +3720,8 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_gt_eq_dyn_float_nan() {
-        let array1: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]
-            .into_iter()
-            .map(Some)
-            .collect();
-        let array2: Float16Array = vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array1 = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(11.0), f16::NAN]);
+        let array2 = Float16Array::from(vec![f16::NAN, f16::NAN, f16::from_f32(8.0), f16::from_f32(9.0), f16::from_f32(10.0), f16::from_f32(1.0)]);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
@@ -3803,14 +3737,8 @@ mod tests {
 
         assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
 
-        let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
-            .into_iter()
-            .map(Some)
-            .collect();
-        let array2: Float32Array = vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]);
+        let array2 = Float32Array::from(vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0]);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
@@ -3826,14 +3754,8 @@ mod tests {
 
         assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
 
-        let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
-            .into_iter()
-            .map(Some)
-            .collect();
-        let array2: Float64Array = vec![f64::NAN, f64::NAN, 8.0, 9.0, 10.0, 1.0]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]);
+        let array2 = Float64Array::from(vec![f64::NAN, f64::NAN, 8.0, 9.0, 10.0, 1.0]);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
@@ -3852,10 +3774,7 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_scalar_neq_dyn_scalar_float_nan() {
-        let array: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
@@ -3867,11 +3786,7 @@ mod tests {
         );
         assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
-        let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
-            .into_iter()
-            .map(Some)
-            .collect();
-
+        let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
@@ -3882,11 +3797,7 @@ mod tests {
         );
         assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
-        let array: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
-            .into_iter()
-            .map(Some)
-            .collect();
-
+        let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
@@ -3900,10 +3811,7 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_scalar_lt_eq_dyn_scalar_float_nan() {
-        let array: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array = Float16Array::from(vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
@@ -3915,10 +3823,7 @@ mod tests {
         );
         assert_eq!(lt_eq_dyn_scalar(&array, f16::NAN).unwrap(), expected);
 
-        let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
@@ -3930,11 +3835,7 @@ mod tests {
         );
         assert_eq!(lt_eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
-        let array: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
-            .into_iter()
-            .map(Some)
-            .collect();
-
+        let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
@@ -3948,10 +3849,13 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_scalar_gt_eq_dyn_scalar_float_nan() {
-        let array: Float16Array = vec![f16::NAN, f16::from_f32(7.0), f16::from_f32(8.0), f16::from_f32(8.0), f16::from_f32(10.0)]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array = Float16Array::from(vec![
+           f16::NAN,
+           f16::from_f32(7.0),
+           f16::from_f32(8.0),
+           f16::from_f32(8.0),
+           f16::from_f32(10.0),
+       ]);
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
@@ -3962,10 +3866,7 @@ mod tests {
         );
         assert_eq!(gt_eq_dyn_scalar(&array, f16::NAN).unwrap(), expected);
 
-        let array: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
@@ -3976,10 +3877,7 @@ mod tests {
         );
         assert_eq!(gt_eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
 
-        let array: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
-            .into_iter()
-            .map(Some)
-            .collect();
+        let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
@@ -3993,8 +3891,8 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_neq_dyn_dictionary_to_utf8_array() {
-        let test1 = vec!["a", "a", "b", "c"];
-        let test2 = vec!["a", "b", "b", "d"];
+        let test1 = ["a", "a", "b", "c"];
+        let test2 = ["a", "b", "b", "d"];
 
         let dict_array: DictionaryArray<Int8Type> = test1
             .iter()
@@ -4033,8 +3931,8 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_lt_eq_dyn_gt_dyn_gt_eq_dyn_dictionary_to_utf8_array() {
-        let test1 = vec!["abc", "abc", "b", "cde"];
-        let test2 = vec!["abc", "b", "b", "def"];
+        let test1 = ["abc", "abc", "b", "cde"];
+        let test2 = ["abc", "b", "b", "def"];
 
         let dict_array: DictionaryArray<Int8Type> = test1
             .iter()
@@ -4380,7 +4278,7 @@ mod tests {
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2]);
         let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
-        let array: BooleanArray = test2.iter().collect();
+        let array = BooleanArray::from(test2);
 
         let result = eq_dyn(&dict_array, &array);
         assert_eq!(
@@ -4416,7 +4314,7 @@ mod tests {
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2]);
         let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
-        let array: BooleanArray = test2.iter().collect();
+        let array = BooleanArray::from(test2);
 
         let result = lt_dyn(&dict_array, &array);
         assert_eq!(

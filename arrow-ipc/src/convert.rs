@@ -150,12 +150,12 @@ pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema, ArrowErr
         if let Some(schema) = ipc.header_as_schema().map(fb_to_schema) {
             Ok(schema)
         } else {
-            Err(ArrowError::IoError(
+            Err(ArrowError::ParseError(
                 "Unable to get head as schema".to_string(),
             ))
         }
     } else {
-        Err(ArrowError::IoError(
+        Err(ArrowError::ParseError(
             "Unable to get root as message".to_string(),
         ))
     }
@@ -717,7 +717,7 @@ pub(crate) fn get_fb_field_type<'a>(
         RunEndEncoded(run_ends, values) => {
             let run_ends_field = build_field(fbb, run_ends);
             let values_field = build_field(fbb, values);
-            let children = vec![run_ends_field, values_field];
+            let children = [run_ends_field, values_field];
             FBFieldType {
                 type_type: crate::Type::RunEndEncoded,
                 type_: crate::RunEndEncodedBuilder::new(fbb)

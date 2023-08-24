@@ -848,7 +848,7 @@ mod tests {
         let mut buf = String::new();
         write!(&mut buf, "{}", pretty_format_batches(&[batch]).unwrap()).unwrap();
 
-        let s = vec![
+        let s = [
             "+---+-----+",
             "| a | b   |",
             "+---+-----+",

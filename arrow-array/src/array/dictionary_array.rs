@@ -800,10 +800,7 @@ pub struct TypedDictionaryArray<'a, K: ArrowDictionaryKeyType, V> {
 // Manually implement `Clone` to avoid `V: Clone` type constraint
 impl<'a, K: ArrowDictionaryKeyType, V> Clone for TypedDictionaryArray<'a, K, V> {
     fn clone(&self) -> Self {
-        Self {
-            dictionary: self.dictionary,
-            values: self.values,
-        }
+        *self
     }
 }
 

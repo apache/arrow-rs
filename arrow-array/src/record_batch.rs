@@ -757,7 +757,7 @@ mod tests {
         ))))
         .add_child_data(a2_child.into_data())
         .len(2)
-        .add_buffer(Buffer::from(vec![0i32, 3, 4].to_byte_slice()))
+        .add_buffer(Buffer::from([0i32, 3, 4].to_byte_slice()))
         .build()
         .unwrap();
         let a2: ArrayRef = Arc::new(ListArray::from(a2));

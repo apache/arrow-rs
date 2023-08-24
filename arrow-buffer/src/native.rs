@@ -222,7 +222,7 @@ pub trait ToByteSlice {
 impl<T: ArrowNativeType> ToByteSlice for [T] {
     #[inline]
     fn to_byte_slice(&self) -> &[u8] {
-        let raw_ptr = self.as_ptr() as *const T as *const u8;
+        let raw_ptr = self.as_ptr() as *const u8;
         unsafe { std::slice::from_raw_parts(raw_ptr, std::mem::size_of_val(self)) }
     }
 }

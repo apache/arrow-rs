@@ -157,7 +157,7 @@ impl<'a> UnalignedBitChunk<'a> {
         self.prefix
             .into_iter()
             .chain(self.chunks.iter().cloned())
-            .chain(self.suffix.into_iter())
+            .chain(self.suffix)
     }
 
     /// Counts the number of ones
