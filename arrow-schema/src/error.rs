@@ -35,7 +35,8 @@ pub enum ArrowError {
     DivideByZero,
     CsvError(String),
     JsonError(String),
-    IoError(String),
+    IoError(String, std::io::Error),
+    IpcError(String),
     InvalidArgumentError(String),
     ParquetError(String),
     /// Error during import or export to/from the C Data Interface
@@ -53,7 +54,7 @@ impl ArrowError {
 
 impl From<std::io::Error> for ArrowError {
     fn from(error: std::io::Error) -> Self {
-        ArrowError::IoError(error.to_string())
+        ArrowError::IoError(error.to_string(), error)
     }
 }
 
@@ -65,7 +66,7 @@ impl From<std::string::FromUtf8Error> for ArrowError {
 
 impl<W: Write> From<std::io::IntoInnerError<W>> for ArrowError {
     fn from(error: std::io::IntoInnerError<W>) -> Self {
-        ArrowError::IoError(error.to_string())
+        ArrowError::IoError(error.to_string(), error.into())
     }
 }
 
@@ -84,7 +85,8 @@ impl Display for ArrowError {
             ArrowError::DivideByZero => write!(f, "Divide by zero error"),
             ArrowError::CsvError(desc) => write!(f, "Csv error: {desc}"),
             ArrowError::JsonError(desc) => write!(f, "Json error: {desc}"),
-            ArrowError::IoError(desc) => write!(f, "Io error: {desc}"),
+            ArrowError::IoError(desc, _) => write!(f, "Io error: {desc}"),
+            ArrowError::IpcError(desc) => write!(f, "Ipc error: {desc}"),
             ArrowError::InvalidArgumentError(desc) => {
                 write!(f, "Invalid argument error: {desc}")
             }

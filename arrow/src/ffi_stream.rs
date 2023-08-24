@@ -258,7 +258,7 @@ fn get_error_code(err: &ArrowError) -> i32 {
     match err {
         ArrowError::NotYetImplemented(_) => ENOSYS,
         ArrowError::MemoryError(_) => ENOMEM,
-        ArrowError::IoError(_) => EIO,
+        ArrowError::IoError(_, _) => EIO,
         _ => EINVAL,
     }
 }

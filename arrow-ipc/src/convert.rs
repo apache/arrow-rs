@@ -150,12 +150,12 @@ pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema, ArrowErr
         if let Some(schema) = ipc.header_as_schema().map(fb_to_schema) {
             Ok(schema)
         } else {
-            Err(ArrowError::IoError(
+            Err(ArrowError::ParseError(
                 "Unable to get head as schema".to_string(),
             ))
         }
     } else {
-        Err(ArrowError::IoError(
+        Err(ArrowError::ParseError(
             "Unable to get root as message".to_string(),
         ))
     }

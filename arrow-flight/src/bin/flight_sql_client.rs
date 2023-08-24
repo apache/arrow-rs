@@ -151,7 +151,7 @@ async fn setup_client(
     let protocol = if args.tls { "https" } else { "http" };
 
     let mut endpoint = Endpoint::new(format!("{}://{}:{}", protocol, args.host, port))
-        .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
+        .map_err(|_| ArrowError::IpcError("Cannot create endpoint".to_string()))?
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(20))
         .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
@@ -162,15 +162,15 @@ async fn setup_client(
 
     if args.tls {
         let tls_config = ClientTlsConfig::new();
-        endpoint = endpoint
-            .tls_config(tls_config)
-            .map_err(|_| ArrowError::IoError("Cannot create TLS endpoint".to_string()))?;
+        endpoint = endpoint.tls_config(tls_config).map_err(|_| {
+            ArrowError::IpcError("Cannot create TLS endpoint".to_string())
+        })?;
     }
 
     let channel = endpoint
         .connect()
         .await
-        .map_err(|e| ArrowError::IoError(format!("Cannot connect to endpoint: {e}")))?;
+        .map_err(|e| ArrowError::IpcError(format!("Cannot connect to endpoint: {e}")))?;
 
     let mut client = FlightSqlServiceClient::new(channel);
     info!("connected");
