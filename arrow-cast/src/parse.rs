@@ -1003,15 +1003,11 @@ impl Interval {
     fn parse(value: &str, config: &IntervalParseConfig) -> Result<Self, ArrowError> {
         let components = parse_interval_components(value, config)?;
 
-        let result = components.into_iter().fold(
-            Ok(Self::default()),
-            |result, (amount, unit)| match result {
-                Ok(result) => result.add(amount, unit),
-                Err(e) => Err(e),
-            },
-        )?;
-
-        Ok(result)
+        components
+            .into_iter()
+            .try_fold(Self::default(), |result, (amount, unit)| {
+                result.add(amount, unit)
+            })
     }
 
     /// Interval addition following Postgres behavior. Fractional units will be spilled into smaller units.

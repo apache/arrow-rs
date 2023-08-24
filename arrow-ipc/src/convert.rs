@@ -717,7 +717,7 @@ pub(crate) fn get_fb_field_type<'a>(
         RunEndEncoded(run_ends, values) => {
             let run_ends_field = build_field(fbb, run_ends);
             let values_field = build_field(fbb, values);
-            let children = vec![run_ends_field, values_field];
+            let children = [run_ends_field, values_field];
             FBFieldType {
                 type_type: crate::Type::RunEndEncoded,
                 type_: crate::RunEndEncodedBuilder::new(fbb)

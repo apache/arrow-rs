@@ -537,10 +537,7 @@ pub struct TypedRunArray<'a, R: RunEndIndexType, V> {
 // Manually implement `Clone` to avoid `V: Clone` type constraint
 impl<'a, R: RunEndIndexType, V> Clone for TypedRunArray<'a, R, V> {
     fn clone(&self) -> Self {
-        Self {
-            run_array: self.run_array,
-            values: self.values,
-        }
+        *self
     }
 }
 
