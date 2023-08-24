@@ -131,7 +131,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::*;
 use arrow_array::*;
-use arrow_array::types::{ArrowDictionaryKeyType, ArrowPrimitiveType};
+use arrow_array::types::{ArrowDictionaryKeyType, ArrowPrimitiveType, Int32Type};
 use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::*;
@@ -1464,16 +1464,13 @@ impl CardinalityAwareRowConverter {
         self.inner.convert_rows(rows)
     }
 
-    pub fn convert_columns<K>(
+    pub fn convert_columns(
         &mut self,
-        columns: &[ArrayRef]) -> Result<Rows, ArrowError> 
-    where 
-        K: ArrowDictionaryKeyType
-    {
+        columns: &[ArrayRef]) -> Result<Rows, ArrowError> {
         if !self.done {
             for (i, col) in columns.iter().enumerate() {
                 if let DataType::Dictionary(_, _) = col.data_type() {
-                    let cardinality = col.as_dictionary::<K>().values().len();
+                    let cardinality = col.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap().keys().len();
                     println!("cardinality: {}", cardinality);
                     if cardinality >= 1 {
                         let mut sort_field = self.inner.fields[i].clone();
@@ -1528,7 +1525,7 @@ mod tests {
             SortField::new(DataType::Utf8),
         ])
         .unwrap();
-        let rows = converter.convert_columns::<Int32Type>(&cols).unwrap();
+        let rows = converter.convert_columns(&cols).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         println!("{:?}", back);
 
