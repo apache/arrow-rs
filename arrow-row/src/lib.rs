@@ -131,7 +131,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::*;
 use arrow_array::*;
-use arrow_array::types::{ArrowDictionaryKeyType, ArrowPrimitiveType, Int32Type};
+use arrow_array::types::Int32Type;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::*;
