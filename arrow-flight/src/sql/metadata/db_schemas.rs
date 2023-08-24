@@ -22,11 +22,11 @@
 use std::sync::Arc;
 
 use arrow_arith::boolean::and;
-use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch, Scalar, StringArray};
+use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch, StringArray};
 use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
-use arrow_string::like::{like, like_utf8_scalar};
+use arrow_string::like::like;
 use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
