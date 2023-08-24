@@ -23,7 +23,7 @@ use arrow_array::{Array, ArrayRef};
 use arrow_buffer::BooleanBuffer;
 use arrow_schema::ArrowError;
 
-use crate::cmp::neq;
+use crate::cmp::distinct;
 use crate::sort::SortColumn;
 
 /// A computed set of partitions, see [`partition`]
@@ -157,23 +157,7 @@ fn find_boundaries(v: &dyn Array) -> Result<BooleanBuffer, ArrowError> {
     let slice_len = v.len() - 1;
     let v1 = v.slice(0, slice_len);
     let v2 = v.slice(1, slice_len);
-
-    let array_ne = neq(&v1, &v2)?;
-    // Set if values have different non-NULL values
-    let values_ne = match array_ne.nulls().filter(|n| n.null_count() > 0) {
-        Some(n) => n.inner() & array_ne.values(),
-        None => array_ne.values().clone(),
-    };
-
-    Ok(match v.nulls().filter(|x| x.null_count() > 0) {
-        Some(n) => {
-            let n1 = n.inner().slice(0, slice_len);
-            let n2 = n.inner().slice(1, slice_len);
-            // Set if values_ne or the nullability has changed
-            &(&n1 ^ &n2) | &values_ne
-        }
-        None => values_ne,
-    })
+    Ok(distinct(&v1, &v2)?.values().clone())
 }
 
 /// Given a list of already sorted columns, find partition ranges that would partition
@@ -236,8 +220,10 @@ mod tests {
             Arc::new(Int32Array::from(vec![1])) as _,
             Arc::new(Int32Array::from(vec![1])) as _,
         ])
-        .unwrap();
-        assert_eq!(results.ranges(), &[0..1]);
+        .unwrap()
+        .ranges();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], 0..1);
     }
 
     #[test]

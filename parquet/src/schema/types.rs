@@ -219,12 +219,12 @@ impl<'a> PrimitiveTypeBuilder<'a> {
         }
     }
 
-    /// Sets [`Repetition`](crate::basic::Repetition) for this field and returns itself.
+    /// Sets [`Repetition`] for this field and returns itself.
     pub fn with_repetition(self, repetition: Repetition) -> Self {
         Self { repetition, ..self }
     }
 
-    /// Sets [`ConvertedType`](crate::basic::ConvertedType) for this field and returns itself.
+    /// Sets [`ConvertedType`] for this field and returns itself.
     pub fn with_converted_type(self, converted_type: ConvertedType) -> Self {
         Self {
             converted_type,
@@ -232,7 +232,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
         }
     }
 
-    /// Sets [`LogicalType`](crate::basic::LogicalType) for this field and returns itself.
+    /// Sets [`LogicalType`] for this field and returns itself.
     /// If only the logical type is populated for a primitive type, the converted type
     /// will be automatically populated, and can thus be omitted.
     pub fn with_logical_type(self, logical_type: Option<LogicalType>) -> Self {
@@ -552,13 +552,13 @@ impl<'a> GroupTypeBuilder<'a> {
         }
     }
 
-    /// Sets [`Repetition`](crate::basic::Repetition) for this field and returns itself.
+    /// Sets [`Repetition`] for this field and returns itself.
     pub fn with_repetition(mut self, repetition: Repetition) -> Self {
         self.repetition = Some(repetition);
         self
     }
 
-    /// Sets [`ConvertedType`](crate::basic::ConvertedType) for this field and returns itself.
+    /// Sets [`ConvertedType`] for this field and returns itself.
     pub fn with_converted_type(self, converted_type: ConvertedType) -> Self {
         Self {
             converted_type,
@@ -566,7 +566,7 @@ impl<'a> GroupTypeBuilder<'a> {
         }
     }
 
-    /// Sets [`LogicalType`](crate::basic::LogicalType) for this field and returns itself.
+    /// Sets [`LogicalType`] for this field and returns itself.
     pub fn with_logical_type(self, logical_type: Option<LogicalType>) -> Self {
         Self {
             logical_type,
@@ -629,18 +629,18 @@ impl BasicTypeInfo {
         self.repetition.is_some()
     }
 
-    /// Returns [`Repetition`](crate::basic::Repetition) value for the type.
+    /// Returns [`Repetition`] value for the type.
     pub fn repetition(&self) -> Repetition {
         assert!(self.repetition.is_some());
         self.repetition.unwrap()
     }
 
-    /// Returns [`ConvertedType`](crate::basic::ConvertedType) value for the type.
+    /// Returns [`ConvertedType`] value for the type.
     pub fn converted_type(&self) -> ConvertedType {
         self.converted_type
     }
 
-    /// Returns [`LogicalType`](crate::basic::LogicalType) value for the type.
+    /// Returns [`LogicalType`] value for the type.
     pub fn logical_type(&self) -> Option<LogicalType> {
         // Unlike ConvertedType, LogicalType cannot implement Copy, thus we clone it
         self.logical_type.clone()
@@ -787,12 +787,12 @@ impl ColumnDescriptor {
         &self.path
     }
 
-    /// Returns self type [`Type`](crate::schema::types::Type) for this leaf column.
+    /// Returns self type [`Type`] for this leaf column.
     pub fn self_type(&self) -> &Type {
         self.primitive_type.as_ref()
     }
 
-    /// Returns self type [`TypePtr`](crate::schema::types::TypePtr)  for this leaf
+    /// Returns self type [`TypePtr`]  for this leaf
     /// column.
     pub fn self_type_ptr(&self) -> TypePtr {
         self.primitive_type.clone()
@@ -803,12 +803,12 @@ impl ColumnDescriptor {
         self.primitive_type.name()
     }
 
-    /// Returns [`ConvertedType`](crate::basic::ConvertedType) for this column.
+    /// Returns [`ConvertedType`] for this column.
     pub fn converted_type(&self) -> ConvertedType {
         self.primitive_type.get_basic_info().converted_type()
     }
 
-    /// Returns [`LogicalType`](crate::basic::LogicalType) for this column.
+    /// Returns [`LogicalType`] for this column.
     pub fn logical_type(&self) -> Option<LogicalType> {
         self.primitive_type.get_basic_info().logical_type()
     }
@@ -928,14 +928,13 @@ impl SchemaDescriptor {
         self.leaves.len()
     }
 
-    /// Returns column root [`Type`](crate::schema::types::Type) for a leaf position.
+    /// Returns column root [`Type`] for a leaf position.
     pub fn get_column_root(&self, i: usize) -> &Type {
         let result = self.column_root_of(i);
         result.as_ref()
     }
 
-    /// Returns column root [`Type`](crate::schema::types::Type) pointer for a leaf
-    /// position.
+    /// Returns column root [`Type`] pointer for a leaf position.
     pub fn get_column_root_ptr(&self, i: usize) -> TypePtr {
         let result = self.column_root_of(i);
         result.clone()
@@ -960,7 +959,7 @@ impl SchemaDescriptor {
         &self.schema.get_fields()[self.get_column_root_idx(i)]
     }
 
-    /// Returns schema as [`Type`](crate::schema::types::Type).
+    /// Returns schema as [`Type`].
     pub fn root_schema(&self) -> &Type {
         self.schema.as_ref()
     }
@@ -1653,8 +1652,8 @@ mod tests {
         //     required int64 item1    2    1
         //     optional boolean item2  3    1
         //     repeated int32 item3    3    2
-        let ex_max_def_levels = vec![0, 1, 1, 2, 3, 3];
-        let ex_max_rep_levels = vec![0, 0, 1, 1, 1, 2];
+        let ex_max_def_levels = [0, 1, 1, 2, 3, 3];
+        let ex_max_rep_levels = [0, 0, 1, 1, 1, 2];
 
         for i in 0..nleaves {
             let col = descr.column(i);

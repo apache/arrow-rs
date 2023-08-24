@@ -207,7 +207,7 @@ mod tests {
         let fetches = do_fetch(vec![], 0).await;
         assert!(fetches.is_empty());
 
-        let fetches = do_fetch(vec![0..3], 0).await;
+        let fetches = do_fetch(vec![0..3; 1], 0).await;
         assert_eq!(fetches, vec![0..3]);
 
         let fetches = do_fetch(vec![0..2, 3..5], 0).await;

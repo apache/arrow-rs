@@ -76,7 +76,7 @@ impl<'a> TryFrom<&'a str> for SerializedFileReader<File> {
     }
 }
 
-/// Conversion into a [`RowIter`](crate::record::reader::RowIter)
+/// Conversion into a [`RowIter`]
 /// using the full file schema over all row groups.
 impl IntoIterator for SerializedFileReader<File> {
     type Item = Result<Row>;
@@ -851,38 +851,23 @@ mod tests {
     #[test]
     fn test_file_reader_into_iter() {
         let path = get_test_path("alltypes_plain.parquet");
-        let vec = vec![path.clone(), path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| r.into_iter())
-            .flat_map(|r| r.unwrap().get_int(0))
-            .collect::<Vec<_>>();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let iter = reader.into_iter();
+        let values: Vec<_> = iter.flat_map(|x| x.unwrap().get_int(0)).collect();
 
-        // rows in the parquet file are not sorted by "id"
-        // each file contains [id:4, id:5, id:6, id:7, id:2, id:3, id:0, id:1]
-        assert_eq!(vec, vec![4, 5, 6, 7, 2, 3, 0, 1, 4, 5, 6, 7, 2, 3, 0, 1]);
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
     fn test_file_reader_into_iter_project() {
         let path = get_test_path("alltypes_plain.parquet");
-        let result = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| {
-                let schema = "message schema { OPTIONAL INT32 id; }";
-                let proj = parse_message_type(schema).ok();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let schema = "message schema { OPTIONAL INT32 id; }";
+        let proj = parse_message_type(schema).ok();
+        let iter = reader.into_iter().project(proj).unwrap();
+        let values: Vec<_> = iter.flat_map(|x| x.unwrap().get_int(0)).collect();
 
-                r.into_iter().project(proj).unwrap()
-            })
-            .map(|r| format!("{}", r.unwrap()))
-            .collect::<Vec<_>>()
-            .join(",");
-
-        assert_eq!(
-            result,
-            "{id: 4},{id: 5},{id: 6},{id: 7},{id: 2},{id: 3},{id: 0},{id: 1}"
-        );
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]

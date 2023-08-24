@@ -386,7 +386,7 @@ async fn test_mismatched_schema_message() {
     do_test(
         make_primitive_batch(5),
         make_dictionary_batch(3),
-        "Error decoding ipc RecordBatch: Io error: Invalid data for schema",
+        "Error decoding ipc RecordBatch: Schema error: Invalid data for schema",
     )
     .await;
 

@@ -802,7 +802,7 @@ mod tests {
 
     fn endpoint(uri: String) -> Result<Endpoint, ArrowError> {
         let endpoint = Endpoint::new(uri)
-            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
+            .map_err(|_| ArrowError::IpcError("Cannot create endpoint".to_string()))?
             .connect_timeout(Duration::from_secs(20))
             .timeout(Duration::from_secs(20))
             .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait

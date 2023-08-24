@@ -399,7 +399,7 @@ fn test_empty_offsets_list_equal() {
         true,
     ))))
     .len(0)
-    .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
+    .add_buffer(Buffer::from([0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(Int32Array::from(vec![1, 2, -1, -2, 3, 4, -3, -4]).into_data())
     .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
     .build()
@@ -437,7 +437,7 @@ fn test_list_null() {
         true,
     ))))
     .len(6)
-    .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
+    .add_buffer(Buffer::from([0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(c_values.into_data())
     .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
     .build()
@@ -460,7 +460,7 @@ fn test_list_null() {
         true,
     ))))
     .len(6)
-    .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
+    .add_buffer(Buffer::from([0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
     .add_child_data(d_values.into_data())
     .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
     .build()

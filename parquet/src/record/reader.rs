@@ -16,7 +16,7 @@
 // under the License.
 
 //! Contains implementation of record assembly and converting Parquet types into
-//! [`Row`](crate::record::Row)s.
+//! [`Row`]s.
 
 use std::{collections::HashMap, fmt, sync::Arc};
 
@@ -618,7 +618,7 @@ impl fmt::Display for Reader {
 // Row iterators
 
 /// The enum Either with variants That represents a reference and a box of
-/// [`FileReader`](crate::file::reader::FileReader).
+/// [`FileReader`].
 enum Either<'a> {
     Left(&'a dyn FileReader),
     Right(Box<dyn FileReader>),
@@ -633,7 +633,7 @@ impl<'a> Either<'a> {
     }
 }
 
-/// Iterator of [`Row`](crate::record::Row)s.
+/// Iterator of [`Row`]s.
 /// It is used either for a single row group to iterate over data in that row group, or
 /// an entire file with auto buffering of all row groups.
 pub struct RowIter<'a> {
@@ -646,7 +646,7 @@ pub struct RowIter<'a> {
 }
 
 impl<'a> RowIter<'a> {
-    /// Creates a new iterator of [`Row`](crate::record::Row)s.
+    /// Creates a new iterator of [`Row`]s.
     fn new(
         file_reader: Option<Either<'a>>,
         row_iter: Option<ReaderIter>,
@@ -668,7 +668,7 @@ impl<'a> RowIter<'a> {
         }
     }
 
-    /// Creates iterator of [`Row`](crate::record::Row)s for all row groups in a
+    /// Creates iterator of [`Row`]s for all row groups in a
     /// file.
     pub fn from_file(proj: Option<Type>, reader: &'a dyn FileReader) -> Result<Self> {
         let either = Either::Left(reader);
@@ -680,7 +680,7 @@ impl<'a> RowIter<'a> {
         Ok(Self::new(Some(either), None, descr))
     }
 
-    /// Creates iterator of [`Row`](crate::record::Row)s for a specific row group.
+    /// Creates iterator of [`Row`]s for a specific row group.
     pub fn from_row_group(
         proj: Option<Type>,
         reader: &'a dyn RowGroupReader,
@@ -694,8 +694,7 @@ impl<'a> RowIter<'a> {
         Ok(Self::new(None, Some(row_iter), descr))
     }
 
-    /// Creates a iterator of [`Row`](crate::record::Row)s from a
-    /// [`FileReader`](crate::file::reader::FileReader) using the full file schema.
+    /// Creates a iterator of [`Row`]s from a [`FileReader`] using the full file schema.
     pub fn from_file_into(reader: Box<dyn FileReader>) -> Self {
         let either = Either::Right(reader);
         let descr = either
@@ -707,7 +706,7 @@ impl<'a> RowIter<'a> {
         Self::new(Some(either), None, descr)
     }
 
-    /// Tries to create a iterator of [`Row`](crate::record::Row)s using projections.
+    /// Tries to create a iterator of [`Row`]s using projections.
     /// Returns a error if a file reader is not the source of this iterator.
     ///
     /// The Projected schema can be a subset of or equal to the file schema,
@@ -793,7 +792,7 @@ impl<'a> Iterator for RowIter<'a> {
     }
 }
 
-/// Internal iterator of [`Row`](crate::record::Row)s for a reader.
+/// Internal iterator of [`Row`]s for a reader.
 pub struct ReaderIter {
     root_reader: Reader,
     records_left: usize,
@@ -829,7 +828,7 @@ mod tests {
 
     use crate::errors::Result;
     use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::record::api::{Field, Row, RowAccessor, RowFormatter};
+    use crate::record::api::{Field, Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
     use std::convert::TryFrom;
@@ -1501,33 +1500,26 @@ mod tests {
     #[test]
     fn test_file_reader_iter() {
         let path = get_test_path("alltypes_plain.parquet");
-        let vec = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| RowIter::from_file_into(Box::new(r)))
-            .flat_map(|r| r.unwrap().get_int(0))
-            .collect::<Vec<_>>();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let iter = RowIter::from_file_into(Box::new(reader));
 
-        assert_eq!(vec, vec![4, 5, 6, 7, 2, 3, 0, 1]);
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
     fn test_file_reader_iter_projection() {
         let path = get_test_path("alltypes_plain.parquet");
-        let values = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| {
-                let schema = "message schema { OPTIONAL INT32 id; }";
-                let proj = parse_message_type(schema).ok();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let schema = "message schema { OPTIONAL INT32 id; }";
+        let proj = parse_message_type(schema).ok();
 
-                RowIter::from_file_into(Box::new(r)).project(proj).unwrap()
-            })
-            .map(|r| format!("id:{}", r.unwrap().fmt(0)))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let iter = RowIter::from_file_into(Box::new(reader))
+            .project(proj)
+            .unwrap();
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
 
-        assert_eq!(values, "id:4, id:5, id:6, id:7, id:2, id:3, id:0, id:1");
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]

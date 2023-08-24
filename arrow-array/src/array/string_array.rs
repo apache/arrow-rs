@@ -324,14 +324,14 @@ mod tests {
 
     #[test]
     fn test_string_array_from_iter_values() {
-        let data = vec!["hello", "hello2"];
+        let data = ["hello", "hello2"];
         let array1 = StringArray::from_iter_values(data.iter());
 
         assert_eq!(array1.value(0), "hello");
         assert_eq!(array1.value(1), "hello2");
 
         // Also works with String types.
-        let data2: Vec<String> = vec!["goodbye".into(), "goodbye2".into()];
+        let data2 = ["goodbye".to_string(), "goodbye2".to_string()];
         let array2 = StringArray::from_iter_values(data2.iter());
 
         assert_eq!(array2.value(0), "goodbye");

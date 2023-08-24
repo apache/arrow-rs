@@ -150,7 +150,7 @@ impl FlightSqlServiceClient<Channel> {
             .flight_client
             .handshake(req)
             .await
-            .map_err(|e| ArrowError::IoError(format!("Can't handshake {e}")))?;
+            .map_err(|e| ArrowError::IpcError(format!("Can't handshake {e}")))?;
         if let Some(auth) = resp.metadata().get("authorization") {
             let auth = auth.to_str().map_err(|_| {
                 ArrowError::ParseError("Can't read auth header".to_string())
@@ -390,16 +390,20 @@ impl FlightSqlServiceClient<Channel> {
     ) -> Result<tonic::Request<T>, ArrowError> {
         for (k, v) in &self.headers {
             let k = AsciiMetadataKey::from_str(k.as_str()).map_err(|e| {
-                ArrowError::IoError(format!("Cannot convert header key \"{k}\": {e}"))
+                ArrowError::ParseError(format!("Cannot convert header key \"{k}\": {e}"))
             })?;
             let v = v.parse().map_err(|e| {
-                ArrowError::IoError(format!("Cannot convert header value \"{v}\": {e}"))
+                ArrowError::ParseError(format!(
+                    "Cannot convert header value \"{v}\": {e}"
+                ))
             })?;
             req.metadata_mut().insert(k, v);
         }
         if let Some(token) = &self.token {
             let val = format!("Bearer {token}").parse().map_err(|e| {
-                ArrowError::IoError(format!("Cannot convert token to header value: {e}"))
+                ArrowError::ParseError(format!(
+                    "Cannot convert token to header value: {e}"
+                ))
             })?;
             req.metadata_mut().insert("authorization", val);
         }
@@ -504,11 +508,11 @@ impl PreparedStatement<Channel> {
 }
 
 fn decode_error_to_arrow_error(err: prost::DecodeError) -> ArrowError {
-    ArrowError::IoError(err.to_string())
+    ArrowError::IpcError(err.to_string())
 }
 
 fn status_to_arrow_error(status: tonic::Status) -> ArrowError {
-    ArrowError::IoError(format!("{status:?}"))
+    ArrowError::IpcError(format!("{status:?}"))
 }
 
 // A polymorphic structure to natively represent different types of data contained in `FlightData`

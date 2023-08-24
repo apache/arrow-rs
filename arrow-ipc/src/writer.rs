@@ -757,7 +757,7 @@ impl<W: Write> FileWriter<W> {
     /// Write a record batch to the file
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         if self.finished {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::IpcError(
                 "Cannot write record batch to file writer as it is closed".to_string(),
             ));
         }
@@ -794,7 +794,7 @@ impl<W: Write> FileWriter<W> {
     /// Write footer and closing tag, then mark the writer as done
     pub fn finish(&mut self) -> Result<(), ArrowError> {
         if self.finished {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::IpcError(
                 "Cannot write footer to file writer as it is closed".to_string(),
             ));
         }
@@ -909,7 +909,7 @@ impl<W: Write> StreamWriter<W> {
     /// Write a record batch to the stream
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         if self.finished {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::IpcError(
                 "Cannot write record batch to stream writer as it is closed".to_string(),
             ));
         }
@@ -930,7 +930,7 @@ impl<W: Write> StreamWriter<W> {
     /// Write continuation bytes, and mark the stream as done
     pub fn finish(&mut self) -> Result<(), ArrowError> {
         if self.finished {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::IpcError(
                 "Cannot write footer to stream writer as it is closed".to_string(),
             ));
         }
@@ -2138,7 +2138,7 @@ mod tests {
             let u32 = UInt32Builder::new();
             let mut ls = ListBuilder::new(u32);
 
-            for list in vec![vec![1u32, 2, 3], vec![4, 5, 6], vec![7, 8, 9, 10]] {
+            for list in [vec![1u32, 2, 3], vec![4, 5, 6], vec![7, 8, 9, 10]] {
                 for value in list {
                     ls.values().append_value(value);
                 }

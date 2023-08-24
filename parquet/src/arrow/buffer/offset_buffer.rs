@@ -281,10 +281,10 @@ mod tests {
             buffer.try_push(v.as_bytes(), false).unwrap()
         }
 
-        let valid = vec![
+        let valid = [
             true, false, false, true, false, true, false, true, true, false, false,
         ];
-        let valid_mask = Buffer::from_iter(valid.iter().cloned());
+        let valid_mask = Buffer::from_iter(valid.iter().copied());
 
         // Both trailing and leading nulls
         buffer.pad_nulls(1, values.len() - 1, valid.len() - 1, valid_mask.as_slice());

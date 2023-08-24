@@ -859,7 +859,7 @@ mod tests {
         let expected_batch =
             RecordBatch::try_new(schema.clone(), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
-        for buffer in vec![
+        for buffer in [
             get_bytes_after_close(schema.clone(), &expected_batch),
             get_bytes_by_into_inner(schema, &expected_batch),
         ] {
@@ -2158,7 +2158,7 @@ mod tests {
     #[test]
     fn u32_min_max() {
         // check values roundtrip through parquet
-        let src = vec![
+        let src = [
             u32::MIN,
             u32::MIN + 1,
             (i32::MAX as u32) - 1,
@@ -2199,7 +2199,7 @@ mod tests {
     #[test]
     fn u64_min_max() {
         // check values roundtrip through parquet
-        let src = vec![
+        let src = [
             u64::MIN,
             u64::MIN + 1,
             (i64::MAX as u64) - 1,
