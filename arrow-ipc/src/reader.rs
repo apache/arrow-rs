@@ -1156,7 +1156,7 @@ mod tests {
 
         let array10_input = vec![Some(1_i32), None, None];
         let mut array10_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
-        array10_builder.extend(array10_input.into_iter());
+        array10_builder.extend(array10_input);
         let array10 = array10_builder.finish();
 
         let array11 = BooleanArray::from(vec![false, false, true]);
@@ -1411,7 +1411,7 @@ mod tests {
 
         let run_array_2_inupt = vec![Some(1_i32), None, None, Some(2), Some(2)];
         let mut run_array_2_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
-        run_array_2_builder.extend(run_array_2_inupt.into_iter());
+        run_array_2_builder.extend(run_array_2_inupt);
         let run_array_2 = run_array_2_builder.finish();
 
         let schema = Arc::new(Schema::new(vec![

@@ -27,7 +27,7 @@ use std::fs::File;
 fn read_0_1_4() {
     let testdata = arrow_test_data();
     let version = "0.14.1";
-    let paths = vec![
+    let paths = [
         "generated_interval",
         "generated_datetime",
         "generated_dictionary",
@@ -48,7 +48,7 @@ fn read_0_1_4() {
 fn read_0_1_7() {
     let testdata = arrow_test_data();
     let version = "0.17.1";
-    let paths = vec!["generated_union"];
+    let paths = ["generated_union"];
     paths.iter().for_each(|path| {
         verify_arrow_file(&testdata, version, path);
         verify_arrow_stream(&testdata, version, path);
@@ -76,7 +76,7 @@ fn read_1_0_0_bigendian_dictionary_should_panic() {
 #[test]
 fn read_1_0_0_bigendian() {
     let testdata = arrow_test_data();
-    let paths = vec![
+    let paths = [
         "generated_interval",
         "generated_datetime",
         "generated_map",
@@ -145,7 +145,7 @@ fn read_2_0_0_compression() {
     let version = "2.0.0-compression";
 
     // the test is repetitive, thus we can read all supported files at once
-    let paths = vec!["generated_lz4", "generated_zstd"];
+    let paths = ["generated_lz4", "generated_zstd"];
     paths.iter().for_each(|path| {
         verify_arrow_file(&testdata, version, path);
         verify_arrow_stream(&testdata, version, path);

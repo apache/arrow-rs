@@ -828,7 +828,7 @@ mod tests {
 
     use crate::errors::Result;
     use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::record::api::{Field, Row, RowAccessor, RowFormatter};
+    use crate::record::api::{Field, Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
     use std::convert::TryFrom;
@@ -1500,33 +1500,26 @@ mod tests {
     #[test]
     fn test_file_reader_iter() {
         let path = get_test_path("alltypes_plain.parquet");
-        let vec = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| RowIter::from_file_into(Box::new(r)))
-            .flat_map(|r| r.unwrap().get_int(0))
-            .collect::<Vec<_>>();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let iter = RowIter::from_file_into(Box::new(reader));
 
-        assert_eq!(vec, vec![4, 5, 6, 7, 2, 3, 0, 1]);
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
     fn test_file_reader_iter_projection() {
         let path = get_test_path("alltypes_plain.parquet");
-        let values = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| {
-                let schema = "message schema { OPTIONAL INT32 id; }";
-                let proj = parse_message_type(schema).ok();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let schema = "message schema { OPTIONAL INT32 id; }";
+        let proj = parse_message_type(schema).ok();
 
-                RowIter::from_file_into(Box::new(r)).project(proj).unwrap()
-            })
-            .map(|r| format!("id:{}", r.unwrap().fmt(0)))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let iter = RowIter::from_file_into(Box::new(reader))
+            .project(proj)
+            .unwrap();
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
 
-        assert_eq!(values, "id:4, id:5, id:6, id:7, id:2, id:3, id:0, id:1");
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]

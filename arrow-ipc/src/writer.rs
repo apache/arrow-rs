@@ -2138,7 +2138,7 @@ mod tests {
             let u32 = UInt32Builder::new();
             let mut ls = ListBuilder::new(u32);
 
-            for list in vec![vec![1u32, 2, 3], vec![4, 5, 6], vec![7, 8, 9, 10]] {
+            for list in [vec![1u32, 2, 3], vec![4, 5, 6], vec![7, 8, 9, 10]] {
                 for value in list {
                     ls.values().append_value(value);
                 }
