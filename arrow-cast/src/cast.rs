@@ -3428,50 +3428,24 @@ mod tests {
 
     macro_rules! generate_cast_test_case {
         ($INPUT_ARRAY: expr, $OUTPUT_TYPE_ARRAY: ident, $OUTPUT_TYPE: expr, $OUTPUT_VALUES: expr) => {
+            let output = $OUTPUT_TYPE_ARRAY::from($OUTPUT_VALUES)
+                .with_data_type($OUTPUT_TYPE.clone());
+
             // assert cast type
             let input_array_type = $INPUT_ARRAY.data_type();
             assert!(can_cast_types(input_array_type, $OUTPUT_TYPE));
-            let casted_array = cast($INPUT_ARRAY, $OUTPUT_TYPE).unwrap();
-            let result_array = casted_array
-                .as_any()
-                .downcast_ref::<$OUTPUT_TYPE_ARRAY>()
-                .unwrap();
-            assert_eq!($OUTPUT_TYPE, result_array.data_type());
-            assert_eq!(result_array.len(), $OUTPUT_VALUES.len());
-            for (i, x) in $OUTPUT_VALUES.iter().enumerate() {
-                match x {
-                    Some(x) => {
-                        assert!(!result_array.is_null(i));
-                        assert_eq!(result_array.value(i), *x);
-                    }
-                    None => {
-                        assert!(result_array.is_null(i));
-                    }
-                }
-            }
+            let result = cast($INPUT_ARRAY, $OUTPUT_TYPE).unwrap();
+            assert_eq!($OUTPUT_TYPE, result.data_type());
+            assert_eq!(result.as_ref(), &output);
 
             let cast_option = CastOptions {
                 safe: false,
                 format_options: FormatOptions::default(),
             };
-            let casted_array_with_option =
+            let result =
                 cast_with_options($INPUT_ARRAY, $OUTPUT_TYPE, &cast_option).unwrap();
-            let result_array = casted_array_with_option
-                .as_any()
-                .downcast_ref::<$OUTPUT_TYPE_ARRAY>()
-                .unwrap();
-            assert_eq!($OUTPUT_TYPE, result_array.data_type());
-            assert_eq!(result_array.len(), $OUTPUT_VALUES.len());
-            for (i, x) in $OUTPUT_VALUES.iter().enumerate() {
-                match x {
-                    Some(x) => {
-                        assert_eq!(result_array.value(i), *x);
-                    }
-                    None => {
-                        assert!(result_array.is_null(i));
-                    }
-                }
-            }
+            assert_eq!($OUTPUT_TYPE, result.data_type());
+            assert_eq!(result.as_ref(), &output);
         };
     }
 
@@ -5997,7 +5971,7 @@ mod tests {
 
     #[test]
     fn test_str_to_str_casts() {
-        for data in vec![
+        for data in [
             vec![Some("foo"), Some("bar"), Some("ham")],
             vec![Some("foo"), None, Some("bar")],
         ] {
@@ -8934,6 +8908,7 @@ mod tests {
     };
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn test_const_options() {
         assert!(CAST_OPTIONS.safe)
     }

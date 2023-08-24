@@ -1090,7 +1090,7 @@ mod tests {
         let values = Int32Array::from(vec![Some(0), None, Some(1), None]);
         let array = RunArray::try_new(&run, &values).unwrap();
 
-        let expected = vec![
+        let expected = [
             true, true, true, false, false, false, true, true, true, false, false, false,
         ];
 

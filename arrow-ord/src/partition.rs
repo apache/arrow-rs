@@ -220,8 +220,10 @@ mod tests {
             Arc::new(Int32Array::from(vec![1])) as _,
             Arc::new(Int32Array::from(vec![1])) as _,
         ])
-        .unwrap();
-        assert_eq!(results.ranges(), &[0..1]);
+        .unwrap()
+        .ranges();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], 0..1);
     }
 
     #[test]

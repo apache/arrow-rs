@@ -166,8 +166,8 @@ pub fn batches_to_flight_data(
         flight_data.push(encoded_batch.into());
     }
     let mut stream = vec![schema_flight_data];
-    stream.extend(dictionaries.into_iter());
-    stream.extend(flight_data.into_iter());
+    stream.extend(dictionaries);
+    stream.extend(flight_data);
     let flight_data: Vec<_> = stream.into_iter().collect();
     Ok(flight_data)
 }
