@@ -131,6 +131,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::*;
 use arrow_array::*;
+use arrow_array::types::{ArrowDictionaryKeyType, ArrowPrimitiveType};
 use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::*;
@@ -1445,6 +1446,48 @@ unsafe fn decode_column(
     Ok(array)
 }
 
+#[derive(Debug)]
+pub struct CardinalityAwareRowConverter {
+    inner: RowConverter,
+    done: bool,
+}
+
+impl CardinalityAwareRowConverter {
+    pub fn new(fields: Vec<SortField>) -> Result<Self, ArrowError> {
+        Ok(Self {
+            inner: RowConverter::new(fields)?,
+            done: false,
+        })
+    }
+
+    pub fn convert_rows(&self, rows: &Rows) -> Result<Vec<ArrayRef>, ArrowError> {
+        self.inner.convert_rows(rows)
+    }
+
+    pub fn convert_columns<K>(
+        &mut self,
+        columns: &[ArrayRef]) -> Result<Rows, ArrowError> 
+    where 
+        K: ArrowDictionaryKeyType
+    {
+        if !self.done {
+            for (i, col) in columns.iter().enumerate() {
+                if let DataType::Dictionary(_, _) = col.data_type() {
+                    let cardinality = col.as_dictionary::<K>().values().len();
+                    println!("cardinality: {}", cardinality);
+                    if cardinality >= 1 {
+                        let mut sort_field = self.inner.fields[i].clone();
+                        sort_field.preserve_dictionaries = false; 
+                        self.inner.codecs[i] = Codec::new(&sort_field).unwrap();
+                    }
+                }
+            }
+        }
+        self.done = true;
+        self.inner.convert_columns(columns)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1464,6 +1507,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_cardinality() {
+        let values = StringArray::from_iter_values(["a", "b", "c"]);
+        let keys = Int32Array::from(vec![0, 0, 1, 2, 2, 1, 1, 0, 2]);
+        let a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());
+        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+            Some("a"),
+            Some("c"),
+            Some("e"),
+            Some("g"),
+            Some("i"),
+            Some("k"),
+            Some("m"),
+            Some("o"),
+            Some("q"),
+        ]));
+        let cols = [a, b];
+        let mut converter = CardinalityAwareRowConverter::new(vec![
+            SortField::new(DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))),
+            SortField::new(DataType::Utf8),
+        ])
+        .unwrap();
+        let rows = converter.convert_columns::<Int32Type>(&cols).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        println!("{:?}", back);
+
+
+    }
+
     fn test_fixed_width() {
         let cols = [
             Arc::new(Int16Array::from_iter([
