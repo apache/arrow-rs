@@ -828,7 +828,7 @@ mod tests {
 
     use crate::errors::Result;
     use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::record::api::{Field, Row, RowAccessor, RowFormatter};
+    use crate::record::api::{Field, Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
     use std::convert::TryFrom;
@@ -1504,7 +1504,7 @@ mod tests {
         let iter = RowIter::from_file_into(Box::new(reader));
 
         let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
-        assert_eq!(values, vec![4, 5, 6, 7, 2, 3, 0, 1]);
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
@@ -1517,12 +1517,9 @@ mod tests {
         let iter = RowIter::from_file_into(Box::new(reader))
             .project(proj)
             .unwrap();
-        let values: Vec<_> = iter.map(|r| format!("id:{}", r.unwrap().fmt(0))).collect();
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
 
-        assert_eq!(
-            values.join(","),
-            "id:4, id:5, id:6, id:7, id:2, id:3, id:0, id:1"
-        );
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
