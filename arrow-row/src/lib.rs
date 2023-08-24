@@ -1470,9 +1470,8 @@ impl CardinalityAwareRowConverter {
         if !self.done {
             for (i, col) in columns.iter().enumerate() {
                 if let DataType::Dictionary(_, _) = col.data_type() {
-                    let cardinality = col.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap().keys().len();
-                    println!("cardinality: {}", cardinality);
-                    if cardinality >= 1 {
+                    let cardinality = col.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap().values().len();
+                    if cardinality >= 10 {
                         let mut sort_field = self.inner.fields[i].clone();
                         sort_field.preserve_dictionaries = false; 
                         self.inner.codecs[i] = Codec::new(&sort_field).unwrap();
@@ -1504,7 +1503,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cardinality() {
+    fn test_card_aware_row_converter() {
         let values = StringArray::from_iter_values(["a", "b", "c"]);
         let keys = Int32Array::from(vec![0, 0, 1, 2, 2, 1, 1, 0, 2]);
         let a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());
@@ -1528,8 +1527,6 @@ mod tests {
         let rows = converter.convert_columns(&cols).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         println!("{:?}", back);
-
-
     }
 
     fn test_fixed_width() {
