@@ -1460,6 +1460,10 @@ impl CardinalityAwareRowConverter {
         })
     }
 
+    pub fn size(&self) -> usize {
+        self.inner.size()
+    }
+
     pub fn convert_rows(&self, rows: &Rows) -> Result<Vec<ArrayRef>, ArrowError> {
         self.inner.convert_rows(rows)
     }
