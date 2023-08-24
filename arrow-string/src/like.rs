@@ -931,7 +931,7 @@ mod tests {
     test_dict_utf8!(
         test_utf8_scalar_ilike_regex_dict,
         vec!["%%%"],
-        vec![r#"\%_\%"#],
+        vec![r"\%_\%"],
         ilike_dyn,
         vec![true]
     );
