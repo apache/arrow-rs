@@ -112,11 +112,9 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
         (LargeUtf8, LargeUtf8) => {
             apply::<i64>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
         }
-        (l_t, r_t) => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Invalid string operation: {l_t} {op} {r_t}"
-            )))
-        }
+        (l_t, r_t) => Err(ArrowError::InvalidArgumentError(format!(
+            "Invalid string operation: {l_t} {op} {r_t}"
+        ))),
     }
 }
 
