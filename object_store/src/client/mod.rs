@@ -469,7 +469,7 @@ impl ClientOptions {
             }
 
             if let Some(proxy_excludes) = &self.proxy_excludes {
-                let no_proxy = NoProxy::from_string(&proxy_excludes);
+                let no_proxy = NoProxy::from_string(proxy_excludes);
 
                 proxy = proxy.no_proxy(no_proxy);
             }
