@@ -16,7 +16,6 @@
 // under the License.
 
 //! Defines kernel for length of string arrays and binary arrays
-#![allow(clippy::redundant_closure_call)]
 
 use arrow_array::*;
 use arrow_array::{cast::AsArray, types::*};
@@ -134,7 +133,7 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
             array.nulls().cloned(),
         ))),
         other => Err(ArrowError::ComputeError(format!(
-            "length not supported for {other:?}"
+            "bit_length not supported for {other:?}"
         ))),
     }
 }
@@ -147,18 +146,11 @@ mod tests {
     use arrow_data::ArrayData;
     use arrow_schema::Field;
 
-    fn double_vec<T: Clone>(v: Vec<T>) -> Vec<T> {
-        [&v[..], &v[..]].concat()
-    }
-
     fn length_cases_string() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
-        let mut values = vec!["one", "on", "o", ""];
-        let mut expected = vec![3, 2, 1, 0];
-        for _ in 0..10 {
-            values = double_vec(values);
-            expected = double_vec(expected);
-        }
+        let values = ["one", "on", "o", ""];
+        let values = values.into_iter().cycle().take(4096).collect();
+        let expected = [3, 2, 1, 0].into_iter().cycle().take(4096).collect();
 
         vec![
             (vec!["hello", " ", "world"], 3, vec![5, 1, 5]),
@@ -192,7 +184,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // running forever
     fn length_test_string() {
         length_cases_string()
             .into_iter()
@@ -208,7 +199,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // running forever
     fn length_test_large_string() {
         length_cases_string()
             .into_iter()
@@ -379,12 +369,9 @@ mod tests {
 
     fn bit_length_cases() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
-        let mut values = vec!["one", "on", "o", ""];
-        let mut expected = vec![24, 16, 8, 0];
-        for _ in 0..10 {
-            values = double_vec(values);
-            expected = double_vec(expected);
-        }
+        let values = ["one", "on", "o", ""];
+        let values = values.into_iter().cycle().take(4096).collect();
+        let expected = [24, 16, 8, 0].into_iter().cycle().take(4096).collect();
 
         vec![
             (vec!["hello", " ", "world", "!"], 4, vec![40, 8, 40, 8]),
@@ -395,7 +382,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // error: this test uses too much memory to run on CI
     fn bit_length_test_string() {
         bit_length_cases()
             .into_iter()
@@ -411,7 +397,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // error: this test uses too much memory to run on CI
     fn bit_length_test_large_string() {
         bit_length_cases()
             .into_iter()
@@ -650,11 +635,21 @@ mod tests {
         let list_array = FixedSizeListArray::from(list_data);
 
         let lengths = length(&list_array).unwrap();
-        let lengths = lengths.as_any().downcast_ref::<Int32Array>().unwrap();
+        let lengths = lengths.as_primitive::<Int32Type>();
 
         assert_eq!(lengths.len(), 3);
         assert_eq!(lengths.value(0), 3);
         assert!(lengths.is_null(1));
         assert_eq!(lengths.value(2), 3);
+    }
+
+    #[test]
+    fn test_fixed_size_binary() {
+        let array = FixedSizeBinaryArray::new(4, [0; 16].into(), None);
+        let result = length(&array).unwrap();
+        assert_eq!(result.as_ref(), &Int32Array::from(vec![4; 4]));
+
+        let result = bit_length(&array).unwrap();
+        assert_eq!(result.as_ref(), &Int32Array::from(vec![32; 4]));
     }
 }
