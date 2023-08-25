@@ -1455,6 +1455,8 @@ macro_rules! downcast_dict {
     }};
 }
 
+const LOW_CARDINALITY_THRESHOLD: usize = 10;
+
 #[derive(Debug)]
 pub struct CardinalityAwareRowConverter {
     inner: RowConverter,
@@ -1495,7 +1497,7 @@ impl CardinalityAwareRowConverter {
                         _ => unreachable!(),
                     };
 
-                    if cardinality >= 10 {
+                    if cardinality >= LOW_CARDINALITY_THRESHOLD {
                         let mut sort_field = self.inner.fields[i].clone();
                         sort_field.preserve_dictionaries = false; 
                         self.inner.codecs[i] = Codec::new(&sort_field).unwrap();
