@@ -131,7 +131,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::*;
 use arrow_array::*;
-use arrow_array::types::Int32Type;
+use arrow_array::types::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::*;
@@ -1446,6 +1446,15 @@ unsafe fn decode_column(
     Ok(array)
 }
 
+macro_rules! downcast_dict {
+    ($array:ident, $key:ident) => {{
+        $array
+            .as_any()
+            .downcast_ref::<DictionaryArray<$key>>()
+            .unwrap()
+    }};
+}
+
 #[derive(Debug)]
 pub struct CardinalityAwareRowConverter {
     inner: RowConverter,
@@ -1473,8 +1482,19 @@ impl CardinalityAwareRowConverter {
         columns: &[ArrayRef]) -> Result<Rows, ArrowError> {
         if !self.done {
             for (i, col) in columns.iter().enumerate() {
-                if let DataType::Dictionary(_, _) = col.data_type() {
-                    let cardinality = col.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap().values().len();
+                if let DataType::Dictionary(k, _) = col.data_type() {
+                    // let cardinality = col.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap().values().len();
+                    let cardinality = match k.as_ref() {
+                        DataType::Int8 => downcast_dict!(col, Int32Type).values().len(),
+                        DataType::Int16 => downcast_dict!(col, Int32Type).values().len(),
+                        DataType::Int32 => downcast_dict!(col, Int32Type).values().len(),
+                        DataType::Int64 => downcast_dict!(col, Int64Type).values().len(),
+                        DataType::UInt16 => downcast_dict!(col, UInt16Type).values().len(),
+                        DataType::UInt32 => downcast_dict!(col, UInt32Type).values().len(),
+                        DataType::UInt64 => downcast_dict!(col, UInt64Type).values().len(),
+                        _ => unreachable!(),
+                    };
+
                     if cardinality >= 10 {
                         let mut sort_field = self.inner.fields[i].clone();
                         sort_field.preserve_dictionaries = false; 
