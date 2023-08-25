@@ -150,7 +150,7 @@ If the file already exists, to avoid mistakenly **overriding**, you MAY have to 
 the link source or file content. Else if not exist, let's safely soft link [pre-commit.sh](pre-commit.sh) as file `.git/hooks/pre-commit`:
 
 ```bash
-ln -s  ../../rust/pre-commit.sh .git/hooks/pre-commit
+ln -s  ../../pre-commit.sh .git/hooks/pre-commit
 ```
 
 If sometimes you want to commit without checking, just run `git commit` with `--no-verify`:

@@ -25,7 +25,7 @@ pub mod bench_util;
 #[cfg(feature = "test_utils")]
 pub mod data_gen;
 #[cfg(feature = "prettyprint")]
-pub mod pretty;
+pub use arrow_cast::pretty;
 pub mod string_writer;
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_util;

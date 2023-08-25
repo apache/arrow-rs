@@ -63,12 +63,10 @@
 //! }
 //! ```
 
-use arrow_array::timezone::Tz;
-use arrow_array::types::*;
 use arrow_array::*;
-use arrow_cast::display::{lexical_to_string, make_string_from_decimal};
+use arrow_cast::display::*;
 use arrow_schema::*;
-use chrono::{DateTime, Utc};
+use csv::ByteRecord;
 use std::io::Write;
 
 use crate::map_csv_error;
@@ -79,15 +77,6 @@ const DEFAULT_TIMESTAMP_FORMAT: &str = "%FT%H:%M:%S.%9f";
 const DEFAULT_TIMESTAMP_TZ_FORMAT: &str = "%FT%H:%M:%S.%9f%:z";
 const DEFAULT_NULL_VALUE: &str = "";
 
-fn write_primitive_value<T>(array: &ArrayRef, i: usize) -> String
-where
-    T: ArrowPrimitiveType,
-    T::Native: lexical_core::ToLexical,
-{
-    let c = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
-    lexical_to_string(c.value(i))
-}
-
 /// A CSV writer
 #[derive(Debug)]
 pub struct Writer<W: Write> {
@@ -96,17 +85,15 @@ pub struct Writer<W: Write> {
     /// Whether file should be written with headers. Defaults to `true`
     has_headers: bool,
     /// The date format for date arrays
-    date_format: String,
+    date_format: Option<String>,
     /// The datetime format for datetime arrays
-    datetime_format: String,
+    datetime_format: Option<String>,
     /// The timestamp format for timestamp arrays
-    #[allow(dead_code)]
-    timestamp_format: String,
+    timestamp_format: Option<String>,
     /// The timestamp format for timestamp (with timezone) arrays
-    #[allow(dead_code)]
-    timestamp_tz_format: String,
+    timestamp_tz_format: Option<String>,
     /// The time format for time arrays
-    time_format: String,
+    time_format: Option<String>,
     /// Is the beginning-of-writer
     beginning: bool,
     /// The value to represent null entries
@@ -122,166 +109,13 @@ impl<W: Write> Writer<W> {
         Writer {
             writer,
             has_headers: true,
-            date_format: DEFAULT_DATE_FORMAT.to_string(),
-            datetime_format: DEFAULT_TIMESTAMP_FORMAT.to_string(),
-            time_format: DEFAULT_TIME_FORMAT.to_string(),
-            timestamp_format: DEFAULT_TIMESTAMP_FORMAT.to_string(),
-            timestamp_tz_format: DEFAULT_TIMESTAMP_TZ_FORMAT.to_string(),
+            date_format: Some(DEFAULT_DATE_FORMAT.to_string()),
+            datetime_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
+            time_format: Some(DEFAULT_TIME_FORMAT.to_string()),
+            timestamp_format: Some(DEFAULT_TIMESTAMP_FORMAT.to_string()),
+            timestamp_tz_format: Some(DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
             beginning: true,
             null_value: DEFAULT_NULL_VALUE.to_string(),
-        }
-    }
-
-    /// Convert a record to a string vector
-    fn convert(
-        &self,
-        batch: &[ArrayRef],
-        row_index: usize,
-        buffer: &mut [String],
-    ) -> Result<(), ArrowError> {
-        // TODO: it'd be more efficient if we could create `record: Vec<&[u8]>
-        for (col_index, item) in buffer.iter_mut().enumerate() {
-            let col = &batch[col_index];
-            if col.is_null(row_index) {
-                // write the configured null value
-                *item = self.null_value.clone();
-                continue;
-            }
-            let string = match col.data_type() {
-                DataType::Float64 => write_primitive_value::<Float64Type>(col, row_index),
-                DataType::Float32 => write_primitive_value::<Float32Type>(col, row_index),
-                DataType::Int8 => write_primitive_value::<Int8Type>(col, row_index),
-                DataType::Int16 => write_primitive_value::<Int16Type>(col, row_index),
-                DataType::Int32 => write_primitive_value::<Int32Type>(col, row_index),
-                DataType::Int64 => write_primitive_value::<Int64Type>(col, row_index),
-                DataType::UInt8 => write_primitive_value::<UInt8Type>(col, row_index),
-                DataType::UInt16 => write_primitive_value::<UInt16Type>(col, row_index),
-                DataType::UInt32 => write_primitive_value::<UInt32Type>(col, row_index),
-                DataType::UInt64 => write_primitive_value::<UInt64Type>(col, row_index),
-                DataType::Boolean => {
-                    let c = col.as_any().downcast_ref::<BooleanArray>().unwrap();
-                    c.value(row_index).to_string()
-                }
-                DataType::Utf8 => {
-                    let c = col.as_any().downcast_ref::<StringArray>().unwrap();
-                    c.value(row_index).to_owned()
-                }
-                DataType::LargeUtf8 => {
-                    let c = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
-                    c.value(row_index).to_owned()
-                }
-                DataType::Date32 => {
-                    let c = col.as_any().downcast_ref::<Date32Array>().unwrap();
-                    c.value_as_date(row_index)
-                        .unwrap()
-                        .format(&self.date_format)
-                        .to_string()
-                }
-                DataType::Date64 => {
-                    let c = col.as_any().downcast_ref::<Date64Array>().unwrap();
-                    c.value_as_datetime(row_index)
-                        .unwrap()
-                        .format(&self.datetime_format)
-                        .to_string()
-                }
-                DataType::Time32(TimeUnit::Second) => {
-                    let c = col.as_any().downcast_ref::<Time32SecondArray>().unwrap();
-                    c.value_as_time(row_index)
-                        .unwrap()
-                        .format(&self.time_format)
-                        .to_string()
-                }
-                DataType::Time32(TimeUnit::Millisecond) => {
-                    let c = col
-                        .as_any()
-                        .downcast_ref::<Time32MillisecondArray>()
-                        .unwrap();
-                    c.value_as_time(row_index)
-                        .unwrap()
-                        .format(&self.time_format)
-                        .to_string()
-                }
-                DataType::Time64(TimeUnit::Microsecond) => {
-                    let c = col
-                        .as_any()
-                        .downcast_ref::<Time64MicrosecondArray>()
-                        .unwrap();
-                    c.value_as_time(row_index)
-                        .unwrap()
-                        .format(&self.time_format)
-                        .to_string()
-                }
-                DataType::Time64(TimeUnit::Nanosecond) => {
-                    let c = col
-                        .as_any()
-                        .downcast_ref::<Time64NanosecondArray>()
-                        .unwrap();
-                    c.value_as_time(row_index)
-                        .unwrap()
-                        .format(&self.time_format)
-                        .to_string()
-                }
-                DataType::Timestamp(time_unit, time_zone) => {
-                    self.handle_timestamp(time_unit, time_zone.as_ref(), row_index, col)?
-                }
-                DataType::Decimal128(..) => make_string_from_decimal(col, row_index)?,
-                t => {
-                    // List and Struct arrays not supported by the writer, any
-                    // other type needs to be implemented
-                    return Err(ArrowError::CsvError(format!(
-                        "CSV Writer does not support {:?} data type",
-                        t
-                    )));
-                }
-            };
-            *item = string;
-        }
-        Ok(())
-    }
-
-    fn handle_timestamp(
-        &self,
-        time_unit: &TimeUnit,
-        time_zone: Option<&String>,
-        row_index: usize,
-        col: &ArrayRef,
-    ) -> Result<String, ArrowError> {
-        use TimeUnit::*;
-        let datetime = match time_unit {
-            Second => col
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Millisecond => col
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Microsecond => col
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-            Nanosecond => col
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap()
-                .value_as_datetime(row_index)
-                .unwrap(),
-        };
-
-        let tz: Option<Tz> = time_zone.map(|x| x.parse()).transpose()?;
-        match tz {
-            Some(tz) => {
-                let utc_time = DateTime::<Utc>::from_utc(datetime, Utc);
-                let local_time = utc_time.with_timezone(&tz);
-                Ok(local_time.format(&self.timestamp_tz_format).to_string())
-            }
-            None => Ok(datetime.format(&self.timestamp_format).to_string()),
         }
     }
 
@@ -303,32 +137,74 @@ impl<W: Write> Writer<W> {
             self.beginning = false;
         }
 
-        let columns: Vec<_> = batch
+        let options = FormatOptions::default()
+            .with_null(&self.null_value)
+            .with_date_format(self.date_format.as_deref())
+            .with_datetime_format(self.datetime_format.as_deref())
+            .with_timestamp_format(self.timestamp_format.as_deref())
+            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
+            .with_time_format(self.time_format.as_deref());
+
+        let converters = batch
             .columns()
             .iter()
-            .map(|array| match array.data_type() {
-                DataType::Dictionary(_, value_type) => {
-                    arrow_cast::cast(array, value_type)
-                        .expect("cannot cast dictionary to underlying values")
-                }
-                _ => array.clone(),
+            .map(|a| match a.data_type() {
+                d if d.is_nested() => Err(ArrowError::CsvError(format!(
+                    "Nested type {} is not supported in CSV",
+                    a.data_type()
+                ))),
+                DataType::Binary | DataType::LargeBinary => Err(ArrowError::CsvError(
+                    "Binary data cannot be written to CSV".to_string(),
+                )),
+                _ => ArrayFormatter::try_new(a.as_ref(), &options),
             })
-            .collect();
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
-        let mut buffer = vec!["".to_string(); batch.num_columns()];
+        let mut buffer = String::with_capacity(1024);
+        let mut byte_record = ByteRecord::with_capacity(1024, converters.len());
 
-        for row_index in 0..batch.num_rows() {
-            self.convert(columns.as_slice(), row_index, &mut buffer)?;
-            self.writer.write_record(&buffer).map_err(map_csv_error)?;
+        for row_idx in 0..batch.num_rows() {
+            byte_record.clear();
+            for (col_idx, converter) in converters.iter().enumerate() {
+                buffer.clear();
+                converter.value(row_idx).write(&mut buffer).map_err(|e| {
+                    ArrowError::CsvError(format!(
+                        "Error processing row {}, col {}: {e}",
+                        row_idx + 1,
+                        col_idx + 1
+                    ))
+                })?;
+                byte_record.push_field(buffer.as_bytes());
+            }
+
+            self.writer
+                .write_byte_record(&byte_record)
+                .map_err(map_csv_error)?;
         }
         self.writer.flush()?;
 
         Ok(())
     }
+
+    /// Unwraps this `Writer<W>`, returning the underlying writer.
+    pub fn into_inner(self) -> W {
+        // Safe to call `unwrap` since `write` always flushes the writer.
+        self.writer.into_inner().unwrap()
+    }
+}
+
+impl<W: Write> RecordBatchWriter for Writer<W> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        self.write(batch)
+    }
+
+    fn close(self) -> Result<(), ArrowError> {
+        Ok(())
+    }
 }
 
 /// A CSV writer builder
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WriterBuilder {
     /// Optional column delimiter. Defaults to `b','`
     delimiter: Option<u8>,
@@ -430,6 +306,16 @@ impl WriterBuilder {
         self
     }
 
+    /// Use RFC3339 format for date/time/timestamps
+    pub fn with_rfc3339(mut self) -> Self {
+        self.date_format = None;
+        self.datetime_format = None;
+        self.time_format = None;
+        self.timestamp_format = None;
+        self.timestamp_tz_format = None;
+        self
+    }
+
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let delimiter = self.delimiter.unwrap_or(b',');
@@ -438,21 +324,11 @@ impl WriterBuilder {
         Writer {
             writer,
             has_headers: self.has_headers,
-            date_format: self
-                .date_format
-                .unwrap_or_else(|| DEFAULT_DATE_FORMAT.to_string()),
-            datetime_format: self
-                .datetime_format
-                .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.to_string()),
-            time_format: self
-                .time_format
-                .unwrap_or_else(|| DEFAULT_TIME_FORMAT.to_string()),
-            timestamp_format: self
-                .timestamp_format
-                .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.to_string()),
-            timestamp_tz_format: self
-                .timestamp_tz_format
-                .unwrap_or_else(|| DEFAULT_TIMESTAMP_TZ_FORMAT.to_string()),
+            date_format: self.date_format,
+            datetime_format: self.datetime_format,
+            time_format: self.time_format,
+            timestamp_format: self.timestamp_format,
+            timestamp_tz_format: self.timestamp_tz_format,
             beginning: true,
             null_value: self
                 .null_value
@@ -465,7 +341,10 @@ impl WriterBuilder {
 mod tests {
     use super::*;
 
-    use crate::Reader;
+    use crate::ReaderBuilder;
+    use arrow_array::builder::{Decimal128Builder, Decimal256Builder};
+    use arrow_array::types::*;
+    use arrow_buffer::i256;
     use std::io::{Cursor, Read, Seek};
     use std::sync::Arc;
 
@@ -478,11 +357,7 @@ mod tests {
             Field::new("c4", DataType::Boolean, true),
             Field::new("c5", DataType::Timestamp(TimeUnit::Millisecond, None), true),
             Field::new("c6", DataType::Time32(TimeUnit::Second), false),
-            Field::new(
-                "c7",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                false,
-            ),
+            Field::new_dictionary("c7", DataType::Int32, DataType::Utf8, false),
         ]);
 
         let c1 = StringArray::from(vec![
@@ -541,6 +416,59 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
+"#;
+        assert_eq!(expected.to_string(), String::from_utf8(buffer).unwrap());
+    }
+
+    #[test]
+    fn test_write_csv_decimal() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Decimal128(38, 6), true),
+            Field::new("c2", DataType::Decimal256(76, 6), true),
+        ]);
+
+        let mut c1_builder =
+            Decimal128Builder::new().with_data_type(DataType::Decimal128(38, 6));
+        c1_builder.extend(vec![Some(-3335724), Some(2179404), None, Some(290472)]);
+        let c1 = c1_builder.finish();
+
+        let mut c2_builder =
+            Decimal256Builder::new().with_data_type(DataType::Decimal256(76, 6));
+        c2_builder.extend(vec![
+            Some(i256::from_i128(-3335724)),
+            Some(i256::from_i128(2179404)),
+            None,
+            Some(i256::from_i128(290472)),
+        ]);
+        let c2 = c2_builder.finish();
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
+                .unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+
+        let mut writer = Writer::new(&mut file);
+        let batches = vec![&batch, &batch];
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
+        drop(writer);
+
+        // check that file was written successfully
+        file.rewind().unwrap();
+        let mut buffer: Vec<u8> = vec![];
+        file.read_to_end(&mut buffer).unwrap();
+
+        let expected = r#"c1,c2
+-3.335724,-3.335724
+2.179404,2.179404
+,
+0.290472,0.290472
+-3.335724,-3.335724
+2.179404,2.179404
+,
+0.290472,0.290472
 "#;
         assert_eq!(expected.to_string(), String::from_utf8(buffer).unwrap());
     }
@@ -642,17 +570,11 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         }
         buf.set_position(0);
 
-        let mut reader = Reader::new(
-            buf,
-            Arc::new(schema),
-            false,
-            None,
-            3,
-            // starting at row 2 and up to row 6.
-            None,
-            None,
-            None,
-        );
+        let mut reader = ReaderBuilder::new(Arc::new(schema))
+            .with_batch_size(3)
+            .build_buffered(buf)
+            .unwrap();
+
         let rb = reader.next().unwrap().unwrap();
         let c1 = rb.column(0).as_any().downcast_ref::<Date32Array>().unwrap();
         let c2 = rb.column(1).as_any().downcast_ref::<Date64Array>().unwrap();
@@ -671,5 +593,82 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
         let actual = c3.into_iter().collect::<Vec<_>>();
         let expected = nanoseconds.into_iter().map(Some).collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_write_csv_invalid_cast() {
+        let schema = Schema::new(vec![
+            Field::new("c0", DataType::UInt32, false),
+            Field::new("c1", DataType::Date64, false),
+        ]);
+
+        let c0 = UInt32Array::from(vec![Some(123), Some(234)]);
+        let c1 = Date64Array::from(vec![Some(1926632005177), Some(1926632005177685347)]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c0), Arc::new(c1)])
+                .unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+        let mut writer = Writer::new(&mut file);
+        let batches = vec![&batch, &batch];
+
+        for batch in batches {
+            let err = writer.write(batch).unwrap_err().to_string();
+            assert_eq!(err, "Csv error: Error processing row 2, col 2: Cast error: Failed to convert 1926632005177685347 to temporal for Date64")
+        }
+        drop(writer);
+    }
+
+    #[test]
+    fn test_write_csv_using_rfc3339() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "c1",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
+                true,
+            ),
+            Field::new("c2", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new("c3", DataType::Date32, false),
+            Field::new("c4", DataType::Time32(TimeUnit::Second), false),
+        ]);
+
+        let c1 = TimestampMillisecondArray::from(vec![
+            Some(1555584887378),
+            Some(1635577147000),
+        ])
+        .with_timezone("+00:00".to_string());
+        let c2 = TimestampMillisecondArray::from(vec![
+            Some(1555584887378),
+            Some(1635577147000),
+        ]);
+        let c3 = Date32Array::from(vec![3, 2]);
+        let c4 = Time32SecondArray::from(vec![1234, 24680]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
+        )
+        .unwrap();
+
+        let mut file = tempfile::tempfile().unwrap();
+
+        let builder = WriterBuilder::new().with_rfc3339();
+        let mut writer = builder.build(&mut file);
+        let batches = vec![&batch];
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
+        drop(writer);
+
+        file.rewind().unwrap();
+        let mut buffer: Vec<u8> = vec![];
+        file.read_to_end(&mut buffer).unwrap();
+
+        assert_eq!(
+            "c1,c2,c3,c4
+2019-04-18T10:54:47.378Z,2019-04-18T10:54:47.378,1970-01-04,00:20:34
+2021-10-30T06:59:07Z,2021-10-30T06:59:07,1970-01-03,06:51:20\n",
+            String::from_utf8(buffer).unwrap()
+        );
     }
 }

@@ -19,6 +19,7 @@
 
 mod common {
     pub mod server;
+    pub mod trailers_layer;
 }
 use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{
@@ -28,7 +29,7 @@ use arrow_flight::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
-use common::server::TestFlightServer;
+use common::{server::TestFlightServer, trailers_layer::TrailersLayer};
 use futures::{Future, StreamExt, TryStreamExt};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tonic::{
@@ -92,10 +93,7 @@ fn ensure_metadata(client: &FlightClient, test_server: &TestFlightServer) {
         assert_eq!(
             metadata.get(k).as_ref(),
             Some(&v),
-            "Missing / Mismatched metadata {:?} sent {:?} got {:?}",
-            k,
-            client_metadata,
-            metadata
+            "Missing / Mismatched metadata {k:?} sent {client_metadata:?} got {metadata:?}"
         );
     }
 }
@@ -107,6 +105,7 @@ fn test_flight_info(request: &FlightDescriptor) -> FlightInfo {
         flight_descriptor: Some(request.clone()),
         total_bytes: 123,
         total_records: 456,
+        ordered: false,
     }
 }
 
@@ -160,18 +159,42 @@ async fn test_do_get() {
 
         let response = vec![Ok(batch.clone())];
         test_server.set_do_get_response(response);
-        let response_stream = client
+        let mut response_stream = client
             .do_get(ticket.clone())
             .await
             .expect("error making request");
 
+        assert_eq!(
+            response_stream
+                .headers()
+                .get("test-resp-header")
+                .expect("header exists")
+                .to_str()
+                .unwrap(),
+            "some_val",
+        );
+
+        // trailers are not available before stream exhaustion
+        assert!(response_stream.trailers().is_none());
+
         let expected_response = vec![batch];
-        let response: Vec<_> = response_stream
+        let response: Vec<_> = (&mut response_stream)
             .try_collect()
             .await
             .expect("Error streaming data");
-
         assert_eq!(response, expected_response);
+
+        assert_eq!(
+            response_stream
+                .trailers()
+                .expect("stream exhausted")
+                .get("test-trailer")
+                .expect("trailer exists")
+                .to_str()
+                .unwrap(),
+            "trailer_val",
+        );
+
         assert_eq!(test_server.take_do_get_request(), Some(ticket));
         ensure_metadata(&client, &test_server);
     })
@@ -251,8 +274,10 @@ async fn test_do_put() {
         test_server
             .set_do_put_response(expected_response.clone().into_iter().map(Ok).collect());
 
+        let input_stream = futures::stream::iter(input_flight_data.clone()).map(Ok);
+
         let response_stream = client
-            .do_put(futures::stream::iter(input_flight_data.clone()))
+            .do_put(input_stream)
             .await
             .expect("error making request");
 
@@ -269,15 +294,15 @@ async fn test_do_put() {
 }
 
 #[tokio::test]
-async fn test_do_put_error() {
+async fn test_do_put_error_server() {
     do_test(|test_server, mut client| async move {
         client.add_header("foo-header", "bar-header-value").unwrap();
 
         let input_flight_data = test_flight_data().await;
 
-        let response = client
-            .do_put(futures::stream::iter(input_flight_data.clone()))
-            .await;
+        let input_stream = futures::stream::iter(input_flight_data.clone()).map(Ok);
+
+        let response = client.do_put(input_stream).await;
         let response = match response {
             Ok(_) => panic!("unexpected success"),
             Err(e) => e,
@@ -293,7 +318,7 @@ async fn test_do_put_error() {
 }
 
 #[tokio::test]
-async fn test_do_put_error_stream() {
+async fn test_do_put_error_stream_server() {
     do_test(|test_server, mut client| async move {
         client.add_header("foo-header", "bar-header-value").unwrap();
 
@@ -310,8 +335,10 @@ async fn test_do_put_error_stream() {
 
         test_server.set_do_put_response(response);
 
+        let input_stream = futures::stream::iter(input_flight_data.clone()).map(Ok);
+
         let response_stream = client
-            .do_put(futures::stream::iter(input_flight_data.clone()))
+            .do_put(input_stream)
             .await
             .expect("error making request");
 
@@ -323,6 +350,87 @@ async fn test_do_put_error_stream() {
 
         expect_status(response, e);
         // server still got the request
+        assert_eq!(test_server.take_do_put_request(), Some(input_flight_data));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_put_error_client() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let e = Status::invalid_argument("bad arg: client");
+
+        // input stream to client sends good FlightData followed by an error
+        let input_flight_data = test_flight_data().await;
+        let input_stream = futures::stream::iter(input_flight_data.clone())
+            .map(Ok)
+            .chain(futures::stream::iter(vec![Err(FlightError::from(
+                e.clone(),
+            ))]));
+
+        // server responds with one good message
+        let response = vec![Ok(PutResult {
+            app_metadata: Bytes::from("foo-metadata"),
+        })];
+        test_server.set_do_put_response(response);
+
+        let response_stream = client
+            .do_put(input_stream)
+            .await
+            .expect("error making request");
+
+        let response: Result<Vec<_>, _> = response_stream.try_collect().await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        // expect to the error made from the client
+        expect_status(response, e);
+        // server still got the request messages until the client sent the error
+        assert_eq!(test_server.take_do_put_request(), Some(input_flight_data));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_put_error_client_and_server() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let e_client = Status::invalid_argument("bad arg: client");
+        let e_server = Status::invalid_argument("bad arg: server");
+
+        // input stream to client sends good FlightData followed by an error
+        let input_flight_data = test_flight_data().await;
+        let input_stream = futures::stream::iter(input_flight_data.clone())
+            .map(Ok)
+            .chain(futures::stream::iter(vec![Err(FlightError::from(
+                e_client.clone(),
+            ))]));
+
+        // server responds with an error (e.g. because it got truncated data)
+        let response = vec![Err(e_server)];
+        test_server.set_do_put_response(response);
+
+        let response_stream = client
+            .do_put(input_stream)
+            .await
+            .expect("error making request");
+
+        let response: Result<Vec<_>, _> = response_stream.try_collect().await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        // expect to the error made from the client (not the server)
+        expect_status(response, e_client);
+        // server still got the request messages until the client sent the error
         assert_eq!(test_server.take_do_put_request(), Some(input_flight_data));
         ensure_metadata(&client, &test_server);
     })
@@ -797,29 +905,23 @@ fn expect_status(error: FlightError, expected: Status) {
     let status = if let FlightError::Tonic(status) = error {
         status
     } else {
-        panic!("Expected FlightError::Tonic, got: {:?}", error);
+        panic!("Expected FlightError::Tonic, got: {error:?}");
     };
 
     assert_eq!(
         status.code(),
         expected.code(),
-        "Got {:?} want {:?}",
-        status,
-        expected
+        "Got {status:?} want {expected:?}"
     );
     assert_eq!(
         status.message(),
         expected.message(),
-        "Got {:?} want {:?}",
-        status,
-        expected
+        "Got {status:?} want {expected:?}"
     );
     assert_eq!(
         status.details(),
         expected.details(),
-        "Got {:?} want {:?}",
-        status,
-        expected
+        "Got {status:?} want {expected:?}"
     );
 }
 
@@ -855,6 +957,7 @@ impl TestFixture {
 
         let serve_future = tonic::transport::Server::builder()
             .timeout(server_timeout)
+            .layer(TrailersLayer)
             .add_service(test_server.service())
             .serve_with_incoming_shutdown(
                 tokio_stream::wrappers::TcpListenerStream::new(listener),

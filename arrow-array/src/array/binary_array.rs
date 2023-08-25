@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::types::GenericBinaryType;
-use crate::{Array, GenericByteArray, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::{bit_util, Buffer, MutableBuffer};
+use crate::types::{ByteArrayType, GenericBinaryType};
+use crate::{
+    Array, GenericByteArray, GenericListArray, GenericStringArray, OffsetSizeTrait,
+};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 
-/// See [`BinaryArray`] and [`LargeBinaryArray`] for storing
-/// binary data.
+/// A [`GenericBinaryArray`] for storing `[u8]`
 pub type GenericBinaryArray<OffsetSize> = GenericByteArray<GenericBinaryType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
@@ -45,13 +45,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     }
 
     fn from_list(v: GenericListArray<OffsetSize>) -> Self {
+        let v = v.into_data();
         assert_eq!(
-            v.data_ref().child_data().len(),
+            v.child_data().len(),
             1,
             "BinaryArray can only be created from list array of u8 values \
              (i.e. List<PrimitiveArray<u8>>)."
         );
-        let child_data = &v.data_ref().child_data()[0];
+        let child_data = &v.child_data()[0];
 
         assert_eq!(
             child_data.child_data().len(),
@@ -73,48 +74,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         let builder = ArrayData::builder(Self::DATA_TYPE)
             .len(v.len())
             .offset(v.offset())
-            .add_buffer(v.data_ref().buffers()[0].clone())
+            .add_buffer(v.buffers()[0].clone())
             .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
-            .null_bit_buffer(v.data_ref().null_buffer().cloned());
+            .nulls(v.nulls().cloned());
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)
-    }
-
-    /// Creates a [`GenericBinaryArray`] based on an iterator of values without nulls
-    pub fn from_iter_values<Ptr, I>(iter: I) -> Self
-    where
-        Ptr: AsRef<[u8]>,
-        I: IntoIterator<Item = Ptr>,
-    {
-        let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
-
-        let mut offsets =
-            MutableBuffer::new((data_len + 1) * std::mem::size_of::<OffsetSize>());
-        let mut values = MutableBuffer::new(0);
-
-        let mut length_so_far = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        for s in iter {
-            let s = s.as_ref();
-            length_so_far += OffsetSize::from_usize(s.len()).unwrap();
-            offsets.push(length_so_far);
-            values.extend_from_slice(s);
-        }
-
-        // iterator size hint may not be correct so compute the actual number of offsets
-        assert!(!offsets.is_empty()); // wrote at least one
-        let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
-
-        let array_data = ArrayData::builder(Self::DATA_TYPE)
-            .len(actual_len)
-            .add_buffer(offsets.into())
-            .add_buffer(values.into());
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
     }
 
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
@@ -157,50 +122,23 @@ impl<T: OffsetSizeTrait> From<GenericListArray<T>> for GenericBinaryArray<T> {
     }
 }
 
-impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
+impl<OffsetSize: OffsetSizeTrait> From<GenericStringArray<OffsetSize>>
     for GenericBinaryArray<OffsetSize>
-where
-    Ptr: AsRef<[u8]>,
 {
-    fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
-        let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+    fn from(value: GenericStringArray<OffsetSize>) -> Self {
+        let builder = value
+            .into_data()
+            .into_builder()
+            .data_type(GenericBinaryType::<OffsetSize>::DATA_TYPE);
 
-        let mut offsets = Vec::with_capacity(data_len + 1);
-        let mut values = Vec::new();
-        let mut null_buf = MutableBuffer::new_null(data_len);
-        let mut length_so_far: OffsetSize = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        {
-            let null_slice = null_buf.as_slice_mut();
-
-            for (i, s) in iter.enumerate() {
-                if let Some(s) = s {
-                    let s = s.as_ref();
-                    bit_util::set_bit(null_slice, i);
-                    length_so_far += OffsetSize::from_usize(s.len()).unwrap();
-                    values.extend_from_slice(s);
-                }
-                // always add an element in offsets
-                offsets.push(length_so_far);
-            }
-        }
-
-        // calculate actual data_len, which may be different from the iterator's upper bound
-        let data_len = offsets.len() - 1;
-        let array_data = ArrayData::builder(Self::DATA_TYPE)
-            .len(data_len)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_buffer(Buffer::from_slice_ref(&values))
-            .null_bit_buffer(Some(null_buf.into()));
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
+        // Safety:
+        // A StringArray is a valid BinaryArray
+        Self::from(unsafe { builder.build_unchecked() })
     }
 }
 
-/// An array where each element contains 0 or more bytes.
+/// A [`GenericBinaryArray`] of `[u8]` using `i32` offsets
+///
 /// The byte length of each element is represented by an i32.
 ///
 /// # Examples
@@ -238,10 +176,10 @@ where
 /// assert!(!array.is_null(4));
 /// ```
 ///
+/// See [`GenericByteArray`] for more information and examples
 pub type BinaryArray = GenericBinaryArray<i32>;
 
-/// An array where each element contains 0 or more bytes.
-/// The byte length of each element is represented by an i64.
+/// A [`GenericBinaryArray`] of `[u8]` using `i64` offsets
 ///
 /// # Examples
 ///
@@ -278,13 +216,16 @@ pub type BinaryArray = GenericBinaryArray<i32>;
 /// assert!(!array.is_null(4));
 /// ```
 ///
+/// See [`GenericByteArray`] for more information and examples
 pub type LargeBinaryArray = GenericBinaryArray<i64>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ListArray;
+    use crate::{ListArray, StringArray};
+    use arrow_buffer::Buffer;
     use arrow_schema::Field;
+    use std::sync::Arc;
 
     #[test]
     fn test_binary_array() {
@@ -435,7 +376,7 @@ mod tests {
             .unwrap();
         let binary_array1 = GenericBinaryArray::<O>::from(array_data1);
 
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, false),
         ));
 
@@ -447,9 +388,6 @@ mod tests {
             .unwrap();
         let list_array = GenericListArray::<O>::from(array_data2);
         let binary_array2 = GenericBinaryArray::<O>::from(list_array);
-
-        assert_eq!(2, binary_array2.data().buffers().len());
-        assert_eq!(0, binary_array2.data().child_data().len());
 
         assert_eq!(binary_array1.len(), binary_array2.len());
         assert_eq!(binary_array1.null_count(), binary_array2.null_count());
@@ -485,7 +423,7 @@ mod tests {
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
         let null_buffer = Buffer::from_slice_ref([0b101]);
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, false),
         ));
 
@@ -530,7 +468,7 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, true),
         ));
 
@@ -590,7 +528,7 @@ mod tests {
             .scan(0usize, |pos, i| {
                 if *pos < 10 {
                     *pos += 1;
-                    Some(Some(format!("value {}", i)))
+                    Some(Some(format!("value {i}")))
                 } else {
                     // actually returns up to 10 values
                     None
@@ -609,9 +547,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "assertion failed: `(left == right)`\n  left: `UInt32`,\n \
-                    right: `UInt8`: BinaryArray can only be created from List<u8> arrays, \
-                    mismatched data types."
+        expected = "BinaryArray can only be created from List<u8> arrays, mismatched data types."
     )]
     fn test_binary_array_from_incorrect_list_array() {
         let values: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
@@ -623,7 +559,7 @@ mod tests {
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::UInt32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::UInt32, false)));
         let array_data = ArrayData::builder(data_type)
             .len(3)
             .add_buffer(Buffer::from_slice_ref(offsets))
@@ -664,7 +600,7 @@ mod tests {
         let data = vec![None];
         let array = BinaryArray::from(data);
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }
@@ -674,7 +610,7 @@ mod tests {
         let data = vec![None];
         let array = LargeBinaryArray::from(data);
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }
@@ -696,5 +632,14 @@ mod tests {
         );
         assert_eq!(string.len(), 0);
         assert_eq!(string.value_offsets(), &[0]);
+    }
+
+    #[test]
+    fn test_to_from_string() {
+        let s = StringArray::from_iter_values(["a", "b", "c", "d"]);
+        let b = BinaryArray::from(s.clone());
+        let sa = StringArray::from(b); // Performs UTF-8 validation again
+
+        assert_eq!(s, sa);
     }
 }

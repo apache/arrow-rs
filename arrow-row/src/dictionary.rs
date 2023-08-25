@@ -17,7 +17,7 @@
 
 use crate::fixed::{FixedLengthEncoding, FromSlice};
 use crate::interner::{Interned, OrderPreservingInterner};
-use crate::{null_sentinel, Rows};
+use crate::{null_sentinel, Row, Rows};
 use arrow_array::builder::*;
 use arrow_array::cast::*;
 use arrow_array::types::*;
@@ -37,7 +37,7 @@ pub fn compute_dictionary_mapping(
         values => interner
             .intern(values.iter().map(|x| x.map(|x| x.encode()))),
         DataType::Binary => {
-            let iter = as_generic_binary_array::<i64>(values).iter();
+            let iter = as_generic_binary_array::<i32>(values).iter();
             interner.intern(iter)
         }
         DataType::LargeBinary => {
@@ -45,14 +45,33 @@ pub fn compute_dictionary_mapping(
             interner.intern(iter)
         }
         DataType::Utf8 => {
-            let iter = as_string_array(values).iter().map(|x| x.map(|x| x.as_bytes()));
+            let iter = values.as_string::<i32>().iter().map(|x| x.map(|x| x.as_bytes()));
             interner.intern(iter)
         }
         DataType::LargeUtf8 => {
-            let iter = as_largestring_array(values).iter().map(|x| x.map(|x| x.as_bytes()));
+            let iter = values.as_string::<i64>().iter().map(|x| x.map(|x| x.as_bytes()));
             interner.intern(iter)
         }
         _ => unreachable!(),
+    }
+}
+
+/// Encode dictionary values not preserving the dictionary encoding
+pub fn encode_dictionary_values<K: ArrowDictionaryKeyType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    column: &DictionaryArray<K>,
+    values: &Rows,
+    null: &Row<'_>,
+) {
+    for (offset, k) in offsets.iter_mut().skip(1).zip(column.keys()) {
+        let row = match k {
+            Some(k) => values.row(k.as_usize()).data,
+            None => null.data,
+        };
+        let end_offset = *offset + row.len();
+        data[*offset..end_offset].copy_from_slice(row);
+        *offset = end_offset;
     }
 }
 
@@ -61,27 +80,26 @@ pub fn compute_dictionary_mapping(
 /// - single `0_u8` if null
 /// - the bytes of the corresponding normalized key including the null terminator
 pub fn encode_dictionary<K: ArrowDictionaryKeyType>(
-    out: &mut Rows,
+    data: &mut [u8],
+    offsets: &mut [usize],
     column: &DictionaryArray<K>,
     normalized_keys: &[Option<&[u8]>],
     opts: SortOptions,
 ) {
-    for (offset, k) in out.offsets.iter_mut().skip(1).zip(column.keys()) {
+    for (offset, k) in offsets.iter_mut().skip(1).zip(column.keys()) {
         match k.and_then(|k| normalized_keys[k.as_usize()]) {
             Some(normalized_key) => {
                 let end_offset = *offset + 1 + normalized_key.len();
-                out.buffer[*offset] = 1;
-                out.buffer[*offset + 1..end_offset].copy_from_slice(normalized_key);
+                data[*offset] = 1;
+                data[*offset + 1..end_offset].copy_from_slice(normalized_key);
                 // Negate if descending
                 if opts.descending {
-                    out.buffer[*offset..end_offset]
-                        .iter_mut()
-                        .for_each(|v| *v = !*v)
+                    data[*offset..end_offset].iter_mut().for_each(|v| *v = !*v)
                 }
                 *offset = end_offset;
             }
             None => {
-                out.buffer[*offset] = null_sentinel(opts);
+                data[*offset] = null_sentinel(opts);
                 *offset += 1;
             }
         }
@@ -184,7 +202,7 @@ pub unsafe fn decode_dictionary<K: ArrowDictionaryKeyType>(
 
     let builder = ArrayDataBuilder::new(data_type)
         .len(len)
-        .null_bit_buffer(Some(null_builder.finish()))
+        .null_bit_buffer(Some(null_builder.into()))
         .null_count(null_count)
         .add_buffer(keys.finish())
         .add_child_data(child);
@@ -232,7 +250,7 @@ fn decode_bool(values: &[&[u8]]) -> ArrayData {
 
     let builder = ArrayDataBuilder::new(DataType::Boolean)
         .len(values.len())
-        .add_buffer(builder.finish());
+        .add_buffer(builder.into());
 
     // SAFETY: Buffers correct length
     unsafe { builder.build_unchecked() }

@@ -25,12 +25,13 @@
 //!# Example of writing Arrow record batch to Parquet file
 //!
 //!```rust
-//! use arrow_array::{Int32Array, ArrayRef};
-//! use arrow_array::RecordBatch;
-//! use parquet::arrow::arrow_writer::ArrowWriter;
-//! use parquet::file::properties::WriterProperties;
-//! use std::fs::File;
-//! use std::sync::Arc;
+//! # use arrow_array::{Int32Array, ArrayRef};
+//! # use arrow_array::RecordBatch;
+//! # use parquet::arrow::arrow_writer::ArrowWriter;
+//! # use parquet::file::properties::WriterProperties;
+//! # use tempfile::tempfile;
+//! # use std::sync::Arc;
+//! # use parquet::basic::Compression;
 //! let ids = Int32Array::from(vec![1, 2, 3, 4]);
 //! let vals = Int32Array::from(vec![5, 6, 7, 8]);
 //! let batch = RecordBatch::try_from_iter(vec![
@@ -38,10 +39,12 @@
 //!   ("val", Arc::new(vals) as ArrayRef),
 //! ]).unwrap();
 //!
-//! let file = File::create("data.parquet").unwrap();
+//! let file = tempfile().unwrap();
 //!
-//! // Default writer properties
-//! let props = WriterProperties::builder().build();
+//! // WriterProperties can be used to set Parquet file options
+//! let props = WriterProperties::builder()
+//!     .set_compression(Compression::SNAPPY)
+//!     .build();
 //!
 //! let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
 //!
@@ -51,24 +54,11 @@
 //! writer.close().unwrap();
 //! ```
 //!
-//! `WriterProperties` can be used to set Parquet file options
-//! ```rust
-//! use parquet::file::properties::WriterProperties;
-//! use parquet::basic::{ Compression, Encoding };
-//! use parquet::file::properties::WriterVersion;
-//!
-//! // File compression
-//! let props = WriterProperties::builder()
-//!     .set_compression(Compression::SNAPPY)
-//!     .build();
-//! ```
-//!
 //! # Example of reading parquet file into arrow record batch
 //!
 //! ```rust
-//! use std::fs::File;
-//! use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-//!
+//! # use std::fs::File;
+//! # use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 //! # use std::sync::Arc;
 //! # use arrow_array::Int32Array;
 //! # use arrow::datatypes::{DataType, Field, Schema};
@@ -91,7 +81,7 @@
 //! #     writer.write(&batch).expect("Writing batch");
 //! # }
 //! # writer.close().unwrap();
-//!
+//! #
 //! let file = File::open("data.parquet").unwrap();
 //!
 //! let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -112,23 +102,33 @@ mod decoder;
 
 #[cfg(feature = "async")]
 pub mod async_reader;
+#[cfg(feature = "async")]
+pub mod async_writer;
 
 mod record_reader;
 experimental!(mod schema);
 
-#[allow(deprecated)]
-pub use self::arrow_reader::{ArrowReader, ParquetFileArrowReader};
 pub use self::arrow_writer::ArrowWriter;
 #[cfg(feature = "async")]
 pub use self::async_reader::ParquetRecordBatchStreamBuilder;
+#[cfg(feature = "async")]
+pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::SchemaDescriptor;
 
 pub use self::schema::{
-    arrow_to_parquet_schema, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
+    arrow_to_parquet_schema, parquet_to_arrow_field_levels, parquet_to_arrow_schema,
+    parquet_to_arrow_schema_by_columns, FieldLevels,
 };
 
 /// Schema metadata key used to store serialized Arrow IPC schema
 pub const ARROW_SCHEMA_META_KEY: &str = "ARROW:schema";
+
+/// The value of this metadata key, if present on [`Field::metadata`], will be used
+/// to populate [`BasicTypeInfo::id`]
+///
+/// [`Field::metadata`]: arrow_schema::Field::metadata
+/// [`BasicTypeInfo::id`]: crate::schema::types::BasicTypeInfo::id
+pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
 
 /// A [`ProjectionMask`] identifies a set of columns within a potentially nested schema to project
 ///

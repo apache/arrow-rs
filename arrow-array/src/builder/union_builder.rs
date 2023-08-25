@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::builder::buffer_builder::{Int32BufferBuilder, Int8BufferBuilder};
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::BufferBuilder;
 use crate::{make_array, ArrowPrimitiveType, UnionArray};
+use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, Field};
@@ -99,7 +99,7 @@ impl FieldData {
     }
 }
 
-/// Builder type for creating a new `UnionArray`.
+/// Builder for [`UnionArray`]
 ///
 /// Example: **Dense Memory Layout**
 ///
@@ -113,13 +113,13 @@ impl FieldData {
 /// builder.append::<Int32Type>("a", 4).unwrap();
 /// let union = builder.build().unwrap();
 ///
-/// assert_eq!(union.type_id(0), 0_i8);
-/// assert_eq!(union.type_id(1), 1_i8);
-/// assert_eq!(union.type_id(2), 0_i8);
+/// assert_eq!(union.type_id(0), 0);
+/// assert_eq!(union.type_id(1), 1);
+/// assert_eq!(union.type_id(2), 0);
 ///
-/// assert_eq!(union.value_offset(0), 0_i32);
-/// assert_eq!(union.value_offset(1), 0_i32);
-/// assert_eq!(union.value_offset(2), 1_i32);
+/// assert_eq!(union.value_offset(0), 0);
+/// assert_eq!(union.value_offset(1), 0);
+/// assert_eq!(union.value_offset(2), 1);
 /// ```
 ///
 /// Example: **Sparse Memory Layout**
@@ -133,13 +133,13 @@ impl FieldData {
 /// builder.append::<Int32Type>("a", 4).unwrap();
 /// let union = builder.build().unwrap();
 ///
-/// assert_eq!(union.type_id(0), 0_i8);
-/// assert_eq!(union.type_id(1), 1_i8);
-/// assert_eq!(union.type_id(2), 0_i8);
+/// assert_eq!(union.type_id(0), 0);
+/// assert_eq!(union.type_id(1), 1);
+/// assert_eq!(union.type_id(2), 0);
 ///
-/// assert_eq!(union.value_offset(0), 0_i32);
-/// assert_eq!(union.value_offset(1), 1_i32);
-/// assert_eq!(union.value_offset(2), 2_i32);
+/// assert_eq!(union.value_offset(0), 0);
+/// assert_eq!(union.value_offset(1), 1);
+/// assert_eq!(union.value_offset(2), 2);
 /// ```
 #[derive(Debug)]
 pub struct UnionBuilder {
@@ -292,7 +292,7 @@ impl UnionBuilder {
             let arr_data_builder = ArrayDataBuilder::new(data_type.clone())
                 .add_buffer(buffer)
                 .len(slots)
-                .null_bit_buffer(bitmap_builder.finish());
+                .nulls(bitmap_builder.finish());
 
             let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
             let array_ref = make_array(arr_data_ref);

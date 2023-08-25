@@ -111,7 +111,7 @@ impl RowSelection {
     }
 
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
-    fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
+    pub(crate) fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
         ranges: I,
         total_rows: usize,
     ) -> Self {
@@ -173,9 +173,14 @@ impl RowSelection {
         }
     }
 
-    /// Given an offset index, return the offset ranges for all data pages selected by `self`
-    #[cfg(any(test, feature = "async"))]
-    pub(crate) fn scan_ranges(
+    /// Given an offset index, return the byte ranges for all data pages selected by `self`
+    ///
+    /// This is useful for determining what byte ranges to fetch from underlying storage
+    ///
+    /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
+    /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
+    /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
+    pub fn scan_ranges(
         &self,
         page_locations: &[crate::format::PageLocation],
     ) -> Vec<Range<usize>> {
@@ -235,13 +240,13 @@ impl RowSelection {
         let mut total_count = 0;
 
         // Find the index where the selector exceeds the row count
-        let find = self.selectors.iter().enumerate().find(|(_, selector)| {
+        let find = self.selectors.iter().position(|selector| {
             total_count += selector.row_count;
             total_count > row_count
         });
 
         let split_idx = match find {
-            Some((idx, _)) => idx,
+            Some(idx) => idx,
             None => {
                 let selectors = std::mem::take(&mut self.selectors);
                 return Self { selectors };
@@ -371,10 +376,75 @@ impl RowSelection {
         self
     }
 
+    /// Applies an offset to this [`RowSelection`], skipping the first `offset` selected rows
+    pub(crate) fn offset(mut self, offset: usize) -> Self {
+        if offset == 0 {
+            return self;
+        }
+
+        let mut selected_count = 0;
+        let mut skipped_count = 0;
+
+        // Find the index where the selector exceeds the row count
+        let find = self
+            .selectors
+            .iter()
+            .position(|selector| match selector.skip {
+                true => {
+                    skipped_count += selector.row_count;
+                    false
+                }
+                false => {
+                    selected_count += selector.row_count;
+                    selected_count > offset
+                }
+            });
+
+        let split_idx = match find {
+            Some(idx) => idx,
+            None => {
+                self.selectors.clear();
+                return self;
+            }
+        };
+
+        let mut selectors = Vec::with_capacity(self.selectors.len() - split_idx + 1);
+        selectors.push(RowSelector::skip(skipped_count + offset));
+        selectors.push(RowSelector::select(selected_count - offset));
+        selectors.extend_from_slice(&self.selectors[split_idx + 1..]);
+
+        Self { selectors }
+    }
+
+    /// Limit this [`RowSelection`] to only select `limit` rows
+    pub(crate) fn limit(mut self, mut limit: usize) -> Self {
+        if limit == 0 {
+            self.selectors.clear();
+        }
+
+        for (idx, selection) in self.selectors.iter_mut().enumerate() {
+            if !selection.skip {
+                if selection.row_count >= limit {
+                    selection.row_count = limit;
+                    self.selectors.truncate(idx + 1);
+                    break;
+                } else {
+                    limit -= selection.row_count;
+                }
+            }
+        }
+        self
+    }
+
     /// Returns an iterator over the [`RowSelector`]s for this
     /// [`RowSelection`].
     pub fn iter(&self) -> impl Iterator<Item = &RowSelector> {
         self.selectors.iter()
+    }
+
+    /// Returns the number of selected rows
+    pub fn row_count(&self) -> usize {
+        self.iter().filter(|s| !s.skip).map(|s| s.row_count).sum()
     }
 }
 
@@ -564,6 +634,64 @@ mod tests {
             vec![RowSelector::skip(2), RowSelector::select(35)]
         );
         assert!(selection.selectors.is_empty());
+    }
+
+    #[test]
+    fn test_offset() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(5),
+            RowSelector::skip(23),
+            RowSelector::select(7),
+            RowSelector::skip(33),
+            RowSelector::select(6),
+        ]);
+
+        let selection = selection.offset(2);
+        assert_eq!(
+            selection.selectors,
+            vec![
+                RowSelector::skip(2),
+                RowSelector::select(3),
+                RowSelector::skip(23),
+                RowSelector::select(7),
+                RowSelector::skip(33),
+                RowSelector::select(6),
+            ]
+        );
+
+        let selection = selection.offset(5);
+        assert_eq!(
+            selection.selectors,
+            vec![
+                RowSelector::skip(30),
+                RowSelector::select(5),
+                RowSelector::skip(33),
+                RowSelector::select(6),
+            ]
+        );
+
+        let selection = selection.offset(3);
+        assert_eq!(
+            selection.selectors,
+            vec![
+                RowSelector::skip(33),
+                RowSelector::select(2),
+                RowSelector::skip(33),
+                RowSelector::select(6),
+            ]
+        );
+
+        let selection = selection.offset(2);
+        assert_eq!(
+            selection.selectors,
+            vec![RowSelector::skip(68), RowSelector::select(6),]
+        );
+
+        let selection = selection.offset(3);
+        assert_eq!(
+            selection.selectors,
+            vec![RowSelector::skip(71), RowSelector::select(3),]
+        );
     }
 
     #[test]
@@ -842,6 +970,59 @@ mod tests {
     }
 
     #[test]
+    fn test_limit() {
+        // Limit to existing limit should no-op
+        let selection =
+            RowSelection::from(vec![RowSelector::select(10), RowSelector::skip(90)]);
+        let limited = selection.limit(10);
+        assert_eq!(RowSelection::from(vec![RowSelector::select(10)]), limited);
+
+        let selection = RowSelection::from(vec![
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+        ]);
+
+        let limited = selection.clone().limit(5);
+        let expected = vec![RowSelector::select(5)];
+        assert_eq!(limited.selectors, expected);
+
+        let limited = selection.clone().limit(15);
+        let expected = vec![
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(5),
+        ];
+        assert_eq!(limited.selectors, expected);
+
+        let limited = selection.clone().limit(0);
+        let expected = vec![];
+        assert_eq!(limited.selectors, expected);
+
+        let limited = selection.clone().limit(30);
+        let expected = vec![
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+        ];
+        assert_eq!(limited.selectors, expected);
+
+        let limited = selection.limit(100);
+        let expected = vec![
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(10),
+        ];
+        assert_eq!(limited.selectors, expected);
+    }
+
+    #[test]
     fn test_scan_ranges() {
         let index = vec![
             PageLocation {
@@ -940,7 +1121,7 @@ mod tests {
             RowSelector::select(5),
             // Skip full page past page boundary
             RowSelector::skip(12),
-            // Select to final page bounday
+            // Select to final page boundary
             RowSelector::select(12),
             RowSelector::skip(1),
             // Skip across final page boundary

@@ -230,6 +230,13 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast decimal256 to decimal256 512", |b| {
         b.iter(|| cast_array(&decimal256_array, DataType::Decimal256(50, 5)))
     });
+
+    c.bench_function("cast decimal128 to decimal128 512 with same scale", |b| {
+        b.iter(|| cast_array(&decimal128_array, DataType::Decimal128(30, 3)))
+    });
+    c.bench_function("cast decimal256 to decimal256 512 with same scale", |b| {
+        b.iter(|| cast_array(&decimal256_array, DataType::Decimal256(60, 3)))
+    });
 }
 
 criterion_group!(benches, add_benchmark);

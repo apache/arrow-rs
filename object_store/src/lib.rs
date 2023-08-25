@@ -28,10 +28,32 @@
 
 //! # object_store
 //!
-//! This crate provides a uniform API for interacting with object storage services and
-//! local files via the the [`ObjectStore`] trait.
+//! This crate provides a uniform API for interacting with object
+//! storage services and local files via the [`ObjectStore`]
+//! trait.
 //!
-//! # Create an [`ObjectStore`] implementation:
+//! Using this crate, the same binary and code can run in multiple
+//! clouds and local test environments, via a simple runtime
+//! configuration change.
+//!
+//! # Features:
+//!
+//! 1. A focused, easy to use, idiomatic, well documented, high
+//! performance, `async` API.
+//!
+//! 2. Production quality, leading this crate to be used in large
+//! scale production systems, such as [crates.io] and [InfluxDB IOx].
+//!
+//! 3. Stable and predictable governance via the [Apache Arrow] project.
+//!
+//! Originally developed for [InfluxDB IOx] and subsequently donated
+//! to [Apache Arrow].
+//!
+//! [Apache Arrow]: https://arrow.apache.org/
+//! [InfluxDB IOx]: https://github.com/influxdata/influxdb_iox/
+//! [crates.io]: https://github.com/rust-lang/crates.io
+//!
+//! # Example: Create an [`ObjectStore`] implementation:
 //!
 #![cfg_attr(
     feature = "gcp",
@@ -245,11 +267,17 @@ pub mod throttle;
 mod client;
 
 #[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
-pub use client::{backoff::BackoffConfig, retry::RetryConfig};
+pub use client::{backoff::BackoffConfig, retry::RetryConfig, CredentialProvider};
 
-#[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
-mod multipart;
+#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
+mod config;
+
+#[cfg(feature = "cloud")]
+pub mod multipart;
+mod parse;
 mod util;
+
+pub use parse::{parse_url, parse_url_opts};
 
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
@@ -258,16 +286,17 @@ use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT}
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt};
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use snafu::Snafu;
 use std::fmt::{Debug, Formatter};
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
+use std::sync::Arc;
 use tokio::io::AsyncWrite;
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp", feature = "http"))]
-pub use client::ClientOptions;
+pub use client::{ClientConfigKey, ClientOptions};
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
@@ -278,7 +307,11 @@ pub type MultipartId = String;
 /// Universal API to multiple object store services.
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
-    /// Save the provided bytes to the specified location.
+    /// Save the provided bytes to the specified location
+    ///
+    /// The operation is guaranteed to be atomic, it will either successfully
+    /// write the entirety of `bytes` to `location`, or fail. No clients
+    /// should be able to observe a partially written object
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()>;
 
     /// Get a multi-part upload that allows writing data in chunks
@@ -286,7 +319,9 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Most cloud-based uploads will buffer and upload parts in parallel.
     ///
     /// To complete the upload, [AsyncWrite::poll_shutdown] must be called
-    /// to completion.
+    /// to completion. This operation is guaranteed to be atomic, it will either
+    /// make all the written data available at `location`, or fail. No clients
+    /// should be able to observe a partially written object
     ///
     /// For some object stores (S3, GCS, and local in particular), if the
     /// writer fails or panics, you must call [ObjectStore::abort_multipart]
@@ -306,12 +341,50 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         multipart_id: &MultipartId,
     ) -> Result<()>;
 
+    /// Returns an [`AsyncWrite`] that can be used to append to the object at `location`
+    ///
+    /// A new object will be created if it doesn't already exist, otherwise it will be
+    /// opened, with subsequent writes appended to the end.
+    ///
+    /// This operation cannot be supported by all stores, most use-cases should prefer
+    /// [`ObjectStore::put`] and [`ObjectStore::put_multipart`] for better portability
+    /// and stronger guarantees
+    ///
+    /// This API is not guaranteed to be atomic, in particular
+    ///
+    /// * On error, `location` may contain partial data
+    /// * Concurrent calls to [`ObjectStore::list`] may return partially written objects
+    /// * Concurrent calls to [`ObjectStore::get`] may return partially written data
+    /// * Concurrent calls to [`ObjectStore::put`] may result in data loss / corruption
+    /// * Concurrent calls to [`ObjectStore::append`] may result in data loss / corruption
+    ///
+    /// Additionally some stores, such as Azure, may only support appending to objects created
+    /// with [`ObjectStore::append`], and not with [`ObjectStore::put`], [`ObjectStore::copy`], or
+    /// [`ObjectStore::put_multipart`]
+    async fn append(
+        &self,
+        _location: &Path,
+    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+        Err(Error::NotImplemented)
+    }
+
     /// Return the bytes that are stored at the specified location.
-    async fn get(&self, location: &Path) -> Result<GetResult>;
+    async fn get(&self, location: &Path) -> Result<GetResult> {
+        self.get_opts(location, GetOptions::default()).await
+    }
+
+    /// Perform a get request with options
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte range
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes>;
+    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+        let options = GetOptions {
+            range: Some(range.clone()),
+            ..Default::default()
+        };
+        self.get_opts(location, options).await?.bytes().await
+    }
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte ranges
@@ -334,14 +407,93 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> Result<()>;
 
+    /// Delete all the objects at the specified locations
+    ///
+    /// When supported, this method will use bulk operations that delete more
+    /// than one object per a request. The default implementation will call
+    /// the single object delete method for each location, but with up to 10
+    /// concurrent requests.
+    ///
+    /// The returned stream yields the results of the delete operations in the
+    /// same order as the input locations. However, some errors will be from
+    /// an overall call to a bulk delete operation, and not from a specific
+    /// location.
+    ///
+    /// If the object did not exist, the result may be an error or a success,
+    /// depending on the behavior of the underlying store. For example, local
+    /// filesystems, GCP, and Azure return an error, while S3 and in-memory will
+    /// return Ok. If it is an error, it will be [`Error::NotFound`].
+    ///
+    /// ```
+    /// # use object_store::local::LocalFileSystem;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let root = tempfile::TempDir::new().unwrap();
+    /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+    /// use object_store::{ObjectStore, ObjectMeta};
+    /// use object_store::path::Path;
+    /// use futures::{StreamExt, TryStreamExt};
+    /// use bytes::Bytes;
+    ///
+    /// // Create two objects
+    /// store.put(&Path::from("foo"), Bytes::from("foo")).await?;
+    /// store.put(&Path::from("bar"), Bytes::from("bar")).await?;
+    ///
+    /// // List object
+    /// let locations = store.list(None).await?
+    ///   .map(|meta: Result<ObjectMeta, _>| meta.map(|m| m.location))
+    ///   .boxed();
+    ///
+    /// // Delete them
+    /// store.delete_stream(locations).try_collect::<Vec<Path>>().await?;
+    /// # Ok(())
+    /// # }
+    /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    /// # rt.block_on(example()).unwrap();
+    /// ```
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        locations
+            .map(|location| async {
+                let location = location?;
+                self.delete(&location).await?;
+                Ok(location)
+            })
+            .buffered(10)
+            .boxed()
+    }
+
     /// List all the objects with the given prefix.
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
+    ///
+    /// Note: the order of returned [`ObjectMeta`] is not guaranteed
     async fn list(
         &self,
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>>;
+
+    /// List all the objects with the given prefix and a location greater than `offset`
+    ///
+    /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
+    /// the number of network requests required
+    ///
+    /// Note: the order of returned [`ObjectMeta`] is not guaranteed
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        let offset = offset.clone();
+        let stream = self
+            .list(prefix)
+            .await?
+            .try_filter(move |f| futures::future::ready(f.location > offset))
+            .boxed();
+        Ok(stream)
+    }
 
     /// List objects with the given prefix and an implementation specific
     /// delimiter. Returns common prefixes (directories) in addition to object
@@ -385,6 +537,123 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 }
 
+macro_rules! as_ref_impl {
+    ($type:ty) => {
+        #[async_trait]
+        impl ObjectStore for $type {
+            async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+                self.as_ref().put(location, bytes).await
+            }
+
+            async fn put_multipart(
+                &self,
+                location: &Path,
+            ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+                self.as_ref().put_multipart(location).await
+            }
+
+            async fn abort_multipart(
+                &self,
+                location: &Path,
+                multipart_id: &MultipartId,
+            ) -> Result<()> {
+                self.as_ref().abort_multipart(location, multipart_id).await
+            }
+
+            async fn append(
+                &self,
+                location: &Path,
+            ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+                self.as_ref().append(location).await
+            }
+
+            async fn get(&self, location: &Path) -> Result<GetResult> {
+                self.as_ref().get(location).await
+            }
+
+            async fn get_opts(
+                &self,
+                location: &Path,
+                options: GetOptions,
+            ) -> Result<GetResult> {
+                self.as_ref().get_opts(location, options).await
+            }
+
+            async fn get_range(
+                &self,
+                location: &Path,
+                range: Range<usize>,
+            ) -> Result<Bytes> {
+                self.as_ref().get_range(location, range).await
+            }
+
+            async fn get_ranges(
+                &self,
+                location: &Path,
+                ranges: &[Range<usize>],
+            ) -> Result<Vec<Bytes>> {
+                self.as_ref().get_ranges(location, ranges).await
+            }
+
+            async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+                self.as_ref().head(location).await
+            }
+
+            async fn delete(&self, location: &Path) -> Result<()> {
+                self.as_ref().delete(location).await
+            }
+
+            fn delete_stream<'a>(
+                &'a self,
+                locations: BoxStream<'a, Result<Path>>,
+            ) -> BoxStream<'a, Result<Path>> {
+                self.as_ref().delete_stream(locations)
+            }
+
+            async fn list(
+                &self,
+                prefix: Option<&Path>,
+            ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+                self.as_ref().list(prefix).await
+            }
+
+            async fn list_with_offset(
+                &self,
+                prefix: Option<&Path>,
+                offset: &Path,
+            ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+                self.as_ref().list_with_offset(prefix, offset).await
+            }
+
+            async fn list_with_delimiter(
+                &self,
+                prefix: Option<&Path>,
+            ) -> Result<ListResult> {
+                self.as_ref().list_with_delimiter(prefix).await
+            }
+
+            async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().copy(from, to).await
+            }
+
+            async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().rename(from, to).await
+            }
+
+            async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().copy_if_not_exists(from, to).await
+            }
+
+            async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+                self.as_ref().rename_if_not_exists(from, to).await
+            }
+        }
+    };
+}
+
+as_ref_impl!(Arc<dyn ObjectStore>);
+as_ref_impl!(Box<dyn ObjectStore>);
+
 /// Result of a list call that includes objects, prefixes (directories) and a
 /// token for the next set of results. Individual result sets may be limited to
 /// 1,000 objects based on the underlying object storage's limitations.
@@ -405,24 +674,97 @@ pub struct ObjectMeta {
     pub last_modified: DateTime<Utc>,
     /// The size in bytes of the object
     pub size: usize,
+    /// The unique identifier for the object
+    pub e_tag: Option<String>,
+}
+
+/// Options for a get request, such as range
+#[derive(Debug, Default)]
+pub struct GetOptions {
+    /// Request will succeed if the `ObjectMeta::e_tag` matches
+    /// otherwise returning [`Error::Precondition`]
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-if-match>
+    pub if_match: Option<String>,
+    /// Request will succeed if the `ObjectMeta::e_tag` does not match
+    /// otherwise returning [`Error::NotModified`]
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.2>
+    pub if_none_match: Option<String>,
+    /// Request will succeed if the object has been modified since
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.3>
+    pub if_modified_since: Option<DateTime<Utc>>,
+    /// Request will succeed if the object has not been modified since
+    /// otherwise returning [`Error::Precondition`]
+    ///
+    /// Some stores, such as S3, will only return `NotModified` for exact
+    /// timestamp matches, instead of for any timestamp greater than or equal.
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.4>
+    pub if_unmodified_since: Option<DateTime<Utc>>,
+    /// Request transfer of only the specified range of bytes
+    /// otherwise returning [`Error::NotModified`]
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
+    pub range: Option<Range<usize>>,
+}
+
+impl GetOptions {
+    /// Returns an error if the modification conditions on this request are not satisfied
+    fn check_modified(
+        &self,
+        location: &Path,
+        last_modified: DateTime<Utc>,
+    ) -> Result<()> {
+        if let Some(date) = self.if_modified_since {
+            if last_modified <= date {
+                return Err(Error::NotModified {
+                    path: location.to_string(),
+                    source: format!("{} >= {}", date, last_modified).into(),
+                });
+            }
+        }
+
+        if let Some(date) = self.if_unmodified_since {
+            if last_modified > date {
+                return Err(Error::Precondition {
+                    path: location.to_string(),
+                    source: format!("{} < {}", date, last_modified).into(),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Result for a get request
+#[derive(Debug)]
+pub struct GetResult {
+    /// The [`GetResultPayload`]
+    pub payload: GetResultPayload,
+    /// The [`ObjectMeta`] for this object
+    pub meta: ObjectMeta,
+    /// The range of bytes returned by this request
+    pub range: Range<usize>,
+}
+
+/// The kind of a [`GetResult`]
 ///
 /// This special cases the case of a local file, as some systems may
 /// be able to optimise the case of a file already present on local disk
-pub enum GetResult {
-    /// A file and its path on the local filesystem
+pub enum GetResultPayload {
+    /// The file, path
     File(std::fs::File, std::path::PathBuf),
-    /// An asynchronous stream
+    /// An opaque stream of bytes
     Stream(BoxStream<'static, Result<Bytes>>),
 }
 
-impl Debug for GetResult {
+impl Debug for GetResultPayload {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::File(_, _) => write!(f, "GetResult(File)"),
-            Self::Stream(_) => write!(f, "GetResult(Stream)"),
+            Self::File(_, _) => write!(f, "GetResultPayload(File)"),
+            Self::Stream(_) => write!(f, "GetResultPayload(Stream)"),
         }
     }
 }
@@ -430,34 +772,31 @@ impl Debug for GetResult {
 impl GetResult {
     /// Collects the data into a [`Bytes`]
     pub async fn bytes(self) -> Result<Bytes> {
-        match self {
+        let len = self.range.end - self.range.start;
+        match self.payload {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::File(mut file, path) => {
+            GetResultPayload::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
-                    let len = file.seek(SeekFrom::End(0)).map_err(|source| {
-                        local::Error::Seek {
+                    file.seek(SeekFrom::Start(self.range.start as _)).map_err(
+                        |source| local::Error::Seek {
                             source,
                             path: path.clone(),
-                        }
-                    })?;
+                        },
+                    )?;
 
-                    file.seek(SeekFrom::Start(0)).map_err(|source| {
-                        local::Error::Seek {
+                    let mut buffer = Vec::with_capacity(len);
+                    file.take(len as _)
+                        .read_to_end(&mut buffer)
+                        .map_err(|source| local::Error::UnableToReadBytes {
                             source,
-                            path: path.clone(),
-                        }
-                    })?;
-
-                    let mut buffer = Vec::with_capacity(len as usize);
-                    file.read_to_end(&mut buffer).map_err(|source| {
-                        local::Error::UnableToReadBytes { source, path }
-                    })?;
+                            path,
+                        })?;
 
                     Ok(buffer.into())
                 })
                 .await
             }
-            Self::Stream(s) => collect_bytes(s, None).await,
+            GetResultPayload::Stream(s) => collect_bytes(s, Some(len)).await,
             #[cfg(target_arch = "wasm32")]
             _ => unimplemented!("File IO not implemented on wasm32."),
         }
@@ -465,8 +804,8 @@ impl GetResult {
 
     /// Converts this into a byte stream
     ///
-    /// If the result is [`Self::File`] will perform chunked reads of the file, otherwise
-    /// will return the [`Self::Stream`].
+    /// If the `self.kind` is [`GetResultPayload::File`] will perform chunked reads of the file,
+    /// otherwise will return the [`GetResultPayload::Stream`].
     ///
     /// # Tokio Compatibility
     ///
@@ -478,36 +817,13 @@ impl GetResult {
     /// If not called from a tokio context, this will perform IO on the current thread with
     /// no additional complexity or overheads
     pub fn into_stream(self) -> BoxStream<'static, Result<Bytes>> {
-        match self {
+        match self.payload {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::File(file, path) => {
+            GetResultPayload::File(file, path) => {
                 const CHUNK_SIZE: usize = 8 * 1024;
-
-                futures::stream::try_unfold(
-                    (file, path, false),
-                    |(mut file, path, finished)| {
-                        maybe_spawn_blocking(move || {
-                            if finished {
-                                return Ok(None);
-                            }
-
-                            let mut buffer = Vec::with_capacity(CHUNK_SIZE);
-                            let read = file
-                                .by_ref()
-                                .take(CHUNK_SIZE as u64)
-                                .read_to_end(&mut buffer)
-                                .map_err(|e| local::Error::UnableToReadBytes {
-                                    source: e,
-                                    path: path.clone(),
-                                })?;
-
-                            Ok(Some((buffer.into(), (file, path, read != CHUNK_SIZE))))
-                        })
-                    },
-                )
-                .boxed()
+                local::chunked_stream(file, path, self.range, CHUNK_SIZE)
             }
-            Self::Stream(s) => s,
+            GetResultPayload::Stream(s) => s,
             #[cfg(target_arch = "wasm32")]
             _ => unimplemented!("File IO not implemented on wasm32."),
         }
@@ -553,6 +869,18 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    #[snafu(display("Request precondition failure for path {}: {}", path, source))]
+    Precondition {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[snafu(display("Object at location {} not modified: {}", path, source))]
+    NotModified {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
     #[snafu(display("Operation not yet implemented."))]
     NotImplemented,
 
@@ -579,6 +907,16 @@ mod test_util {
     use super::*;
     use futures::TryStreamExt;
 
+    macro_rules! maybe_skip_integration {
+        () => {
+            if std::env::var("TEST_INTEGRATION").is_err() {
+                eprintln!("Skipping integration test - set TEST_INTEGRATION");
+                return;
+            }
+        };
+    }
+    pub(crate) use maybe_skip_integration;
+
     pub async fn flatten_list_stream(
         storage: &DynObjectStore,
         prefix: Option<&Path>,
@@ -596,6 +934,7 @@ mod test_util {
 mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
+    use rand::{thread_rng, Rng};
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
@@ -611,8 +950,7 @@ mod tests {
         let content_list = flatten_list_stream(storage, None).await.unwrap();
         assert!(
             content_list.is_empty(),
-            "Expected list to be empty; found: {:?}",
-            content_list
+            "Expected list to be empty; found: {content_list:?}"
         );
 
         let location = Path::from("test_dir/test_file.json");
@@ -642,6 +980,14 @@ mod tests {
         assert!(result.objects.is_empty());
         assert_eq!(result.common_prefixes.len(), 1);
         assert_eq!(result.common_prefixes[0], Path::from("test_dir"));
+
+        // Should return not found
+        let err = storage.get(&Path::from("test_dir")).await.unwrap_err();
+        assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
+        // Should return not found
+        let err = storage.head(&Path::from("test_dir")).await.unwrap_err();
+        assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
 
         // List everything starting with a prefix that should return results
         let prefix = Path::from("test_dir");
@@ -815,20 +1161,220 @@ mod tests {
         storage.delete(&path).await.unwrap();
 
         let files = flatten_list_stream(storage, None).await.unwrap();
-        assert!(files.is_empty(), "{:?}", files);
+        assert!(files.is_empty(), "{files:?}");
+
+        // Test list order
+        let files = vec![
+            Path::from("a a/b.file"),
+            Path::parse("a%2Fa.file").unwrap(),
+            Path::from("a/😀.file"),
+            Path::from("a/a file"),
+            Path::parse("a/a%2F.file").unwrap(),
+            Path::from("a/a.file"),
+            Path::from("a/a/b.file"),
+            Path::from("a/b.file"),
+            Path::from("aa/a.file"),
+            Path::from("ab/a.file"),
+        ];
+
+        for file in &files {
+            storage.put(file, "foo".into()).await.unwrap();
+        }
+
+        let cases = [
+            (None, Path::from("a")),
+            (None, Path::from("a/a file")),
+            (None, Path::from("a/a/b.file")),
+            (None, Path::from("ab/a.file")),
+            (None, Path::from("a%2Fa.file")),
+            (None, Path::from("a/😀.file")),
+            (Some(Path::from("a")), Path::from("")),
+            (Some(Path::from("a")), Path::from("a")),
+            (Some(Path::from("a")), Path::from("a/😀")),
+            (Some(Path::from("a")), Path::from("a/😀.file")),
+            (Some(Path::from("a")), Path::from("a/b")),
+            (Some(Path::from("a")), Path::from("a/a/b.file")),
+        ];
+
+        for (prefix, offset) in cases {
+            let s = storage
+                .list_with_offset(prefix.as_ref(), &offset)
+                .await
+                .unwrap();
+
+            let mut actual: Vec<_> =
+                s.map_ok(|x| x.location).try_collect().await.unwrap();
+
+            actual.sort_unstable();
+
+            let expected: Vec<_> = files
+                .iter()
+                .cloned()
+                .filter(|x| {
+                    let prefix_match =
+                        prefix.as_ref().map(|p| x.prefix_matches(p)).unwrap_or(true);
+                    prefix_match && x > &offset
+                })
+                .collect();
+
+            assert_eq!(actual, expected, "{prefix:?} - {offset:?}");
+        }
+
+        // Test bulk delete
+        let paths = vec![
+            Path::from("a/a.file"),
+            Path::from("a/a/b.file"),
+            Path::from("aa/a.file"),
+            Path::from("does_not_exist"),
+            Path::from("I'm a < & weird path"),
+            Path::from("ab/a.file"),
+            Path::from("a/😀.file"),
+        ];
+
+        storage.put(&paths[4], "foo".into()).await.unwrap();
+
+        let out_paths = storage
+            .delete_stream(futures::stream::iter(paths.clone()).map(Ok).boxed())
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(out_paths.len(), paths.len());
+
+        let expect_errors = [3];
+
+        for (i, input_path) in paths.iter().enumerate() {
+            let err = storage.head(input_path).await.unwrap_err();
+            assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
+            if expect_errors.contains(&i) {
+                // Some object stores will report NotFound, but others (such as S3) will
+                // report success regardless.
+                match &out_paths[i] {
+                    Err(Error::NotFound { path: out_path, .. }) => {
+                        assert!(out_path.ends_with(&input_path.to_string()));
+                    }
+                    Ok(out_path) => {
+                        assert_eq!(out_path, input_path);
+                    }
+                    _ => panic!("unexpected error"),
+                }
+            } else {
+                assert_eq!(out_paths[i].as_ref().unwrap(), input_path);
+            }
+        }
+
+        delete_fixtures(storage).await;
+
+        let path = Path::from("empty");
+        storage.put(&path, Bytes::new()).await.unwrap();
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.size, 0);
+        let data = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(data.len(), 0);
+
+        storage.delete(&path).await.unwrap();
     }
 
-    fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
-        std::iter::repeat(Bytes::from_iter(std::iter::repeat(b'x').take(chunk_length)))
-            .take(num_chunks)
-            .collect()
+    pub(crate) async fn get_opts(storage: &dyn ObjectStore) {
+        let path = Path::from("test");
+        storage.put(&path, "foo".into()).await.unwrap();
+        let meta = storage.head(&path).await.unwrap();
+
+        let options = GetOptions {
+            if_unmodified_since: Some(meta.last_modified),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Ok(_) | Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let options = GetOptions {
+            if_unmodified_since: Some(meta.last_modified + chrono::Duration::hours(10)),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Ok(_) | Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        let options = GetOptions {
+            if_unmodified_since: Some(meta.last_modified - chrono::Duration::hours(10)),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Err(Error::Precondition { .. } | Error::NotSupported { .. }) => {}
+            d => panic!("{d:?}"),
+        }
+
+        let options = GetOptions {
+            if_modified_since: Some(meta.last_modified),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Err(Error::NotModified { .. } | Error::NotSupported { .. }) => {}
+            d => panic!("{d:?}"),
+        }
+
+        let options = GetOptions {
+            if_modified_since: Some(meta.last_modified - chrono::Duration::hours(10)),
+            ..GetOptions::default()
+        };
+        match storage.get_opts(&path, options).await {
+            Ok(_) | Err(Error::NotSupported { .. }) => {}
+            Err(e) => panic!("{e}"),
+        }
+
+        if let Some(tag) = meta.e_tag {
+            let options = GetOptions {
+                if_match: Some(tag.clone()),
+                ..GetOptions::default()
+            };
+            storage.get_opts(&path, options).await.unwrap();
+
+            let options = GetOptions {
+                if_match: Some("invalid".to_string()),
+                ..GetOptions::default()
+            };
+            let err = storage.get_opts(&path, options).await.unwrap_err();
+            assert!(matches!(err, Error::Precondition { .. }), "{err}");
+
+            let options = GetOptions {
+                if_none_match: Some(tag.clone()),
+                ..GetOptions::default()
+            };
+            let err = storage.get_opts(&path, options).await.unwrap_err();
+            assert!(matches!(err, Error::NotModified { .. }), "{err}");
+
+            let options = GetOptions {
+                if_none_match: Some("invalid".to_string()),
+                ..GetOptions::default()
+            };
+            storage.get_opts(&path, options).await.unwrap();
+        }
+    }
+
+    /// Returns a chunk of length `chunk_length`
+    fn get_chunk(chunk_length: usize) -> Bytes {
+        let mut data = vec![0_u8; chunk_length];
+        let mut rng = thread_rng();
+        // Set a random selection of bytes
+        for _ in 0..1000 {
+            data[rng.gen_range(0..chunk_length)] = rng.gen();
+        }
+        data.into()
+    }
+
+    /// Returns `num_chunks` of length `chunks`
+    fn get_chunks(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
+        (0..num_chunks).map(|_| get_chunk(chunk_length)).collect()
     }
 
     pub(crate) async fn stream_get(storage: &DynObjectStore) {
         let location = Path::from("test_dir/test_upload_file.txt");
 
         // Can write to storage
-        let data = get_vec_of_bytes(5_000, 10);
+        let data = get_chunks(5_000, 10);
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {
@@ -843,13 +1389,19 @@ mod tests {
             crate::Error::NotFound { .. }
         ));
 
+        let files = flatten_list_stream(storage, None).await.unwrap();
+        assert_eq!(&files, &[]);
+
+        let result = storage.list_with_delimiter(None).await.unwrap();
+        assert_eq!(&result.objects, &[]);
+
         writer.shutdown().await.unwrap();
         let bytes_written = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes_expected, bytes_written);
 
         // Can overwrite some storage
-        // Sizes carefully chosen to exactly hit min limit of 5 MiB
-        let data = get_vec_of_bytes(242_880, 22);
+        // Sizes chosen to ensure we write three parts
+        let data = get_chunks(3_200_000, 7);
         let bytes_expected = data.concat();
         let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {
@@ -900,8 +1452,7 @@ mod tests {
         let content_list = flatten_list_stream(storage, None).await.unwrap();
         assert!(
             content_list.is_empty(),
-            "Expected list to be empty; found: {:?}",
-            content_list
+            "Expected list to be empty; found: {content_list:?}"
         );
 
         let location1 = Path::from("foo/x.json");
@@ -915,9 +1466,29 @@ mod tests {
         let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
         assert_eq!(content_list, &[location1.clone()]);
 
+        let result = storage.list_with_delimiter(Some(&prefix)).await.unwrap();
+        assert_eq!(result.objects.len(), 1);
+        assert_eq!(result.objects[0].location, location1);
+        assert_eq!(result.common_prefixes, &[]);
+
+        // Listing an existing path (file) should return an empty list:
+        // https://github.com/apache/arrow-rs/issues/3712
+        let content_list = flatten_list_stream(storage, Some(&location1))
+            .await
+            .unwrap();
+        assert_eq!(content_list, &[]);
+
+        let list = storage.list_with_delimiter(Some(&location1)).await.unwrap();
+        assert_eq!(list.objects, &[]);
+        assert_eq!(list.common_prefixes, &[]);
+
         let prefix = Path::from("foo/x");
         let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
         assert_eq!(content_list, &[]);
+
+        let list = storage.list_with_delimiter(Some(&prefix)).await.unwrap();
+        assert_eq!(list.objects, &[]);
+        assert_eq!(list.common_prefixes, &[]);
     }
 
     pub(crate) async fn list_with_delimiter(storage: &DynObjectStore) {
@@ -1063,11 +1634,17 @@ mod tests {
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {
-        let paths = flatten_list_stream(storage, None).await.unwrap();
-
-        for f in &paths {
-            storage.delete(f).await.unwrap();
-        }
+        let paths = storage
+            .list(None)
+            .await
+            .unwrap()
+            .map_ok(|meta| meta.location)
+            .boxed();
+        storage
+            .delete_stream(paths)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
     }
 
     /// Test that the returned stream does not borrow the lifetime of Path

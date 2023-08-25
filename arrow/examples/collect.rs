@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///! `FromIterator` API is implemented for different array types to easily create them
-/// from values.
+//! `FromIterator` API is implemented for different array types to easily create them
+//! from values.
+
 use arrow::array::Array;
 use arrow_array::types::Int32Type;
 use arrow_array::{Float32Array, Int32Array, Int8Array, ListArray};
@@ -29,18 +30,18 @@ fn main() {
 
     // Create an Int8Array with 4 values
     let array: Int8Array = vec![1, 2, 3, 4].into_iter().collect();
-    println!("{:?}", array);
+    println!("{array:?}");
 
     // Arrays can also be built from `Vec<Option<T>>`. `None`
     // represents a null value in the array.
     let array: Int8Array = vec![Some(1_i8), Some(2), None, Some(3)]
         .into_iter()
         .collect();
-    println!("{:?}", array);
+    println!("{array:?}");
     assert!(array.is_null(2));
 
     let array: Float32Array = [Some(1.0_f32), Some(2.3), None].into_iter().collect();
-    println!("{:?}", array);
+    println!("{array:?}");
     assert_eq!(array.value(0), 1.0_f32);
     assert_eq!(array.value(1), 2.3_f32);
     assert!(array.is_null(2));

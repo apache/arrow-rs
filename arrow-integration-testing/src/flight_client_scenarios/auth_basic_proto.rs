@@ -30,7 +30,7 @@ type Result<T = (), E = Error> = std::result::Result<T, E>;
 type Client = FlightServiceClient<tonic::transport::Channel>;
 
 pub async fn run_scenario(host: &str, port: u16) -> Result {
-    let url = format!("http://{}:{}", host, port);
+    let url = format!("http://{host}:{port}");
     let mut client = FlightServiceClient::connect(url).await?;
 
     let action = arrow_flight::Action::default();
@@ -41,15 +41,13 @@ pub async fn run_scenario(host: &str, port: u16) -> Result {
         Err(e) => {
             if e.code() != tonic::Code::Unauthenticated {
                 return Err(Box::new(Status::internal(format!(
-                    "Expected UNAUTHENTICATED but got {:?}",
-                    e
+                    "Expected UNAUTHENTICATED but got {e:?}"
                 ))));
             }
         }
         Ok(other) => {
             return Err(Box::new(Status::internal(format!(
-                "Expected UNAUTHENTICATED but got {:?}",
-                other
+                "Expected UNAUTHENTICATED but got {other:?}"
             ))));
         }
     }

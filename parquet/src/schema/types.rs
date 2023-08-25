@@ -219,53 +219,52 @@ impl<'a> PrimitiveTypeBuilder<'a> {
         }
     }
 
-    /// Sets [`Repetition`](crate::basic::Repetition) for this field and returns itself.
-    pub fn with_repetition(mut self, repetition: Repetition) -> Self {
-        self.repetition = repetition;
-        self
+    /// Sets [`Repetition`] for this field and returns itself.
+    pub fn with_repetition(self, repetition: Repetition) -> Self {
+        Self { repetition, ..self }
     }
 
-    /// Sets [`ConvertedType`](crate::basic::ConvertedType) for this field and returns itself.
-    pub fn with_converted_type(mut self, converted_type: ConvertedType) -> Self {
-        self.converted_type = converted_type;
-        self
+    /// Sets [`ConvertedType`] for this field and returns itself.
+    pub fn with_converted_type(self, converted_type: ConvertedType) -> Self {
+        Self {
+            converted_type,
+            ..self
+        }
     }
 
-    /// Sets [`LogicalType`](crate::basic::LogicalType) for this field and returns itself.
+    /// Sets [`LogicalType`] for this field and returns itself.
     /// If only the logical type is populated for a primitive type, the converted type
     /// will be automatically populated, and can thus be omitted.
-    pub fn with_logical_type(mut self, logical_type: Option<LogicalType>) -> Self {
-        self.logical_type = logical_type;
-        self
+    pub fn with_logical_type(self, logical_type: Option<LogicalType>) -> Self {
+        Self {
+            logical_type,
+            ..self
+        }
     }
 
     /// Sets type length and returns itself.
     /// This is only applied to FIXED_LEN_BYTE_ARRAY and INT96 (INTERVAL) types, because
     /// they maintain fixed size underlying byte array.
     /// By default, value is `0`.
-    pub fn with_length(mut self, length: i32) -> Self {
-        self.length = length;
-        self
+    pub fn with_length(self, length: i32) -> Self {
+        Self { length, ..self }
     }
 
     /// Sets precision for Parquet DECIMAL physical type and returns itself.
     /// By default, it equals to `0` and used only for decimal context.
-    pub fn with_precision(mut self, precision: i32) -> Self {
-        self.precision = precision;
-        self
+    pub fn with_precision(self, precision: i32) -> Self {
+        Self { precision, ..self }
     }
 
     /// Sets scale for Parquet DECIMAL physical type and returns itself.
     /// By default, it equals to `0` and used only for decimal context.
-    pub fn with_scale(mut self, scale: i32) -> Self {
-        self.scale = scale;
-        self
+    pub fn with_scale(self, scale: i32) -> Self {
+        Self { scale, ..self }
     }
 
     /// Sets optional field id and returns itself.
-    pub fn with_id(mut self, id: i32) -> Self {
-        self.id = Some(id);
-        self
+    pub fn with_id(self, id: Option<i32>) -> Self {
+        Self { id, ..self }
     }
 
     /// Creates a new `PrimitiveType` instance from the collected attributes.
@@ -553,35 +552,37 @@ impl<'a> GroupTypeBuilder<'a> {
         }
     }
 
-    /// Sets [`Repetition`](crate::basic::Repetition) for this field and returns itself.
+    /// Sets [`Repetition`] for this field and returns itself.
     pub fn with_repetition(mut self, repetition: Repetition) -> Self {
         self.repetition = Some(repetition);
         self
     }
 
-    /// Sets [`ConvertedType`](crate::basic::ConvertedType) for this field and returns itself.
-    pub fn with_converted_type(mut self, converted_type: ConvertedType) -> Self {
-        self.converted_type = converted_type;
-        self
+    /// Sets [`ConvertedType`] for this field and returns itself.
+    pub fn with_converted_type(self, converted_type: ConvertedType) -> Self {
+        Self {
+            converted_type,
+            ..self
+        }
     }
 
-    /// Sets [`LogicalType`](crate::basic::LogicalType) for this field and returns itself.
-    pub fn with_logical_type(mut self, logical_type: Option<LogicalType>) -> Self {
-        self.logical_type = logical_type;
-        self
+    /// Sets [`LogicalType`] for this field and returns itself.
+    pub fn with_logical_type(self, logical_type: Option<LogicalType>) -> Self {
+        Self {
+            logical_type,
+            ..self
+        }
     }
 
     /// Sets a list of fields that should be child nodes of this field.
     /// Returns updated self.
-    pub fn with_fields(mut self, fields: &mut Vec<TypePtr>) -> Self {
-        self.fields.append(fields);
-        self
+    pub fn with_fields(self, fields: Vec<TypePtr>) -> Self {
+        Self { fields, ..self }
     }
 
     /// Sets optional field id and returns itself.
-    pub fn with_id(mut self, id: i32) -> Self {
-        self.id = Some(id);
-        self
+    pub fn with_id(self, id: Option<i32>) -> Self {
+        Self { id, ..self }
     }
 
     /// Creates a new `GroupType` instance from the gathered attributes.
@@ -628,18 +629,18 @@ impl BasicTypeInfo {
         self.repetition.is_some()
     }
 
-    /// Returns [`Repetition`](crate::basic::Repetition) value for the type.
+    /// Returns [`Repetition`] value for the type.
     pub fn repetition(&self) -> Repetition {
         assert!(self.repetition.is_some());
         self.repetition.unwrap()
     }
 
-    /// Returns [`ConvertedType`](crate::basic::ConvertedType) value for the type.
+    /// Returns [`ConvertedType`] value for the type.
     pub fn converted_type(&self) -> ConvertedType {
         self.converted_type
     }
 
-    /// Returns [`LogicalType`](crate::basic::LogicalType) value for the type.
+    /// Returns [`LogicalType`] value for the type.
     pub fn logical_type(&self) -> Option<LogicalType> {
         // Unlike ConvertedType, LogicalType cannot implement Copy, thus we clone it
         self.logical_type.clone()
@@ -786,12 +787,12 @@ impl ColumnDescriptor {
         &self.path
     }
 
-    /// Returns self type [`Type`](crate::schema::types::Type) for this leaf column.
+    /// Returns self type [`Type`] for this leaf column.
     pub fn self_type(&self) -> &Type {
         self.primitive_type.as_ref()
     }
 
-    /// Returns self type [`TypePtr`](crate::schema::types::TypePtr)  for this leaf
+    /// Returns self type [`TypePtr`]  for this leaf
     /// column.
     pub fn self_type_ptr(&self) -> TypePtr {
         self.primitive_type.clone()
@@ -802,12 +803,12 @@ impl ColumnDescriptor {
         self.primitive_type.name()
     }
 
-    /// Returns [`ConvertedType`](crate::basic::ConvertedType) for this column.
+    /// Returns [`ConvertedType`] for this column.
     pub fn converted_type(&self) -> ConvertedType {
         self.primitive_type.get_basic_info().converted_type()
     }
 
-    /// Returns [`LogicalType`](crate::basic::LogicalType) for this column.
+    /// Returns [`LogicalType`] for this column.
     pub fn logical_type(&self) -> Option<LogicalType> {
         self.primitive_type.get_basic_info().logical_type()
     }
@@ -927,14 +928,13 @@ impl SchemaDescriptor {
         self.leaves.len()
     }
 
-    /// Returns column root [`Type`](crate::schema::types::Type) for a leaf position.
+    /// Returns column root [`Type`] for a leaf position.
     pub fn get_column_root(&self, i: usize) -> &Type {
         let result = self.column_root_of(i);
         result.as_ref()
     }
 
-    /// Returns column root [`Type`](crate::schema::types::Type) pointer for a leaf
-    /// position.
+    /// Returns column root [`Type`] pointer for a leaf position.
     pub fn get_column_root_ptr(&self, i: usize) -> TypePtr {
         let result = self.column_root_of(i);
         result.clone()
@@ -949,16 +949,17 @@ impl SchemaDescriptor {
             self.leaves.len()
         );
 
-        *self.leaf_to_base.get(leaf).unwrap_or_else(|| {
-            panic!("Expected a value for index {} but found None", leaf)
-        })
+        *self
+            .leaf_to_base
+            .get(leaf)
+            .unwrap_or_else(|| panic!("Expected a value for index {leaf} but found None"))
     }
 
     fn column_root_of(&self, i: usize) -> &TypePtr {
         &self.schema.get_fields()[self.get_column_root_idx(i)]
     }
 
-    /// Returns schema as [`Type`](crate::schema::types::Type).
+    /// Returns schema as [`Type`].
     pub fn root_schema(&self) -> &Type {
         self.schema.as_ref()
     }
@@ -1092,16 +1093,14 @@ fn from_thrift_helper(
             let scale = elements[index].scale.unwrap_or(-1);
             let precision = elements[index].precision.unwrap_or(-1);
             let name = &elements[index].name;
-            let mut builder = Type::primitive_type_builder(name, physical_type)
+            let builder = Type::primitive_type_builder(name, physical_type)
                 .with_repetition(repetition)
                 .with_converted_type(converted_type)
                 .with_logical_type(logical_type)
                 .with_length(length)
                 .with_precision(precision)
-                .with_scale(scale);
-            if let Some(id) = field_id {
-                builder = builder.with_id(id);
-            }
+                .with_scale(scale)
+                .with_id(field_id);
             Ok((index + 1, Arc::new(builder.build()?)))
         }
         Some(n) => {
@@ -1121,7 +1120,8 @@ fn from_thrift_helper(
             let mut builder = Type::group_type_builder(&elements[index].name)
                 .with_converted_type(converted_type)
                 .with_logical_type(logical_type)
-                .with_fields(&mut fields);
+                .with_fields(fields)
+                .with_id(field_id);
             if let Some(rep) = repetition {
                 // Sometimes parquet-cpp and parquet-mr set repetition level REQUIRED or
                 // REPEATED for root node.
@@ -1133,9 +1133,6 @@ fn from_thrift_helper(
                 if !is_root_node {
                     builder = builder.with_repetition(rep);
                 }
-            }
-            if let Some(id) = field_id {
-                builder = builder.with_id(id);
             }
             Ok((next_index, Arc::new(builder.build().unwrap())))
         }
@@ -1242,7 +1239,7 @@ mod tests {
                 bit_width: 32,
                 is_signed: true,
             }))
-            .with_id(0)
+            .with_id(Some(0))
             .build();
         assert!(result.is_ok());
 
@@ -1279,7 +1276,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Cannot annotate Integer { bit_width: 8, is_signed: true } from INT64 for field 'foo'"
             );
         }
@@ -1292,7 +1289,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: BSON cannot annotate field 'foo' because it is not a BYTE_ARRAY field"
             );
         }
@@ -1306,7 +1303,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: DECIMAL can only annotate INT32, INT64, BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY"
             );
         }
@@ -1323,7 +1320,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: DECIMAL logical type scale 32 must match self.scale -1 for field 'foo'"
             );
         }
@@ -1337,7 +1334,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Invalid DECIMAL precision: -1"
             );
         }
@@ -1351,7 +1348,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Invalid DECIMAL precision: 0"
             );
         }
@@ -1364,7 +1361,7 @@ mod tests {
             .build();
         assert!(result.is_err());
         if let Err(e) = result {
-            assert_eq!(format!("{}", e), "Parquet error: Invalid DECIMAL scale: -1");
+            assert_eq!(format!("{e}"), "Parquet error: Invalid DECIMAL scale: -1");
         }
 
         result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
@@ -1376,7 +1373,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Invalid DECIMAL: scale (2) cannot be greater than precision (1)"
             );
         }
@@ -1399,7 +1396,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Cannot represent INT32 as DECIMAL with precision 18"
             );
         }
@@ -1413,7 +1410,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Cannot represent INT64 as DECIMAL with precision 32"
             );
         }
@@ -1428,7 +1425,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Cannot represent FIXED_LEN_BYTE_ARRAY as DECIMAL with length 5 and precision 12. The max precision can only be 11"
             );
         }
@@ -1440,7 +1437,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: UINT_8 cannot annotate field 'foo' because it is not a INT32 field"
             );
         }
@@ -1452,7 +1449,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: TIME_MICROS cannot annotate field 'foo' because it is not a INT64 field"
             );
         }
@@ -1464,7 +1461,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: INTERVAL cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(12) field"
             );
         }
@@ -1477,7 +1474,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: INTERVAL cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(12) field"
             );
         }
@@ -1489,7 +1486,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: ENUM cannot annotate field 'foo' because it is not a BYTE_ARRAY field"
             );
         }
@@ -1501,7 +1498,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: MAP cannot be applied to primitive field 'foo'"
             );
         }
@@ -1514,7 +1511,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Invalid FIXED_LEN_BYTE_ARRAY length: -1 for field 'foo'"
             );
         }
@@ -1524,22 +1521,22 @@ mod tests {
     fn test_group_type() {
         let f1 = Type::primitive_type_builder("f1", PhysicalType::INT32)
             .with_converted_type(ConvertedType::INT_32)
-            .with_id(0)
+            .with_id(Some(0))
             .build();
         assert!(f1.is_ok());
         let f2 = Type::primitive_type_builder("f2", PhysicalType::BYTE_ARRAY)
             .with_converted_type(ConvertedType::UTF8)
-            .with_id(1)
+            .with_id(Some(1))
             .build();
         assert!(f2.is_ok());
 
-        let mut fields = vec![Arc::new(f1.unwrap()), Arc::new(f2.unwrap())];
+        let fields = vec![Arc::new(f1.unwrap()), Arc::new(f2.unwrap())];
 
         let result = Type::group_type_builder("foo")
             .with_repetition(Repetition::REPEATED)
             .with_logical_type(Some(LogicalType::List))
-            .with_fields(&mut fields)
-            .with_id(1)
+            .with_fields(fields)
+            .with_id(Some(1))
             .build();
         assert!(result.is_ok());
 
@@ -1629,17 +1626,17 @@ mod tests {
         let list = Type::group_type_builder("records")
             .with_repetition(Repetition::REPEATED)
             .with_converted_type(ConvertedType::LIST)
-            .with_fields(&mut vec![Arc::new(item1), Arc::new(item2), Arc::new(item3)])
+            .with_fields(vec![Arc::new(item1), Arc::new(item2), Arc::new(item3)])
             .build()?;
         let bag = Type::group_type_builder("bag")
             .with_repetition(Repetition::OPTIONAL)
-            .with_fields(&mut vec![Arc::new(list)])
+            .with_fields(vec![Arc::new(list)])
             .build()?;
         fields.push(Arc::new(bag));
 
         let schema = Type::group_type_builder("schema")
             .with_repetition(Repetition::REPEATED)
-            .with_fields(&mut fields)
+            .with_fields(fields)
             .build()?;
         let descr = SchemaDescriptor::new(Arc::new(schema));
 
@@ -1655,13 +1652,13 @@ mod tests {
         //     required int64 item1    2    1
         //     optional boolean item2  3    1
         //     repeated int32 item3    3    2
-        let ex_max_def_levels = vec![0, 1, 1, 2, 3, 3];
-        let ex_max_rep_levels = vec![0, 0, 1, 1, 1, 2];
+        let ex_max_def_levels = [0, 1, 1, 2, 3, 3];
+        let ex_max_rep_levels = [0, 0, 1, 1, 1, 2];
 
         for i in 0..nleaves {
             let col = descr.column(i);
-            assert_eq!(col.max_def_level(), ex_max_def_levels[i], "{}", i);
-            assert_eq!(col.max_rep_level(), ex_max_rep_levels[i], "{}", i);
+            assert_eq!(col.max_def_level(), ex_max_def_levels[i], "{i}");
+            assert_eq!(col.max_rep_level(), ex_max_rep_levels[i], "{i}");
         }
 
         assert_eq!(descr.column(0).path().string(), "a");
@@ -1788,13 +1785,9 @@ mod tests {
 
     // function to create a new group type for testing
     fn test_new_group_type(name: &str, repetition: Repetition, types: Vec<Type>) -> Type {
-        let mut fields = Vec::new();
-        for tpe in types {
-            fields.push(Arc::new(tpe))
-        }
         Type::group_type_builder(name)
             .with_repetition(repetition)
-            .with_fields(&mut fields)
+            .with_fields(types.into_iter().map(Arc::new).collect())
             .build()
             .unwrap()
     }
@@ -1989,7 +1982,7 @@ mod tests {
         assert!(thrift_schema.is_err());
         if let Err(e) = thrift_schema {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "Parquet error: Root schema must be Group type"
             );
         }
@@ -2084,7 +2077,7 @@ mod tests {
         let expected_schema = parse_message_type(message_type).unwrap();
         let mut thrift_schema = to_thrift(&expected_schema).unwrap();
         // Change all of None to Some(0)
-        for mut elem in &mut thrift_schema[..] {
+        for elem in &mut thrift_schema[..] {
             if elem.num_children.is_none() {
                 elem.num_children = Some(0);
             }

@@ -157,7 +157,7 @@ impl<'a> UnalignedBitChunk<'a> {
         self.prefix
             .into_iter()
             .chain(self.chunks.iter().cloned())
-            .chain(self.suffix.into_iter())
+            .chain(self.suffix)
     }
 
     /// Counts the number of ones
@@ -295,6 +295,12 @@ impl<'a> BitChunks<'a> {
             chunk_len: self.chunk_len,
             index: 0,
         }
+    }
+
+    /// Returns an iterator over chunks of 64 bits, with the remaining bits zero padded to 64-bits
+    #[inline]
+    pub fn iter_padded(&self) -> impl Iterator<Item = u64> + 'a {
+        self.iter().chain(std::iter::once(self.remainder_bits()))
     }
 }
 

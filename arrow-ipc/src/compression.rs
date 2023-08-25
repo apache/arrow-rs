@@ -37,8 +37,7 @@ impl TryFrom<CompressionType> for CompressionCodec {
             CompressionType::ZSTD => Ok(CompressionCodec::Zstd),
             CompressionType::LZ4_FRAME => Ok(CompressionCodec::Lz4Frame),
             other_type => Err(ArrowError::NotYetImplemented(format!(
-                "compression type {:?} not supported ",
-                other_type
+                "compression type {other_type:?} not supported "
             ))),
         }
     }
@@ -70,7 +69,7 @@ impl CompressionCodec {
             output.extend_from_slice(&uncompressed_data_len.to_le_bytes());
             self.compress(input, output)?;
 
-            let compression_len = output.len();
+            let compression_len = output.len() - original_output_len;
             if compression_len > uncompressed_data_len {
                 // length of compressed data was larger than
                 // uncompressed data, use the uncompressed data with
@@ -99,7 +98,7 @@ impl CompressionCodec {
         // compressed
         let decompressed_length = read_uncompressed_size(input);
         let buffer = if decompressed_length == 0 {
-            // emtpy
+            // empty
             Buffer::from([])
         } else if decompressed_length == LENGTH_NO_COMPRESSED_DATA {
             // no compression

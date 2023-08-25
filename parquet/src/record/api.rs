@@ -66,7 +66,7 @@ impl Row {
     ///
     /// let file = File::open("/path/to/file").unwrap();
     /// let reader = SerializedFileReader::new(file).unwrap();
-    /// let row: Row = reader.get_row_iter(None).unwrap().next().unwrap();
+    /// let row: Row = reader.get_row_iter(None).unwrap().next().unwrap().unwrap();
     /// for (idx, (name, field)) in row.get_column_iter().enumerate() {
     ///     println!("column index: {}, column name: {}, column value: {}", idx, name, field);
     /// }
@@ -133,7 +133,7 @@ pub trait RowAccessor {
     fn get_map(&self, i: usize) -> Result<&Map>;
 }
 
-/// Trait for formating fields within a Row.
+/// Trait for formatting fields within a Row.
 ///
 /// # Examples
 ///
@@ -146,7 +146,7 @@ pub trait RowAccessor {
 ///
 /// if let Ok(file) = File::open(&Path::new("test.parquet")) {
 ///     let reader = SerializedFileReader::new(file).unwrap();
-///     let row = reader.get_row_iter(None).unwrap().next().unwrap();
+///     let row = reader.get_row_iter(None).unwrap().next().unwrap().unwrap();
 ///     println!("column 0: {}, column 1: {}", row.fmt(0), row.fmt(1));
 /// }
 /// ```
@@ -245,7 +245,7 @@ pub fn make_row(fields: Vec<(String, Field)>) -> Row {
 impl fmt::Display for Row {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{{")?;
-        for (i, &(ref key, ref value)) in self.fields.iter().enumerate() {
+        for (i, (key, value)) in self.fields.iter().enumerate() {
             key.fmt(f)?;
             write!(f, ": ")?;
             value.fmt(f)?;
@@ -525,7 +525,7 @@ pub enum Field {
     Date(i32),
     /// Milliseconds from the Unix epoch, 1 January 1970.
     TimestampMillis(i64),
-    /// Microseconds from the Unix epoch, 1 Janiary 1970.
+    /// Microseconds from the Unix epoch, 1 January 1970.
     TimestampMicros(i64),
 
     // ----------------------------------------------------------------------
@@ -639,11 +639,17 @@ impl Field {
     /// Converts Parquet BYTE_ARRAY type with converted type into either UTF8 string or
     /// array of bytes.
     #[inline]
-    pub fn convert_byte_array(descr: &ColumnDescPtr, value: ByteArray) -> Self {
-        match descr.physical_type() {
+    pub fn convert_byte_array(descr: &ColumnDescPtr, value: ByteArray) -> Result<Self> {
+        let field = match descr.physical_type() {
             PhysicalType::BYTE_ARRAY => match descr.converted_type() {
                 ConvertedType::UTF8 | ConvertedType::ENUM | ConvertedType::JSON => {
-                    let value = String::from_utf8(value.data().to_vec()).unwrap();
+                    let value =
+                        String::from_utf8(value.data().to_vec()).map_err(|e| {
+                            general_err!(
+                                "Error reading BYTE_ARRAY as String. Bytes: {:?} Error: {:?}",
+                                value.data(), e
+                            )
+                        })?;
                     Field::Str(value)
                 }
                 ConvertedType::BSON | ConvertedType::NONE => Field::Bytes(value),
@@ -664,7 +670,8 @@ impl Field {
                 _ => nyi!(descr, value),
             },
             _ => nyi!(descr, value),
-        }
+        };
+        Ok(field)
     }
 
     #[cfg(any(feature = "json", test))]
@@ -724,37 +731,37 @@ impl fmt::Display for Field {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Field::Null => write!(f, "null"),
-            Field::Bool(value) => write!(f, "{}", value),
-            Field::Byte(value) => write!(f, "{}", value),
-            Field::Short(value) => write!(f, "{}", value),
-            Field::Int(value) => write!(f, "{}", value),
-            Field::Long(value) => write!(f, "{}", value),
-            Field::UByte(value) => write!(f, "{}", value),
-            Field::UShort(value) => write!(f, "{}", value),
-            Field::UInt(value) => write!(f, "{}", value),
-            Field::ULong(value) => write!(f, "{}", value),
+            Field::Bool(value) => write!(f, "{value}"),
+            Field::Byte(value) => write!(f, "{value}"),
+            Field::Short(value) => write!(f, "{value}"),
+            Field::Int(value) => write!(f, "{value}"),
+            Field::Long(value) => write!(f, "{value}"),
+            Field::UByte(value) => write!(f, "{value}"),
+            Field::UShort(value) => write!(f, "{value}"),
+            Field::UInt(value) => write!(f, "{value}"),
+            Field::ULong(value) => write!(f, "{value}"),
             Field::Float(value) => {
                 if !(1e-15..=1e19).contains(&value) {
-                    write!(f, "{:E}", value)
+                    write!(f, "{value:E}")
                 } else if value.trunc() == value {
-                    write!(f, "{}.0", value)
+                    write!(f, "{value}.0")
                 } else {
-                    write!(f, "{}", value)
+                    write!(f, "{value}")
                 }
             }
             Field::Double(value) => {
                 if !(1e-15..=1e19).contains(&value) {
-                    write!(f, "{:E}", value)
+                    write!(f, "{value:E}")
                 } else if value.trunc() == value {
-                    write!(f, "{}.0", value)
+                    write!(f, "{value}.0")
                 } else {
-                    write!(f, "{}", value)
+                    write!(f, "{value}")
                 }
             }
             Field::Decimal(ref value) => {
                 write!(f, "{}", convert_decimal_to_string(value))
             }
-            Field::Str(ref value) => write!(f, "\"{}\"", value),
+            Field::Str(ref value) => write!(f, "\"{value}\""),
             Field::Bytes(ref value) => write!(f, "{:?}", value.data()),
             Field::Date(value) => write!(f, "{}", convert_date_to_string(value)),
             Field::TimestampMillis(value) => {
@@ -763,7 +770,7 @@ impl fmt::Display for Field {
             Field::TimestampMicros(value) => {
                 write!(f, "{}", convert_timestamp_micros_to_string(value))
             }
-            Field::Group(ref fields) => write!(f, "{}", fields),
+            Field::Group(ref fields) => write!(f, "{fields}"),
             Field::ListInternal(ref list) => {
                 let elems = &list.elements;
                 write!(f, "[")?;
@@ -778,7 +785,7 @@ impl fmt::Display for Field {
             Field::MapInternal(ref map) => {
                 let entries = &map.entries;
                 write!(f, "{{")?;
-                for (i, &(ref key, ref value)) in entries.iter().enumerate() {
+                for (i, (key, value)) in entries.iter().enumerate() {
                     key.fmt(f)?;
                     write!(f, " -> ")?;
                     value.fmt(f)?;
@@ -1020,38 +1027,41 @@ mod tests {
         let descr = make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::UTF8];
         let value = ByteArray::from(vec![b'A', b'B', b'C', b'D']);
         let row = Field::convert_byte_array(&descr, value);
-        assert_eq!(row, Field::Str("ABCD".to_string()));
+        assert_eq!(row.unwrap(), Field::Str("ABCD".to_string()));
 
         // ENUM
         let descr = make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::ENUM];
         let value = ByteArray::from(vec![b'1', b'2', b'3']);
         let row = Field::convert_byte_array(&descr, value);
-        assert_eq!(row, Field::Str("123".to_string()));
+        assert_eq!(row.unwrap(), Field::Str("123".to_string()));
 
         // JSON
         let descr = make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::JSON];
         let value = ByteArray::from(vec![b'{', b'"', b'a', b'"', b':', b'1', b'}']);
         let row = Field::convert_byte_array(&descr, value);
-        assert_eq!(row, Field::Str("{\"a\":1}".to_string()));
+        assert_eq!(row.unwrap(), Field::Str("{\"a\":1}".to_string()));
 
         // NONE
         let descr = make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::NONE];
         let value = ByteArray::from(vec![1, 2, 3, 4, 5]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row, Field::Bytes(value));
+        assert_eq!(row.unwrap(), Field::Bytes(value));
 
         // BSON
         let descr = make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::BSON];
         let value = ByteArray::from(vec![1, 2, 3, 4, 5]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row, Field::Bytes(value));
+        assert_eq!(row.unwrap(), Field::Bytes(value));
 
         // DECIMAL
         let descr =
             make_column_descr![PhysicalType::BYTE_ARRAY, ConvertedType::DECIMAL, 0, 8, 2];
         let value = ByteArray::from(vec![207, 200]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row, Field::Decimal(Decimal::from_bytes(value, 8, 2)));
+        assert_eq!(
+            row.unwrap(),
+            Field::Decimal(Decimal::from_bytes(value, 8, 2))
+        );
 
         // DECIMAL (FIXED_LEN_BYTE_ARRAY)
         let descr = make_column_descr![
@@ -1063,7 +1073,10 @@ mod tests {
         ];
         let value = ByteArray::from(vec![0, 0, 0, 0, 0, 4, 147, 224]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row, Field::Decimal(Decimal::from_bytes(value, 17, 5)));
+        assert_eq!(
+            row.unwrap(),
+            Field::Decimal(Decimal::from_bytes(value, 17, 5))
+        );
 
         // NONE (FIXED_LEN_BYTE_ARRAY)
         let descr = make_column_descr![
@@ -1075,7 +1088,7 @@ mod tests {
         ];
         let value = ByteArray::from(vec![1, 2, 3, 4, 5, 6]);
         let row = Field::convert_byte_array(&descr, value.clone());
-        assert_eq!(row, Field::Bytes(value));
+        assert_eq!(row.unwrap(), Field::Bytes(value));
     }
 
     #[test]
@@ -1248,7 +1261,7 @@ mod tests {
             ("a".to_string(), Field::Str("abc".to_string())),
         ];
         let row = Field::Group(make_row(fields));
-        assert_eq!(format!("{}", row), "{x: null, Y: 2, z: 3.1, a: \"abc\"}");
+        assert_eq!(format!("{row}"), "{x: null, Y: 2, z: 3.1, a: \"abc\"}");
 
         let row = Field::ListInternal(make_list(vec![
             Field::Int(2),
@@ -1256,14 +1269,14 @@ mod tests {
             Field::Null,
             Field::Int(12),
         ]));
-        assert_eq!(format!("{}", row), "[2, 1, null, 12]");
+        assert_eq!(format!("{row}"), "[2, 1, null, 12]");
 
         let row = Field::MapInternal(make_map(vec![
             (Field::Int(1), Field::Float(1.2)),
             (Field::Int(2), Field::Float(4.5)),
             (Field::Int(3), Field::Float(2.3)),
         ]));
-        assert_eq!(format!("{}", row), "{1 -> 1.2, 2 -> 4.5, 3 -> 2.3}");
+        assert_eq!(format!("{row}"), "{1 -> 1.2, 2 -> 4.5, 3 -> 2.3}");
     }
 
     #[test]
@@ -1536,16 +1549,16 @@ mod tests {
         ]);
 
         assert_eq!(
-            ParquetError::General("Cannot access Group as Float".to_string()),
-            row.get_float(0).unwrap_err()
+            row.get_float(0).unwrap_err().to_string(),
+            "Parquet error: Cannot access Group as Float"
         );
         assert_eq!(
-            ParquetError::General("Cannot access ListInternal as Float".to_string()),
-            row.get_float(1).unwrap_err()
+            row.get_float(1).unwrap_err().to_string(),
+            "Parquet error: Cannot access ListInternal as Float"
         );
         assert_eq!(
-            ParquetError::General("Cannot access MapInternal as Float".to_string()),
-            row.get_float(2).unwrap_err()
+            row.get_float(2).unwrap_err().to_string(),
+            "Parquet error: Cannot access MapInternal as Float",
         );
     }
 
@@ -1680,8 +1693,8 @@ mod tests {
             ("Y".to_string(), Field::Int(2)),
         ]))]);
         assert_eq!(
-            general_err!("Cannot access Group as Float".to_string()),
-            list.get_float(0).unwrap_err()
+            list.get_float(0).unwrap_err().to_string(),
+            "Parquet error: Cannot access Group as Float"
         );
 
         let list = make_list(vec![Field::ListInternal(make_list(vec![
@@ -1691,8 +1704,8 @@ mod tests {
             Field::Int(12),
         ]))]);
         assert_eq!(
-            general_err!("Cannot access ListInternal as Float".to_string()),
-            list.get_float(0).unwrap_err()
+            list.get_float(0).unwrap_err().to_string(),
+            "Parquet error: Cannot access ListInternal as Float"
         );
 
         let list = make_list(vec![Field::MapInternal(make_map(vec![
@@ -1701,8 +1714,8 @@ mod tests {
             (Field::Int(3), Field::Float(2.3)),
         ]))]);
         assert_eq!(
-            general_err!("Cannot access MapInternal as Float".to_string()),
-            list.get_float(0).unwrap_err()
+            list.get_float(0).unwrap_err().to_string(),
+            "Parquet error: Cannot access MapInternal as Float",
         );
     }
 

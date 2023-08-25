@@ -15,80 +15,193 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::print_long_array;
 use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
-use crate::raw_pointer::RawPtrBox;
 use crate::temporal_conversions::{
     as_date, as_datetime, as_datetime_with_timezone, as_duration, as_time,
 };
 use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
-use crate::{print_long_array, Array, ArrayAccessor};
-use arrow_buffer::{i256, ArrowNativeType, Buffer};
+use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
+use arrow_buffer::{i256, ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use half::f16;
 use std::any::Any;
+use std::sync::Arc;
 
+/// A [`PrimitiveArray`] of `i8`
 ///
-/// # Example: Using `collect`
+/// # Examples
+///
+/// Construction
+///
 /// ```
 /// # use arrow_array::Int8Array;
-/// let arr : Int8Array = [Some(1), Some(2)].into_iter().collect();
+/// // Create from Vec<Option<i8>>
+/// let arr = Int8Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i8>
+/// let arr = Int8Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Int8Array = std::iter::repeat(42).take(10).collect();
 /// ```
-pub type Int8Array = PrimitiveArray<Int8Type>;
 ///
-/// # Example: Using `collect`
+/// See [`PrimitiveArray`] for more information and examples
+pub type Int8Array = PrimitiveArray<Int8Type>;
+
+/// A [`PrimitiveArray`] of `i16`
+///
+/// # Examples
+///
+/// Construction
+///
 /// ```
 /// # use arrow_array::Int16Array;
-/// let arr : Int16Array = [Some(1), Some(2)].into_iter().collect();
+/// // Create from Vec<Option<i16>>
+/// let arr = Int16Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i16>
+/// let arr = Int16Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Int16Array = std::iter::repeat(42).take(10).collect();
 /// ```
-pub type Int16Array = PrimitiveArray<Int16Type>;
 ///
-/// # Example: Using `collect`
+/// See [`PrimitiveArray`] for more information and examples
+pub type Int16Array = PrimitiveArray<Int16Type>;
+
+/// A [`PrimitiveArray`] of `i32`
+///
+/// # Examples
+///
+/// Construction
+///
 /// ```
 /// # use arrow_array::Int32Array;
-/// let arr : Int32Array = [Some(1), Some(2)].into_iter().collect();
+/// // Create from Vec<Option<i32>>
+/// let arr = Int32Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i32>
+/// let arr = Int32Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Int32Array = std::iter::repeat(42).take(10).collect();
 /// ```
-pub type Int32Array = PrimitiveArray<Int32Type>;
 ///
-/// # Example: Using `collect`
+/// See [`PrimitiveArray`] for more information and examples
+pub type Int32Array = PrimitiveArray<Int32Type>;
+
+/// A [`PrimitiveArray`] of `i64`
+///
+/// # Examples
+///
+/// Construction
+///
 /// ```
 /// # use arrow_array::Int64Array;
-/// let arr : Int64Array = [Some(1), Some(2)].into_iter().collect();
+/// // Create from Vec<Option<i64>>
+/// let arr = Int64Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i64>
+/// let arr = Int64Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Int64Array = std::iter::repeat(42).take(10).collect();
 /// ```
-pub type Int64Array = PrimitiveArray<Int64Type>;
 ///
-/// # Example: Using `collect`
+/// See [`PrimitiveArray`] for more information and examples
+pub type Int64Array = PrimitiveArray<Int64Type>;
+
+/// A [`PrimitiveArray`] of `u8`
+///
+/// # Examples
+///
+/// Construction
+///
 /// ```
 /// # use arrow_array::UInt8Array;
-/// let arr : UInt8Array = [Some(1), Some(2)].into_iter().collect();
+/// // Create from Vec<Option<u8>>
+/// let arr = UInt8Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<u8>
+/// let arr = UInt8Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: UInt8Array = std::iter::repeat(42).take(10).collect();
 /// ```
-pub type UInt8Array = PrimitiveArray<UInt8Type>;
 ///
-/// # Example: Using `collect`
+/// See [`PrimitiveArray`] for more information and examples
+pub type UInt8Array = PrimitiveArray<UInt8Type>;
+
+/// A [`PrimitiveArray`] of `u16`
+///
+/// # Examples
+///
+/// Construction
+///
 /// ```
 /// # use arrow_array::UInt16Array;
-/// let arr : UInt16Array = [Some(1), Some(2)].into_iter().collect();
+/// // Create from Vec<Option<u16>>
+/// let arr = UInt16Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<u16>
+/// let arr = UInt16Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: UInt16Array = std::iter::repeat(42).take(10).collect();
 /// ```
-pub type UInt16Array = PrimitiveArray<UInt16Type>;
 ///
-/// # Example: Using `collect`
+/// See [`PrimitiveArray`] for more information and examples
+pub type UInt16Array = PrimitiveArray<UInt16Type>;
+
+/// A [`PrimitiveArray`] of `u32`
+///
+/// # Examples
+///
+/// Construction
+///
 /// ```
 /// # use arrow_array::UInt32Array;
-/// let arr : UInt32Array = [Some(1), Some(2)].into_iter().collect();
+/// // Create from Vec<Option<u32>>
+/// let arr = UInt32Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<u32>
+/// let arr = UInt32Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: UInt32Array = std::iter::repeat(42).take(10).collect();
 /// ```
-pub type UInt32Array = PrimitiveArray<UInt32Type>;
 ///
-/// # Example: Using `collect`
+/// See [`PrimitiveArray`] for more information and examples
+pub type UInt32Array = PrimitiveArray<UInt32Type>;
+
+/// A [`PrimitiveArray`] of `u64`
+///
+/// # Examples
+///
+/// Construction
+///
 /// ```
 /// # use arrow_array::UInt64Array;
-/// let arr : UInt64Array = [Some(1), Some(2)].into_iter().collect();
+/// // Create from Vec<Option<u64>>
+/// let arr = UInt64Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<u64>
+/// let arr = UInt64Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: UInt64Array = std::iter::repeat(42).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type UInt64Array = PrimitiveArray<UInt64Type>;
+
+/// A [`PrimitiveArray`] of `f16`
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Float16Array;
+/// use half::f16;
+/// // Create from Vec<Option<f16>>
+/// let arr = Float16Array::from(vec![Some(f16::from_f64(1.0)), Some(f16::from_f64(2.0))]);
+/// // Create from Vec<i8>
+/// let arr = Float16Array::from(vec![f16::from_f64(1.0), f16::from_f64(2.0), f16::from_f64(3.0)]);
+/// // Create iter/collect
+/// let arr: Float16Array = std::iter::repeat(f16::from_f64(1.0)).take(10).collect();
+/// ```
 ///
 /// # Example: Using `collect`
 /// ```
@@ -96,24 +209,53 @@ pub type UInt64Array = PrimitiveArray<UInt64Type>;
 /// use half::f16;
 /// let arr : Float16Array = [Some(f16::from_f64(1.0)), Some(f16::from_f64(2.0))].into_iter().collect();
 /// ```
-pub type Float16Array = PrimitiveArray<Float16Type>;
 ///
-/// # Example: Using `collect`
+/// See [`PrimitiveArray`] for more information and examples
+pub type Float16Array = PrimitiveArray<Float16Type>;
+
+/// A [`PrimitiveArray`] of `f32`
+///
+/// # Examples
+///
+/// Construction
+///
 /// ```
 /// # use arrow_array::Float32Array;
-/// let arr : Float32Array = [Some(1.0), Some(2.0)].into_iter().collect();
+/// // Create from Vec<Option<f32>>
+/// let arr = Float32Array::from(vec![Some(1.0), None, Some(2.0)]);
+/// // Create from Vec<f32>
+/// let arr = Float32Array::from(vec![1.0, 2.0, 3.0]);
+/// // Create iter/collect
+/// let arr: Float32Array = std::iter::repeat(42.0).take(10).collect();
 /// ```
-pub type Float32Array = PrimitiveArray<Float32Type>;
 ///
-/// # Example: Using `collect`
+/// See [`PrimitiveArray`] for more information and examples
+pub type Float32Array = PrimitiveArray<Float32Type>;
+
+/// A [`PrimitiveArray`] of `f64`
+///
+/// # Examples
+///
+/// Construction
+///
 /// ```
-/// # use arrow_array::Float64Array;
-/// let arr : Float64Array = [Some(1.0), Some(2.0)].into_iter().collect();
+/// # use arrow_array::Float32Array;
+/// // Create from Vec<Option<f32>>
+/// let arr = Float32Array::from(vec![Some(1.0), None, Some(2.0)]);
+/// // Create from Vec<f32>
+/// let arr = Float32Array::from(vec![1.0, 2.0, 3.0]);
+/// // Create iter/collect
+/// let arr: Float32Array = std::iter::repeat(42.0).take(10).collect();
 /// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Float64Array = PrimitiveArray<Float64Type>;
 
+/// A [`PrimitiveArray`] of seconds since UNIX epoch stored as `i64`
 ///
-/// A primitive array where each element is of type [TimestampSecondType].
+/// This type is similar to the [`chrono::DateTime`] type and can hold
+/// values such as `1970-05-09 14:25:11 +01:00`
+///
 /// See also [`Timestamp`](arrow_schema::DataType::Timestamp).
 ///
 /// # Example: UTC timestamps post epoch
@@ -155,141 +297,314 @@ pub type Float64Array = PrimitiveArray<Float64Type>;
 /// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_tz).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11 +10:00")
 /// ```
 ///
+/// See [`PrimitiveArray`] for more information and examples
 pub type TimestampSecondArray = PrimitiveArray<TimestampSecondType>;
-/// A primitive array where each element is of type `TimestampMillisecondType.`
-/// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
+
+/// A [`PrimitiveArray`] of milliseconds since UNIX epoch stored as `i64`
+///
+/// See examples for [`TimestampSecondArray`]
 pub type TimestampMillisecondArray = PrimitiveArray<TimestampMillisecondType>;
-/// A primitive array where each element is of type `TimestampMicrosecondType.`
-/// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
+
+/// A [`PrimitiveArray`] of microseconds since UNIX epoch stored as `i64`
+///
+/// See examples for [`TimestampSecondArray`]
 pub type TimestampMicrosecondArray = PrimitiveArray<TimestampMicrosecondType>;
-/// A primitive array where each element is of type `TimestampNanosecondType.`
-/// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
+
+/// A [`PrimitiveArray`] of nanoseconds since UNIX epoch stored as `i64`
+///
+/// See examples for [`TimestampSecondArray`]
 pub type TimestampNanosecondArray = PrimitiveArray<TimestampNanosecondType>;
 
-// TODO: give examples for the below types
-
-/// A primitive array where each element is of 32-bit date type.
+/// A [`PrimitiveArray`] of days since UNIX epoch stored as `i32`
+///
+/// This type is similar to the [`chrono::NaiveDate`] type and can hold
+/// values such as `2018-11-13`
 pub type Date32Array = PrimitiveArray<Date32Type>;
-/// A primitive array where each element is of 64-bit date type.
+
+/// A [`PrimitiveArray`] of milliseconds since UNIX epoch stored as `i64`
+///
+/// This type is similar to the [`chrono::NaiveDate`] type and can hold
+/// values such as `2018-11-13`
 pub type Date64Array = PrimitiveArray<Date64Type>;
 
-/// An array where each element is of 32-bit type representing time elapsed in seconds
-/// since midnight.
+/// A [`PrimitiveArray`] of seconds since midnight stored as `i32`
+///
+/// This type is similar to the [`chrono::NaiveTime`] type and can
+/// hold values such as `00:02:00`
 pub type Time32SecondArray = PrimitiveArray<Time32SecondType>;
-/// An array where each element is of 32-bit type representing time elapsed in milliseconds
-/// since midnight.
+
+/// A [`PrimitiveArray`] of milliseconds since midnight stored as `i32`
+///
+/// This type is similar to the [`chrono::NaiveTime`] type and can
+/// hold values such as `00:02:00.123`
 pub type Time32MillisecondArray = PrimitiveArray<Time32MillisecondType>;
-/// An array where each element is of 64-bit type representing time elapsed in microseconds
-/// since midnight.
+
+/// A [`PrimitiveArray`] of microseconds since midnight stored as `i64`
+///
+/// This type is similar to the [`chrono::NaiveTime`] type and can
+/// hold values such as `00:02:00.123456`
 pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
-/// An array where each element is of 64-bit type representing time elapsed in nanoseconds
-/// since midnight.
+
+/// A [`PrimitiveArray`] of nanoseconds since midnight stored as `i64`
+///
+/// This type is similar to the [`chrono::NaiveTime`] type and can
+/// hold values such as `00:02:00.123456789`
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 
-/// An array where each element is a “calendar” interval in months.
+/// A [`PrimitiveArray`] of “calendar” intervals in months
 pub type IntervalYearMonthArray = PrimitiveArray<IntervalYearMonthType>;
-/// An array where each element is a “calendar” interval days and milliseconds.
+
+/// A [`PrimitiveArray`] of “calendar” intervals in days and milliseconds
 pub type IntervalDayTimeArray = PrimitiveArray<IntervalDayTimeType>;
-/// An array where each element is a “calendar” interval in  months, days, and nanoseconds.
+
+/// A [`PrimitiveArray`] of “calendar” intervals in  months, days, and nanoseconds
 pub type IntervalMonthDayNanoArray = PrimitiveArray<IntervalMonthDayNanoType>;
 
-/// An array where each element is an elapsed time type in seconds.
+/// A [`PrimitiveArray`] of elapsed durations in seconds
 pub type DurationSecondArray = PrimitiveArray<DurationSecondType>;
-/// An array where each element is an elapsed time type in milliseconds.
+
+/// A [`PrimitiveArray`] of elapsed durations in milliseconds
 pub type DurationMillisecondArray = PrimitiveArray<DurationMillisecondType>;
-/// An array where each element is an elapsed time type in microseconds.
+
+/// A [`PrimitiveArray`] of elapsed durations in microseconds
 pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
-/// An array where each element is an elapsed time type in nanoseconds.
+
+/// A [`PrimitiveArray`] of elapsed durations in nanoseconds
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
-/// An array where each element is a 128-bits decimal with precision in [1, 38] and
-/// scale less or equal to 38.
+/// A [`PrimitiveArray`] of 128-bit fixed point decimals
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Decimal128Array;
+/// // Create from Vec<Option<i18>>
+/// let arr = Decimal128Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i128>
+/// let arr = Decimal128Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Decimal128Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Decimal128Array = PrimitiveArray<Decimal128Type>;
-/// An array where each element is a 256-bits decimal with precision in [1, 76] and
-/// scale less or equal to 76.
+
+/// A [`PrimitiveArray`] of 256-bit fixed point decimals
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Decimal256Array;
+/// use arrow_buffer::i256;
+/// // Create from Vec<Option<i256>>
+/// let arr = Decimal256Array::from(vec![Some(i256::from(1)), None, Some(i256::from(2))]);
+/// // Create from Vec<i256>
+/// let arr = Decimal256Array::from(vec![i256::from(1), i256::from(2), i256::from(3)]);
+/// // Create iter/collect
+/// let arr: Decimal256Array = std::iter::repeat(i256::from(42)).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
 pub type Decimal256Array = PrimitiveArray<Decimal256Type>;
 
-/// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
-/// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
-pub trait ArrowPrimitiveType: 'static {
-    /// Corresponding Rust native type for the primitive type.
-    type Native: ArrowNativeType;
+pub use crate::types::ArrowPrimitiveType;
 
-    /// the corresponding Arrow data type of this primitive type.
-    const DATA_TYPE: DataType;
-
-    /// Returns the byte width of this primitive type.
-    fn get_byte_width() -> usize {
-        std::mem::size_of::<Self::Native>()
-    }
-
-    /// Returns a default value of this primitive type.
-    ///
-    /// This is useful for aggregate array ops like `sum()`, `mean()`.
-    fn default_value() -> Self::Native {
-        Default::default()
-    }
-}
-
-/// Array whose elements are of primitive types.
+/// An array of [primitive values](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout)
+///
+/// # Example: From a Vec
+///
+/// ```
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr: PrimitiveArray<Int32Type> = vec![1, 2, 3, 4].into();
+/// assert_eq!(4, arr.len());
+/// assert_eq!(0, arr.null_count());
+/// assert_eq!(arr.values(), &[1, 2, 3, 4])
+/// ```
+///
+/// # Example: From an optional Vec
+///
+/// ```
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr: PrimitiveArray<Int32Type> = vec![Some(1), None, Some(3), None].into();
+/// assert_eq!(4, arr.len());
+/// assert_eq!(2, arr.null_count());
+/// // Note: values for null indexes are arbitrary
+/// assert_eq!(arr.values(), &[1, 0, 3, 0])
+/// ```
 ///
 /// # Example: From an iterator of values
 ///
 /// ```
-/// use arrow_array::{Array, PrimitiveArray, types::Int32Type};
-/// let arr: PrimitiveArray<Int32Type> = PrimitiveArray::from_iter_values((0..10).map(|x| x + 1));
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr: PrimitiveArray<Int32Type> = (0..10).map(|x| x + 1).collect();
 /// assert_eq!(10, arr.len());
 /// assert_eq!(0, arr.null_count());
 /// for i in 0..10i32 {
 ///     assert_eq!(i + 1, arr.value(i as usize));
 /// }
 /// ```
+///
+/// # Example: From an iterator of option
+///
+/// ```
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr: PrimitiveArray<Int32Type> = (0..10).map(|x| (x % 2 == 0).then_some(x)).collect();
+/// assert_eq!(10, arr.len());
+/// assert_eq!(5, arr.null_count());
+/// // Note: values for null indexes are arbitrary
+/// assert_eq!(arr.values(), &[0, 0, 2, 0, 4, 0, 6, 0, 8, 0])
+/// ```
+///
+/// # Example: Using Builder
+///
+/// ```
+/// # use arrow_array::Array;
+/// # use arrow_array::builder::PrimitiveBuilder;
+/// # use arrow_array::types::Int32Type;
+/// let mut builder = PrimitiveBuilder::<Int32Type>::new();
+/// builder.append_value(1);
+/// builder.append_null();
+/// builder.append_value(2);
+/// let array = builder.finish();
+/// // Note: values for null indexes are arbitrary
+/// assert_eq!(array.values(), &[1, 0, 2]);
+/// assert!(array.is_null(1));
+/// ```
 pub struct PrimitiveArray<T: ArrowPrimitiveType> {
-    /// Underlying ArrayData
-    /// # Safety
-    /// must have exactly one buffer, aligned to type T
-    data: ArrayData,
-    /// Pointer to the value array. The lifetime of this must be <= to the value buffer
-    /// stored in `data`, so it's safe to store.
-    /// # Safety
-    /// raw_values must have a value equivalent to `data.buffers()[0].raw_data()`
-    /// raw_values must have alignment for type T::NativeType
-    raw_values: RawPtrBox<T::Native>,
+    data_type: DataType,
+    /// Values data
+    values: ScalarBuffer<T::Native>,
+    nulls: Option<NullBuffer>,
 }
 
 impl<T: ArrowPrimitiveType> Clone for PrimitiveArray<T> {
     fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),
-            raw_values: self.raw_values,
+            data_type: self.data_type.clone(),
+            values: self.values.clone(),
+            nulls: self.nulls.clone(),
         }
     }
 }
 
 impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
+    /// Create a new [`PrimitiveArray`] from the provided values and nulls
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`Self::try_new`] returns an error
+    ///
+    /// # Example
+    ///
+    /// Creating a [`PrimitiveArray`] directly from a [`ScalarBuffer`] and [`NullBuffer`] using
+    /// this constructor is the most performant approach, avoiding any additional allocations
+    ///
+    /// ```
+    /// # use arrow_array::Int32Array;
+    /// # use arrow_array::types::Int32Type;
+    /// # use arrow_buffer::NullBuffer;
+    /// // [1, 2, 3, 4]
+    /// let array = Int32Array::new(vec![1, 2, 3, 4].into(), None);
+    /// // [1, null, 3, 4]
+    /// let nulls = NullBuffer::from(vec![true, false, true, true]);
+    /// let array = Int32Array::new(vec![1, 2, 3, 4].into(), Some(nulls));
+    /// ```
+    pub fn new(values: ScalarBuffer<T::Native>, nulls: Option<NullBuffer>) -> Self {
+        Self::try_new(values, nulls).unwrap()
+    }
+
+    /// Create a new [`PrimitiveArray`] of the given length where all values are null
+    pub fn new_null(length: usize) -> Self {
+        Self {
+            data_type: T::DATA_TYPE,
+            values: vec![T::Native::usize_as(0); length].into(),
+            nulls: Some(NullBuffer::new_null(length)),
+        }
+    }
+
+    /// Create a new [`PrimitiveArray`] from the provided values and nulls
+    ///
+    /// # Errors
+    ///
+    /// Errors if:
+    /// - `values.len() != nulls.len()`
+    pub fn try_new(
+        values: ScalarBuffer<T::Native>,
+        nulls: Option<NullBuffer>,
+    ) -> Result<Self, ArrowError> {
+        if let Some(n) = nulls.as_ref() {
+            if n.len() != values.len() {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
+                    values.len(),
+                    n.len(),
+                )));
+            }
+        }
+
+        Ok(Self {
+            data_type: T::DATA_TYPE,
+            values,
+            nulls,
+        })
+    }
+
+    /// Create a new [`Scalar`] from `value`
+    pub fn new_scalar(value: T::Native) -> Scalar<Self> {
+        Scalar::new(Self {
+            data_type: T::DATA_TYPE,
+            values: vec![value].into(),
+            nulls: None,
+        })
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(self) -> (DataType, ScalarBuffer<T::Native>, Option<NullBuffer>) {
+        (self.data_type, self.values, self.nulls)
+    }
+
+    /// Overrides the [`DataType`] of this [`PrimitiveArray`]
+    ///
+    /// Prefer using [`Self::with_timezone`] or [`Self::with_precision_and_scale`] where
+    /// the primitive type is suitably constrained, as these cannot panic
+    ///
+    /// # Panics
+    ///
+    /// Panics if ![Self::is_compatible]
+    pub fn with_data_type(self, data_type: DataType) -> Self {
+        Self::assert_compatible(&data_type);
+        Self { data_type, ..self }
+    }
+
+    /// Asserts that `data_type` is compatible with `Self`
+    fn assert_compatible(data_type: &DataType) {
+        assert!(
+            Self::is_compatible(data_type),
+            "PrimitiveArray expected data type {} got {}",
+            T::DATA_TYPE,
+            data_type
+        );
+    }
+
     /// Returns the length of this array.
     #[inline]
     pub fn len(&self) -> usize {
-        self.data.len()
+        self.values.len()
     }
 
     /// Returns whether this array is empty.
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.values.is_empty()
     }
 
-    /// Returns a slice of the values of this array
+    /// Returns the values of this array
     #[inline]
-    pub fn values(&self) -> &[T::Native] {
-        // Soundness
-        //     raw_values alignment & location is ensured by fn from(ArrayDataRef)
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.raw_values.as_ptr().add(self.data.offset()),
-                self.len(),
-            )
-        }
+    pub fn values(&self) -> &ScalarBuffer<T::Native> {
+        &self.values
     }
 
     /// Returns a new primitive array builder
@@ -319,8 +634,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// caller must ensure that the passed in offset is less than the array len()
     #[inline]
     pub unsafe fn value_unchecked(&self, i: usize) -> T::Native {
-        let offset = i + self.offset();
-        *self.raw_values.as_ptr().add(offset)
+        *self.values.get_unchecked(i)
     }
 
     /// Returns the primitive value at index `i`.
@@ -340,25 +654,19 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Creates a PrimitiveArray based on an iterator of values without nulls
     pub fn from_iter_values<I: IntoIterator<Item = T::Native>>(iter: I) -> Self {
         let val_buf: Buffer = iter.into_iter().collect();
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                T::DATA_TYPE,
-                val_buf.len() / std::mem::size_of::<<T as ArrowPrimitiveType>::Native>(),
-                None,
-                None,
-                0,
-                vec![val_buf],
-                vec![],
-            )
-        };
-        PrimitiveArray::from(data)
+        let len = val_buf.len() / std::mem::size_of::<T::Native>();
+        Self {
+            data_type: T::DATA_TYPE,
+            values: ScalarBuffer::new(val_buf, 0, len),
+            nulls: None,
+        }
     }
 
     /// Creates a PrimitiveArray based on a constant value with `count` elements
     pub fn from_value(value: T::Native, count: usize) -> Self {
         unsafe {
             let val_buf = Buffer::from_trusted_len_iter((0..count).map(|_| value));
-            build_primitive_array(count, val_buf, 0, None)
+            Self::new(val_buf.into(), None)
         }
     }
 
@@ -379,6 +687,15 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<T::Native>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+    }
+
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        Self {
+            data_type: self.data_type.clone(),
+            values: self.values.slice(offset, length),
+            nulls: self.nulls.as_ref().map(|n| n.slice(offset, length)),
+        }
     }
 
     /// Reinterprets this array's contents as a different data type without copying
@@ -403,7 +720,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     where
         K: ArrowPrimitiveType<Native = T::Native>,
     {
-        let d = self.data.clone().into_builder().data_type(K::DATA_TYPE);
+        let d = self.to_data().into_builder().data_type(K::DATA_TYPE);
 
         // SAFETY:
         // Native type is the same
@@ -433,11 +750,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> O::Native,
     {
-        let data = self.data();
-        let len = self.len();
-        let null_count = self.null_count();
-
-        let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
+        let nulls = self.nulls().cloned();
         let values = self.values().iter().map(|v| op(*v));
         // JUSTIFICATION
         //  Benefit
@@ -445,7 +758,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         //  Soundness
         //      `values` is an iterator with a known size because arrays are sized.
         let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-        unsafe { build_primitive_array(len, buffer, null_count, null_buffer) }
+        PrimitiveArray::new(buffer.into(), nulls)
     }
 
     /// Applies an unary and infallible function to a mutable primitive array.
@@ -490,34 +803,25 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> Result<O::Native, E>,
     {
-        let data = self.data();
         let len = self.len();
-        let null_count = self.null_count();
 
-        if null_count == 0 {
-            let values = self.values().iter().map(|v| op(*v));
-            // JUSTIFICATION
-            //  Benefit
-            //      ~60% speedup
-            //  Soundness
-            //      `values` is an iterator with a known size because arrays are sized.
-            let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
-            return Ok(unsafe { build_primitive_array(len, buffer, 0, None) });
-        }
-
-        let null_buffer = data.null_buffer().map(|b| b.bit_slice(data.offset(), len));
+        let nulls = self.nulls().cloned();
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
         let slice = buffer.as_slice_mut();
 
-        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        let f = |idx| {
             unsafe { *slice.get_unchecked_mut(idx) = op(self.value_unchecked(idx))? };
             Ok::<_, E>(())
-        })?;
+        };
 
-        Ok(unsafe {
-            build_primitive_array(len, buffer.finish(), null_count, null_buffer)
-        })
+        match &nulls {
+            Some(nulls) => nulls.try_for_each_valid_idx(f)?,
+            None => (0..len).try_for_each(f)?,
+        }
+
+        let values = buffer.finish().into();
+        Ok(PrimitiveArray::new(values, nulls))
     }
 
     /// Applies an unary and fallible function to all valid values in a mutable primitive array.
@@ -570,11 +874,11 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         O: ArrowPrimitiveType,
         F: Fn(T::Native) -> Option<O::Native>,
     {
-        let data = self.data();
-        let len = data.len();
-        let offset = data.offset();
-        let null_count = data.null_count();
-        let nulls = data.null_buffer().map(|x| x.as_slice());
+        let len = self.len();
+        let (nulls, null_count, offset) = match self.nulls() {
+            Some(n) => (Some(n.validity()), n.null_count(), n.offset()),
+            None => (None, 0, 0),
+        };
 
         let mut null_builder = BooleanBufferBuilder::new(len);
         match nulls {
@@ -599,30 +903,24 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             Ok::<_, ()>(())
         });
 
-        unsafe {
-            build_primitive_array(
-                len,
-                buffer.finish(),
-                out_null_count,
-                Some(null_builder.finish()),
-            )
-        }
+        let nulls = null_builder.finish();
+        let values = buffer.finish().into();
+        let nulls = unsafe { NullBuffer::new_unchecked(nulls, out_null_count) };
+        PrimitiveArray::new(values, Some(nulls))
     }
 
     /// Returns `PrimitiveBuilder` of this primitive array for mutating its values if the underlying
     /// data buffer is not shared by others.
     pub fn into_builder(self) -> Result<PrimitiveBuilder<T>, Self> {
         let len = self.len();
-        let null_bit_buffer = self
-            .data
-            .null_buffer()
-            .map(|b| b.bit_slice(self.data.offset(), len));
+        let data = self.into_data();
+        let null_bit_buffer = data.nulls().map(|b| b.inner().sliced());
 
         let element_len = std::mem::size_of::<T::Native>();
-        let buffer = self.data.buffers()[0]
-            .slice_with_length(self.data.offset() * element_len, len * element_len);
+        let buffer = data.buffers()[0]
+            .slice_with_length(data.offset() * element_len, len * element_len);
 
-        drop(self.data);
+        drop(data);
 
         let try_mutable_null_buffer = match null_bit_buffer {
             None => Ok(None),
@@ -670,27 +968,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 }
 
-#[inline]
-unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
-    len: usize,
-    buffer: Buffer,
-    null_count: usize,
-    null_buffer: Option<Buffer>,
-) -> PrimitiveArray<O> {
-    PrimitiveArray::from(ArrayData::new_unchecked(
-        O::DATA_TYPE,
-        len,
-        Some(null_count),
-        null_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    ))
-}
-
 impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
     fn from(array: PrimitiveArray<T>) -> Self {
-        array.data
+        let builder = ArrayDataBuilder::new(array.data_type)
+            .len(array.values.len())
+            .nulls(array.nulls)
+            .buffers(vec![array.values.into_inner()]);
+
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -699,12 +984,48 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
+    fn to_data(&self) -> ArrayData {
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        Arc::new(self.slice(offset, length))
+    }
+
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        0
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.nulls.as_ref()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        let mut size = self.values.inner().capacity();
+        if let Some(n) = self.nulls.as_ref() {
+            size += n.buffer().capacity();
+        }
+        size
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.get_buffer_memory_size()
     }
 }
 
@@ -715,6 +1036,7 @@ impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
         PrimitiveArray::value(self, index)
     }
 
+    #[inline]
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         PrimitiveArray::value_unchecked(self, index)
     }
@@ -765,19 +1087,19 @@ where
 impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let data_type = self.data_type();
-        write!(f, "PrimitiveArray<{:?}>\n[\n", data_type)?;
+        write!(f, "PrimitiveArray<{data_type:?}>\n[\n")?;
         print_long_array(self, f, |array, index, f| match data_type {
             DataType::Date32 | DataType::Date64 => {
                 let v = self.value(index).to_isize().unwrap() as i64;
                 match as_date::<T>(v) {
-                    Some(date) => write!(f, "{:?}", date),
+                    Some(date) => write!(f, "{date:?}"),
                     None => write!(f, "null"),
                 }
             }
             DataType::Time32(_) | DataType::Time64(_) => {
                 let v = self.value(index).to_isize().unwrap() as i64;
                 match as_time::<T>(v) {
-                    Some(time) => write!(f, "{:?}", time),
+                    Some(time) => write!(f, "{time:?}"),
                     None => write!(f, "null"),
                 }
             }
@@ -796,8 +1118,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                             Err(_) => match as_datetime::<T>(v) {
                                 Some(datetime) => write!(
                                     f,
-                                    "{:?} (Unknown Time Zone '{}')",
-                                    datetime, tz_string
+                                    "{datetime:?} (Unknown Time Zone '{tz_string}')"
                                 ),
                                 None => write!(f, "null"),
                             },
@@ -805,7 +1126,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                     }
                     // for Timestamp without TimeZone
                     None => match as_datetime::<T>(v) {
-                        Some(datetime) => write!(f, "{:?}", datetime),
+                        Some(datetime) => write!(f, "{datetime:?}"),
                         None => write!(f, "null"),
                     },
                 }
@@ -832,6 +1153,8 @@ impl<'a, T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 }
 
+/// An optional primitive value
+///
 /// This struct is used as an adapter when creating `PrimitiveArray` from an iterator.
 /// `FromIterator` for `PrimitiveArray` takes an iterator where the elements can be `into`
 /// this struct. So once implementing `From` or `Into` trait for a type, an iterator of
@@ -964,7 +1287,7 @@ macro_rules! def_numeric_from_vec {
             fn from(data: Vec<<$ty as ArrowPrimitiveType>::Native>) -> Self {
                 let array_data = ArrayData::builder($ty::DATA_TYPE)
                     .len(data.len())
-                    .add_buffer(Buffer::from_slice_ref(&data));
+                    .add_buffer(Buffer::from_vec(data));
                 let array_data = unsafe { array_data.build_unchecked() };
                 PrimitiveArray::from(array_data)
             }
@@ -989,6 +1312,7 @@ def_numeric_from_vec!(UInt8Type);
 def_numeric_from_vec!(UInt16Type);
 def_numeric_from_vec!(UInt32Type);
 def_numeric_from_vec!(UInt64Type);
+def_numeric_from_vec!(Float16Type);
 def_numeric_from_vec!(Float32Type);
 def_numeric_from_vec!(Float64Type);
 def_numeric_from_vec!(Decimal128Type);
@@ -1031,50 +1355,49 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
         Self::from(data).with_timezone_opt(timezone)
     }
 
+    /// Returns the timezone of this array if any
+    pub fn timezone(&self) -> Option<&str> {
+        match self.data_type() {
+            DataType::Timestamp(_, tz) => tz.as_deref(),
+            _ => unreachable!(),
+        }
+    }
+
     /// Construct a timestamp array with new timezone
-    pub fn with_timezone(&self, timezone: impl Into<String>) -> Self {
+    pub fn with_timezone(self, timezone: impl Into<Arc<str>>) -> Self {
         self.with_timezone_opt(Some(timezone.into()))
     }
 
     /// Construct a timestamp array with UTC
-    pub fn with_timezone_utc(&self) -> Self {
+    pub fn with_timezone_utc(self) -> Self {
         self.with_timezone("+00:00")
     }
 
     /// Construct a timestamp array with an optional timezone
-    pub fn with_timezone_opt(&self, timezone: Option<String>) -> Self {
-        let array_data = unsafe {
-            self.data
-                .clone()
-                .into_builder()
-                .data_type(DataType::Timestamp(T::get_time_unit(), timezone))
-                .build_unchecked()
-        };
-        PrimitiveArray::from(array_data)
+    pub fn with_timezone_opt<S: Into<Arc<str>>>(self, timezone: Option<S>) -> Self {
+        Self {
+            data_type: DataType::Timestamp(T::UNIT, timezone.map(Into::into)),
+            ..self
+        }
     }
 }
 
 /// Constructs a `PrimitiveArray` from an array data reference.
 impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
     fn from(data: ArrayData) -> Self {
-        assert!(
-            Self::is_compatible(data.data_type()),
-            "PrimitiveArray expected ArrayData with type {} got {}",
-            T::DATA_TYPE,
-            data.data_type()
-        );
+        Self::assert_compatible(data.data_type());
         assert_eq!(
             data.buffers().len(),
             1,
             "PrimitiveArray data should contain a single buffer only (values buffer)"
         );
 
-        let ptr = data.buffers()[0].as_ptr();
+        let values =
+            ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
         Self {
-            data,
-            // SAFETY:
-            // ArrayData must be valid, and validated data type above
-            raw_values: unsafe { RawPtrBox::new(ptr) },
+            data_type: data.data_type().clone(),
+            values,
+            nulls: data.nulls().cloned(),
         }
     }
 }
@@ -1083,65 +1406,17 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns a Decimal array with the same data as self, with the
     /// specified precision and scale.
     ///
-    /// Returns an Error if:
-    /// - `precision` is zero
-    /// - `precision` is larger than `T:MAX_PRECISION`
-    /// - `scale` is larger than `T::MAX_SCALE`
-    /// - `scale` is > `precision`
+    /// See [`validate_decimal_precision_and_scale`]
     pub fn with_precision_and_scale(
         self,
         precision: u8,
         scale: i8,
-    ) -> Result<Self, ArrowError>
-    where
-        Self: Sized,
-    {
-        // validate precision and scale
-        self.validate_precision_scale(precision, scale)?;
-
-        // safety: self.data is valid DataType::Decimal as checked above
-        let new_data_type = T::TYPE_CONSTRUCTOR(precision, scale);
-        let data = self.data.into_builder().data_type(new_data_type);
-
-        // SAFETY
-        // Validated data above
-        Ok(unsafe { data.build_unchecked().into() })
-    }
-
-    // validate that the new precision and scale are valid or not
-    fn validate_precision_scale(
-        &self,
-        precision: u8,
-        scale: i8,
-    ) -> Result<(), ArrowError> {
-        if precision == 0 {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "precision cannot be 0, has to be between [1, {}]",
-                T::MAX_PRECISION
-            )));
-        }
-        if precision > T::MAX_PRECISION {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "precision {} is greater than max {}",
-                precision,
-                T::MAX_PRECISION
-            )));
-        }
-        if scale > T::MAX_SCALE {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "scale {} is greater than max {}",
-                scale,
-                T::MAX_SCALE
-            )));
-        }
-        if scale > 0 && scale as u8 > precision {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "scale {} is greater than precision {}",
-                scale, precision
-            )));
-        }
-
-        Ok(())
+    ) -> Result<Self, ArrowError> {
+        validate_decimal_precision_and_scale::<T>(precision, scale)?;
+        Ok(Self {
+            data_type: T::TYPE_CONSTRUCTOR(precision, scale),
+            ..self
+        })
     }
 
     /// Validates values in this array can be properly interpreted
@@ -1174,7 +1449,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn precision(&self) -> u8 {
         match T::BYTE_LENGTH {
             16 => {
-                if let DataType::Decimal128(p, _) = self.data().data_type() {
+                if let DataType::Decimal128(p, _) = self.data_type() {
                     *p
                 } else {
                     unreachable!(
@@ -1184,7 +1459,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 }
             }
             32 => {
-                if let DataType::Decimal256(p, _) = self.data().data_type() {
+                if let DataType::Decimal256(p, _) = self.data_type() {
                     *p
                 } else {
                     unreachable!(
@@ -1201,7 +1476,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn scale(&self) -> i8 {
         match T::BYTE_LENGTH {
             16 => {
-                if let DataType::Decimal128(_, s) = self.data().data_type() {
+                if let DataType::Decimal128(_, s) = self.data_type() {
                     *s
                 } else {
                     unreachable!(
@@ -1211,7 +1486,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
                 }
             }
             32 => {
-                if let DataType::Decimal256(_, s) = self.data().data_type() {
+                if let DataType::Decimal256(_, s) = self.data_type() {
                     *s
                 } else {
                     unreachable!(
@@ -1231,13 +1506,14 @@ mod tests {
     use crate::builder::{Decimal128Builder, Decimal256Builder};
     use crate::cast::downcast_array;
     use crate::{ArrayRef, BooleanArray};
+    use arrow_schema::TimeUnit;
     use std::sync::Arc;
 
     #[test]
     fn test_primitive_array_from_vec() {
         let buf = Buffer::from_slice_ref([0, 1, 2, 3, 4]);
         let arr = Int32Array::from(vec![0, 1, 2, 3, 4]);
-        assert_eq!(buf, arr.data.buffers()[0]);
+        assert_eq!(&buf, arr.values.inner());
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -1304,7 +1580,7 @@ mod tests {
         assert_eq!(3, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
-        let formatted = vec!["00:00:00.001", "10:30:00.005", "23:59:59.210"];
+        let formatted = ["00:00:00.001", "10:30:00.005", "23:59:59.210"];
         for (i, formatted) in formatted.iter().enumerate().take(3) {
             // check that we can't create dates or datetimes from time instances
             assert_eq!(None, arr.value_as_datetime(i));
@@ -1328,7 +1604,7 @@ mod tests {
         assert_eq!(3, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
-        let formatted = vec!["00:00:00.001", "10:30:00.005", "23:59:59.210"];
+        let formatted = ["00:00:00.001", "10:30:00.005", "23:59:59.210"];
         for (i, item) in formatted.iter().enumerate().take(3) {
             // check that we can't create dates or datetimes from time instances
             assert_eq!(None, arr.value_as_datetime(i));
@@ -1477,7 +1753,6 @@ mod tests {
 
         let arr2 = arr.slice(2, 5);
         assert_eq!(5, arr2.len());
-        assert_eq!(2, arr2.offset());
         assert_eq!(1, arr2.null_count());
 
         for i in 0..arr2.len() {
@@ -1490,7 +1765,6 @@ mod tests {
 
         let arr3 = arr2.slice(2, 3);
         assert_eq!(3, arr3.len());
-        assert_eq!(4, arr3.offset());
         assert_eq!(0, arr3.null_count());
 
         let int_arr3 = arr3.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -1546,7 +1820,7 @@ mod tests {
         let arr = Int32Array::from(vec![0, 1, 2, 3, 4]);
         assert_eq!(
             "PrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1558,13 +1832,13 @@ mod tests {
                 "PrimitiveArray<Int16>\n[\n{}\n]",
                 values
                     .iter()
-                    .map(|v| { format!("  {},", v) })
+                    .map(|v| { format!("  {v},") })
                     .collect::<Vec<String>>()
                     .join("\n")
             );
             let array = Int16Array::from(values);
 
-            assert_eq!(array_expected, format!("{:?}", array));
+            assert_eq!(array_expected, format!("{array:?}"));
         })
     }
 
@@ -1577,7 +1851,7 @@ mod tests {
         let arr = builder.finish();
         assert_eq!(
             "PrimitiveArray<Int32>\n[\n  0,\n  1,\n  null,\n  3,\n  4,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1591,7 +1865,7 @@ mod tests {
             ]);
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, None)>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1606,7 +1880,7 @@ mod tests {
             .with_timezone_utc();
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"+00:00\"))>\n[\n  2018-12-31T00:00:00+00:00,\n  2018-12-31T00:00:00+00:00,\n  1921-01-02T00:00:00+00:00,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1637,11 +1911,11 @@ mod tests {
             ])
             .with_timezone("Asia/Taipei".to_string());
 
-        println!("{:?}", arr);
+        println!("{arr:?}");
 
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1656,7 +1930,7 @@ mod tests {
             .with_timezone("+08:00".to_string());
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"+08:00\"))>\n[\n  2018-12-31T08:00:00+08:00,\n  2018-12-31T08:00:00+08:00,\n  1921-01-02T08:00:00+08:00,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1671,7 +1945,7 @@ mod tests {
             .with_timezone("xxx".to_string());
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"xxx\"))>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'xxx'),\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1697,7 +1971,7 @@ mod tests {
         let arr: PrimitiveArray<Date32Type> = vec![12356, 13548, -365].into();
         assert_eq!(
             "PrimitiveArray<Date32>\n[\n  2003-10-31,\n  2007-02-04,\n  1969-01-01,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1706,7 +1980,7 @@ mod tests {
         let arr: PrimitiveArray<Time32SecondType> = vec![7201, 60054].into();
         assert_eq!(
             "PrimitiveArray<Time32(Second)>\n[\n  02:00:01,\n  16:40:54,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -1716,7 +1990,7 @@ mod tests {
         let arr: PrimitiveArray<Time32SecondType> = vec![-7201, -60054].into();
         assert_eq!(
             "PrimitiveArray<Time32(Second)>\n[\n  null,\n  null,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         )
     }
 
@@ -1727,7 +2001,7 @@ mod tests {
             vec![9065525203050843594].into();
         assert_eq!(
             "PrimitiveArray<Timestamp(Microsecond, None)>\n[\n  null,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         )
     }
 
@@ -1735,7 +2009,7 @@ mod tests {
     fn test_primitive_array_builder() {
         // Test building a primitive array with ArrayData builder and offset
         let buf = Buffer::from_slice_ref([0i32, 1, 2, 3, 4, 5, 6]);
-        let buf2 = buf.clone();
+        let buf2 = buf.slice_with_length(8, 20);
         let data = ArrayData::builder(DataType::Int32)
             .len(5)
             .offset(2)
@@ -1743,7 +2017,7 @@ mod tests {
             .build()
             .unwrap();
         let arr = Int32Array::from(data);
-        assert_eq!(buf2, arr.data.buffers()[0]);
+        assert_eq!(&buf2, arr.values.inner());
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.null_count());
         for i in 0..3 {
@@ -1792,7 +2066,7 @@ mod tests {
         let primitive_array = PrimitiveArray::<Int32Type>::from_iter(iter);
         assert_eq!(primitive_array.len(), 10);
         assert_eq!(primitive_array.null_count(), 0);
-        assert_eq!(primitive_array.data().null_buffer(), None);
+        assert!(primitive_array.nulls().is_none());
         assert_eq!(primitive_array.values(), &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     }
 
@@ -1843,9 +2117,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "PrimitiveArray expected ArrayData with type Int64 got Int32"
-    )]
+    #[should_panic(expected = "PrimitiveArray expected data type Int64 got Int32")]
     fn test_from_array_data_validation() {
         let foo = PrimitiveArray::<Int32Type>::from_iter([1, 2, 3]);
         let _ = PrimitiveArray::<Int64Type>::from(foo.into_data());
@@ -1865,7 +2137,7 @@ mod tests {
         let array = PrimitiveArray::<Decimal128Type>::from(values.clone());
         assert_eq!(array.values(), &values);
 
-        let array = PrimitiveArray::<Decimal128Type>::from(array.data().clone());
+        let array = PrimitiveArray::<Decimal128Type>::from(array.to_data());
         assert_eq!(array.values(), &values);
     }
 
@@ -1885,7 +2157,7 @@ mod tests {
         let array = PrimitiveArray::<Decimal256Type>::from(values.clone());
         assert_eq!(array.values(), &values);
 
-        let array = PrimitiveArray::<Decimal256Type>::from(array.data().clone());
+        let array = PrimitiveArray::<Decimal256Type>::from(array.to_data());
         assert_eq!(array.values(), &values);
     }
 
@@ -1947,7 +2219,7 @@ mod tests {
 
     #[test]
     fn test_decimal_from_iter_values() {
-        let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
+        let array = Decimal128Array::from_iter_values(vec![-100, 0, 101]);
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
         assert_eq!(-100_i128, array.value(0));
@@ -2147,8 +2419,7 @@ mod tests {
         expected = "Trying to access an element at index 4 from a PrimitiveArray of length 3"
     )]
     fn test_fixed_size_binary_array_get_value_index_out_of_bound() {
-        let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
-
+        let array = Decimal128Array::from(vec![-100, 0, 101]);
         array.value(4);
     }
 
@@ -2181,7 +2452,7 @@ mod tests {
 
         let boxed: ArrayRef = Arc::new(array);
 
-        let col: Int32Array = PrimitiveArray::<Int32Type>::from(boxed.data().clone());
+        let col: Int32Array = PrimitiveArray::<Int32Type>::from(boxed.to_data());
         let err = col.into_builder();
 
         match err {
@@ -2221,10 +2492,44 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "PrimitiveArray expected ArrayData with type Interval(MonthDayNano) got Interval(DayTime)"
+        expected = "PrimitiveArray expected data type Interval(MonthDayNano) got Interval(DayTime)"
     )]
     fn test_invalid_interval_type() {
         let array = IntervalDayTimeArray::from(vec![1, 2, 3]);
         let _ = IntervalMonthDayNanoArray::from(array.into_data());
+    }
+
+    #[test]
+    fn test_timezone() {
+        let array = TimestampNanosecondArray::from_iter_values([1, 2]);
+        assert_eq!(array.timezone(), None);
+
+        let array = array.with_timezone("+02:00");
+        assert_eq!(array.timezone(), Some("+02:00"));
+    }
+
+    #[test]
+    fn test_try_new() {
+        Int32Array::new(vec![1, 2, 3, 4].into(), None);
+        Int32Array::new(vec![1, 2, 3, 4].into(), Some(NullBuffer::new_null(4)));
+
+        let err =
+            Int32Array::try_new(vec![1, 2, 3, 4].into(), Some(NullBuffer::new_null(3)))
+                .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for PrimitiveArray, expected 4 got 3"
+        );
+
+        TimestampNanosecondArray::new(vec![1, 2, 3, 4].into(), None).with_data_type(
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("03:00".into())),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "PrimitiveArray expected data type Int32 got Date32")]
+    fn test_with_data_type() {
+        Int32Array::new(vec![1, 2, 3, 4].into(), None).with_data_type(DataType::Date32);
     }
 }

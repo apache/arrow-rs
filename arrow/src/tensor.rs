@@ -85,16 +85,36 @@ pub struct Tensor<'a, T: ArrowPrimitiveType> {
 }
 
 pub type BooleanTensor<'a> = Tensor<'a, BooleanType>;
+pub type Date32Tensor<'a> = Tensor<'a, Date32Type>;
+pub type Date64Tensor<'a> = Tensor<'a, Date64Type>;
+pub type Decimal128Tensor<'a> = Tensor<'a, Decimal128Type>;
+pub type Decimal256Tensor<'a> = Tensor<'a, Decimal256Type>;
+pub type DurationMicrosecondTensor<'a> = Tensor<'a, DurationMicrosecondType>;
+pub type DurationMillisecondTensor<'a> = Tensor<'a, DurationMillisecondType>;
+pub type DurationNanosecondTensor<'a> = Tensor<'a, DurationNanosecondType>;
+pub type DurationSecondTensor<'a> = Tensor<'a, DurationSecondType>;
+pub type Float16Tensor<'a> = Tensor<'a, Float16Type>;
+pub type Float32Tensor<'a> = Tensor<'a, Float32Type>;
+pub type Float64Tensor<'a> = Tensor<'a, Float64Type>;
 pub type Int8Tensor<'a> = Tensor<'a, Int8Type>;
 pub type Int16Tensor<'a> = Tensor<'a, Int16Type>;
 pub type Int32Tensor<'a> = Tensor<'a, Int32Type>;
 pub type Int64Tensor<'a> = Tensor<'a, Int64Type>;
+pub type IntervalDayTimeTensor<'a> = Tensor<'a, IntervalDayTimeType>;
+pub type IntervalMonthDayNanoTensor<'a> = Tensor<'a, IntervalMonthDayNanoType>;
+pub type IntervalYearMonthTensor<'a> = Tensor<'a, IntervalYearMonthType>;
+pub type Time32MillisecondTensor<'a> = Tensor<'a, Time32MillisecondType>;
+pub type Time32SecondTensor<'a> = Tensor<'a, Time32SecondType>;
+pub type Time64MicrosecondTensor<'a> = Tensor<'a, Time64MicrosecondType>;
+pub type Time64NanosecondTensor<'a> = Tensor<'a, Time64NanosecondType>;
+pub type TimestampMicrosecondTensor<'a> = Tensor<'a, TimestampMicrosecondType>;
+pub type TimestampMillisecondTensor<'a> = Tensor<'a, TimestampMillisecondType>;
+pub type TimestampNanosecondTensor<'a> = Tensor<'a, TimestampNanosecondType>;
+pub type TimestampSecondTensor<'a> = Tensor<'a, TimestampSecondType>;
 pub type UInt8Tensor<'a> = Tensor<'a, UInt8Type>;
 pub type UInt16Tensor<'a> = Tensor<'a, UInt16Type>;
 pub type UInt32Tensor<'a> = Tensor<'a, UInt32Type>;
 pub type UInt64Tensor<'a> = Tensor<'a, UInt64Type>;
-pub type Float32Tensor<'a> = Tensor<'a, Float32Type>;
-pub type Float64Tensor<'a> = Tensor<'a, Float64Type>;
 
 impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
     /// Creates a new `Tensor`

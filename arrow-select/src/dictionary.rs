@@ -21,8 +21,7 @@ use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array};
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray};
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
-use arrow_data::bit_iterator::BitIndexIterator;
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
@@ -86,13 +85,13 @@ pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     arrays: &[&dyn Array],
     len: usize,
 ) -> bool {
-    let first_array = &arrays[0].data();
+    let first_array = &arrays[0].to_data();
     let first_values = &first_array.child_data()[0];
 
     let mut single_dictionary = true;
     let mut total_values = first_values.len();
     for a in arrays.iter().skip(1) {
-        let data = a.data();
+        let data = a.to_data();
 
         let values = &data.child_data()[0];
         total_values += values.len();
@@ -111,7 +110,7 @@ pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
 /// keys to the new keys within this values array. Best-effort will be made to ensure
 /// that the dictionary values are unique
 pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
-    dictionaries: &[(&DictionaryArray<K>, Option<Buffer>)],
+    dictionaries: &[(&DictionaryArray<K>, Option<BooleanBuffer>)],
 ) -> Result<MergedDictionaries<K>, ArrowError> {
     let mut num_values = 0;
 
@@ -120,10 +119,7 @@ pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
 
     for (dictionary, key_mask) in dictionaries {
         let values_mask = match key_mask {
-            Some(key_mask) => {
-                let iter = BitIndexIterator::new(key_mask, 0, dictionary.len());
-                compute_values_mask(dictionary, iter)
-            }
+            Some(key_mask) => compute_values_mask(dictionary, key_mask.set_indices()),
             None => compute_values_mask(dictionary, 0..dictionary.len()),
         };
         let v = dictionary.values().as_ref();
@@ -169,7 +165,10 @@ pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
 
 /// Return a mask identifying the values that are referenced by keys in `dictionary`
 /// at the positions indicated by `selection`
-fn compute_values_mask<K, I>(dictionary: &DictionaryArray<K>, selection: I) -> Buffer
+fn compute_values_mask<K, I>(
+    dictionary: &DictionaryArray<K>,
+    selection: I,
+) -> BooleanBuffer
 where
     K: ArrowDictionaryKeyType,
     I: IntoIterator<Item = usize>,
@@ -190,7 +189,10 @@ where
 }
 
 /// Return a Vec containing for each set index in `mask`, the index and byte value of that index
-fn get_masked_values<'a>(array: &'a dyn Array, mask: &Buffer) -> Vec<(usize, &'a [u8])> {
+fn get_masked_values<'a>(
+    array: &'a dyn Array,
+    mask: &BooleanBuffer,
+) -> Vec<(usize, &'a [u8])> {
     match array.data_type() {
         DataType::Utf8 => masked_bytes(as_string_array(array), mask),
         DataType::LargeUtf8 => masked_bytes(as_largestring_array(array), mask),
@@ -207,11 +209,10 @@ fn get_masked_values<'a>(array: &'a dyn Array, mask: &Buffer) -> Vec<(usize, &'a
 /// Note: this does not check the null mask and will return values contained in null slots
 fn masked_bytes<'a, T: ByteArrayType>(
     array: &'a GenericByteArray<T>,
-    mask: &Buffer,
+    mask: &BooleanBuffer,
 ) -> Vec<(usize, &'a [u8])> {
-    let cap = mask.count_set_bits_offset(0, array.len());
-    let mut out = Vec::with_capacity(cap);
-    for idx in BitIndexIterator::new(mask.as_slice(), 0, array.len()) {
+    let mut out = Vec::with_capacity(mask.count_set_bits());
+    for idx in mask.set_indices() {
         out.push((idx, array.value(idx).as_ref()))
     }
     out
@@ -220,10 +221,10 @@ fn masked_bytes<'a, T: ByteArrayType>(
 #[cfg(test)]
 mod tests {
     use crate::dictionary::merge_dictionary_values;
-    use arrow_array::cast::{as_dictionary_array, as_string_array};
+    use arrow_array::cast::as_string_array;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Array, DictionaryArray};
-    use arrow_buffer::Buffer;
+    use arrow_array::DictionaryArray;
+    use arrow_buffer::BooleanBuffer;
 
     #[test]
     fn test_merge_strings() {
@@ -241,11 +242,7 @@ mod tests {
         assert_eq!(&merged.key_mappings[1], &[3, 5, 2, 0]);
 
         let a_slice = a.slice(1, 4);
-        let merged = merge_dictionary_values(&[
-            (as_dictionary_array::<Int32Type>(a_slice.as_ref()), None),
-            (&b, None),
-        ])
-        .unwrap();
+        let merged = merge_dictionary_values(&[(&a_slice, None), (&b, None)]).unwrap();
 
         let values = as_string_array(merged.values.as_ref());
         let actual: Vec<_> = values.iter().map(Option::unwrap).collect();
@@ -256,7 +253,8 @@ mod tests {
         assert_eq!(&merged.key_mappings[1], &[3, 4, 2, 0]);
 
         // Mask out only ["b", "b", "d"] from a
-        let mask = Buffer::from_iter([false, true, false, true, true, false, false]);
+        let mask =
+            BooleanBuffer::from_iter([false, true, false, true, true, false, false]);
         let merged = merge_dictionary_values(&[(&a, Some(mask)), (&b, None)]).unwrap();
 
         let values = as_string_array(merged.values.as_ref());

@@ -31,6 +31,7 @@ mod fixed_list;
 mod list;
 mod null;
 mod primitive;
+mod run;
 mod structure;
 mod union;
 mod utils;
@@ -49,6 +50,8 @@ use primitive::primitive_equal;
 use structure::struct_equal;
 use union::union_equal;
 use variable_size::variable_sized_equal;
+
+use self::run::run_equal;
 
 /// Compares the values of two [ArrayData] starting at `lhs_start` and `rhs_start` respectively
 /// for `len` slots.
@@ -109,7 +112,7 @@ fn equal_values(
             fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::Struct(_) => struct_equal(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::Union(_, _, _) => union_equal(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Union(_, _) => union_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Dictionary(data_type, _) => match data_type.as_ref() {
             DataType::Int8 => dictionary_equal::<i8>(lhs, rhs, lhs_start, rhs_start, len),
             DataType::Int16 => {
@@ -137,6 +140,7 @@ fn equal_values(
         },
         DataType::Float16 => primitive_equal::<f16>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Map(_, _) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::RunEndEncoded(_, _) => run_equal(lhs, rhs, lhs_start, rhs_start, len),
     }
 }
 

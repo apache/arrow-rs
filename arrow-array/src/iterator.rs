@@ -21,6 +21,8 @@ use crate::array::{
     ArrayAccessor, BooleanArray, FixedSizeBinaryArray, GenericBinaryArray,
     GenericListArray, GenericStringArray, PrimitiveArray,
 };
+use crate::{FixedSizeListArray, MapArray};
+use arrow_buffer::NullBuffer;
 
 /// An iterator that returns Some(T) or None, that can be used on any [`ArrayAccessor`]
 ///
@@ -45,6 +47,7 @@ use crate::array::{
 #[derive(Debug)]
 pub struct ArrayIter<T: ArrayAccessor> {
     array: T,
+    logical_nulls: Option<NullBuffer>,
     current: usize,
     current_end: usize,
 }
@@ -53,11 +56,21 @@ impl<T: ArrayAccessor> ArrayIter<T> {
     /// create a new iterator
     pub fn new(array: T) -> Self {
         let len = array.len();
+        let logical_nulls = array.logical_nulls();
         ArrayIter {
             array,
+            logical_nulls,
             current: 0,
             current_end: len,
         }
+    }
+
+    #[inline]
+    fn is_null(&self, idx: usize) -> bool {
+        self.logical_nulls
+            .as_ref()
+            .map(|x| x.is_null(idx))
+            .unwrap_or_default()
     }
 }
 
@@ -68,7 +81,7 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.current == self.current_end {
             None
-        } else if self.array.is_null(self.current) {
+        } else if self.is_null(self.current) {
             self.current += 1;
             Some(None)
         } else {
@@ -97,7 +110,7 @@ impl<T: ArrayAccessor> DoubleEndedIterator for ArrayIter<T> {
             None
         } else {
             self.current_end -= 1;
-            Some(if self.array.is_null(self.current_end) {
+            Some(if self.is_null(self.current_end) {
                 None
             } else {
                 // Safety:
@@ -124,8 +137,12 @@ pub type GenericStringIter<'a, T> = ArrayIter<&'a GenericStringArray<T>>;
 pub type GenericBinaryIter<'a, T> = ArrayIter<&'a GenericBinaryArray<T>>;
 /// an iterator that returns Some(T) or None, that can be used on any FixedSizeBinaryArray
 pub type FixedSizeBinaryIter<'a> = ArrayIter<&'a FixedSizeBinaryArray>;
+/// an iterator that returns Some(T) or None, that can be used on any FixedSizeListArray
+pub type FixedSizeListIter<'a> = ArrayIter<&'a FixedSizeListArray>;
 /// an iterator that returns Some(T) or None, that can be used on any ListArray
 pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
+/// an iterator that returns Some(T) or None, that can be used on any MapArray
+pub type MapArrayIter<'a> = ArrayIter<&'a MapArray>;
 
 #[cfg(test)]
 mod tests {

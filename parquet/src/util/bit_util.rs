@@ -17,37 +17,34 @@
 
 use std::{cmp, mem::size_of};
 
-use crate::data_type::AsBytes;
+use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
+use crate::errors::{ParquetError, Result};
 use crate::util::bit_pack::{unpack16, unpack32, unpack64, unpack8};
 use crate::util::memory::ByteBufferPtr;
 
 #[inline]
-pub fn from_ne_slice<T: FromBytes>(bs: &[u8]) -> T {
-    let mut b = T::Buffer::default();
-    {
-        let b = b.as_mut();
-        let bs = &bs[..b.len()];
-        b.copy_from_slice(bs);
-    }
-    T::from_ne_bytes(b)
+pub fn from_le_slice<T: FromBytes>(bs: &[u8]) -> T {
+    // TODO: propagate the error (#3577)
+    T::try_from_le_slice(bs).unwrap()
 }
 
 #[inline]
-pub fn from_le_slice<T: FromBytes>(bs: &[u8]) -> T {
-    let mut b = T::Buffer::default();
-    {
-        let b = b.as_mut();
-        let bs = &bs[..b.len()];
-        b.copy_from_slice(bs);
+fn array_from_slice<const N: usize>(bs: &[u8]) -> Result<[u8; N]> {
+    // Need to slice as may be called with zero-padded values
+    match bs.get(..N) {
+        Some(b) => Ok(b.try_into().unwrap()),
+        None => Err(general_err!(
+            "error converting value, expected {} bytes got {}",
+            N,
+            bs.len()
+        )),
     }
-    T::from_le_bytes(b)
 }
 
 pub trait FromBytes: Sized {
     type Buffer: AsMut<[u8]> + Default;
+    fn try_from_le_slice(b: &[u8]) -> Result<Self>;
     fn from_le_bytes(bs: Self::Buffer) -> Self;
-    fn from_be_bytes(bs: Self::Buffer) -> Self;
-    fn from_ne_bytes(bs: Self::Buffer) -> Self;
 }
 
 macro_rules! from_le_bytes {
@@ -55,38 +52,69 @@ macro_rules! from_le_bytes {
         $(
         impl FromBytes for $ty {
             type Buffer = [u8; size_of::<Self>()];
+            fn try_from_le_slice(b: &[u8]) -> Result<Self> {
+                Ok(Self::from_le_bytes(array_from_slice(b)?))
+            }
             fn from_le_bytes(bs: Self::Buffer) -> Self {
                 <$ty>::from_le_bytes(bs)
-            }
-            fn from_be_bytes(bs: Self::Buffer) -> Self {
-                <$ty>::from_be_bytes(bs)
-            }
-            fn from_ne_bytes(bs: Self::Buffer) -> Self {
-                <$ty>::from_ne_bytes(bs)
             }
         }
         )*
     };
 }
 
+from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64, f32, f64 }
+
 impl FromBytes for bool {
     type Buffer = [u8; 1];
+
+    fn try_from_le_slice(b: &[u8]) -> Result<Self> {
+        Ok(Self::from_le_bytes(array_from_slice(b)?))
+    }
     fn from_le_bytes(bs: Self::Buffer) -> Self {
-        Self::from_ne_bytes(bs)
-    }
-    fn from_be_bytes(bs: Self::Buffer) -> Self {
-        Self::from_ne_bytes(bs)
-    }
-    fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        match bs[0] {
-            0 => false,
-            1 => true,
-            _ => panic!("Invalid byte when reading bool"),
-        }
+        bs[0] != 0
     }
 }
 
-from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64, f32, f64 }
+impl FromBytes for Int96 {
+    type Buffer = [u8; 12];
+
+    fn try_from_le_slice(b: &[u8]) -> Result<Self> {
+        Ok(Self::from_le_bytes(array_from_slice(b)?))
+    }
+
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        let mut i = Int96::new();
+        i.set_data(
+            from_le_slice(&bs[0..4]),
+            from_le_slice(&bs[4..8]),
+            from_le_slice(&bs[8..12]),
+        );
+        i
+    }
+}
+
+impl FromBytes for ByteArray {
+    type Buffer = Vec<u8>;
+
+    fn try_from_le_slice(b: &[u8]) -> Result<Self> {
+        Ok(b.to_vec().into())
+    }
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        bs.into()
+    }
+}
+
+impl FromBytes for FixedLenByteArray {
+    type Buffer = Vec<u8>;
+
+    fn try_from_le_slice(b: &[u8]) -> Result<Self> {
+        Ok(b.to_vec().into())
+    }
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        bs.into()
+    }
+}
 
 /// Reads `size` of bytes from `src`, and reinterprets them as type `ty`, in
 /// little-endian order.
@@ -98,7 +126,7 @@ where
     assert!(size <= src.len());
     let mut buffer = <T as FromBytes>::Buffer::default();
     buffer.as_mut()[..size].copy_from_slice(&src[..size]);
-    <T>::from_ne_bytes(buffer)
+    <T>::from_le_bytes(buffer)
 }
 
 /// Returns the ceil of value/divisor.
@@ -395,7 +423,7 @@ impl BitReader {
         }
 
         // TODO: better to avoid copying here
-        Some(from_ne_slice(v.as_bytes()))
+        Some(from_le_slice(v.as_bytes()))
     }
 
     /// Read multiple values from their packed representation where each element is represented
@@ -610,8 +638,7 @@ impl BitReader {
             shift += 7;
             assert!(
                 shift <= MAX_VLQ_BYTE_LEN * 7,
-                "Num of bytes exceed MAX_VLQ_BYTE_LEN ({})",
-                MAX_VLQ_BYTE_LEN
+                "Num of bytes exceed MAX_VLQ_BYTE_LEN ({MAX_VLQ_BYTE_LEN})"
             );
             if byte & 0x80 == 0 {
                 return Some(v);
@@ -973,7 +1000,7 @@ mod tests {
 
         // Generic values used to check against actual values read from `get_batch`.
         let expected_values: Vec<T> =
-            values.iter().map(|v| from_ne_slice(v.as_bytes())).collect();
+            values.iter().map(|v| from_le_slice(v.as_bytes())).collect();
 
         (0..total).for_each(|i| writer.put_value(values[i], num_bits));
 

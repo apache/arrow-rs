@@ -735,8 +735,7 @@ pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
 pub fn validate_decimal_precision(value: i128, precision: u8) -> Result<(), ArrowError> {
     if precision > DECIMAL128_MAX_PRECISION {
         return Err(ArrowError::InvalidArgumentError(format!(
-            "Max precision of a Decimal128 is {}, but got {}",
-            DECIMAL128_MAX_PRECISION, precision,
+            "Max precision of a Decimal128 is {DECIMAL128_MAX_PRECISION}, but got {precision}",
         )));
     }
 
@@ -745,13 +744,11 @@ pub fn validate_decimal_precision(value: i128, precision: u8) -> Result<(), Arro
 
     if value > max {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{} is too large to store in a Decimal128 of precision {}. Max is {}",
-            value, precision, max
+            "{value} is too large to store in a Decimal128 of precision {precision}. Max is {max}"
         )))
     } else if value < min {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{} is too small to store in a Decimal128 of precision {}. Min is {}",
-            value, precision, min
+            "{value} is too small to store in a Decimal128 of precision {precision}. Min is {min}"
         )))
     } else {
         Ok(())
@@ -767,8 +764,7 @@ pub fn validate_decimal256_precision(
 ) -> Result<(), ArrowError> {
     if precision > DECIMAL256_MAX_PRECISION {
         return Err(ArrowError::InvalidArgumentError(format!(
-            "Max precision of a Decimal256 is {}, but got {}",
-            DECIMAL256_MAX_PRECISION, precision,
+            "Max precision of a Decimal256 is {DECIMAL256_MAX_PRECISION}, but got {precision}",
         )));
     }
     let max = MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[usize::from(precision) - 1];
@@ -776,13 +772,11 @@ pub fn validate_decimal256_precision(
 
     if value > max {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{:?} is too large to store in a Decimal256 of precision {}. Max is {:?}",
-            value, precision, max
+            "{value:?} is too large to store in a Decimal256 of precision {precision}. Max is {max:?}"
         )))
     } else if value < min {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{:?} is too small to store in a Decimal256 of precision {}. Min is {:?}",
-            value, precision, min
+            "{value:?} is too small to store in a Decimal256 of precision {precision}. Min is {min:?}"
         )))
     } else {
         Ok(())

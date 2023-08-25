@@ -1128,9 +1128,9 @@ mod tests {
 
     #[test]
     fn test_plain_decode_int32() {
-        let data = vec![42, 18, 52];
+        let data = [42, 18, 52];
         let data_bytes = Int32Type::to_byte_array(&data[..]);
-        let mut buffer = vec![0; 3];
+        let mut buffer = [0; 3];
         test_plain_decode::<Int32Type>(
             ByteBufferPtr::new(data_bytes),
             3,
@@ -1142,7 +1142,7 @@ mod tests {
 
     #[test]
     fn test_plain_skip_int32() {
-        let data = vec![42, 18, 52];
+        let data = [42, 18, 52];
         let data_bytes = Int32Type::to_byte_array(&data[..]);
         test_plain_skip::<Int32Type>(
             ByteBufferPtr::new(data_bytes),
@@ -1155,7 +1155,7 @@ mod tests {
 
     #[test]
     fn test_plain_skip_all_int32() {
-        let data = vec![42, 18, 52];
+        let data = [42, 18, 52];
         let data_bytes = Int32Type::to_byte_array(&data[..]);
         test_plain_skip::<Int32Type>(ByteBufferPtr::new(data_bytes), 3, 5, -1, &[]);
     }
@@ -1165,7 +1165,7 @@ mod tests {
         let data = [42, 18, 52];
         let expected_data = [0, 42, 0, 18, 0, 0, 52, 0];
         let data_bytes = Int32Type::to_byte_array(&data[..]);
-        let mut buffer = vec![0; 8];
+        let mut buffer = [0; 8];
         let num_nulls = 5;
         let valid_bits = [0b01001010];
         test_plain_decode_spaced::<Int32Type>(
@@ -1181,9 +1181,9 @@ mod tests {
 
     #[test]
     fn test_plain_decode_int64() {
-        let data = vec![42, 18, 52];
+        let data = [42, 18, 52];
         let data_bytes = Int64Type::to_byte_array(&data[..]);
-        let mut buffer = vec![0; 3];
+        let mut buffer = [0; 3];
         test_plain_decode::<Int64Type>(
             ByteBufferPtr::new(data_bytes),
             3,
@@ -1195,7 +1195,7 @@ mod tests {
 
     #[test]
     fn test_plain_skip_int64() {
-        let data = vec![42, 18, 52];
+        let data = [42, 18, 52];
         let data_bytes = Int64Type::to_byte_array(&data[..]);
         test_plain_skip::<Int64Type>(
             ByteBufferPtr::new(data_bytes),
@@ -1208,16 +1208,16 @@ mod tests {
 
     #[test]
     fn test_plain_skip_all_int64() {
-        let data = vec![42, 18, 52];
+        let data = [42, 18, 52];
         let data_bytes = Int64Type::to_byte_array(&data[..]);
         test_plain_skip::<Int64Type>(ByteBufferPtr::new(data_bytes), 3, 3, -1, &[]);
     }
 
     #[test]
     fn test_plain_decode_float() {
-        let data = vec![PI_f32, 2.414, 12.51];
+        let data = [PI_f32, 2.414, 12.51];
         let data_bytes = FloatType::to_byte_array(&data[..]);
-        let mut buffer = vec![0.0; 3];
+        let mut buffer = [0.0; 3];
         test_plain_decode::<FloatType>(
             ByteBufferPtr::new(data_bytes),
             3,
@@ -1229,7 +1229,7 @@ mod tests {
 
     #[test]
     fn test_plain_skip_float() {
-        let data = vec![PI_f32, 2.414, 12.51];
+        let data = [PI_f32, 2.414, 12.51];
         let data_bytes = FloatType::to_byte_array(&data[..]);
         test_plain_skip::<FloatType>(
             ByteBufferPtr::new(data_bytes),
@@ -1242,14 +1242,14 @@ mod tests {
 
     #[test]
     fn test_plain_skip_all_float() {
-        let data = vec![PI_f32, 2.414, 12.51];
+        let data = [PI_f32, 2.414, 12.51];
         let data_bytes = FloatType::to_byte_array(&data[..]);
         test_plain_skip::<FloatType>(ByteBufferPtr::new(data_bytes), 3, 4, -1, &[]);
     }
 
     #[test]
     fn test_plain_skip_double() {
-        let data = vec![PI_f64, 2.414f64, 12.51f64];
+        let data = [PI_f64, 2.414f64, 12.51f64];
         let data_bytes = DoubleType::to_byte_array(&data[..]);
         test_plain_skip::<DoubleType>(
             ByteBufferPtr::new(data_bytes),
@@ -1262,16 +1262,16 @@ mod tests {
 
     #[test]
     fn test_plain_skip_all_double() {
-        let data = vec![PI_f64, 2.414f64, 12.51f64];
+        let data = [PI_f64, 2.414f64, 12.51f64];
         let data_bytes = DoubleType::to_byte_array(&data[..]);
         test_plain_skip::<DoubleType>(ByteBufferPtr::new(data_bytes), 3, 5, -1, &[]);
     }
 
     #[test]
     fn test_plain_decode_double() {
-        let data = vec![PI_f64, 2.414f64, 12.51f64];
+        let data = [PI_f64, 2.414f64, 12.51f64];
         let data_bytes = DoubleType::to_byte_array(&data[..]);
-        let mut buffer = vec![0.0f64; 3];
+        let mut buffer = [0.0f64; 3];
         test_plain_decode::<DoubleType>(
             ByteBufferPtr::new(data_bytes),
             3,
@@ -1283,13 +1283,13 @@ mod tests {
 
     #[test]
     fn test_plain_decode_int96() {
-        let mut data = vec![Int96::new(); 4];
+        let mut data = [Int96::new(); 4];
         data[0].set_data(11, 22, 33);
         data[1].set_data(44, 55, 66);
         data[2].set_data(10, 20, 30);
         data[3].set_data(40, 50, 60);
         let data_bytes = Int96Type::to_byte_array(&data[..]);
-        let mut buffer = vec![Int96::new(); 4];
+        let mut buffer = [Int96::new(); 4];
         test_plain_decode::<Int96Type>(
             ByteBufferPtr::new(data_bytes),
             4,
@@ -1301,7 +1301,7 @@ mod tests {
 
     #[test]
     fn test_plain_skip_int96() {
-        let mut data = vec![Int96::new(); 4];
+        let mut data = [Int96::new(); 4];
         data[0].set_data(11, 22, 33);
         data[1].set_data(44, 55, 66);
         data[2].set_data(10, 20, 30);
@@ -1318,7 +1318,7 @@ mod tests {
 
     #[test]
     fn test_plain_skip_all_int96() {
-        let mut data = vec![Int96::new(); 4];
+        let mut data = [Int96::new(); 4];
         data[0].set_data(11, 22, 33);
         data[1].set_data(44, 55, 66);
         data[2].set_data(10, 20, 30);
@@ -1329,11 +1329,11 @@ mod tests {
 
     #[test]
     fn test_plain_decode_bool() {
-        let data = vec![
+        let data = [
             false, true, false, false, true, false, true, true, false, true,
         ];
         let data_bytes = BoolType::to_byte_array(&data[..]);
-        let mut buffer = vec![false; 10];
+        let mut buffer = [false; 10];
         test_plain_decode::<BoolType>(
             ByteBufferPtr::new(data_bytes),
             10,
@@ -1345,7 +1345,7 @@ mod tests {
 
     #[test]
     fn test_plain_skip_bool() {
-        let data = vec![
+        let data = [
             false, true, false, false, true, false, true, true, false, true,
         ];
         let data_bytes = BoolType::to_byte_array(&data[..]);
@@ -1360,7 +1360,7 @@ mod tests {
 
     #[test]
     fn test_plain_skip_all_bool() {
-        let data = vec![
+        let data = [
             false, true, false, false, true, false, true, true, false, true,
         ];
         let data_bytes = BoolType::to_byte_array(&data[..]);
@@ -1946,11 +1946,12 @@ mod tests {
         let decoder = get_decoder::<T>(descr, encoding);
         match err {
             Some(parquet_error) => {
-                assert!(decoder.is_err());
-                assert_eq!(decoder.err().unwrap(), parquet_error);
+                assert_eq!(
+                    decoder.err().unwrap().to_string(),
+                    parquet_error.to_string()
+                );
             }
             None => {
-                assert!(decoder.is_ok());
                 assert_eq!(decoder.unwrap().encoding(), encoding);
             }
         }

@@ -15,17 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::task::Poll;
+
 use crate::{
-    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient, Action,
-    ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, PutResult, Ticket,
+    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient,
+    trailers::extract_lazy_trailers, Action, ActionType, Criteria, Empty, FlightData,
+    FlightDescriptor, FlightInfo, HandshakeRequest, PutResult, Ticket,
 };
 use arrow_schema::Schema;
 use bytes::Bytes;
 use futures::{
     future::ready,
+    ready,
     stream::{self, BoxStream},
-    Stream, StreamExt, TryStreamExt,
+    FutureExt, Stream, StreamExt, TryStreamExt,
 };
 use tonic::{metadata::MetadataMap, transport::Channel};
 
@@ -71,7 +74,7 @@ pub struct FlightClient {
 }
 
 impl FlightClient {
-    /// Creates a client client with the provided [`Channel`](tonic::transport::Channel)
+    /// Creates a client client with the provided [`Channel`]
     pub fn new(channel: Channel) -> Self {
         Self::new_from_inner(FlightServiceClient::new(channel))
     }
@@ -201,16 +204,14 @@ impl FlightClient {
     pub async fn do_get(&mut self, ticket: Ticket) -> Result<FlightRecordBatchStream> {
         let request = self.make_request(ticket);
 
-        let response_stream = self
-            .inner
-            .do_get(request)
-            .await?
-            .into_inner()
-            .map_err(FlightError::Tonic);
+        let (md, response_stream, _ext) = self.inner.do_get(request).await?.into_parts();
+        let (response_stream, trailers) = extract_lazy_trailers(response_stream);
 
         Ok(FlightRecordBatchStream::new_from_flight_data(
-            response_stream,
-        ))
+            response_stream.map_err(FlightError::Tonic),
+        )
+        .with_headers(md)
+        .with_trailers(trailers))
     }
 
     /// Make a `GetFlightInfo` call to the server with the provided
@@ -259,8 +260,17 @@ impl FlightClient {
     }
 
     /// Make a `DoPut` call to the server with the provided
-    /// [`Stream`](futures::Stream) of [`FlightData`] and returning a
+    /// [`Stream`] of [`FlightData`] and returning a
     /// stream of [`PutResult`].
+    ///
+    /// # Note
+    ///
+    /// The input stream is [`Result`] so that this can be connected
+    /// to a streaming data source, such as [`FlightDataEncoder`](crate::encode::FlightDataEncoder),
+    /// without having to buffer. If the input stream returns an error
+    /// that error will not be sent to the server, instead it will be
+    /// placed into the result stream and the server connection
+    /// terminated.
     ///
     /// # Example:
     /// ```no_run
@@ -279,9 +289,7 @@ impl FlightClient {
     ///
     /// // encode the batch as a stream of `FlightData`
     /// let flight_data_stream = FlightDataEncoderBuilder::new()
-    ///   .build(futures::stream::iter(vec![Ok(batch)]))
-    ///   // data encoder return Results, but do_put requires FlightData
-    ///   .map(|batch|batch.unwrap());
+    ///   .build(futures::stream::iter(vec![Ok(batch)]));
     ///
     /// // send the stream and get the results as `PutResult`
     /// let response: Vec<PutResult>= client
@@ -293,24 +301,44 @@ impl FlightClient {
     ///   .expect("error calling do_put");
     /// # }
     /// ```
-    pub async fn do_put<S: Stream<Item = FlightData> + Send + 'static>(
+    pub async fn do_put<S: Stream<Item = Result<FlightData>> + Send + 'static>(
         &mut self,
         request: S,
     ) -> Result<BoxStream<'static, Result<PutResult>>> {
-        let request = self.make_request(request);
+        let (sender, mut receiver) = futures::channel::oneshot::channel();
 
-        let response = self
-            .inner
-            .do_put(request)
-            .await?
-            .into_inner()
-            .map_err(FlightError::Tonic);
+        // Intercepts client errors and sends them to the oneshot channel above
+        let mut request = Box::pin(request); // Pin to heap
+        let mut sender = Some(sender); // Wrap into Option so can be taken
+        let request_stream = futures::stream::poll_fn(move |cx| {
+            Poll::Ready(match ready!(request.poll_next_unpin(cx)) {
+                Some(Ok(data)) => Some(data),
+                Some(Err(e)) => {
+                    let _ = sender.take().unwrap().send(e);
+                    None
+                }
+                None => None,
+            })
+        });
 
-        Ok(response.boxed())
+        let request = self.make_request(request_stream);
+        let mut response_stream = self.inner.do_put(request).await?.into_inner();
+
+        // Forwards errors from the error oneshot with priority over responses from server
+        let error_stream = futures::stream::poll_fn(move |cx| {
+            if let Poll::Ready(Ok(err)) = receiver.poll_unpin(cx) {
+                return Poll::Ready(Some(Err(err)));
+            }
+            let next = ready!(response_stream.poll_next_unpin(cx));
+            Poll::Ready(next.map(|x| x.map_err(FlightError::Tonic)))
+        });
+
+        // combine the response from the server and any error from the client
+        Ok(error_stream.boxed())
     }
 
     /// Make a `DoExchange` call to the server with the provided
-    /// [`Stream`](futures::Stream) of [`FlightData`] and returning a
+    /// [`Stream`] of [`FlightData`] and returning a
     /// stream of [`FlightData`].
     ///
     /// # Example:
@@ -361,7 +389,7 @@ impl FlightClient {
     }
 
     /// Make a `ListFlights` call to the server with the provided
-    /// critera and returning a [`Stream`](futures::Stream) of [`FlightInfo`].
+    /// criteria and returning a [`Stream`] of [`FlightInfo`].
     ///
     /// # Example:
     /// ```no_run
@@ -439,7 +467,7 @@ impl FlightClient {
     }
 
     /// Make a `ListActions` call to the server and returning a
-    /// [`Stream`](futures::Stream) of [`ActionType`].
+    /// [`Stream`] of [`ActionType`].
     ///
     /// # Example:
     /// ```no_run
@@ -476,7 +504,7 @@ impl FlightClient {
     }
 
     /// Make a `DoAction` call to the server and returning a
-    /// [`Stream`](futures::Stream) of opaque [`Bytes`].
+    /// [`Stream`] of opaque [`Bytes`].
     ///
     /// # Example:
     /// ```no_run

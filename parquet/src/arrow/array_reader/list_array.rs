@@ -143,11 +143,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         let mut skipped = 0;
 
         // Builder used to construct the filtered child data, skipping empty lists and nulls
-        let mut child_data_builder = MutableArrayData::new(
-            vec![next_batch_array.data()],
-            false,
-            next_batch_array.len(),
-        );
+        let data = next_batch_array.to_data();
+        let mut child_data_builder =
+            MutableArrayData::new(vec![&data], false, next_batch_array.len());
 
         def_levels.iter().zip(rep_levels).try_for_each(|(d, r)| {
             match r.cmp(&self.rep_level) {
@@ -201,7 +199,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 
         let child_data = if skipped == 0 {
             // No filtered values - can reuse original array
-            next_batch_array.data().clone()
+            next_batch_array.to_data()
         } else {
             // One or more filtered values - must build new array
             if let Some(start) = filter_start.take() {
@@ -222,9 +220,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             .add_buffer(value_offsets)
             .add_child_data(child_data);
 
-        if let Some(mut builder) = validity {
+        if let Some(builder) = validity {
             assert_eq!(builder.len(), list_offsets.len() - 1);
-            data_builder = data_builder.null_bit_buffer(Some(builder.finish()))
+            data_builder = data_builder.null_bit_buffer(Some(builder.into()))
         }
 
         let list_data = unsafe { data_builder.build_unchecked() };
@@ -252,7 +250,7 @@ mod tests {
     use crate::arrow::array_reader::build_array_reader;
     use crate::arrow::array_reader::list_array::ListArrayReader;
     use crate::arrow::array_reader::test_util::InMemoryArrayReader;
-    use crate::arrow::schema::parquet_to_array_schema_and_fields;
+    use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::{parquet_to_arrow_schema, ArrowWriter, ProjectionMask};
     use crate::file::properties::WriterProperties;
     use crate::file::reader::{FileReader, SerializedFileReader};
@@ -261,13 +259,14 @@ mod tests {
     use arrow::datatypes::{Field, Int32Type as ArrowInt32, Int32Type};
     use arrow_array::{Array, PrimitiveArray};
     use arrow_data::ArrayDataBuilder;
+    use arrow_schema::Fields;
     use std::sync::Arc;
 
     fn list_type<OffsetSize: OffsetSizeTrait>(
         data_type: ArrowType,
         item_nullable: bool,
     ) -> ArrowType {
-        let field = Box::new(Field::new("item", data_type, item_nullable));
+        let field = Arc::new(Field::new("item", data_type, item_nullable));
         GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field)
     }
 
@@ -401,10 +400,10 @@ mod tests {
         let expected_2 = expected.slice(2, 2);
 
         let actual = l1.next_batch(2).unwrap();
-        assert_eq!(expected_1.as_ref(), actual.as_ref());
+        assert_eq!(actual.as_ref(), &expected_1);
 
         let actual = l1.next_batch(1024).unwrap();
-        assert_eq!(expected_2.as_ref(), actual.as_ref());
+        assert_eq!(actual.as_ref(), &expected_2);
     }
 
     fn test_required_list<OffsetSize: OffsetSizeTrait>() {
@@ -567,7 +566,7 @@ mod tests {
         let file_metadata = file_reader.metadata().file_metadata();
         let schema = file_metadata.schema_descr();
         let mask = ProjectionMask::leaves(schema, vec![0]);
-        let (_, fields) = parquet_to_array_schema_and_fields(
+        let (_, fields) = parquet_to_arrow_schema_and_fields(
             schema,
             ProjectionMask::all(),
             file_metadata.key_value_metadata(),
@@ -581,15 +580,17 @@ mod tests {
         assert_eq!(batch.data_type(), array_reader.get_data_type());
         assert_eq!(
             batch.data_type(),
-            &ArrowType::Struct(vec![Field::new(
+            &ArrowType::Struct(Fields::from(vec![Field::new(
                 "table_info",
-                ArrowType::List(Box::new(Field::new(
+                ArrowType::List(Arc::new(Field::new(
                     "table_info",
-                    ArrowType::Struct(vec![Field::new("name", ArrowType::Binary, false)]),
+                    ArrowType::Struct(
+                        vec![Field::new("name", ArrowType::Binary, false)].into()
+                    ),
                     false
                 ))),
                 false
-            )])
+            )]))
         );
         assert_eq!(batch.len(), 0);
     }

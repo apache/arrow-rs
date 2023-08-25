@@ -27,7 +27,7 @@ use std::fs::File;
 fn read_0_1_4() {
     let testdata = arrow_test_data();
     let version = "0.14.1";
-    let paths = vec![
+    let paths = [
         "generated_interval",
         "generated_datetime",
         "generated_dictionary",
@@ -48,7 +48,7 @@ fn read_0_1_4() {
 fn read_0_1_7() {
     let testdata = arrow_test_data();
     let version = "0.17.1";
-    let paths = vec!["generated_union"];
+    let paths = ["generated_union"];
     paths.iter().for_each(|path| {
         verify_arrow_file(&testdata, version, path);
         verify_arrow_stream(&testdata, version, path);
@@ -76,7 +76,7 @@ fn read_1_0_0_bigendian_dictionary_should_panic() {
 #[test]
 fn read_1_0_0_bigendian() {
     let testdata = arrow_test_data();
-    let paths = vec![
+    let paths = [
         "generated_interval",
         "generated_datetime",
         "generated_map",
@@ -89,15 +89,14 @@ fn read_1_0_0_bigendian() {
     ];
     paths.iter().for_each(|path| {
         let file = File::open(format!(
-            "{}/arrow-ipc-stream/integration/1.0.0-bigendian/{}.arrow_file",
-            testdata, path
+            "{testdata}/arrow-ipc-stream/integration/1.0.0-bigendian/{path}.arrow_file"
         ))
         .unwrap();
 
         FileReader::try_new(file, None).unwrap();
 
         // While the the reader doesn't error but the values are not
-        // read correctly on little endian platforms so verifing the
+        // read correctly on little endian platforms so verifying the
         // contents fails
         //
         // https://github.com/apache/arrow-rs/issues/3459
@@ -146,7 +145,7 @@ fn read_2_0_0_compression() {
     let version = "2.0.0-compression";
 
     // the test is repetitive, thus we can read all supported files at once
-    let paths = vec!["generated_lz4", "generated_zstd"];
+    let paths = ["generated_lz4", "generated_zstd"];
     paths.iter().for_each(|path| {
         verify_arrow_file(&testdata, version, path);
         verify_arrow_stream(&testdata, version, path);
@@ -161,10 +160,8 @@ fn read_2_0_0_compression() {
 /// Verification json file
 /// `arrow-ipc-stream/integration/<version>/<path>.json.gz
 fn verify_arrow_file(testdata: &str, version: &str, path: &str) {
-    let filename = format!(
-        "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-        testdata, version, path
-    );
+    let filename =
+        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.arrow_file");
     println!("Verifying {filename}");
 
     // Compare contents to the expected output format in JSON
@@ -200,10 +197,8 @@ fn verify_arrow_file(testdata: &str, version: &str, path: &str) {
 /// Verification json file
 /// `arrow-ipc-stream/integration/<version>/<path>.json.gz
 fn verify_arrow_stream(testdata: &str, version: &str, path: &str) {
-    let filename = format!(
-        "{}/arrow-ipc-stream/integration/{}/{}.stream",
-        testdata, version, path
-    );
+    let filename =
+        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
     println!("Verifying {filename}");
 
     // Compare contents to the expected output format in JSON

@@ -16,7 +16,7 @@
 // under the License.
 
 //! Contains implementation of record assembly and converting Parquet types into
-//! [`Row`](crate::record::Row)s.
+//! [`Row`]s.
 
 use std::{collections::HashMap, fmt, sync::Arc};
 
@@ -65,7 +65,7 @@ impl TreeBuilder {
         &self,
         descr: SchemaDescPtr,
         row_group_reader: &dyn RowGroupReader,
-    ) -> Reader {
+    ) -> Result<Reader> {
         // Prepare lookup table of column path -> original column index
         // This allows to prune columns and map schema leaf nodes to the column readers
         let mut paths: HashMap<ColumnPath, usize> = HashMap::new();
@@ -89,13 +89,13 @@ impl TreeBuilder {
                 0,
                 &paths,
                 row_group_reader,
-            );
+            )?;
             readers.push(reader);
         }
 
         // Return group reader for message type,
         // it is always required with definition level 0
-        Reader::GroupReader(None, 0, readers)
+        Ok(Reader::GroupReader(None, 0, readers))
     }
 
     /// Creates iterator of `Row`s directly from schema descriptor and row group.
@@ -103,9 +103,12 @@ impl TreeBuilder {
         &self,
         descr: SchemaDescPtr,
         row_group_reader: &dyn RowGroupReader,
-    ) -> ReaderIter {
+    ) -> Result<ReaderIter> {
         let num_records = row_group_reader.metadata().num_rows() as usize;
-        ReaderIter::new(self.build(descr, row_group_reader), num_records)
+        Ok(ReaderIter::new(
+            self.build(descr, row_group_reader)?,
+            num_records,
+        ))
     }
 
     /// Builds tree of readers for the current schema recursively.
@@ -117,7 +120,7 @@ impl TreeBuilder {
         mut curr_rep_level: i16,
         paths: &HashMap<ColumnPath, usize>,
         row_group_reader: &dyn RowGroupReader,
-    ) -> Reader {
+    ) -> Result<Reader> {
         assert!(field.get_basic_info().has_repetition());
         // Update current definition and repetition levels for this type
         let repetition = field.get_basic_info().repetition();
@@ -135,12 +138,14 @@ impl TreeBuilder {
         path.push(String::from(field.name()));
         let reader = if field.is_primitive() {
             let col_path = ColumnPath::new(path.to_vec());
-            let orig_index = *paths.get(&col_path).unwrap();
+            let orig_index = *paths
+                .get(&col_path)
+                .ok_or(general_err!("Path {:?} not found", col_path))?;
             let col_descr = row_group_reader
                 .metadata()
                 .column(orig_index)
                 .column_descr_ptr();
-            let col_reader = row_group_reader.get_column_reader(orig_index).unwrap();
+            let col_reader = row_group_reader.get_column_reader(orig_index)?;
             let column = TripletIter::new(col_descr, col_reader, self.batch_size);
             Reader::PrimitiveReader(field, Box::new(column))
         } else {
@@ -150,16 +155,14 @@ impl TreeBuilder {
                     assert_eq!(
                         field.get_fields().len(),
                         1,
-                        "Invalid list type {:?}",
-                        field
+                        "Invalid list type {field:?}"
                     );
 
                     let repeated_field = field.get_fields()[0].clone();
                     assert_eq!(
                         repeated_field.get_basic_info().repetition(),
                         Repetition::REPEATED,
-                        "Invalid list type {:?}",
-                        field
+                        "Invalid list type {field:?}"
                     );
 
                     if Reader::is_element_type(&repeated_field) {
@@ -171,7 +174,7 @@ impl TreeBuilder {
                             curr_rep_level,
                             paths,
                             row_group_reader,
-                        );
+                        )?;
 
                         Reader::RepeatedReader(
                             field,
@@ -191,7 +194,7 @@ impl TreeBuilder {
                             curr_rep_level + 1,
                             paths,
                             row_group_reader,
-                        );
+                        )?;
 
                         path.pop();
 
@@ -208,27 +211,23 @@ impl TreeBuilder {
                     assert_eq!(
                         field.get_fields().len(),
                         1,
-                        "Invalid map type: {:?}",
-                        field
+                        "Invalid map type: {field:?}"
                     );
                     assert!(
                         !field.get_fields()[0].is_primitive(),
-                        "Invalid map type: {:?}",
-                        field
+                        "Invalid map type: {field:?}"
                     );
 
                     let key_value_type = field.get_fields()[0].clone();
                     assert_eq!(
                         key_value_type.get_basic_info().repetition(),
                         Repetition::REPEATED,
-                        "Invalid map type: {:?}",
-                        field
+                        "Invalid map type: {field:?}"
                     );
                     assert_eq!(
                         key_value_type.get_fields().len(),
                         2,
-                        "Invalid map type: {:?}",
-                        field
+                        "Invalid map type: {field:?}"
                     );
 
                     path.push(String::from(key_value_type.name()));
@@ -236,8 +235,7 @@ impl TreeBuilder {
                     let key_type = &key_value_type.get_fields()[0];
                     assert!(
                         key_type.is_primitive(),
-                        "Map key type is expected to be a primitive type, but found {:?}",
-                        key_type
+                        "Map key type is expected to be a primitive type, but found {key_type:?}"
                     );
                     let key_reader = self.reader_tree(
                         key_type.clone(),
@@ -246,7 +244,7 @@ impl TreeBuilder {
                         curr_rep_level + 1,
                         paths,
                         row_group_reader,
-                    );
+                    )?;
 
                     let value_type = &key_value_type.get_fields()[1];
                     let value_reader = self.reader_tree(
@@ -256,7 +254,7 @@ impl TreeBuilder {
                         curr_rep_level + 1,
                         paths,
                         row_group_reader,
-                    );
+                    )?;
 
                     path.pop();
 
@@ -276,9 +274,8 @@ impl TreeBuilder {
                     let required_field = Type::group_type_builder(field.name())
                         .with_repetition(Repetition::REQUIRED)
                         .with_converted_type(field.get_basic_info().converted_type())
-                        .with_fields(&mut Vec::from(field.get_fields()))
-                        .build()
-                        .unwrap();
+                        .with_fields(field.get_fields().to_vec())
+                        .build()?;
 
                     path.pop();
 
@@ -289,7 +286,7 @@ impl TreeBuilder {
                         curr_rep_level,
                         paths,
                         row_group_reader,
-                    );
+                    )?;
 
                     Reader::RepeatedReader(
                         field,
@@ -309,7 +306,7 @@ impl TreeBuilder {
                             curr_rep_level,
                             paths,
                             row_group_reader,
-                        );
+                        )?;
                         readers.push(reader);
                     }
                     Reader::GroupReader(Some(field), curr_def_level, readers)
@@ -318,7 +315,7 @@ impl TreeBuilder {
         };
         path.pop();
 
-        Reader::option(repetition, curr_def_level, reader)
+        Ok(Reader::option(repetition, curr_def_level, reader))
     }
 }
 
@@ -402,31 +399,32 @@ impl Reader {
     /// Automatically advances all necessary readers.
     /// This must be called on the root level reader (i.e., for Message type).
     /// Otherwise, it will panic.
-    fn read(&mut self) -> Row {
+    fn read(&mut self) -> Result<Row> {
         match *self {
             Reader::GroupReader(_, _, ref mut readers) => {
                 let mut fields = Vec::new();
                 for reader in readers {
-                    fields.push((String::from(reader.field_name()), reader.read_field()));
+                    fields
+                        .push((String::from(reader.field_name()), reader.read_field()?));
                 }
-                make_row(fields)
+                Ok(make_row(fields))
             }
-            _ => panic!("Cannot call read() on {}", self),
+            _ => panic!("Cannot call read() on {self}"),
         }
     }
 
     /// Reads current record as `Field` from the reader tree.
     /// Automatically advances all necessary readers.
-    fn read_field(&mut self) -> Field {
-        match *self {
+    fn read_field(&mut self) -> Result<Field> {
+        let field = match *self {
             Reader::PrimitiveReader(_, ref mut column) => {
-                let value = column.current_value();
-                column.read_next().unwrap();
+                let value = column.current_value()?;
+                column.read_next()?;
                 value
             }
             Reader::OptionReader(def_level, ref mut reader) => {
                 if reader.current_def_level() > def_level {
-                    reader.read_field()
+                    reader.read_field()?
                 } else {
                     reader.advance_columns();
                     Field::Null
@@ -440,7 +438,7 @@ impl Reader {
                     {
                         fields.push((
                             String::from(reader.field_name()),
-                            reader.read_field(),
+                            reader.read_field()?,
                         ));
                     } else {
                         reader.advance_columns();
@@ -454,7 +452,7 @@ impl Reader {
                 let mut elements = Vec::new();
                 loop {
                     if reader.current_def_level() > def_level {
-                        elements.push(reader.read_field());
+                        elements.push(reader.read_field()?);
                     } else {
                         reader.advance_columns();
                         // If the current definition level is equal to the definition
@@ -483,7 +481,7 @@ impl Reader {
                 let mut pairs = Vec::new();
                 loop {
                     if keys.current_def_level() > def_level {
-                        pairs.push((keys.read_field(), values.read_field()));
+                        pairs.push((keys.read_field()?, values.read_field()?));
                     } else {
                         keys.advance_columns();
                         values.advance_columns();
@@ -504,7 +502,8 @@ impl Reader {
 
                 Field::MapInternal(make_map(pairs))
             }
-        }
+        };
+        Ok(field)
     }
 
     /// Returns field name for the current reader.
@@ -611,15 +610,15 @@ impl fmt::Display for Reader {
             Reader::RepeatedReader(..) => "RepeatedReader",
             Reader::KeyValueReader(..) => "KeyValueReader",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
 // ----------------------------------------------------------------------
 // Row iterators
 
-/// The enum Either with variants That represet a reference and a box of
-/// [`FileReader`](crate::file::reader::FileReader).
+/// The enum Either with variants That represents a reference and a box of
+/// [`FileReader`].
 enum Either<'a> {
     Left(&'a dyn FileReader),
     Right(Box<dyn FileReader>),
@@ -634,7 +633,7 @@ impl<'a> Either<'a> {
     }
 }
 
-/// Iterator of [`Row`](crate::record::Row)s.
+/// Iterator of [`Row`]s.
 /// It is used either for a single row group to iterate over data in that row group, or
 /// an entire file with auto buffering of all row groups.
 pub struct RowIter<'a> {
@@ -647,7 +646,7 @@ pub struct RowIter<'a> {
 }
 
 impl<'a> RowIter<'a> {
-    /// Creates a new iterator of [`Row`](crate::record::Row)s.
+    /// Creates a new iterator of [`Row`]s.
     fn new(
         file_reader: Option<Either<'a>>,
         row_iter: Option<ReaderIter>,
@@ -669,7 +668,7 @@ impl<'a> RowIter<'a> {
         }
     }
 
-    /// Creates iterator of [`Row`](crate::record::Row)s for all row groups in a
+    /// Creates iterator of [`Row`]s for all row groups in a
     /// file.
     pub fn from_file(proj: Option<Type>, reader: &'a dyn FileReader) -> Result<Self> {
         let either = Either::Left(reader);
@@ -681,22 +680,21 @@ impl<'a> RowIter<'a> {
         Ok(Self::new(Some(either), None, descr))
     }
 
-    /// Creates iterator of [`Row`](crate::record::Row)s for a specific row group.
+    /// Creates iterator of [`Row`]s for a specific row group.
     pub fn from_row_group(
         proj: Option<Type>,
         reader: &'a dyn RowGroupReader,
     ) -> Result<Self> {
         let descr = Self::get_proj_descr(proj, reader.metadata().schema_descr_ptr())?;
         let tree_builder = Self::tree_builder();
-        let row_iter = tree_builder.as_iter(descr.clone(), reader);
+        let row_iter = tree_builder.as_iter(descr.clone(), reader)?;
 
         // For row group we need to set `current_row_group` >= `num_row_groups`, because
         // we only have one row group and can't buffer more.
         Ok(Self::new(None, Some(row_iter), descr))
     }
 
-    /// Creates a iterator of [`Row`](crate::record::Row)s from a
-    /// [`FileReader`](crate::file::reader::FileReader) using the full file schema.
+    /// Creates a iterator of [`Row`]s from a [`FileReader`] using the full file schema.
     pub fn from_file_into(reader: Box<dyn FileReader>) -> Self {
         let either = Either::Right(reader);
         let descr = either
@@ -708,7 +706,7 @@ impl<'a> RowIter<'a> {
         Self::new(Some(either), None, descr)
     }
 
-    /// Tries to create a iterator of [`Row`](crate::record::Row)s using projections.
+    /// Tries to create a iterator of [`Row`]s using projections.
     /// Returns a error if a file reader is not the source of this iterator.
     ///
     /// The Projected schema can be a subset of or equal to the file schema,
@@ -758,9 +756,9 @@ impl<'a> RowIter<'a> {
 }
 
 impl<'a> Iterator for RowIter<'a> {
-    type Item = Row;
+    type Item = Result<Row>;
 
-    fn next(&mut self) -> Option<Row> {
+    fn next(&mut self) -> Option<Result<Row>> {
         let mut row = None;
         if let Some(ref mut iter) = self.row_iter {
             row = iter.next();
@@ -775,14 +773,18 @@ impl<'a> Iterator for RowIter<'a> {
                     .get_row_group(self.current_row_group)
                     .expect("Row group is required to advance");
 
-                let mut iter = self
+                match self
                     .tree_builder
-                    .as_iter(self.descr.clone(), row_group_reader);
+                    .as_iter(self.descr.clone(), row_group_reader)
+                {
+                    Ok(mut iter) => {
+                        row = iter.next();
 
-                row = iter.next();
-
-                self.current_row_group += 1;
-                self.row_iter = Some(iter);
+                        self.current_row_group += 1;
+                        self.row_iter = Some(iter);
+                    }
+                    Err(e) => return Some(Err(e)),
+                }
             }
         }
 
@@ -790,7 +792,7 @@ impl<'a> Iterator for RowIter<'a> {
     }
 }
 
-/// Internal iterator of [`Row`](crate::record::Row)s for a reader.
+/// Internal iterator of [`Row`]s for a reader.
 pub struct ReaderIter {
     root_reader: Reader,
     records_left: usize,
@@ -808,9 +810,9 @@ impl ReaderIter {
 }
 
 impl Iterator for ReaderIter {
-    type Item = Row;
+    type Item = Result<Row>;
 
-    fn next(&mut self) -> Option<Row> {
+    fn next(&mut self) -> Option<Result<Row>> {
         if self.records_left > 0 {
             self.records_left -= 1;
             Some(self.root_reader.read())
@@ -824,9 +826,9 @@ impl Iterator for ReaderIter {
 mod tests {
     use super::*;
 
-    use crate::errors::{ParquetError, Result};
+    use crate::errors::Result;
     use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::record::api::{Field, Row, RowAccessor, RowFormatter};
+    use crate::record::api::{Field, Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
     use std::convert::TryFrom;
@@ -1452,10 +1454,9 @@ mod tests {
     ";
         let schema = parse_message_type(schema).unwrap();
         let res = test_file_reader_rows("nested_maps.snappy.parquet", Some(schema));
-        assert!(res.is_err());
         assert_eq!(
-            res.unwrap_err(),
-            general_err!("Root schema does not contain projection")
+            res.unwrap_err().to_string(),
+            "Parquet error: Root schema does not contain projection"
         );
     }
 
@@ -1469,10 +1470,9 @@ mod tests {
     ";
         let schema = parse_message_type(schema).unwrap();
         let res = test_row_group_rows("nested_maps.snappy.parquet", Some(schema));
-        assert!(res.is_err());
         assert_eq!(
-            res.unwrap_err(),
-            general_err!("Root schema does not contain projection")
+            res.unwrap_err().to_string(),
+            "Parquet error: Root schema does not contain projection"
         );
     }
 
@@ -1500,33 +1500,26 @@ mod tests {
     #[test]
     fn test_file_reader_iter() {
         let path = get_test_path("alltypes_plain.parquet");
-        let vec = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| RowIter::from_file_into(Box::new(r)))
-            .flat_map(|r| r.get_int(0))
-            .collect::<Vec<_>>();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let iter = RowIter::from_file_into(Box::new(reader));
 
-        assert_eq!(vec, vec![4, 5, 6, 7, 2, 3, 0, 1]);
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
     fn test_file_reader_iter_projection() {
         let path = get_test_path("alltypes_plain.parquet");
-        let values = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| {
-                let schema = "message schema { OPTIONAL INT32 id; }";
-                let proj = parse_message_type(schema).ok();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let schema = "message schema { OPTIONAL INT32 id; }";
+        let proj = parse_message_type(schema).ok();
 
-                RowIter::from_file_into(Box::new(r)).project(proj).unwrap()
-            })
-            .map(|r| format!("id:{}", r.fmt(0)))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let iter = RowIter::from_file_into(Box::new(reader))
+            .project(proj)
+            .unwrap();
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
 
-        assert_eq!(values, "id:4, id:5, id:6, id:7, id:2, id:3, id:0, id:1");
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
@@ -1542,10 +1535,9 @@ mod tests {
         let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
         let res = RowIter::from_file_into(Box::new(reader)).project(proj);
 
-        assert!(res.is_err());
         assert_eq!(
-            res.err().unwrap(),
-            general_err!("Root schema does not contain projection")
+            res.err().unwrap().to_string(),
+            "Parquet error: Root schema does not contain projection"
         );
     }
 
@@ -1628,7 +1620,7 @@ mod tests {
         let file = get_test_file(file_name);
         let file_reader: Box<dyn FileReader> = Box::new(SerializedFileReader::new(file)?);
         let iter = file_reader.get_row_iter(schema)?;
-        Ok(iter.collect())
+        Ok(iter.map(|row| row.unwrap()).collect())
     }
 
     fn test_row_group_rows(file_name: &str, schema: Option<Type>) -> Result<Vec<Row>> {
@@ -1638,6 +1630,6 @@ mod tests {
         // group
         let row_group_reader = file_reader.get_row_group(0).unwrap();
         let iter = row_group_reader.get_row_iter(schema)?;
-        Ok(iter.collect())
+        Ok(iter.map(|row| row.unwrap()).collect())
     }
 }

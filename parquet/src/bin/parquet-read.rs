@@ -45,7 +45,7 @@ use std::{fs::File, path::Path};
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Binary file to read data from a Parquet file"), long_about = None)]
 struct Args {
-    #[clap(short, long, help("Path to a parquet file, or - for stdin"))]
+    #[clap(help("Path to a parquet file, or - for stdin"))]
     file_name: String,
     #[clap(
         short,
@@ -91,9 +91,9 @@ fn main() {
 
     while all_records || start < end {
         match iter.next() {
-            Some(row) => print_row(&row, json),
+            Some(row) => print_row(&row.unwrap(), json),
             None => break,
-        }
+        };
         start += 1;
     }
 }
@@ -102,6 +102,6 @@ fn print_row(row: &Row, json: bool) {
     if json {
         println!("{}", row.to_json_value())
     } else {
-        println!("{}", row);
+        println!("{row}");
     }
 }

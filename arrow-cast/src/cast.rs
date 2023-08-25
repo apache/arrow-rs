@@ -25,26 +25,31 @@
 //! use arrow_cast::cast;
 //! use arrow_schema::DataType;
 //! use std::sync::Arc;
+//! use arrow_array::types::Float64Type;
+//! use arrow_array::cast::AsArray;
 //!
 //! let a = Int32Array::from(vec![5, 6, 7]);
 //! let array = Arc::new(a) as ArrayRef;
 //! let b = cast(&array, &DataType::Float64).unwrap();
-//! let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
+//! let c = b.as_primitive::<Float64Type>();
 //! assert_eq!(5.0, c.value(0));
 //! assert_eq!(6.0, c.value(1));
 //! assert_eq!(7.0, c.value(2));
 //! ```
 
-use chrono::{DateTime, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{NaiveTime, Offset, TimeZone, Utc};
+use std::cmp::Ordering;
 use std::sync::Arc;
 
-use crate::display::{array_value_to_string, lexical_to_string};
-use crate::parse::string_to_timestamp_nanos;
-use arrow_array::{
-    builder::*, cast::*, iterator::ArrayIter, temporal_conversions::*, timezone::Tz,
-    types::*, *,
+use crate::display::{ArrayFormatter, FormatOptions};
+use crate::parse::{
+    parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
+    string_to_datetime, Parser,
 };
-use arrow_buffer::{i256, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_array::{
+    builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *,
+};
+use arrow_buffer::{i256, ArrowNativeType, Buffer, OffsetBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
@@ -52,13 +57,22 @@ use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CastOptions {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CastOptions<'a> {
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     pub safe: bool,
+    /// Formatting options when casting from temporal types to string
+    pub format_options: FormatOptions<'a>,
 }
 
-pub const DEFAULT_CAST_OPTIONS: CastOptions = CastOptions { safe: true };
+impl<'a> Default for CastOptions<'a> {
+    fn default() -> Self {
+        Self {
+            safe: true,
+            format_options: FormatOptions::default(),
+        }
+    }
+}
 
 /// Return true if a value of type `from_type` can be cast into a
 /// value of `to_type`. Note that such as cast may be lossy.
@@ -66,6 +80,8 @@ pub const DEFAULT_CAST_OPTIONS: CastOptions = CastOptions { safe: true };
 /// If this function returns true to stay consistent with the `cast` kernel below.
 pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     use self::DataType::*;
+    use self::IntervalUnit::*;
+    use self::TimeUnit::*;
     if from_type == to_type {
         return true;
     }
@@ -101,7 +117,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | FixedSizeList(_, _)
             | Struct(_)
             | Map(_, _)
-            | Dictionary(_, _)
+            | Dictionary(_, _),
         ) => true,
         // Dictionary/List conditions should be put in front of others
         (Dictionary(_, from_value_type), Dictionary(_, to_value_type)) => {
@@ -121,8 +137,16 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (LargeList(list_from), List(list_to)) => {
             list_from.data_type() == list_to.data_type()
         }
-        (List(list_from) | LargeList(list_from), Utf8 | LargeUtf8) => can_cast_types(list_from.data_type(), to_type),
+        (List(list_from) | LargeList(list_from), Utf8 | LargeUtf8) => {
+            can_cast_types(list_from.data_type(), to_type)
+        }
         (List(_), _) => false,
+        (FixedSizeList(list_from,_), List(list_to)) => {
+            list_from.data_type() == list_to.data_type()
+        }
+        (FixedSizeList(list_from,_), LargeList(list_to)) => {
+            list_from.data_type() == list_to.data_type()
+        }
         (_, List(list_to)) => can_cast_types(from_type, list_to.data_type()),
         (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
         // cast one decimal type to another decimal type
@@ -137,101 +161,54 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal128(_, _)) |
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal256(_, _)) |
         // decimal to unsigned numeric
-        (Decimal128(_, _), UInt8 | UInt16 | UInt32 | UInt64) |
-        (Decimal256(_, _), UInt8 | UInt16 | UInt32 | UInt64) |
+        (Decimal128(_, _) | Decimal256(_, _), UInt8 | UInt16 | UInt32 | UInt64) |
         // decimal to signed numeric
-        (Decimal128(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) |
-        (Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) => true,
+        (Decimal128(_, _) | Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) => true,
+        // decimal to Utf8
+        (Decimal128(_, _) | Decimal256(_, _), Utf8 | LargeUtf8) => true,
         // Utf8 to decimal
-        (Utf8 | LargeUtf8, Decimal128(_, _)) => true,
-        (Utf8 | LargeUtf8, Decimal256(_, _)) => true,
-        (Decimal128(_, _), _) => false,
-        (_, Decimal128(_, _)) => false,
-        (Decimal256(_, _), _) => false,
-        (_, Decimal256(_, _)) => false,
+        (Utf8 | LargeUtf8, Decimal128(_, _) | Decimal256(_, _)) => true,
+        (Decimal128(_, _) | Decimal256(_, _), _) => false,
+        (_, Decimal128(_, _) | Decimal256(_, _)) => false,
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
-        (_, Boolean) => DataType::is_numeric(from_type) || from_type == &Utf8,
-        (Boolean, _) => DataType::is_numeric(to_type) || to_type == &Utf8,
+        (_, Boolean) => {
+            DataType::is_numeric(from_type)
+                || from_type == &Utf8
+                || from_type == &LargeUtf8
+        }
+        (Boolean, _) => {
+            DataType::is_numeric(to_type) || to_type == &Utf8 || to_type == &LargeUtf8
+        }
 
-        (Utf8, LargeUtf8) => true,
-        (LargeUtf8, Utf8) => true,
-        (Utf8,
+        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_)) => true,
+        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_)) => true,
+        (FixedSizeBinary(_), Binary | LargeBinary) => true,
+        (
+            Utf8 | LargeUtf8,
             Binary
+            | LargeBinary
+            | Utf8
+            | LargeUtf8
             | Date32
             | Date64
-            | Time32(TimeUnit::Second)
-            | Time32(TimeUnit::Millisecond)
-            | Time64(TimeUnit::Microsecond)
-            | Time64(TimeUnit::Nanosecond)
-            | Timestamp(TimeUnit::Nanosecond, None)
+            | Time32(Second)
+            | Time32(Millisecond)
+            | Time64(Microsecond)
+            | Time64(Nanosecond)
+            | Timestamp(Second, _)
+            | Timestamp(Millisecond, _)
+            | Timestamp(Microsecond, _)
+            | Timestamp(Nanosecond, _)
+            | Interval(_),
         ) => true,
-        (Utf8, _) => DataType::is_numeric(to_type) && to_type != &Float16,
-        (LargeUtf8,
-            LargeBinary
-            | Date32
-            | Date64
-            | Time32(TimeUnit::Second)
-            | Time32(TimeUnit::Millisecond)
-            | Time64(TimeUnit::Microsecond)
-            | Time64(TimeUnit::Nanosecond)
-            | Timestamp(TimeUnit::Nanosecond, None)
-        ) => true,
-        (LargeUtf8, _) => DataType::is_numeric(to_type) && to_type != &Float16,
-        (Timestamp(_, _), Utf8) | (Timestamp(_, _), LargeUtf8) => true,
-        (Date32, Utf8) | (Date32, LargeUtf8) => true,
-        (Date64, Utf8) | (Date64, LargeUtf8) => true,
-        (_, Utf8 | LargeUtf8) => (DataType::is_numeric(from_type) && from_type != &Float16) || from_type == &Binary,
+        (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
+        (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
 
         // start numeric casts
         (
-            UInt8,
-            UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            UInt16,
-            UInt8 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            UInt32,
-            UInt8 | UInt16 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            UInt64,
-            UInt8 | UInt16 | UInt32 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            Int8,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int16 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            Int16,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int32 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            Int32,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int64 | Float32 | Float64,
-        ) => true,
-
-        (
-            Int64,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Float32 | Float64,
-        ) => true,
-
-        (
-            Float32,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float64,
-        ) => true,
-
-        (
-            Float64,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
         ) => true,
         // end numeric casts
 
@@ -242,51 +219,51 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Int64, Date64 | Date32 | Time64(_)) => true,
         (Date64, Int64 | Int32) => true,
         (Time64(_), Int64) => true,
-        (Date32, Date64) => true,
-        (Date64, Date32) => true,
-        (Time32(TimeUnit::Second), Time32(TimeUnit::Millisecond)) => true,
-        (Time32(TimeUnit::Millisecond), Time32(TimeUnit::Second)) => true,
+        (Date32 | Date64, Date32 | Date64) => true,
+        // time casts
+        (Time32(_), Time32(_)) => true,
         (Time32(_), Time64(_)) => true,
-        (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => true,
-        (Time64(TimeUnit::Nanosecond), Time64(TimeUnit::Microsecond)) => true,
+        (Time64(_), Time64(_)) => true,
         (Time64(_), Time32(to_unit)) => {
-            matches!(to_unit, TimeUnit::Second | TimeUnit::Millisecond)
+            matches!(to_unit, Second | Millisecond)
         }
         (Timestamp(_, _), Int64) => true,
         (Int64, Timestamp(_, _)) => true,
         (Date64, Timestamp(_, None)) => true,
         (Date32, Timestamp(_, None)) => true,
-        (Timestamp(_, _),
+        (
+            Timestamp(_, _),
             Timestamp(_, _)
             | Date32
             | Date64
-            | Time32(TimeUnit::Second)
-            | Time32(TimeUnit::Millisecond)
-            | Time64(TimeUnit::Microsecond)
-            | Time64(TimeUnit::Nanosecond)) => true,
+            | Time32(Second)
+            | Time32(Millisecond)
+            | Time64(Microsecond)
+            | Time64(Nanosecond),
+        ) => true,
         (Int64, Duration(_)) => true,
         (Duration(_), Int64) => true,
         (Interval(from_type), Int64) => {
             match from_type {
-                IntervalUnit::YearMonth => true,
-                IntervalUnit::DayTime => true,
-                IntervalUnit::MonthDayNano => false, // Native type is i128
+                YearMonth => true,
+                DayTime => true,
+                MonthDayNano => false, // Native type is i128
             }
         }
-        (Int32, Interval(to_type)) => {
-            match to_type {
-                IntervalUnit::YearMonth => true,
-                IntervalUnit::DayTime => false,
-                IntervalUnit::MonthDayNano => false,
-            }
-        }
-        (Int64, Interval(to_type)) => {
-            match to_type {
-                IntervalUnit::YearMonth => false,
-                IntervalUnit::DayTime => true,
-                IntervalUnit::MonthDayNano => false,
-            }
-        }
+        (Int32, Interval(to_type)) => match to_type {
+            YearMonth => true,
+            DayTime => false,
+            MonthDayNano => false,
+        },
+        (Int64, Interval(to_type)) => match to_type {
+            YearMonth => false,
+            DayTime => true,
+            MonthDayNano => false,
+        },
+        (Duration(_), Interval(MonthDayNano)) => true,
+        (Interval(MonthDayNano), Duration(_)) => true,
+        (Interval(YearMonth), Interval(MonthDayNano)) => true,
+        (Interval(DayTime), Interval(MonthDayNano)) => true,
         (_, _) => false,
     }
 }
@@ -315,8 +292,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 /// * To or from `StructArray`
 /// * List to primitive
 /// * Interval and duration
-pub fn cast(array: &ArrayRef, to_type: &DataType) -> Result<ArrayRef, ArrowError> {
-    cast_with_options(array, to_type, &DEFAULT_CAST_OPTIONS)
+pub fn cast(array: &dyn Array, to_type: &DataType) -> Result<ArrayRef, ArrowError> {
+    cast_with_options(array, to_type, &CastOptions::default())
 }
 
 fn cast_integer_to_decimal<
@@ -345,13 +322,29 @@ where
 
     let array = if scale < 0 {
         match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| v.as_().div_checked(scale_factor).ok()),
-            false => array.try_unary::<_, D, _>(|v| v.as_().div_checked(scale_factor))?,
+            true => array.unary_opt::<_, D>(|v| {
+                v.as_().div_checked(scale_factor).ok().and_then(|v| {
+                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
+                })
+            }),
+            false => array.try_unary::<_, D, _>(|v| {
+                v.as_()
+                    .div_checked(scale_factor)
+                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+            })?,
         }
     } else {
         match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| v.as_().mul_checked(scale_factor).ok()),
-            false => array.try_unary::<_, D, _>(|v| v.as_().mul_checked(scale_factor))?,
+            true => array.unary_opt::<_, D>(|v| {
+                v.as_().mul_checked(scale_factor).ok().and_then(|v| {
+                    (D::validate_decimal_precision(v, precision).is_ok()).then_some(v)
+                })
+            }),
+            false => array.try_unary::<_, D, _>(|v| {
+                v.as_()
+                    .mul_checked(scale_factor)
+                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+            })?,
         }
     };
 
@@ -426,6 +419,125 @@ where
     }
 }
 
+/// Cast the array from interval year month to month day nano
+fn cast_interval_year_month_to_interval_month_day_nano(
+    array: &dyn Array,
+    _cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_primitive::<IntervalYearMonthType>();
+
+    Ok(Arc::new(array.unary::<_, IntervalMonthDayNanoType>(|v| {
+        let months = IntervalYearMonthType::to_months(v);
+        IntervalMonthDayNanoType::make_value(months, 0, 0)
+    })))
+}
+
+/// Cast the array from interval day time to month day nano
+fn cast_interval_day_time_to_interval_month_day_nano(
+    array: &dyn Array,
+    _cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_primitive::<IntervalDayTimeType>();
+    let mul = 1_000_000;
+
+    Ok(Arc::new(array.unary::<_, IntervalMonthDayNanoType>(|v| {
+        let (days, ms) = IntervalDayTimeType::to_parts(v);
+        IntervalMonthDayNanoType::make_value(0, days, ms as i64 * mul)
+    })))
+}
+
+/// Cast the array from interval to duration
+fn cast_month_day_nano_to_duration<D: ArrowTemporalType<Native = i64>>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_primitive::<IntervalMonthDayNanoType>();
+    let scale = match D::DATA_TYPE {
+        DataType::Duration(TimeUnit::Second) => 1_000_000_000,
+        DataType::Duration(TimeUnit::Millisecond) => 1_000_000,
+        DataType::Duration(TimeUnit::Microsecond) => 1_000,
+        DataType::Duration(TimeUnit::Nanosecond) => 1,
+        _ => unreachable!(),
+    };
+
+    if cast_options.safe {
+        let iter = array
+            .iter()
+            .map(|v| v.and_then(|v| (v >> 64 == 0).then_some((v as i64) / scale)));
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<D>::from_trusted_len_iter(iter)
+        }))
+    } else {
+        let vec = array
+            .iter()
+            .map(|v| {
+                v.map(|v| match v >> 64 {
+                    0 => Ok((v as i64) / scale),
+                    _ => Err(ArrowError::ComputeError("Cannot convert interval containing non-zero months or days to duration".to_string()))
+                })
+                .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<D>::from_trusted_len_iter(vec.iter())
+        }))
+    }
+}
+
+/// Cast the array from duration and interval
+fn cast_duration_to_interval<D: ArrowTemporalType<Native = i64>>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array
+        .as_any()
+        .downcast_ref::<PrimitiveArray<D>>()
+        .ok_or_else(|| {
+            ArrowError::ComputeError(
+                "Internal Error: Cannot cast duration to DurationArray of expected type"
+                    .to_string(),
+            )
+        })?;
+
+    let scale = match array.data_type() {
+        DataType::Duration(TimeUnit::Second) => 1_000_000_000,
+        DataType::Duration(TimeUnit::Millisecond) => 1_000_000,
+        DataType::Duration(TimeUnit::Microsecond) => 1_000,
+        DataType::Duration(TimeUnit::Nanosecond) => 1,
+        _ => unreachable!(),
+    };
+
+    if cast_options.safe {
+        let iter = array
+            .iter()
+            .map(|v| v.and_then(|v| v.checked_mul(scale).map(|v| v as i128)));
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(iter)
+        }))
+    } else {
+        let vec = array
+            .iter()
+            .map(|v| {
+                v.map(|v| {
+                    if let Ok(v) = v.mul_checked(scale) {
+                        Ok(v as i128)
+                    } else {
+                        Err(ArrowError::ComputeError(format!(
+                            "Cannot cast to {:?}. Overflowing on {:?}",
+                            IntervalMonthDayNanoType::DATA_TYPE,
+                            v
+                        )))
+                    }
+                })
+                .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Arc::new(unsafe {
+            PrimitiveArray::<IntervalMonthDayNanoType>::from_trusted_len_iter(vec.iter())
+        }))
+    }
+}
+
 /// Cast the primitive array using [`PrimitiveArray::reinterpret_cast`]
 fn cast_reinterpret_arrays<
     I: ArrowPrimitiveType,
@@ -433,13 +545,11 @@ fn cast_reinterpret_arrays<
 >(
     array: &dyn Array,
 ) -> Result<ArrayRef, ArrowError> {
-    Ok(Arc::new(
-        as_primitive_array::<I>(array).reinterpret_cast::<O>(),
-    ))
+    Ok(Arc::new(array.as_primitive::<I>().reinterpret_cast::<O>()))
 }
 
 fn cast_decimal_to_integer<D, T>(
-    array: &ArrayRef,
+    array: &dyn Array,
     base: D::Native,
     scale: i8,
     cast_options: &CastOptions,
@@ -450,7 +560,7 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: ArrowNativeTypeOp + ToPrimitive,
 {
-    let array = array.as_any().downcast_ref::<PrimitiveArray<D>>().unwrap();
+    let array = array.as_primitive::<D>();
 
     let div: D::Native = base.pow_checked(scale as u32).map_err(|_| {
         ArrowError::CastError(format!(
@@ -501,36 +611,21 @@ where
 
 // cast the decimal array to floating-point array
 fn cast_decimal_to_float<D: DecimalType, T: ArrowPrimitiveType, F>(
-    array: &ArrayRef,
+    array: &dyn Array,
     op: F,
 ) -> Result<ArrayRef, ArrowError>
 where
     F: Fn(D::Native) -> T::Native,
 {
-    let array = array.as_any().downcast_ref::<PrimitiveArray<D>>().unwrap();
+    let array = array.as_primitive::<D>();
     let array = array.unary::<_, T>(op);
     Ok(Arc::new(array))
-}
-
-// cast the List array to Utf8 array
-macro_rules! cast_list_to_string {
-    ($ARRAY:expr, $SIZE:ident) => {{
-        let mut value_builder: GenericStringBuilder<$SIZE> = GenericStringBuilder::new();
-        for i in 0..$ARRAY.len() {
-            if $ARRAY.is_null(i) {
-                value_builder.append_null();
-            } else {
-                value_builder.append_value(array_value_to_string($ARRAY, i)?);
-            }
-        }
-        Ok(Arc::new(value_builder.finish()))
-    }};
 }
 
 fn make_timestamp_array(
     array: &PrimitiveArray<Int64Type>,
     unit: TimeUnit,
-    tz: Option<String>,
+    tz: Option<Arc<str>>,
 ) -> ArrayRef {
     match unit {
         TimeUnit::Second => Arc::new(
@@ -596,16 +691,15 @@ fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
 /// * To or from `StructArray`
 /// * List to primitive
 pub fn cast_with_options(
-    array: &ArrayRef,
+    array: &dyn Array,
     to_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     use DataType::*;
     let from_type = array.data_type();
-
     // clone array if types are the same
     if from_type == to_type {
-        return Ok(array.clone());
+        return Ok(make_array(array.to_data()));
     }
     match (from_type, to_type) {
         (
@@ -650,8 +744,7 @@ pub fn cast_with_options(
             UInt32 => dictionary_cast::<UInt32Type>(array, to_type, cast_options),
             UInt64 => dictionary_cast::<UInt64Type>(array, to_type, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from dictionary type {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from dictionary type {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (_, Dictionary(index_type, value_type)) => match **index_type {
@@ -664,8 +757,7 @@ pub fn cast_with_options(
             UInt32 => cast_to_dictionary::<UInt32Type>(array, value_type, cast_options),
             UInt64 => cast_to_dictionary::<UInt64Type>(array, value_type, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from type {:?} to dictionary type {:?} not supported",
-                from_type, to_type,
+                "Casting from type {from_type:?} to dictionary type {to_type:?} not supported",
             ))),
         },
         (List(_), List(ref to)) => {
@@ -680,7 +772,7 @@ pub fn cast_with_options(
                     "cannot cast list to large-list with different child data".into(),
                 ))
             } else {
-                cast_list_container::<i32, i64>(&**array, cast_options)
+                cast_list_container::<i32, i64>(array, cast_options)
             }
         }
         (LargeList(list_from), List(list_to)) => {
@@ -689,25 +781,40 @@ pub fn cast_with_options(
                     "cannot cast large-list to list with different child data".into(),
                 ))
             } else {
-                cast_list_container::<i64, i32>(&**array, cast_options)
+                cast_list_container::<i64, i32>(array, cast_options)
             }
         }
         (List(_) | LargeList(_), _) => match to_type {
-            Utf8 => cast_list_to_string!(array, i32),
-            LargeUtf8 => cast_list_to_string!(array, i64),
+            Utf8 => value_to_string::<i32>(array, cast_options),
+            LargeUtf8 => value_to_string::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(
                 "Cannot cast list to non-list data types".to_string(),
             )),
         },
-        (_, List(ref to)) => {
-            cast_primitive_to_list::<i32>(array, to, to_type, cast_options)
+        (FixedSizeList(list_from, _), List(list_to)) => {
+            if list_to.data_type() != list_from.data_type() {
+                Err(ArrowError::CastError(
+                    "cannot cast fixed-size-list to list with different child data".into(),
+                ))
+            } else {
+                cast_fixed_size_list_to_list::<i32>(array)
+            }
         }
-        (_, LargeList(ref to)) => {
-            cast_primitive_to_list::<i64>(array, to, to_type, cast_options)
+        (FixedSizeList(list_from, _), LargeList(list_to)) => {
+            if list_to.data_type() != list_from.data_type() {
+                Err(ArrowError::CastError(
+                    "cannot cast fixed-size-list to largelist with different child data".into(),
+                ))
+            } else {
+                cast_fixed_size_list_to_list::<i64>(array)
+            }
         }
+
+        (_, List(ref to)) => cast_values_to_list::<i32>(array, to, cast_options),
+        (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
-            cast_decimal_to_decimal::<Decimal128Type, Decimal128Type>(
-                as_primitive_array(array),
+            cast_decimal_to_decimal_same_type::<Decimal128Type>(
+                array.as_primitive(),
                 *s1,
                 *p2,
                 *s2,
@@ -715,8 +822,8 @@ pub fn cast_with_options(
             )
         }
         (Decimal256(_, s1), Decimal256(p2, s2)) => {
-            cast_decimal_to_decimal::<Decimal256Type, Decimal256Type>(
-                as_primitive_array(array),
+            cast_decimal_to_decimal_same_type::<Decimal256Type>(
+                array.as_primitive(),
                 *s1,
                 *p2,
                 *s2,
@@ -725,7 +832,7 @@ pub fn cast_with_options(
         }
         (Decimal128(_, s1), Decimal256(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal128Type, Decimal256Type>(
-                as_primitive_array(array),
+                array.as_primitive(),
                 *s1,
                 *p2,
                 *s2,
@@ -734,7 +841,7 @@ pub fn cast_with_options(
         }
         (Decimal256(_, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal256Type, Decimal128Type>(
-                as_primitive_array(array),
+                array.as_primitive(),
                 *s1,
                 *p2,
                 *s2,
@@ -802,10 +909,11 @@ pub fn cast_with_options(
                         x as f64 / 10_f64.powi(*scale as i32)
                     })
                 }
+                Utf8 => value_to_string::<i32>(array, cast_options),
+                LargeUtf8 => value_to_string::<i64>(array, cast_options),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
+                    "Casting from {from_type:?} to {to_type:?} not supported"
                 ))),
             }
         }
@@ -870,10 +978,11 @@ pub fn cast_with_options(
                         x.to_f64().unwrap() / 10_f64.powi(*scale as i32)
                     })
                 }
+                Utf8 => value_to_string::<i32>(array, cast_options),
+                LargeUtf8 => value_to_string::<i64>(array, cast_options),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
+                    "Casting from {from_type:?} to {to_type:?} not supported"
                 ))),
             }
         }
@@ -881,69 +990,69 @@ pub fn cast_with_options(
             // cast data to decimal
             match from_type {
                 UInt8 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<UInt8Type>(array),
+                    array.as_primitive::<UInt8Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 UInt16 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<UInt16Type>(array),
+                    array.as_primitive::<UInt16Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 UInt32 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<UInt32Type>(array),
+                    array.as_primitive::<UInt32Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 UInt64 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<UInt64Type>(array),
+                    array.as_primitive::<UInt64Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 Int8 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<Int8Type>(array),
+                    array.as_primitive::<Int8Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 Int16 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<Int16Type>(array),
+                    array.as_primitive::<Int16Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 Int32 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<Int32Type>(array),
+                    array.as_primitive::<Int32Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 Int64 => cast_integer_to_decimal::<_, Decimal128Type, _>(
-                    as_primitive_array::<Int64Type>(array),
+                    array.as_primitive::<Int64Type>(),
                     *precision,
                     *scale,
                     10_i128,
                     cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal128(
-                    as_primitive_array::<Float32Type>(array),
+                    array.as_primitive::<Float32Type>(),
                     *precision,
                     *scale,
                     cast_options,
                 ),
                 Float64 => cast_floating_point_to_decimal128(
-                    as_primitive_array::<Float64Type>(array),
+                    array.as_primitive::<Float64Type>(),
                     *precision,
                     *scale,
                     cast_options,
@@ -962,8 +1071,7 @@ pub fn cast_with_options(
                 ),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
+                    "Casting from {from_type:?} to {to_type:?} not supported"
                 ))),
             }
         }
@@ -971,69 +1079,69 @@ pub fn cast_with_options(
             // cast data to decimal
             match from_type {
                 UInt8 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<UInt8Type>(array),
+                    array.as_primitive::<UInt8Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 UInt16 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<UInt16Type>(array),
+                    array.as_primitive::<UInt16Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 UInt32 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<UInt32Type>(array),
+                    array.as_primitive::<UInt32Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 UInt64 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<UInt64Type>(array),
+                    array.as_primitive::<UInt64Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Int8 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<Int8Type>(array),
+                    array.as_primitive::<Int8Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Int16 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<Int16Type>(array),
+                    array.as_primitive::<Int16Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Int32 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<Int32Type>(array),
+                    array.as_primitive::<Int32Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Int64 => cast_integer_to_decimal::<_, Decimal256Type, _>(
-                    as_primitive_array::<Int64Type>(array),
+                    array.as_primitive::<Int64Type>(),
                     *precision,
                     *scale,
                     i256::from_i128(10_i128),
                     cast_options,
                 ),
                 Float32 => cast_floating_point_to_decimal256(
-                    as_primitive_array::<Float32Type>(array),
+                    array.as_primitive::<Float32Type>(),
                     *precision,
                     *scale,
                     cast_options,
                 ),
                 Float64 => cast_floating_point_to_decimal256(
-                    as_primitive_array::<Float64Type>(array),
+                    array.as_primitive::<Float64Type>(),
                     *precision,
                     *scale,
                     cast_options,
@@ -1052,8 +1160,7 @@ pub fn cast_with_options(
                 ),
                 Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
+                    "Casting from {from_type:?} to {to_type:?} not supported"
                 ))),
             }
         }
@@ -1075,10 +1182,10 @@ pub fn cast_with_options(
             Float16 => cast_numeric_to_bool::<Float16Type>(array),
             Float32 => cast_numeric_to_bool::<Float32Type>(array),
             Float64 => cast_numeric_to_bool::<Float64Type>(array),
-            Utf8 => cast_utf8_to_boolean(array, cast_options),
+            Utf8 => cast_utf8_to_boolean::<i32>(array, cast_options),
+            LargeUtf8 => cast_utf8_to_boolean::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (Boolean, _) => match to_type {
@@ -1093,205 +1200,151 @@ pub fn cast_with_options(
             Float16 => cast_bool_to_numeric::<Float16Type>(array, cast_options),
             Float32 => cast_bool_to_numeric::<Float32Type>(array, cast_options),
             Float64 => cast_bool_to_numeric::<Float64Type>(array, cast_options),
-            Utf8 => {
-                let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-                Ok(Arc::new(
-                    array
-                        .iter()
-                        .map(|value| value.map(|value| if value { "1" } else { "0" }))
-                        .collect::<StringArray>(),
-                ))
-            }
+            Utf8 => value_to_string::<i32>(array, cast_options),
+            LargeUtf8 => value_to_string::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (Utf8, _) => match to_type {
-            LargeUtf8 => cast_str_container::<i32, i64>(&**array),
-            UInt8 => cast_string_to_numeric::<UInt8Type, i32>(array, cast_options),
-            UInt16 => cast_string_to_numeric::<UInt16Type, i32>(array, cast_options),
-            UInt32 => cast_string_to_numeric::<UInt32Type, i32>(array, cast_options),
-            UInt64 => cast_string_to_numeric::<UInt64Type, i32>(array, cast_options),
-            Int8 => cast_string_to_numeric::<Int8Type, i32>(array, cast_options),
-            Int16 => cast_string_to_numeric::<Int16Type, i32>(array, cast_options),
-            Int32 => cast_string_to_numeric::<Int32Type, i32>(array, cast_options),
-            Int64 => cast_string_to_numeric::<Int64Type, i32>(array, cast_options),
-            Float32 => cast_string_to_numeric::<Float32Type, i32>(array, cast_options),
-            Float64 => cast_string_to_numeric::<Float64Type, i32>(array, cast_options),
-            Date32 => cast_string_to_date32::<i32>(&**array, cast_options),
-            Date64 => cast_string_to_date64::<i32>(&**array, cast_options),
-            Binary => cast_string_to_binary(array),
-            Time32(TimeUnit::Second) => {
-                cast_string_to_time32second::<i32>(&**array, cast_options)
+            UInt8 => parse_string::<UInt8Type, i32>(array, cast_options),
+            UInt16 => parse_string::<UInt16Type, i32>(array, cast_options),
+            UInt32 => parse_string::<UInt32Type, i32>(array, cast_options),
+            UInt64 => parse_string::<UInt64Type, i32>(array, cast_options),
+            Int8 => parse_string::<Int8Type, i32>(array, cast_options),
+            Int16 => parse_string::<Int16Type, i32>(array, cast_options),
+            Int32 => parse_string::<Int32Type, i32>(array, cast_options),
+            Int64 => parse_string::<Int64Type, i32>(array, cast_options),
+            Float32 => parse_string::<Float32Type, i32>(array, cast_options),
+            Float64 => parse_string::<Float64Type, i32>(array, cast_options),
+            Date32 => parse_string::<Date32Type, i32>(array, cast_options),
+            Date64 => parse_string::<Date64Type, i32>(array, cast_options),
+            Binary => Ok(Arc::new(BinaryArray::from(array.as_string::<i32>().clone()))),
+            LargeBinary => {
+                let binary = BinaryArray::from(array.as_string::<i32>().clone());
+                cast_byte_container::<BinaryType, LargeBinaryType>(&binary)
             }
-            Time32(TimeUnit::Millisecond) => {
-                cast_string_to_time32millisecond::<i32>(&**array, cast_options)
+            LargeUtf8 => cast_byte_container::<Utf8Type, LargeUtf8Type>(array),
+            Time32(TimeUnit::Second) => parse_string::<Time32SecondType, i32>(array, cast_options),
+            Time32(TimeUnit::Millisecond) => parse_string::<Time32MillisecondType, i32>(array, cast_options),
+            Time64(TimeUnit::Microsecond) => parse_string::<Time64MicrosecondType, i32>(array, cast_options),
+            Time64(TimeUnit::Nanosecond) => parse_string::<Time64NanosecondType, i32>(array, cast_options),
+            Timestamp(TimeUnit::Second, to_tz) => {
+                cast_string_to_timestamp::<i32, TimestampSecondType>(array, to_tz, cast_options)
             }
-            Time64(TimeUnit::Microsecond) => {
-                cast_string_to_time64microsecond::<i32>(&**array, cast_options)
+            Timestamp(TimeUnit::Millisecond, to_tz) => {
+                cast_string_to_timestamp::<i32, TimestampMillisecondType>(array, to_tz, cast_options)
             }
-            Time64(TimeUnit::Nanosecond) => {
-                cast_string_to_time64nanosecond::<i32>(&**array, cast_options)
+            Timestamp(TimeUnit::Microsecond, to_tz) => {
+                cast_string_to_timestamp::<i32, TimestampMicrosecondType>(array, to_tz, cast_options)
             }
-            Timestamp(TimeUnit::Nanosecond, None) => {
-                cast_string_to_timestamp_ns::<i32>(&**array, cast_options)
+            Timestamp(TimeUnit::Nanosecond, to_tz) => {
+                cast_string_to_timestamp::<i32, TimestampNanosecondType>(array, to_tz, cast_options)
             }
-            _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
-            ))),
-        },
-        (_, Utf8) => match from_type {
-            LargeUtf8 => cast_str_container::<i64, i32>(&**array),
-            UInt8 => cast_numeric_to_string::<UInt8Type, i32>(array),
-            UInt16 => cast_numeric_to_string::<UInt16Type, i32>(array),
-            UInt32 => cast_numeric_to_string::<UInt32Type, i32>(array),
-            UInt64 => cast_numeric_to_string::<UInt64Type, i32>(array),
-            Int8 => cast_numeric_to_string::<Int8Type, i32>(array),
-            Int16 => cast_numeric_to_string::<Int16Type, i32>(array),
-            Int32 => cast_numeric_to_string::<Int32Type, i32>(array),
-            Int64 => cast_numeric_to_string::<Int64Type, i32>(array),
-            Float32 => cast_numeric_to_string::<Float32Type, i32>(array),
-            Float64 => cast_numeric_to_string::<Float64Type, i32>(array),
-            Timestamp(TimeUnit::Nanosecond, tz) => cast_timestamp_to_string::<
-                TimestampNanosecondType,
-                i32,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Microsecond, tz) => cast_timestamp_to_string::<
-                TimestampMicrosecondType,
-                i32,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Millisecond, tz) => cast_timestamp_to_string::<
-                TimestampMillisecondType,
-                i32,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Second, tz) => {
-                cast_timestamp_to_string::<TimestampSecondType, i32>(array, tz.as_ref())
+            Interval(IntervalUnit::YearMonth) => {
+                cast_string_to_year_month_interval::<i32>(array, cast_options)
             }
-            Date32 => cast_date32_to_string::<i32>(array),
-            Date64 => cast_date64_to_string::<i32>(array),
-            Binary => {
-                let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                Ok(Arc::new(
-                    array
-                        .iter()
-                        .map(|maybe_value| match maybe_value {
-                            Some(value) => {
-                                let result = std::str::from_utf8(value);
-                                if cast_options.safe {
-                                    Ok(result.ok())
-                                } else {
-                                    Some(result.map_err(|_| {
-                                        ArrowError::CastError(
-                                            "Cannot cast binary to string".to_string(),
-                                        )
-                                    }))
-                                    .transpose()
-                                }
-                            }
-                            None => Ok(None),
-                        })
-                        .collect::<Result<StringArray, _>>()?,
-                ))
+            Interval(IntervalUnit::DayTime) => {
+                cast_string_to_day_time_interval::<i32>(array, cast_options)
+            }
+            Interval(IntervalUnit::MonthDayNano) => {
+                cast_string_to_month_day_nano_interval::<i32>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
-            ))),
-        },
-        (_, LargeUtf8) => match from_type {
-            UInt8 => cast_numeric_to_string::<UInt8Type, i64>(array),
-            UInt16 => cast_numeric_to_string::<UInt16Type, i64>(array),
-            UInt32 => cast_numeric_to_string::<UInt32Type, i64>(array),
-            UInt64 => cast_numeric_to_string::<UInt64Type, i64>(array),
-            Int8 => cast_numeric_to_string::<Int8Type, i64>(array),
-            Int16 => cast_numeric_to_string::<Int16Type, i64>(array),
-            Int32 => cast_numeric_to_string::<Int32Type, i64>(array),
-            Int64 => cast_numeric_to_string::<Int64Type, i64>(array),
-            Float32 => cast_numeric_to_string::<Float32Type, i64>(array),
-            Float64 => cast_numeric_to_string::<Float64Type, i64>(array),
-            Timestamp(TimeUnit::Nanosecond, tz) => cast_timestamp_to_string::<
-                TimestampNanosecondType,
-                i64,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Microsecond, tz) => cast_timestamp_to_string::<
-                TimestampMicrosecondType,
-                i64,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Millisecond, tz) => cast_timestamp_to_string::<
-                TimestampMillisecondType,
-                i64,
-            >(array, tz.as_ref()),
-            Timestamp(TimeUnit::Second, tz) => {
-                cast_timestamp_to_string::<TimestampSecondType, i64>(array, tz.as_ref())
-            }
-            Date32 => cast_date32_to_string::<i64>(array),
-            Date64 => cast_date64_to_string::<i64>(array),
-            Binary => {
-                let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
-                Ok(Arc::new(
-                    array
-                        .iter()
-                        .map(|maybe_value| match maybe_value {
-                            Some(value) => {
-                                let result = std::str::from_utf8(value);
-                                if cast_options.safe {
-                                    Ok(result.ok())
-                                } else {
-                                    Some(result.map_err(|_| {
-                                        ArrowError::CastError(
-                                            "Cannot cast binary to string".to_string(),
-                                        )
-                                    }))
-                                    .transpose()
-                                }
-                            }
-                            None => Ok(None),
-                        })
-                        .collect::<Result<LargeStringArray, _>>()?,
-                ))
-            }
-            _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
         (LargeUtf8, _) => match to_type {
-            UInt8 => cast_string_to_numeric::<UInt8Type, i64>(array, cast_options),
-            UInt16 => cast_string_to_numeric::<UInt16Type, i64>(array, cast_options),
-            UInt32 => cast_string_to_numeric::<UInt32Type, i64>(array, cast_options),
-            UInt64 => cast_string_to_numeric::<UInt64Type, i64>(array, cast_options),
-            Int8 => cast_string_to_numeric::<Int8Type, i64>(array, cast_options),
-            Int16 => cast_string_to_numeric::<Int16Type, i64>(array, cast_options),
-            Int32 => cast_string_to_numeric::<Int32Type, i64>(array, cast_options),
-            Int64 => cast_string_to_numeric::<Int64Type, i64>(array, cast_options),
-            Float32 => cast_string_to_numeric::<Float32Type, i64>(array, cast_options),
-            Float64 => cast_string_to_numeric::<Float64Type, i64>(array, cast_options),
-            Date32 => cast_string_to_date32::<i64>(&**array, cast_options),
-            Date64 => cast_string_to_date64::<i64>(&**array, cast_options),
-            LargeBinary => cast_string_to_binary(array),
-            Time32(TimeUnit::Second) => {
-                cast_string_to_time32second::<i64>(&**array, cast_options)
+            UInt8 => parse_string::<UInt8Type, i64>(array, cast_options),
+            UInt16 => parse_string::<UInt16Type, i64>(array, cast_options),
+            UInt32 => parse_string::<UInt32Type, i64>(array, cast_options),
+            UInt64 => parse_string::<UInt64Type, i64>(array, cast_options),
+            Int8 => parse_string::<Int8Type, i64>(array, cast_options),
+            Int16 => parse_string::<Int16Type, i64>(array, cast_options),
+            Int32 => parse_string::<Int32Type, i64>(array, cast_options),
+            Int64 => parse_string::<Int64Type, i64>(array, cast_options),
+            Float32 => parse_string::<Float32Type, i64>(array, cast_options),
+            Float64 => parse_string::<Float64Type, i64>(array, cast_options),
+            Date32 => parse_string::<Date32Type, i64>(array, cast_options),
+            Date64 => parse_string::<Date64Type, i64>(array, cast_options),
+            Utf8 => cast_byte_container::<LargeUtf8Type, Utf8Type>(array),
+            Binary => {
+                let large_binary =
+                    LargeBinaryArray::from(array.as_string::<i64>().clone());
+                cast_byte_container::<LargeBinaryType, BinaryType>(&large_binary)
             }
-            Time32(TimeUnit::Millisecond) => {
-                cast_string_to_time32millisecond::<i64>(&**array, cast_options)
+            LargeBinary => Ok(Arc::new(LargeBinaryArray::from(
+                array.as_string::<i64>().clone(),
+            ))),
+            Time32(TimeUnit::Second) => parse_string::<Time32SecondType, i64>(array, cast_options),
+            Time32(TimeUnit::Millisecond) => parse_string::<Time32MillisecondType, i64>(array, cast_options),
+            Time64(TimeUnit::Microsecond) => parse_string::<Time64MicrosecondType, i64>(array, cast_options),
+            Time64(TimeUnit::Nanosecond) => parse_string::<Time64NanosecondType, i64>(array, cast_options),
+            Timestamp(TimeUnit::Second, to_tz) => {
+                cast_string_to_timestamp::<i64, TimestampSecondType>(array, to_tz, cast_options)
             }
-            Time64(TimeUnit::Microsecond) => {
-                cast_string_to_time64microsecond::<i64>(&**array, cast_options)
+            Timestamp(TimeUnit::Millisecond, to_tz) => {
+                cast_string_to_timestamp::<i64, TimestampMillisecondType>(array, to_tz, cast_options)
             }
-            Time64(TimeUnit::Nanosecond) => {
-                cast_string_to_time64nanosecond::<i64>(&**array, cast_options)
+            Timestamp(TimeUnit::Microsecond, to_tz) => {
+                cast_string_to_timestamp::<i64, TimestampMicrosecondType>(array, to_tz, cast_options)
             }
-            Timestamp(TimeUnit::Nanosecond, None) => {
-                cast_string_to_timestamp_ns::<i64>(&**array, cast_options)
+            Timestamp(TimeUnit::Nanosecond, to_tz) => {
+                cast_string_to_timestamp::<i64, TimestampNanosecondType>(array, to_tz, cast_options)
+            }
+            Interval(IntervalUnit::YearMonth) => {
+                cast_string_to_year_month_interval::<i64>(array, cast_options)
+            }
+            Interval(IntervalUnit::DayTime) => {
+                cast_string_to_day_time_interval::<i64>(array, cast_options)
+            }
+            Interval(IntervalUnit::MonthDayNano) => {
+                cast_string_to_month_day_nano_interval::<i64>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {:?} to {:?} not supported",
-                from_type, to_type,
+                "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
         },
-
+        (Binary, _) => match to_type {
+            Utf8 => cast_binary_to_string::<i32>(array, cast_options),
+            LargeUtf8 => {
+                let array = cast_binary_to_string::<i32>(array, cast_options)?;
+                cast_byte_container::<Utf8Type, LargeUtf8Type>(array.as_ref())
+            }
+            LargeBinary => {
+                cast_byte_container::<BinaryType, LargeBinaryType>(array)
+            }
+            FixedSizeBinary(size) => {
+                cast_binary_to_fixed_size_binary::<i32>(array, *size, cast_options)
+            }
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {from_type:?} to {to_type:?} not supported",
+            ))),
+        },
+        (LargeBinary, _) => match to_type {
+            Utf8 => {
+                let array = cast_binary_to_string::<i64>(array, cast_options)?;
+                cast_byte_container::<LargeUtf8Type, Utf8Type>(array.as_ref())
+            }
+            LargeUtf8 => cast_binary_to_string::<i64>(array, cast_options),
+            Binary => cast_byte_container::<LargeBinaryType, BinaryType>(array),
+            FixedSizeBinary(size) => {
+                cast_binary_to_fixed_size_binary::<i64>(array, *size, cast_options)
+            }
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {from_type:?} to {to_type:?} not supported",
+            ))),
+        },
+        (FixedSizeBinary(size), _) => match to_type {
+            Binary => cast_fixed_size_binary_to_binary::<i32>(array, *size),
+            LargeBinary =>
+                cast_fixed_size_binary_to_binary::<i64>(array, *size),
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {from_type:?} to {to_type:?} not supported",
+            ))),
+        },
+        (from_type, LargeUtf8) if from_type.is_primitive() => value_to_string::<i64>(array, cast_options),
+        (from_type, Utf8) if from_type.is_primitive() => value_to_string::<i32>(array, cast_options),
         // start numeric casts
         (UInt8, UInt16) => {
             cast_numeric_arrays::<UInt8Type, UInt16Type>(array, cast_options)
@@ -1611,71 +1664,71 @@ pub fn cast_with_options(
             cast_reinterpret_arrays::<Time64NanosecondType, Int64Type>(array)
         }
         (Date32, Date64) => Ok(Arc::new(
-            as_primitive_array::<Date32Type>(array)
+            array.as_primitive::<Date32Type>()
                 .unary::<_, Date64Type>(|x| x as i64 * MILLISECONDS_IN_DAY),
         )),
         (Date64, Date32) => Ok(Arc::new(
-            as_primitive_array::<Date64Type>(array)
+            array.as_primitive::<Date64Type>()
                 .unary::<_, Date32Type>(|x| (x / MILLISECONDS_IN_DAY) as i32),
         )),
 
         (Time32(TimeUnit::Second), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            as_primitive_array::<Time32SecondType>(array)
+            array.as_primitive::<Time32SecondType>()
                 .unary::<_, Time32MillisecondType>(|x| x * MILLISECONDS as i32),
         )),
         (Time32(TimeUnit::Second), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
-            as_primitive_array::<Time32SecondType>(array)
+            array.as_primitive::<Time32SecondType>()
                 .unary::<_, Time64MicrosecondType>(|x| x as i64 * MICROSECONDS),
         )),
         (Time32(TimeUnit::Second), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
-            as_primitive_array::<Time32SecondType>(array)
+            array.as_primitive::<Time32SecondType>()
                 .unary::<_, Time64NanosecondType>(|x| x as i64 * NANOSECONDS),
         )),
 
         (Time32(TimeUnit::Millisecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
-            as_primitive_array::<Time32MillisecondType>(array)
+            array.as_primitive::<Time32MillisecondType>()
                 .unary::<_, Time32SecondType>(|x| x / MILLISECONDS as i32),
         )),
         (Time32(TimeUnit::Millisecond), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
-            as_primitive_array::<Time32MillisecondType>(array)
+            array.as_primitive::<Time32MillisecondType>()
                 .unary::<_, Time64MicrosecondType>(|x| {
                     x as i64 * (MICROSECONDS / MILLISECONDS)
                 }),
         )),
         (Time32(TimeUnit::Millisecond), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
-            as_primitive_array::<Time32MillisecondType>(array)
+            array.as_primitive::<Time32MillisecondType>()
                 .unary::<_, Time64NanosecondType>(|x| {
                     x as i64 * (MICROSECONDS / NANOSECONDS)
                 }),
         )),
 
         (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
-            as_primitive_array::<Time64MicrosecondType>(array)
+            array.as_primitive::<Time64MicrosecondType>()
                 .unary::<_, Time32SecondType>(|x| (x / MICROSECONDS) as i32),
         )),
         (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            as_primitive_array::<Time64MicrosecondType>(array)
+            array.as_primitive::<Time64MicrosecondType>()
                 .unary::<_, Time32MillisecondType>(|x| {
                     (x / (MICROSECONDS / MILLISECONDS)) as i32
                 }),
         )),
         (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
-            as_primitive_array::<Time64MicrosecondType>(array)
+            array.as_primitive::<Time64MicrosecondType>()
                 .unary::<_, Time64NanosecondType>(|x| x * (NANOSECONDS / MICROSECONDS)),
         )),
 
         (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
-            as_primitive_array::<Time64NanosecondType>(array)
+            array.as_primitive::<Time64NanosecondType>()
                 .unary::<_, Time32SecondType>(|x| (x / NANOSECONDS) as i32),
         )),
         (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            as_primitive_array::<Time64NanosecondType>(array)
+            array.as_primitive::<Time64NanosecondType>()
                 .unary::<_, Time32MillisecondType>(|x| {
                     (x / (NANOSECONDS / MILLISECONDS)) as i32
                 }),
         )),
         (Time64(TimeUnit::Nanosecond), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
-            as_primitive_array::<Time64NanosecondType>(array)
+            array.as_primitive::<Time64NanosecondType>()
                 .unary::<_, Time64MicrosecondType>(|x| x / (NANOSECONDS / MICROSECONDS)),
         )),
 
@@ -1693,34 +1746,86 @@ pub fn cast_with_options(
         }
 
         (Int64, Timestamp(unit, tz)) => Ok(make_timestamp_array(
-            as_primitive_array(array),
+            array.as_primitive(),
             unit.clone(),
             tz.clone(),
         )),
 
-        (Timestamp(from_unit, _), Timestamp(to_unit, to_tz)) => {
+        (Timestamp(from_unit, from_tz), Timestamp(to_unit, to_tz)) => {
             let array = cast_with_options(array, &Int64, cast_options)?;
-            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
+            let time_array = array.as_primitive::<Int64Type>();
             let from_size = time_unit_multiple(from_unit);
             let to_size = time_unit_multiple(to_unit);
             // we either divide or multiply, depending on size of each unit
             // units are never the same when the types are the same
-            let converted = if from_size >= to_size {
-                let divisor = from_size / to_size;
-                time_array.unary::<_, Int64Type>(|o| o / divisor)
-            } else {
-                let mul = to_size / from_size;
-                time_array.unary::<_, Int64Type>(|o| o * mul)
+            let converted = match from_size.cmp(&to_size) {
+                Ordering::Greater => {
+                    let divisor = from_size / to_size;
+                    time_array.unary::<_, Int64Type>(|o| o / divisor)
+                }
+                Ordering::Equal => time_array.clone(),
+                Ordering::Less => {
+                    let mul = to_size / from_size;
+                    if cast_options.safe {
+                        time_array.unary_opt::<_, Int64Type>(|o| o.checked_mul(mul))
+                    } else {
+                        time_array.try_unary::<_, Int64Type, _>(|o| o.mul_checked(mul))?
+                    }
+                }
+            };
+            // Normalize timezone
+            let adjusted = match (from_tz, to_tz) {
+                // Only this case needs to be adjusted because we're casting from
+                // unknown time offset to some time offset, we want the time to be
+                // unchanged.
+                //
+                // i.e. Timestamp('2001-01-01T00:00', None) -> Timestamp('2001-01-01T00:00', '+0700')
+                (None, Some(to_tz)) => {
+                    let to_tz: Tz = to_tz.parse()?;
+                    match to_unit {
+                        TimeUnit::Second => {
+                            adjust_timestamp_to_timezone::<TimestampSecondType>(
+                                converted,
+                                &to_tz,
+                                cast_options,
+                            )?
+                        }
+                        TimeUnit::Millisecond => {
+                            adjust_timestamp_to_timezone::<TimestampMillisecondType>(
+                                converted,
+                                &to_tz,
+                                cast_options,
+                            )?
+                        }
+                        TimeUnit::Microsecond => {
+                            adjust_timestamp_to_timezone::<TimestampMicrosecondType>(
+                                converted,
+                                &to_tz,
+                                cast_options,
+                            )?
+                        }
+                        TimeUnit::Nanosecond => {
+                            adjust_timestamp_to_timezone::<TimestampNanosecondType>(
+                                converted,
+                                &to_tz,
+                                cast_options,
+                            )?
+                        }
+                    }
+                }
+                _ => {
+                    converted
+                }
             };
             Ok(make_timestamp_array(
-                &converted,
+                &adjusted,
                 to_unit.clone(),
                 to_tz.clone(),
             ))
         }
         (Timestamp(from_unit, _), Date32) => {
             let array = cast_with_options(array, &Int64, cast_options)?;
-            let time_array = as_primitive_array::<Int64Type>(array.as_ref());
+            let time_array = array.as_primitive::<Int64Type>();
             let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
 
             let mut b = Date32Builder::with_capacity(array.len());
@@ -1729,31 +1834,45 @@ pub fn cast_with_options(
                 if time_array.is_null(i) {
                     b.append_null();
                 } else {
-                    b.append_value((time_array.value(i) / from_size) as i32);
+                    b.append_value(num::integer::div_floor::<i64>(time_array.value(i), from_size) as i32);
                 }
             }
 
             Ok(Arc::new(b.finish()) as ArrayRef)
         }
         (Timestamp(TimeUnit::Second, _), Date64) => Ok(Arc::new(
-            as_primitive_array::<TimestampSecondType>(array)
-                .unary::<_, Date64Type>(|x| x * MILLISECONDS),
+            match cast_options.safe {
+                true => {
+                    // change error to None
+                    array.as_primitive::<TimestampSecondType>()
+                        .unary_opt::<_, Date64Type>(|x| {
+                            x.checked_mul(MILLISECONDS)
+                        })
+                }
+                false => {
+                    array.as_primitive::<TimestampSecondType>().try_unary::<_, Date64Type, _>(
+                        |x| {
+                            x.mul_checked(MILLISECONDS)
+                        },
+                    )?
+                }
+            },
         )),
         (Timestamp(TimeUnit::Millisecond, _), Date64) => {
             cast_reinterpret_arrays::<TimestampMillisecondType, Date64Type>(array)
         }
         (Timestamp(TimeUnit::Microsecond, _), Date64) => Ok(Arc::new(
-            as_primitive_array::<TimestampMicrosecondType>(array)
+            array.as_primitive::<TimestampMicrosecondType>()
                 .unary::<_, Date64Type>(|x| x / (MICROSECONDS / MILLISECONDS)),
         )),
         (Timestamp(TimeUnit::Nanosecond, _), Date64) => Ok(Arc::new(
-            as_primitive_array::<TimestampNanosecondType>(array)
+            array.as_primitive::<TimestampNanosecondType>()
                 .unary::<_, Date64Type>(|x| x / (NANOSECONDS / MILLISECONDS)),
         )),
         (Timestamp(TimeUnit::Second, tz), Time64(TimeUnit::Microsecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampSecondType>(array)
+                array.as_primitive::<TimestampSecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
                         Ok(time_to_time64us(as_time_res_with_timezone::<
                             TimestampSecondType,
@@ -1764,7 +1883,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Second, tz), Time64(TimeUnit::Nanosecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampSecondType>(array)
+                array.as_primitive::<TimestampSecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
                         Ok(time_to_time64ns(as_time_res_with_timezone::<
                             TimestampSecondType,
@@ -1775,73 +1894,73 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Millisecond, tz), Time64(TimeUnit::Microsecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMillisecondType>(array)
+                array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64us(as_time_res_with_timezone::<
-                        TimestampMillisecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64us(as_time_res_with_timezone::<
+                            TimestampMillisecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Millisecond, tz), Time64(TimeUnit::Nanosecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMillisecondType>(array)
+                array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64ns(as_time_res_with_timezone::<
-                        TimestampMillisecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64ns(as_time_res_with_timezone::<
+                            TimestampMillisecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Microsecond, tz), Time64(TimeUnit::Microsecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMicrosecondType>(array)
+                array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64us(as_time_res_with_timezone::<
-                        TimestampMicrosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64us(as_time_res_with_timezone::<
+                            TimestampMicrosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Microsecond, tz), Time64(TimeUnit::Nanosecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMicrosecondType>(array)
+                array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64ns(as_time_res_with_timezone::<
-                        TimestampMicrosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64ns(as_time_res_with_timezone::<
+                            TimestampMicrosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Nanosecond, tz), Time64(TimeUnit::Microsecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampNanosecondType>(array)
+                array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time64MicrosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64us(as_time_res_with_timezone::<
-                        TimestampNanosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64us(as_time_res_with_timezone::<
+                            TimestampNanosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Nanosecond, tz), Time64(TimeUnit::Nanosecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampNanosecondType>(array)
+                array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time64NanosecondType, ArrowError>(|x| {
-                    Ok(time_to_time64ns(as_time_res_with_timezone::<
-                        TimestampNanosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time64ns(as_time_res_with_timezone::<
+                            TimestampNanosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Second, tz), Time32(TimeUnit::Second)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampSecondType>(array)
+                array.as_primitive::<TimestampSecondType>()
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
                         Ok(time_to_time32s(as_time_res_with_timezone::<
                             TimestampSecondType,
@@ -1852,7 +1971,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Second, tz), Time32(TimeUnit::Millisecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampSecondType>(array)
+                array.as_primitive::<TimestampSecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
                         Ok(time_to_time32ms(as_time_res_with_timezone::<
                             TimestampSecondType,
@@ -1863,7 +1982,7 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Millisecond, tz), Time32(TimeUnit::Second)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMillisecondType>(array)
+                array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
                         Ok(time_to_time32s(as_time_res_with_timezone::<
                             TimestampMillisecondType,
@@ -1874,18 +1993,18 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Millisecond, tz), Time32(TimeUnit::Millisecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMillisecondType>(array)
+                array.as_primitive::<TimestampMillisecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
-                    Ok(time_to_time32ms(as_time_res_with_timezone::<
-                        TimestampMillisecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time32ms(as_time_res_with_timezone::<
+                            TimestampMillisecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Microsecond, tz), Time32(TimeUnit::Second)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMicrosecondType>(array)
+                array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
                         Ok(time_to_time32s(as_time_res_with_timezone::<
                             TimestampMicrosecondType,
@@ -1896,18 +2015,18 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Microsecond, tz), Time32(TimeUnit::Millisecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampMicrosecondType>(array)
+                array.as_primitive::<TimestampMicrosecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
-                    Ok(time_to_time32ms(as_time_res_with_timezone::<
-                        TimestampMicrosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time32ms(as_time_res_with_timezone::<
+                            TimestampMicrosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
         (Timestamp(TimeUnit::Nanosecond, tz), Time32(TimeUnit::Second)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampNanosecondType>(array)
+                array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time32SecondType, ArrowError>(|x| {
                         Ok(time_to_time32s(as_time_res_with_timezone::<
                             TimestampNanosecondType,
@@ -1918,48 +2037,48 @@ pub fn cast_with_options(
         (Timestamp(TimeUnit::Nanosecond, tz), Time32(TimeUnit::Millisecond)) => {
             let tz = tz.as_ref().map(|tz| tz.parse()).transpose()?;
             Ok(Arc::new(
-                as_primitive_array::<TimestampNanosecondType>(array)
+                array.as_primitive::<TimestampNanosecondType>()
                     .try_unary::<_, Time32MillisecondType, ArrowError>(|x| {
-                    Ok(time_to_time32ms(as_time_res_with_timezone::<
-                        TimestampNanosecondType,
-                    >(x, tz)?))
-                })?,
+                        Ok(time_to_time32ms(as_time_res_with_timezone::<
+                            TimestampNanosecondType,
+                        >(x, tz)?))
+                    })?,
             ))
         }
 
         (Date64, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
-            as_primitive_array::<Date64Type>(array)
+            array.as_primitive::<Date64Type>()
                 .unary::<_, TimestampSecondType>(|x| x / MILLISECONDS),
         )),
         (Date64, Timestamp(TimeUnit::Millisecond, None)) => {
             cast_reinterpret_arrays::<Date64Type, TimestampMillisecondType>(array)
         }
         (Date64, Timestamp(TimeUnit::Microsecond, None)) => Ok(Arc::new(
-            as_primitive_array::<Date64Type>(array).unary::<_, TimestampMicrosecondType>(
+            array.as_primitive::<Date64Type>().unary::<_, TimestampMicrosecondType>(
                 |x| x * (MICROSECONDS / MILLISECONDS),
             ),
         )),
         (Date64, Timestamp(TimeUnit::Nanosecond, None)) => Ok(Arc::new(
-            as_primitive_array::<Date64Type>(array).unary::<_, TimestampNanosecondType>(
+            array.as_primitive::<Date64Type>().unary::<_, TimestampNanosecondType>(
                 |x| x * (NANOSECONDS / MILLISECONDS),
             ),
         )),
         (Date32, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
-            as_primitive_array::<Date32Type>(array)
+            array.as_primitive::<Date32Type>()
                 .unary::<_, TimestampSecondType>(|x| (x as i64) * SECONDS_IN_DAY),
         )),
         (Date32, Timestamp(TimeUnit::Millisecond, None)) => Ok(Arc::new(
-            as_primitive_array::<Date32Type>(array).unary::<_, TimestampMillisecondType>(
+            array.as_primitive::<Date32Type>().unary::<_, TimestampMillisecondType>(
                 |x| (x as i64) * MILLISECONDS_IN_DAY,
             ),
         )),
         (Date32, Timestamp(TimeUnit::Microsecond, None)) => Ok(Arc::new(
-            as_primitive_array::<Date32Type>(array).unary::<_, TimestampMicrosecondType>(
+            array.as_primitive::<Date32Type>().unary::<_, TimestampMicrosecondType>(
                 |x| (x as i64) * MICROSECONDS_IN_DAY,
             ),
         )),
         (Date32, Timestamp(TimeUnit::Nanosecond, None)) => Ok(Arc::new(
-            as_primitive_array::<Date32Type>(array)
+            array.as_primitive::<Date32Type>()
                 .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY),
         )),
         (Int64, Duration(TimeUnit::Second)) => {
@@ -1987,7 +2106,36 @@ pub fn cast_with_options(
         (Duration(TimeUnit::Nanosecond), Int64) => {
             cast_reinterpret_arrays::<DurationNanosecondType, Int64Type>(array)
         }
-
+        (Duration(TimeUnit::Second), Interval(IntervalUnit::MonthDayNano)) => {
+            cast_duration_to_interval::<DurationSecondType>(array, cast_options)
+        }
+        (Duration(TimeUnit::Millisecond), Interval(IntervalUnit::MonthDayNano)) => {
+            cast_duration_to_interval::<DurationMillisecondType>(array, cast_options)
+        }
+        (Duration(TimeUnit::Microsecond), Interval(IntervalUnit::MonthDayNano)) => {
+            cast_duration_to_interval::<DurationMicrosecondType>(array, cast_options)
+        }
+        (Duration(TimeUnit::Nanosecond), Interval(IntervalUnit::MonthDayNano)) => {
+            cast_duration_to_interval::<DurationNanosecondType>(array, cast_options)
+        }
+        (Interval(IntervalUnit::MonthDayNano), Duration(TimeUnit::Second)) => {
+            cast_month_day_nano_to_duration::<DurationSecondType>(array, cast_options)
+        }
+        (Interval(IntervalUnit::MonthDayNano), Duration(TimeUnit::Millisecond)) => {
+            cast_month_day_nano_to_duration::<DurationMillisecondType>(array, cast_options)
+        }
+        (Interval(IntervalUnit::MonthDayNano), Duration(TimeUnit::Microsecond)) => {
+            cast_month_day_nano_to_duration::<DurationMicrosecondType>(array, cast_options)
+        }
+        (Interval(IntervalUnit::MonthDayNano), Duration(TimeUnit::Nanosecond)) => {
+            cast_month_day_nano_to_duration::<DurationNanosecondType>(array, cast_options)
+        }
+        (Interval(IntervalUnit::YearMonth), Interval(IntervalUnit::MonthDayNano)) => {
+            cast_interval_year_month_to_interval_month_day_nano(array, cast_options)
+        }
+        (Interval(IntervalUnit::DayTime), Interval(IntervalUnit::MonthDayNano)) => {
+            cast_interval_day_time_to_interval_month_day_nano(array, cast_options)
+        }
         (Interval(IntervalUnit::YearMonth), Int64) => {
             cast_numeric_arrays::<IntervalYearMonthType, Int64Type>(array, cast_options)
         }
@@ -2001,43 +2149,7 @@ pub fn cast_with_options(
             cast_reinterpret_arrays::<Int64Type, IntervalDayTimeType>(array)
         }
         (_, _) => Err(ArrowError::CastError(format!(
-            "Casting from {:?} to {:?} not supported",
-            from_type, to_type,
-        ))),
-    }
-}
-
-/// Cast to string array to binary array
-fn cast_string_to_binary(array: &ArrayRef) -> Result<ArrayRef, ArrowError> {
-    let from_type = array.data_type();
-    match *from_type {
-        DataType::Utf8 => {
-            let data = unsafe {
-                array
-                    .data()
-                    .clone()
-                    .into_builder()
-                    .data_type(DataType::Binary)
-                    .build_unchecked()
-            };
-
-            Ok(Arc::new(BinaryArray::from(data)) as ArrayRef)
-        }
-        DataType::LargeUtf8 => {
-            let data = unsafe {
-                array
-                    .data()
-                    .clone()
-                    .into_builder()
-                    .data_type(DataType::LargeBinary)
-                    .build_unchecked()
-            };
-
-            Ok(Arc::new(LargeBinaryArray::from(data)) as ArrayRef)
-        }
-        _ => Err(ArrowError::InvalidArgumentError(format!(
-            "{:?} cannot be converted to binary array",
-            from_type
+            "Casting from {from_type:?} to {to_type:?} not supported",
         ))),
     }
 }
@@ -2090,6 +2202,137 @@ impl DecimalCast for i256 {
     }
 }
 
+fn cast_decimal_to_decimal_error<I, O>(
+    output_precision: u8,
+    output_scale: i8,
+) -> impl Fn(<I as ArrowPrimitiveType>::Native) -> ArrowError
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    move |x: I::Native| {
+        ArrowError::CastError(format!(
+            "Cannot cast to {}({}, {}). Overflowing on {:?}",
+            O::PREFIX,
+            output_precision,
+            output_scale,
+            x
+        ))
+    }
+}
+
+fn convert_to_smaller_scale_decimal<I, O>(
+    array: &PrimitiveArray<I>,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
+    let div = I::Native::from_decimal(10_i128)
+        .unwrap()
+        .pow_checked((input_scale - output_scale) as u32)?;
+
+    let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
+    let half_neg = half.neg_wrapping();
+
+    let f = |x: I::Native| {
+        // div is >= 10 and so this cannot overflow
+        let d = x.div_wrapping(div);
+        let r = x.mod_wrapping(div);
+
+        // Round result
+        let adjusted = match x >= I::Native::ZERO {
+            true if r >= half => d.add_wrapping(I::Native::ONE),
+            false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
+            _ => d,
+        };
+        O::Native::from_decimal(adjusted)
+    };
+
+    Ok(match cast_options.safe {
+        true => array.unary_opt(f),
+        false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
+    })
+}
+
+fn convert_to_bigger_or_equal_scale_decimal<I, O>(
+    array: &PrimitiveArray<I>,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
+    let mul = O::Native::from_decimal(10_i128)
+        .unwrap()
+        .pow_checked((output_scale - input_scale) as u32)?;
+
+    let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
+
+    Ok(match cast_options.safe {
+        true => array.unary_opt(f),
+        false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
+    })
+}
+
+// Only support one type of decimal cast operations
+fn cast_decimal_to_decimal_same_type<T>(
+    array: &PrimitiveArray<T>,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    T: DecimalType,
+    T::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let array: PrimitiveArray<T> = match input_scale.cmp(&output_scale) {
+        Ordering::Equal => {
+            // the scale doesn't change, the native value don't need to be changed
+            array.clone()
+        }
+        Ordering::Greater => convert_to_smaller_scale_decimal::<T, T>(
+            array,
+            input_scale,
+            output_precision,
+            output_scale,
+            cast_options,
+        )?,
+        Ordering::Less => {
+            // input_scale < output_scale
+            convert_to_bigger_or_equal_scale_decimal::<T, T>(
+                array,
+                input_scale,
+                output_precision,
+                output_scale,
+                cast_options,
+            )?
+        }
+    };
+
+    Ok(Arc::new(array.with_precision_and_scale(
+        output_precision,
+        output_scale,
+    )?))
+}
+
+// Support two different types of decimal cast operations
 fn cast_decimal_to_decimal<I, O>(
     array: &PrimitiveArray<I>,
     input_scale: i8,
@@ -2103,53 +2346,22 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let error = |x| {
-        ArrowError::CastError(format!(
-            "Cannot cast to {}({}, {}). Overflowing on {:?}",
-            O::PREFIX,
+    let array: PrimitiveArray<O> = if input_scale > output_scale {
+        convert_to_smaller_scale_decimal::<I, O>(
+            array,
+            input_scale,
             output_precision,
             output_scale,
-            x
-        ))
-    };
-
-    let array: PrimitiveArray<O> = if input_scale > output_scale {
-        let div = I::Native::from_decimal(10_i128)
-            .unwrap()
-            .pow_checked((input_scale - output_scale) as u32)?;
-
-        let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
-        let half_neg = half.neg_wrapping();
-
-        let f = |x: I::Native| {
-            // div is >= 10 and so this cannot overflow
-            let d = x.div_wrapping(div);
-            let r = x.mod_wrapping(div);
-
-            // Round result
-            let adjusted = match x >= I::Native::ZERO {
-                true if r >= half => d.add_wrapping(I::Native::ONE),
-                false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
-                _ => d,
-            };
-            O::Native::from_decimal(adjusted)
-        };
-
-        match cast_options.safe {
-            true => array.unary_opt(f),
-            false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
-        }
+            cast_options,
+        )?
     } else {
-        let mul = O::Native::from_decimal(10_i128)
-            .unwrap()
-            .pow_checked((output_scale - input_scale) as u32)?;
-
-        let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
-
-        match cast_options.safe {
-            true => array.unary_opt(f),
-            false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
-        }
+        convert_to_bigger_or_equal_scale_decimal::<I, O>(
+            array,
+            input_scale,
+            output_precision,
+            output_scale,
+            cast_options,
+        )?
     };
 
     Ok(Arc::new(array.with_precision_and_scale(
@@ -2160,7 +2372,7 @@ where
 
 /// Convert Array into a PrimitiveArray of type, and apply numeric cast
 fn cast_numeric_arrays<FROM, TO>(
-    from: &ArrayRef,
+    from: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
@@ -2172,16 +2384,12 @@ where
     if cast_options.safe {
         // If the value can't be casted to the `TO::Native`, return null
         Ok(Arc::new(numeric_cast::<FROM, TO>(
-            from.as_any()
-                .downcast_ref::<PrimitiveArray<FROM>>()
-                .unwrap(),
+            from.as_primitive::<FROM>(),
         )))
     } else {
         // If the value can't be casted to the `TO::Native`, return error
         Ok(Arc::new(try_numeric_cast::<FROM, TO>(
-            from.as_any()
-                .downcast_ref::<PrimitiveArray<FROM>>()
-                .unwrap(),
+            from.as_primitive::<FROM>(),
         )?))
     }
 }
@@ -2220,286 +2428,125 @@ where
     from.unary_opt::<_, R>(num::cast::cast::<T::Native, R::Native>)
 }
 
-fn as_time_with_string_op<
-    A: ArrayAccessor<Item = T::Native>,
-    OffsetSize,
-    T: ArrowTemporalType,
-    F,
->(
-    iter: ArrayIter<A>,
-    mut builder: GenericStringBuilder<OffsetSize>,
-    op: F,
-) -> ArrayRef
-where
-    OffsetSize: OffsetSizeTrait,
-    F: Fn(NaiveDateTime) -> String,
-    i64: From<T::Native>,
-{
-    iter.into_iter().for_each(|value| {
-        if let Some(value) = value {
-            match as_datetime::<T>(<i64 as From<_>>::from(value)) {
-                Some(dt) => builder.append_value(op(dt)),
-                None => builder.append_null(),
+fn value_to_string<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = GenericStringBuilder::<O>::new();
+    let formatter = ArrayFormatter::try_new(array, &options.format_options)?;
+    let nulls = array.nulls();
+    for i in 0..array.len() {
+        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
+            true => builder.append_null(),
+            false => {
+                formatter.value(i).write(&mut builder)?;
+                // tell the builder the row is finished
+                builder.append_value("");
             }
-        } else {
-            builder.append_null();
-        }
-    });
-
-    Arc::new(builder.finish())
-}
-
-fn extract_component_from_datetime_array<
-    A: ArrayAccessor<Item = T::Native>,
-    OffsetSize,
-    T: ArrowTemporalType,
-    F,
->(
-    iter: ArrayIter<A>,
-    mut builder: GenericStringBuilder<OffsetSize>,
-    tz: &str,
-    op: F,
-) -> Result<ArrayRef, ArrowError>
-where
-    OffsetSize: OffsetSizeTrait,
-    F: Fn(DateTime<Tz>) -> String,
-    i64: From<T::Native>,
-{
-    let tz: Tz = tz.parse()?;
-    for value in iter {
-        match value {
-            Some(value) => match as_datetime_with_timezone::<T>(value.into(), tz) {
-                Some(time) => builder.append_value(op(time)),
-                _ => {
-                    return Err(ArrowError::ComputeError(
-                        "Unable to read value as datetime".to_string(),
-                    ));
-                }
-            },
-            None => builder.append_null(),
         }
     }
     Ok(Arc::new(builder.finish()))
 }
 
-/// Cast timestamp types to Utf8/LargeUtf8
-fn cast_timestamp_to_string<T, OffsetSize>(
-    array: &ArrayRef,
-    tz: Option<&String>,
-) -> Result<ArrayRef, ArrowError>
-where
-    T: ArrowTemporalType + ArrowPrimitiveType,
-    i64: From<<T as ArrowPrimitiveType>::Native>,
-    OffsetSize: OffsetSizeTrait,
-{
-    let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
-
-    let builder = GenericStringBuilder::<OffsetSize>::new();
-
-    if let Some(tz) = tz {
-        // The macro calls `as_datetime` on timestamp values of the array.
-        // After applying timezone offset on the datatime, calling `to_string` to get
-        // the strings.
-        let iter = ArrayIter::new(array);
-        extract_component_from_datetime_array::<_, OffsetSize, T, _>(
-            iter,
-            builder,
-            tz,
-            |t| t.to_string(),
-        )
-    } else {
-        // No timezone available. Calling `to_string` on the datatime value simply.
-        let iter = ArrayIter::new(array);
-        Ok(as_time_with_string_op::<_, OffsetSize, T, _>(
-            iter,
-            builder,
-            |t| t.to_string(),
-        ))
-    }
-}
-
-/// Cast date32 types to Utf8/LargeUtf8
-fn cast_date32_to_string<OffsetSize: OffsetSizeTrait>(
-    array: &ArrayRef,
-) -> Result<ArrayRef, ArrowError> {
-    let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
-
-    Ok(Arc::new(
-        (0..array.len())
-            .map(|ix| {
-                if array.is_null(ix) {
-                    None
-                } else {
-                    array.value_as_date(ix).map(|v| v.to_string())
-                }
-            })
-            .collect::<GenericStringArray<OffsetSize>>(),
-    ))
-}
-
-/// Cast date64 types to Utf8/LargeUtf8
-fn cast_date64_to_string<OffsetSize: OffsetSizeTrait>(
-    array: &ArrayRef,
-) -> Result<ArrayRef, ArrowError> {
-    let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
-
-    Ok(Arc::new(
-        (0..array.len())
-            .map(|ix| {
-                if array.is_null(ix) {
-                    None
-                } else {
-                    array.value_as_datetime(ix).map(|v| v.to_string())
-                }
-            })
-            .collect::<GenericStringArray<OffsetSize>>(),
-    ))
-}
-
-/// Cast numeric types to Utf8
-fn cast_numeric_to_string<FROM, OffsetSize>(
-    array: &ArrayRef,
-) -> Result<ArrayRef, ArrowError>
-where
-    FROM: ArrowPrimitiveType,
-    FROM::Native: lexical_core::ToLexical,
-    OffsetSize: OffsetSizeTrait,
-{
-    Ok(Arc::new(numeric_to_string_cast::<FROM, OffsetSize>(
-        array
-            .as_any()
-            .downcast_ref::<PrimitiveArray<FROM>>()
-            .unwrap(),
-    )))
-}
-
-fn numeric_to_string_cast<T, OffsetSize>(
-    from: &PrimitiveArray<T>,
-) -> GenericStringArray<OffsetSize>
-where
-    T: ArrowPrimitiveType + ArrowPrimitiveType,
-    T::Native: lexical_core::ToLexical,
-    OffsetSize: OffsetSizeTrait,
-{
-    from.iter()
-        .map(|maybe_value| maybe_value.map(lexical_to_string))
-        .collect()
-}
-
-/// Cast numeric types to Utf8
-fn cast_string_to_numeric<T, Offset: OffsetSizeTrait>(
-    from: &ArrayRef,
+/// Parse UTF-8
+fn parse_string<P: Parser, O: OffsetSizeTrait>(
+    array: &dyn Array,
     cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    T: ArrowPrimitiveType,
-    <T as ArrowPrimitiveType>::Native: lexical_core::FromLexical,
-{
-    Ok(Arc::new(string_to_numeric_cast::<T, Offset>(
-        from.as_any()
-            .downcast_ref::<GenericStringArray<Offset>>()
-            .unwrap(),
-        cast_options,
-    )?))
-}
+) -> Result<ArrayRef, ArrowError> {
+    let string_array = array.as_string::<O>();
+    let array = if cast_options.safe {
+        let iter = string_array.iter().map(|x| x.and_then(P::parse));
 
-fn string_to_numeric_cast<T, Offset: OffsetSizeTrait>(
-    from: &GenericStringArray<Offset>,
-    cast_options: &CastOptions,
-) -> Result<PrimitiveArray<T>, ArrowError>
-where
-    T: ArrowPrimitiveType,
-    <T as ArrowPrimitiveType>::Native: lexical_core::FromLexical,
-{
-    if cast_options.safe {
-        let iter = from
-            .iter()
-            .map(|v| v.and_then(|v| lexical_core::parse(v.as_bytes()).ok()));
         // Benefit:
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        Ok(unsafe { PrimitiveArray::<T>::from_trusted_len_iter(iter) })
+        unsafe { PrimitiveArray::<P>::from_trusted_len_iter(iter) }
     } else {
-        let vec = from
+        let v = string_array
+            .iter()
+            .map(|x| match x {
+                Some(v) => P::parse(v).ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast string '{}' to value of {:?} type",
+                        v,
+                        P::DATA_TYPE
+                    ))
+                }),
+                None => Ok(P::Native::default()),
+            })
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+        PrimitiveArray::new(v.into(), string_array.nulls().cloned())
+    };
+
+    Ok(Arc::new(array) as ArrayRef)
+}
+
+/// Casts generic string arrays to an ArrowTimestampType (TimeStampNanosecondArray, etc.)
+fn cast_string_to_timestamp<O: OffsetSizeTrait, T: ArrowTimestampType>(
+    array: &dyn Array,
+    to_tz: &Option<Arc<str>>,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_string::<O>();
+    let out: PrimitiveArray<T> = match to_tz {
+        Some(tz) => {
+            let tz: Tz = tz.as_ref().parse()?;
+            cast_string_to_timestamp_impl(array, &tz, cast_options)?
+        }
+        None => cast_string_to_timestamp_impl(array, &Utc, cast_options)?,
+    };
+    Ok(Arc::new(out.with_timezone_opt(to_tz.clone())))
+}
+
+fn cast_string_to_timestamp_impl<
+    O: OffsetSizeTrait,
+    T: ArrowTimestampType,
+    Tz: TimeZone,
+>(
+    array: &GenericStringArray<O>,
+    tz: &Tz,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<T>, ArrowError> {
+    if cast_options.safe {
+        let iter = array.iter().map(|v| {
+            v.and_then(|v| {
+                let naive = string_to_datetime(tz, v).ok()?.naive_utc();
+                T::make_value(naive)
+            })
+        });
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+
+        Ok(unsafe { PrimitiveArray::from_trusted_len_iter(iter) })
+    } else {
+        let vec = array
             .iter()
             .map(|v| {
                 v.map(|v| {
-                    lexical_core::parse(v.as_bytes()).map_err(|_| {
+                    let naive = string_to_datetime(tz, v)?.naive_utc();
+                    T::make_value(naive).ok_or_else(|| {
                         ArrowError::CastError(format!(
-                            "Cannot cast string '{}' to value of {:?} type",
-                            v,
-                            T::DATA_TYPE,
+                            "Overflow converting {naive} to {:?}",
+                            T::UNIT
                         ))
                     })
                 })
                 .transpose()
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<Option<i64>>, _>>()?;
+
         // Benefit:
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        Ok(unsafe { PrimitiveArray::<T>::from_trusted_len_iter(vec.iter()) })
+        Ok(unsafe { PrimitiveArray::from_trusted_len_iter(vec.iter()) })
     }
 }
 
-/// Casts generic string arrays to Date32Array
-fn cast_string_to_date32<Offset: OffsetSizeTrait>(
-    array: &dyn Array,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    use chrono::Datelike;
-    let string_array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<Offset>>()
-        .unwrap();
-
-    let array = if cast_options.safe {
-        let iter = string_array.iter().map(|v| {
-            v.and_then(|v| {
-                v.parse::<chrono::NaiveDate>()
-                    .map(|date| date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
-                    .ok()
-            })
-        });
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Date32Array::from_trusted_len_iter(iter) }
-    } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveDate>()
-                        .map(|date| date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Date32
-                            ))
-                        })
-                })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i32>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Date32Array::from_trusted_len_iter(vec.iter()) }
-    };
-
-    Ok(Arc::new(array) as ArrayRef)
-}
-
-/// Casts generic string arrays to Date64Array
-fn cast_string_to_date64<Offset: OffsetSizeTrait>(
+fn cast_string_to_year_month_interval<Offset: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
@@ -2507,347 +2554,133 @@ fn cast_string_to_date64<Offset: OffsetSizeTrait>(
         .as_any()
         .downcast_ref::<GenericStringArray<Offset>>()
         .unwrap();
-
-    let array = if cast_options.safe {
-        let iter = string_array.iter().map(|v| {
-            v.and_then(|v| {
-                v.parse::<chrono::NaiveDateTime>()
-                    .map(|datetime| datetime.timestamp_millis())
-                    .ok()
-            })
-        });
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Date64Array::from_trusted_len_iter(iter) }
-    } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveDateTime>()
-                        .map(|datetime| datetime.timestamp_millis())
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Date64
-                            ))
-                        })
-                })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i64>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Date64Array::from_trusted_len_iter(vec.iter()) }
-    };
-
-    Ok(Arc::new(array) as ArrayRef)
-}
-
-/// Casts generic string arrays to `Time32SecondArray`
-fn cast_string_to_time32second<Offset: OffsetSizeTrait>(
-    array: &dyn Array,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    /// The number of nanoseconds per millisecond.
-    const NANOS_PER_SEC: u32 = 1_000_000_000;
-
-    let string_array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<Offset>>()
-        .unwrap();
-
-    let array = if cast_options.safe {
-        let iter = string_array.iter().map(|v| {
-            v.and_then(|v| {
-                v.parse::<chrono::NaiveTime>()
-                    .map(|time| {
-                        (time.num_seconds_from_midnight()
-                            + time.nanosecond() / NANOS_PER_SEC)
-                            as i32
-                    })
-                    .ok()
-            })
-        });
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time32SecondArray::from_trusted_len_iter(iter) }
-    } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveTime>()
-                        .map(|time| {
-                            (time.num_seconds_from_midnight()
-                                + time.nanosecond() / NANOS_PER_SEC)
-                                as i32
-                        })
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Time32(TimeUnit::Second)
-                            ))
-                        })
-                })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i32>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time32SecondArray::from_trusted_len_iter(vec.iter()) }
-    };
-
-    Ok(Arc::new(array) as ArrayRef)
-}
-
-/// Casts generic string arrays to `Time32MillisecondArray`
-fn cast_string_to_time32millisecond<Offset: OffsetSizeTrait>(
-    array: &dyn Array,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    /// The number of nanoseconds per millisecond.
-    const NANOS_PER_MILLI: u32 = 1_000_000;
-    /// The number of milliseconds per second.
-    const MILLIS_PER_SEC: u32 = 1_000;
-
-    let string_array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<Offset>>()
-        .unwrap();
-
-    let array = if cast_options.safe {
-        let iter = string_array.iter().map(|v| {
-            v.and_then(|v| {
-                v.parse::<chrono::NaiveTime>()
-                    .map(|time| {
-                        (time.num_seconds_from_midnight() * MILLIS_PER_SEC
-                            + time.nanosecond() / NANOS_PER_MILLI)
-                            as i32
-                    })
-                    .ok()
-            })
-        });
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time32MillisecondArray::from_trusted_len_iter(iter) }
-    } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveTime>()
-                        .map(|time| {
-                            (time.num_seconds_from_midnight() * MILLIS_PER_SEC
-                                + time.nanosecond() / NANOS_PER_MILLI)
-                                as i32
-                        })
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Time32(TimeUnit::Millisecond)
-                            ))
-                        })
-                })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i32>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time32MillisecondArray::from_trusted_len_iter(vec.iter()) }
-    };
-
-    Ok(Arc::new(array) as ArrayRef)
-}
-
-/// Casts generic string arrays to `Time64MicrosecondArray`
-fn cast_string_to_time64microsecond<Offset: OffsetSizeTrait>(
-    array: &dyn Array,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    /// The number of nanoseconds per microsecond.
-    const NANOS_PER_MICRO: i64 = 1_000;
-    /// The number of microseconds per second.
-    const MICROS_PER_SEC: i64 = 1_000_000;
-
-    let string_array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<Offset>>()
-        .unwrap();
-
-    let array = if cast_options.safe {
-        let iter = string_array.iter().map(|v| {
-            v.and_then(|v| {
-                v.parse::<chrono::NaiveTime>()
-                    .map(|time| {
-                        time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
-                            + time.nanosecond() as i64 / NANOS_PER_MICRO
-                    })
-                    .ok()
-            })
-        });
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time64MicrosecondArray::from_trusted_len_iter(iter) }
-    } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveTime>()
-                        .map(|time| {
-                            time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
-                                + time.nanosecond() as i64 / NANOS_PER_MICRO
-                        })
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Time64(TimeUnit::Microsecond)
-                            ))
-                        })
-                })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i64>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time64MicrosecondArray::from_trusted_len_iter(vec.iter()) }
-    };
-
-    Ok(Arc::new(array) as ArrayRef)
-}
-
-/// Casts generic string arrays to `Time64NanosecondArray`
-fn cast_string_to_time64nanosecond<Offset: OffsetSizeTrait>(
-    array: &dyn Array,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    /// The number of nanoseconds per second.
-    const NANOS_PER_SEC: i64 = 1_000_000_000;
-
-    let string_array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<Offset>>()
-        .unwrap();
-
-    let array = if cast_options.safe {
-        let iter = string_array.iter().map(|v| {
-            v.and_then(|v| {
-                v.parse::<chrono::NaiveTime>()
-                    .map(|time| {
-                        time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC
-                            + time.nanosecond() as i64
-                    })
-                    .ok()
-            })
-        });
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time64NanosecondArray::from_trusted_len_iter(iter) }
-    } else {
-        let vec = string_array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    v.parse::<chrono::NaiveTime>()
-                        .map(|time| {
-                            time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC
-                                + time.nanosecond() as i64
-                        })
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                DataType::Time64(TimeUnit::Nanosecond)
-                            ))
-                        })
-                })
-                .transpose()
-            })
-            .collect::<Result<Vec<Option<i64>>, _>>()?;
-
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { Time64NanosecondArray::from_trusted_len_iter(vec.iter()) }
-    };
-
-    Ok(Arc::new(array) as ArrayRef)
-}
-
-/// Casts generic string arrays to TimeStampNanosecondArray
-fn cast_string_to_timestamp_ns<Offset: OffsetSizeTrait>(
-    array: &dyn Array,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    let string_array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<Offset>>()
-        .unwrap();
-
-    let array = if cast_options.safe {
+    let interval_array = if cast_options.safe {
         let iter = string_array
             .iter()
-            .map(|v| v.and_then(|v| string_to_timestamp_nanos(v).ok()));
+            .map(|v| v.and_then(|v| parse_interval_year_month(v).ok()));
+
         // Benefit:
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { TimestampNanosecondArray::from_trusted_len_iter(iter) }
+        unsafe { IntervalYearMonthArray::from_trusted_len_iter(iter) }
     } else {
         let vec = string_array
             .iter()
-            .map(|v| v.map(string_to_timestamp_nanos).transpose())
-            .collect::<Result<Vec<Option<i64>>, _>>()?;
+            .map(|v| v.map(parse_interval_year_month).transpose())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         // Benefit:
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { TimestampNanosecondArray::from_trusted_len_iter(vec.iter()) }
+        unsafe { IntervalYearMonthArray::from_trusted_len_iter(vec) }
     };
+    Ok(Arc::new(interval_array) as ArrayRef)
+}
 
-    Ok(Arc::new(array) as ArrayRef)
+fn cast_string_to_day_time_interval<Offset: OffsetSizeTrait>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let string_array = array
+        .as_any()
+        .downcast_ref::<GenericStringArray<Offset>>()
+        .unwrap();
+    let interval_array = if cast_options.safe {
+        let iter = string_array
+            .iter()
+            .map(|v| v.and_then(|v| parse_interval_day_time(v).ok()));
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { IntervalDayTimeArray::from_trusted_len_iter(iter) }
+    } else {
+        let vec = string_array
+            .iter()
+            .map(|v| v.map(parse_interval_day_time).transpose())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { IntervalDayTimeArray::from_trusted_len_iter(vec) }
+    };
+    Ok(Arc::new(interval_array) as ArrayRef)
+}
+
+fn cast_string_to_month_day_nano_interval<Offset: OffsetSizeTrait>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let string_array = array
+        .as_any()
+        .downcast_ref::<GenericStringArray<Offset>>()
+        .unwrap();
+    let interval_array = if cast_options.safe {
+        let iter = string_array
+            .iter()
+            .map(|v| v.and_then(|v| parse_interval_month_day_nano(v).ok()));
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { IntervalMonthDayNanoArray::from_trusted_len_iter(iter) }
+    } else {
+        let vec = string_array
+            .iter()
+            .map(|v| v.map(parse_interval_month_day_nano).transpose())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { IntervalMonthDayNanoArray::from_trusted_len_iter(vec) }
+    };
+    Ok(Arc::new(interval_array) as ArrayRef)
+}
+
+fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
+    array: PrimitiveArray<Int64Type>,
+    to_tz: &Tz,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<Int64Type>, ArrowError> {
+    let adjust = |o| {
+        let local = as_datetime::<T>(o)?;
+        let offset = to_tz.offset_from_local_datetime(&local).single()?;
+        T::make_value(local - offset.fix())
+    };
+    let adjusted = if cast_options.safe {
+        array.unary_opt::<_, Int64Type>(adjust)
+    } else {
+        array.try_unary::<_, Int64Type, _>(|o| {
+            adjust(o).ok_or_else(|| {
+                ArrowError::CastError(
+                    "Cannot cast timezone to different timezone".to_string(),
+                )
+            })
+        })?
+    };
+    Ok(adjusted)
 }
 
 /// Casts Utf8 to Boolean
-fn cast_utf8_to_boolean(
-    from: &ArrayRef,
+fn cast_utf8_to_boolean<OffsetSize>(
+    from: &dyn Array,
     cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    let array = as_string_array(from);
+) -> Result<ArrayRef, ArrowError>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let array = from
+        .as_any()
+        .downcast_ref::<GenericStringArray<OffsetSize>>()
+        .unwrap();
 
     let output_array = array
         .iter()
@@ -2861,8 +2694,7 @@ fn cast_utf8_to_boolean(
                 invalid_value => match cast_options.safe {
                     true => Ok(None),
                     false => Err(ArrowError::CastError(format!(
-                        "Cannot cast string '{}' to value of Boolean type",
-                        invalid_value,
+                        "Cannot cast value '{invalid_value}' to value of Boolean type",
                     ))),
                 },
             },
@@ -2886,8 +2718,7 @@ where
     let parts: Vec<&str> = value_str.split('.').collect();
     if parts.len() > 2 {
         return Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid decimal format: {:?}",
-            value_str
+            "Invalid decimal format: {value_str:?}"
         )));
     }
 
@@ -2898,8 +2729,7 @@ where
     let number_decimals = if decimals.len() > scale {
         let decimal_number = i256::from_string(decimals).ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!(
-                "Cannot parse decimal format: {}",
-                value_str
+                "Cannot parse decimal format: {value_str}"
             ))
         })?;
 
@@ -2923,8 +2753,7 @@ where
             i256::from_string(integers)
                 .ok_or_else(|| {
                     ArrowError::InvalidArgumentError(format!(
-                        "Cannot parse decimal format: {}",
-                        value_str
+                        "Cannot parse decimal format: {value_str}"
                     ))
                 })
                 .map(|v| {
@@ -2938,8 +2767,8 @@ where
     } else {
         let padding = if scale > decimals.len() { scale } else { 0 };
 
-        let decimals = format!("{:0<width$}", decimals, width = padding);
-        format!("{}{}", integers, decimals)
+        let decimals = format!("{decimals:0<padding$}");
+        format!("{integers}{decimals}")
     };
 
     let value = i256::from_string(number_decimals.as_str()).ok_or_else(|| {
@@ -3010,7 +2839,7 @@ where
 
 /// Cast Utf8 to decimal
 fn cast_string_to_decimal<T, Offset: OffsetSizeTrait>(
-    from: &ArrayRef,
+    from: &dyn Array,
     precision: u8,
     scale: i8,
     cast_options: &CastOptions,
@@ -3021,8 +2850,7 @@ where
 {
     if scale < 0 {
         return Err(ArrowError::InvalidArgumentError(format!(
-            "Cannot cast string to decimal with negative scale {}",
-            scale
+            "Cannot cast string to decimal with negative scale {scale}"
         )));
     }
 
@@ -3046,16 +2874,12 @@ where
 /// Cast numeric types to Boolean
 ///
 /// Any zero value returns `false` while non-zero returns `true`
-fn cast_numeric_to_bool<FROM>(from: &ArrayRef) -> Result<ArrayRef, ArrowError>
+fn cast_numeric_to_bool<FROM>(from: &dyn Array) -> Result<ArrayRef, ArrowError>
 where
     FROM: ArrowPrimitiveType,
 {
-    numeric_to_bool_cast::<FROM>(
-        from.as_any()
-            .downcast_ref::<PrimitiveArray<FROM>>()
-            .unwrap(),
-    )
-    .map(|to| Arc::new(to) as ArrayRef)
+    numeric_to_bool_cast::<FROM>(from.as_primitive::<FROM>())
+        .map(|to| Arc::new(to) as ArrayRef)
 }
 
 fn numeric_to_bool_cast<T>(from: &PrimitiveArray<T>) -> Result<BooleanArray, ArrowError>
@@ -3081,7 +2905,7 @@ where
 ///
 /// `false` returns 0 while `true` returns 1
 fn cast_bool_to_numeric<TO>(
-    from: &ArrayRef,
+    from: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
@@ -3124,7 +2948,7 @@ where
 ///
 /// K is the key type
 fn dictionary_cast<K: ArrowDictionaryKeyType>(
-    array: &ArrayRef,
+    array: &dyn Array,
     to_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
@@ -3142,7 +2966,7 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                 })?;
 
             let keys_array: ArrayRef =
-                Arc::new(PrimitiveArray::<K>::from(dict_array.keys().data().clone()));
+                Arc::new(PrimitiveArray::<K>::from(dict_array.keys().to_data()));
             let values_array = dict_array.values();
             let cast_keys = cast_with_options(&keys_array, to_index_type, cast_options)?;
             let cast_values =
@@ -3159,22 +2983,15 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                 )));
             }
 
-            // keys are data, child_data is values (dictionary)
-            let data = unsafe {
-                ArrayData::new_unchecked(
-                    to_type.clone(),
-                    cast_keys.len(),
-                    Some(cast_keys.null_count()),
-                    cast_keys
-                        .data()
-                        .null_bitmap()
-                        .cloned()
-                        .map(|bitmap| bitmap.into_buffer()),
-                    cast_keys.data().offset(),
-                    cast_keys.data().buffers().to_vec(),
-                    vec![cast_values.into_data()],
-                )
-            };
+            let data = cast_keys.into_data();
+            let builder = data
+                .into_builder()
+                .data_type(to_type.clone())
+                .child_data(vec![cast_values.into_data()]);
+
+            // Safety
+            // Cast keys are still valid
+            let data = unsafe { builder.build_unchecked() };
 
             // create the appropriate array type
             let new_array: ArrayRef = match **to_index_type {
@@ -3188,8 +3005,7 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                 UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)),
                 _ => {
                     return Err(ArrowError::CastError(format!(
-                        "Unsupported type {:?} for dictionary index",
-                        to_index_type
+                        "Unsupported type {to_index_type:?} for dictionary index"
                     )));
                 }
             };
@@ -3202,41 +3018,16 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
 
 // Unpack a dictionary where the keys are of type <K> into a flattened array of type to_type
 fn unpack_dictionary<K>(
-    array: &ArrayRef,
+    array: &dyn Array,
     to_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
     K: ArrowDictionaryKeyType,
 {
-    let dict_array = array
-        .as_any()
-        .downcast_ref::<DictionaryArray<K>>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError(
-                "Internal Error: Cannot cast dictionary to DictionaryArray of expected type".to_string(),
-            )
-        })?;
-
-    // attempt to cast the dict values to the target type
-    // use the take kernel to expand out the dictionary
+    let dict_array = array.as_dictionary::<K>();
     let cast_dict_values = cast_with_options(dict_array.values(), to_type, cast_options)?;
-
-    // Note take requires first casting the indices to u32
-    let keys_array: ArrayRef =
-        Arc::new(PrimitiveArray::<K>::from(dict_array.keys().data().clone()));
-    let indices = cast_with_options(&keys_array, &DataType::UInt32, cast_options)?;
-    let u32_indices =
-        indices
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .ok_or_else(|| {
-                ArrowError::ComputeError(
-                    "Internal Error: Cannot cast dict indices to UInt32".to_string(),
-                )
-            })?;
-
-    take(cast_dict_values.as_ref(), u32_indices, None)
+    take(cast_dict_values.as_ref(), dict_array.keys(), None)
 }
 
 /// Attempts to encode an array into an `ArrayDictionary` with index
@@ -3244,7 +3035,7 @@ where
 ///
 /// K is the key type
 fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
-    array: &ArrayRef,
+    array: &dyn Array,
     dict_value_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
@@ -3301,13 +3092,18 @@ fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             dict_value_type,
             cast_options,
         ),
-        Utf8 => pack_string_to_dictionary::<K>(array, cast_options),
-        LargeUtf8 => pack_string_to_dictionary::<K>(array, cast_options),
-        Binary => pack_binary_to_dictionary::<K>(array, cast_options),
-        LargeBinary => pack_binary_to_dictionary::<K>(array, cast_options),
+        Utf8 => pack_byte_to_dictionary::<K, GenericStringType<i32>>(array, cast_options),
+        LargeUtf8 => {
+            pack_byte_to_dictionary::<K, GenericStringType<i64>>(array, cast_options)
+        }
+        Binary => {
+            pack_byte_to_dictionary::<K, GenericBinaryType<i32>>(array, cast_options)
+        }
+        LargeBinary => {
+            pack_byte_to_dictionary::<K, GenericBinaryType<i64>>(array, cast_options)
+        }
         _ => Err(ArrowError::CastError(format!(
-            "Unsupported output type for dictionary packing: {:?}",
-            dict_value_type
+            "Unsupported output type for dictionary packing: {dict_value_type:?}"
         ))),
     }
 }
@@ -3315,7 +3111,7 @@ fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
 // Packs the data from the primitive array of type <V> to a
 // DictionaryArray with keys of type K and values of value_type V
 fn pack_numeric_to_dictionary<K, V>(
-    array: &ArrayRef,
+    array: &dyn Array,
     dict_value_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
@@ -3325,10 +3121,7 @@ where
 {
     // attempt to cast the source array values to the target value type (the dictionary values type)
     let cast_values = cast_with_options(array, dict_value_type, cast_options)?;
-    let values = cast_values
-        .as_any()
-        .downcast_ref::<PrimitiveArray<V>>()
-        .unwrap();
+    let values = cast_values.as_primitive::<V>();
 
     let mut b =
         PrimitiveDictionaryBuilder::<K, V>::with_capacity(values.len(), values.len());
@@ -3344,42 +3137,23 @@ where
     Ok(Arc::new(b.finish()))
 }
 
-// Packs the data as a StringDictionaryArray, if possible, with the
+// Packs the data as a GenericByteDictionaryBuilder, if possible, with the
 // key types of K
-fn pack_string_to_dictionary<K>(
-    array: &ArrayRef,
+fn pack_byte_to_dictionary<K, T>(
+    array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
     K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
 {
-    let cast_values = cast_with_options(array, &DataType::Utf8, cast_options)?;
-    let values = cast_values.as_any().downcast_ref::<StringArray>().unwrap();
-    let mut b = StringDictionaryBuilder::<K>::with_capacity(values.len(), 1024, 1024);
-
-    // copy each element one at a time
-    for i in 0..values.len() {
-        if values.is_null(i) {
-            b.append_null();
-        } else {
-            b.append(values.value(i))?;
-        }
-    }
-    Ok(Arc::new(b.finish()))
-}
-
-// Packs the data as a BinaryDictionaryArray, if possible, with the
-// key types of K
-fn pack_binary_to_dictionary<K>(
-    array: &ArrayRef,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    K: ArrowDictionaryKeyType,
-{
-    let cast_values = cast_with_options(array, &DataType::Binary, cast_options)?;
-    let values = cast_values.as_any().downcast_ref::<BinaryArray>().unwrap();
-    let mut b = BinaryDictionaryBuilder::<K>::with_capacity(values.len(), 1024, 1024);
+    let cast_values = cast_with_options(array, &T::DATA_TYPE, cast_options)?;
+    let values = cast_values
+        .as_any()
+        .downcast_ref::<GenericByteArray<T>>()
+        .unwrap();
+    let mut b =
+        GenericByteDictionaryBuilder::<K, T>::with_capacity(values.len(), 1024, 1024);
 
     // copy each element one at a time
     for i in 0..values.len() {
@@ -3393,119 +3167,193 @@ where
 }
 
 /// Helper function that takes a primitive array and casts to a (generic) list array.
-fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
-    array: &ArrayRef,
-    to: &Field,
-    to_type: &DataType,
+fn cast_values_to_list<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    to: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    // cast primitive to list's primitive
-    let cast_array = cast_with_options(array, to.data_type(), cast_options)?;
-    // create offsets, where if array.len() = 2, we have [0,1,2]
-    // Safety:
-    // Length of range can be trusted.
-    // Note: could not yet create a generic range in stable Rust.
-    let offsets = unsafe {
-        MutableBuffer::from_trusted_len_iter(
-            (0..=array.len()).map(|i| OffsetSize::from(i).expect("integer")),
-        )
-    };
-
-    let list_data = unsafe {
-        ArrayData::new_unchecked(
-            to_type.clone(),
-            array.len(),
-            Some(cast_array.null_count()),
-            cast_array
-                .data()
-                .null_bitmap()
-                .cloned()
-                .map(|bitmap| bitmap.into_buffer()),
-            0,
-            vec![offsets.into()],
-            vec![cast_array.into_data()],
-        )
-    };
-    let list_array =
-        Arc::new(GenericListArray::<OffsetSize>::from(list_data)) as ArrayRef;
-
-    Ok(list_array)
+    let values = cast_with_options(array, to.data_type(), cast_options)?;
+    let offsets = OffsetBuffer::from_lengths(std::iter::repeat(1).take(values.len()));
+    let list = GenericListArray::<O>::new(to.clone(), offsets, values, None);
+    Ok(Arc::new(list))
 }
 
 /// Helper function that takes an Generic list container and casts the inner datatype.
 fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
-    array: &Arc<dyn Array>,
+    array: &dyn Array,
     to: &Field,
     to_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let data = array.data_ref();
+    let data = array.to_data();
     let underlying_array = make_array(data.child_data()[0].clone());
-    let cast_array = cast_with_options(&underlying_array, to.data_type(), cast_options)?;
-    let array_data = unsafe {
-        ArrayData::new_unchecked(
-            to_type.clone(),
-            array.len(),
-            Some(data.null_count()),
-            data.null_bitmap()
-                .cloned()
-                .map(|bitmap| bitmap.into_buffer()),
-            array.offset(),
-            // reuse offset buffer
-            data.buffers().to_vec(),
-            vec![cast_array.into_data()],
-        )
-    };
+    let cast_array =
+        cast_with_options(underlying_array.as_ref(), to.data_type(), cast_options)?;
+    let builder = data
+        .into_builder()
+        .data_type(to_type.clone())
+        .child_data(vec![cast_array.into_data()]);
+
+    // Safety
+    // Data was valid before
+    let array_data = unsafe { builder.build_unchecked() };
     let list = GenericListArray::<OffsetSize>::from(array_data);
     Ok(Arc::new(list) as ArrayRef)
 }
 
-/// Helper function to cast from `Utf8` to `LargeUtf8` and vice versa. If the `LargeUtf8` is too large for
-/// a `Utf8` array it will return an Error.
-fn cast_str_container<OffsetSizeFrom, OffsetSizeTo>(
+/// A specified helper to cast from `GenericBinaryArray` to `GenericStringArray` when they have same
+/// offset size so re-encoding offset is unnecessary.
+fn cast_binary_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,
-) -> Result<ArrayRef, ArrowError>
-where
-    OffsetSizeFrom: OffsetSizeTrait + ToPrimitive,
-    OffsetSizeTo: OffsetSizeTrait + NumCast + ArrowNativeType,
-{
-    let data = array.data();
-    assert_eq!(
-        data.data_type(),
-        &GenericStringArray::<OffsetSizeFrom>::DATA_TYPE
-    );
-    let str_values_buf = data.buffers()[1].clone();
-    let offsets = data.buffers()[0].typed_data::<OffsetSizeFrom>();
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array
+        .as_any()
+        .downcast_ref::<GenericByteArray<GenericBinaryType<O>>>()
+        .unwrap();
 
-    let mut offset_builder = BufferBuilder::<OffsetSizeTo>::new(offsets.len());
+    match GenericStringArray::<O>::try_from_binary(array.clone()) {
+        Ok(a) => Ok(Arc::new(a)),
+        Err(e) => match cast_options.safe {
+            true => {
+                // Fallback to slow method to convert invalid sequences to nulls
+                let mut builder = GenericStringBuilder::<O>::with_capacity(
+                    array.len(),
+                    array.value_data().len(),
+                );
+
+                let iter = array
+                    .iter()
+                    .map(|v| v.and_then(|v| std::str::from_utf8(v).ok()));
+
+                builder.extend(iter);
+                Ok(Arc::new(builder.finish()))
+            }
+            false => Err(e),
+        },
+    }
+}
+
+/// Helper function to cast from one `BinaryArray` or 'LargeBinaryArray' to 'FixedSizeBinaryArray'.
+fn cast_binary_to_fixed_size_binary<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    byte_width: i32,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_binary::<O>();
+    let mut builder = FixedSizeBinaryBuilder::with_capacity(array.len(), byte_width);
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            builder.append_null();
+        } else {
+            match builder.append_value(array.value(i)) {
+                Ok(_) => {}
+                Err(e) => match cast_options.safe {
+                    true => builder.append_null(),
+                    false => return Err(e),
+                },
+            }
+        }
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+/// Helper function to cast from 'FixedSizeBinaryArray' to one `BinaryArray` or 'LargeBinaryArray'.
+/// If the target one is too large for the source array it will return an Error.
+fn cast_fixed_size_binary_to_binary<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    byte_width: i32,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .unwrap();
+
+    let offsets: i128 = byte_width as i128 * array.len() as i128;
+
+    let is_binary = matches!(GenericBinaryType::<O>::DATA_TYPE, DataType::Binary);
+    if is_binary && offsets > i32::MAX as i128 {
+        return Err(ArrowError::ComputeError(
+            "FixedSizeBinary array too large to cast to Binary array".to_string(),
+        ));
+    } else if !is_binary && offsets > i64::MAX as i128 {
+        return Err(ArrowError::ComputeError(
+            "FixedSizeBinary array too large to cast to LargeBinary array".to_string(),
+        ));
+    }
+
+    let mut builder = GenericBinaryBuilder::<O>::with_capacity(array.len(), array.len());
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            builder.append_null();
+        } else {
+            builder.append_value(array.value(i));
+        }
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+/// Helper function to cast from one `ByteArrayType` to another and vice versa.
+/// If the target one (e.g., `LargeUtf8`) is too large for the source array it will return an Error.
+fn cast_byte_container<FROM, TO>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
+where
+    FROM: ByteArrayType,
+    TO: ByteArrayType<Native = FROM::Native>,
+    FROM::Offset: OffsetSizeTrait + ToPrimitive,
+    TO::Offset: OffsetSizeTrait + NumCast,
+{
+    let data = array.to_data();
+    assert_eq!(data.data_type(), &FROM::DATA_TYPE);
+    let str_values_buf = data.buffers()[1].clone();
+    let offsets = data.buffers()[0].typed_data::<FROM::Offset>();
+
+    let mut offset_builder = BufferBuilder::<TO::Offset>::new(offsets.len());
     offsets
         .iter()
         .try_for_each::<_, Result<_, ArrowError>>(|offset| {
-            let offset = OffsetSizeTo::from(*offset).ok_or_else(|| {
-                ArrowError::ComputeError(
-                    "large-utf8 array too large to cast to utf8-array".into(),
-                )
-            })?;
+            let offset = <<TO as ByteArrayType>::Offset as NumCast>::from(*offset)
+                .ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "{}{} array too large to cast to {}{} array",
+                        FROM::Offset::PREFIX,
+                        FROM::PREFIX,
+                        TO::Offset::PREFIX,
+                        TO::PREFIX
+                    ))
+                })?;
             offset_builder.append(offset);
             Ok(())
         })?;
 
     let offset_buffer = offset_builder.finish();
 
-    let dtype = GenericStringArray::<OffsetSizeTo>::DATA_TYPE;
+    let dtype = TO::DATA_TYPE;
 
     let builder = ArrayData::builder(dtype)
         .offset(array.offset())
         .len(array.len())
         .add_buffer(offset_buffer)
         .add_buffer(str_values_buf)
-        .null_bit_buffer(data.null_buffer().cloned());
+        .nulls(data.nulls().cloned());
 
     let array_data = unsafe { builder.build_unchecked() };
 
-    Ok(Arc::new(GenericStringArray::<OffsetSizeTo>::from(
-        array_data,
-    )))
+    Ok(Arc::new(GenericByteArray::<TO>::from(array_data)))
+}
+
+fn cast_fixed_size_list_to_list<OffsetSize>(
+    array: &dyn Array,
+) -> Result<ArrayRef, ArrowError>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let fixed_size_list: &FixedSizeListArray = array.as_fixed_size_list();
+    let list: GenericListArray<OffsetSize> = fixed_size_list.clone().into();
+    Ok(Arc::new(list))
 }
 
 /// Cast the container type of List/Largelist array but not the inner types.
@@ -3518,9 +3366,9 @@ where
     OffsetSizeFrom: OffsetSizeTrait + ToPrimitive,
     OffsetSizeTo: OffsetSizeTrait + NumCast,
 {
-    let data = array.data_ref();
+    let list = array.as_list::<OffsetSizeFrom>();
     // the value data stored by the list
-    let value_data = data.child_data()[0].clone();
+    let values = list.values();
 
     let out_dtype = match array.data_type() {
         DataType::List(value_type) => {
@@ -3543,7 +3391,7 @@ where
                 std::mem::size_of::<OffsetSizeTo>(),
                 std::mem::size_of::<i32>()
             );
-            if value_data.len() > i32::MAX as usize {
+            if values.len() > i32::MAX as usize {
                 return Err(ArrowError::ComputeError(
                     "LargeList too large to cast to List".into(),
                 ));
@@ -3554,14 +3402,7 @@ where
         _ => unreachable!(),
     };
 
-    // Safety:
-    //      The first buffer is the offsets and they are aligned to OffSetSizeFrom: (i64 or i32)
-    // Justification:
-    //      The safe variant data.buffer::<OffsetSizeFrom> take the offset into account and we
-    //      cannot create a list array with offsets starting at non zero.
-    let offsets = unsafe { data.buffers()[0].as_slice().align_to::<OffsetSizeFrom>() }.1;
-
-    let iter = offsets.iter().map(|idx| {
+    let iter = list.value_offsets().iter().map(|idx| {
         let idx: OffsetSizeTo = NumCast::from(*idx).unwrap();
         idx
     });
@@ -3572,14 +3413,13 @@ where
 
     // wrap up
     let builder = ArrayData::builder(out_dtype)
-        .offset(array.offset())
-        .len(array.len())
+        .len(list.len())
         .add_buffer(offset_buffer)
-        .add_child_data(value_data)
-        .null_bit_buffer(data.null_buffer().cloned());
+        .add_child_data(values.to_data())
+        .nulls(list.nulls().cloned());
 
     let array_data = unsafe { builder.build_unchecked() };
-    Ok(make_array(array_data))
+    Ok(Arc::new(GenericListArray::<OffsetSizeTo>::from(array_data)))
 }
 
 #[cfg(test)]
@@ -3588,47 +3428,24 @@ mod tests {
 
     macro_rules! generate_cast_test_case {
         ($INPUT_ARRAY: expr, $OUTPUT_TYPE_ARRAY: ident, $OUTPUT_TYPE: expr, $OUTPUT_VALUES: expr) => {
+            let output = $OUTPUT_TYPE_ARRAY::from($OUTPUT_VALUES)
+                .with_data_type($OUTPUT_TYPE.clone());
+
             // assert cast type
             let input_array_type = $INPUT_ARRAY.data_type();
             assert!(can_cast_types(input_array_type, $OUTPUT_TYPE));
-            let casted_array = cast($INPUT_ARRAY, $OUTPUT_TYPE).unwrap();
-            let result_array = casted_array
-                .as_any()
-                .downcast_ref::<$OUTPUT_TYPE_ARRAY>()
-                .unwrap();
-            assert_eq!($OUTPUT_TYPE, result_array.data_type());
-            assert_eq!(result_array.len(), $OUTPUT_VALUES.len());
-            for (i, x) in $OUTPUT_VALUES.iter().enumerate() {
-                match x {
-                    Some(x) => {
-                        assert!(!result_array.is_null(i));
-                        assert_eq!(result_array.value(i), *x);
-                    }
-                    None => {
-                        assert!(result_array.is_null(i));
-                    }
-                }
-            }
+            let result = cast($INPUT_ARRAY, $OUTPUT_TYPE).unwrap();
+            assert_eq!($OUTPUT_TYPE, result.data_type());
+            assert_eq!(result.as_ref(), &output);
 
-            let cast_option = CastOptions { safe: false };
-            let casted_array_with_option =
+            let cast_option = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
+            let result =
                 cast_with_options($INPUT_ARRAY, $OUTPUT_TYPE, &cast_option).unwrap();
-            let result_array = casted_array_with_option
-                .as_any()
-                .downcast_ref::<$OUTPUT_TYPE_ARRAY>()
-                .unwrap();
-            assert_eq!($OUTPUT_TYPE, result_array.data_type());
-            assert_eq!(result_array.len(), $OUTPUT_VALUES.len());
-            for (i, x) in $OUTPUT_VALUES.iter().enumerate() {
-                match x {
-                    Some(x) => {
-                        assert_eq!(result_array.value(i), *x);
-                    }
-                    None => {
-                        assert!(result_array.is_null(i));
-                    }
-                }
-            }
+            assert_eq!($OUTPUT_TYPE, result.data_type());
+            assert_eq!(result.as_ref(), &output);
         };
     }
 
@@ -3701,8 +3518,7 @@ mod tests {
             Some(-3123456),
             None,
         ];
-        let input_decimal_array = create_decimal_array(array, 20, 4).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
+        let array = create_decimal_array(array, 20, 4).unwrap();
         // decimal128 to decimal128
         let input_type = DataType::Decimal128(20, 4);
         let output_type = DataType::Decimal128(20, 3);
@@ -3745,8 +3561,7 @@ mod tests {
             Some(i256::from_i128(-3123456)),
             None,
         ];
-        let input_decimal_array = create_decimal256_array(array, 20, 4).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
+        let array = create_decimal256_array(array, 20, 4).unwrap();
 
         // decimal256 to decimal256
         let input_type = DataType::Decimal256(20, 4);
@@ -3788,8 +3603,7 @@ mod tests {
         let output_type = DataType::Decimal128(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
-        let input_decimal_array = create_decimal_array(array, 20, 3).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
+        let array = create_decimal_array(array, 20, 3).unwrap();
         generate_cast_test_case!(
             &array,
             Decimal128Array,
@@ -3803,12 +3617,11 @@ mod tests {
         );
         // negative test
         let array = vec![Some(123456), None];
-        let input_decimal_array = create_decimal_array(array, 10, 0).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
+        let array = create_decimal_array(array, 10, 0).unwrap();
         let result = cast(&array, &DataType::Decimal128(2, 2));
         assert!(result.is_ok());
         let array = result.unwrap();
-        let array: &Decimal128Array = as_primitive_array(&array);
+        let array: &Decimal128Array = array.as_primitive();
         let err = array.validate_decimal_precision(2);
         assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 2. Max is 99",
                    err.unwrap_err().to_string());
@@ -3821,10 +3634,15 @@ mod tests {
         assert!(can_cast_types(&input_type, &output_type));
 
         let array = vec![Some(i128::MAX)];
-        let input_decimal_array = create_decimal_array(array, 38, 3).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
-        let result =
-            cast_with_options(&array, &output_type, &CastOptions { safe: false });
+        let array = create_decimal_array(array, 38, 3).unwrap();
+        let result = cast_with_options(
+            &array,
+            &output_type,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!("Cast error: Cannot cast to Decimal128(38, 38). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
@@ -3836,10 +3654,15 @@ mod tests {
         assert!(can_cast_types(&input_type, &output_type));
 
         let array = vec![Some(i128::MAX)];
-        let input_decimal_array = create_decimal_array(array, 38, 3).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
-        let result =
-            cast_with_options(&array, &output_type, &CastOptions { safe: false });
+        let array = create_decimal_array(array, 38, 3).unwrap();
+        let result = cast_with_options(
+            &array,
+            &output_type,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!("Cast error: Cannot cast to Decimal256(76, 76). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
@@ -3850,8 +3673,7 @@ mod tests {
         let output_type = DataType::Decimal256(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
-        let input_decimal_array = create_decimal_array(array, 20, 3).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
+        let array = create_decimal_array(array, 20, 3).unwrap();
         generate_cast_test_case!(
             &array,
             Decimal256Array,
@@ -3871,10 +3693,15 @@ mod tests {
         let output_type = DataType::Decimal128(38, 7);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(i256::from_i128(i128::MAX))];
-        let input_decimal_array = create_decimal256_array(array, 76, 5).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
-        let result =
-            cast_with_options(&array, &output_type, &CastOptions { safe: false });
+        let array = create_decimal256_array(array, 76, 5).unwrap();
+        let result = cast_with_options(
+            &array,
+            &output_type,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!("Cast error: Cannot cast to Decimal128(38, 7). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
@@ -3885,10 +3712,15 @@ mod tests {
         let output_type = DataType::Decimal256(76, 55);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(i256::from_i128(i128::MAX))];
-        let input_decimal_array = create_decimal256_array(array, 76, 5).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
-        let result =
-            cast_with_options(&array, &output_type, &CastOptions { safe: false });
+        let array = create_decimal256_array(array, 76, 5).unwrap();
+        let result = cast_with_options(
+            &array,
+            &output_type,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!("Cast error: Cannot cast to Decimal256(76, 55). Overflowing on 170141183460469231731687303715884105727",
                    result.unwrap_err().to_string());
     }
@@ -3904,8 +3736,7 @@ mod tests {
             Some(i256::from_i128(3123456)),
             None,
         ];
-        let input_decimal_array = create_decimal256_array(array, 20, 3).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
+        let array = create_decimal256_array(array, 20, 3).unwrap();
         generate_cast_test_case!(
             &array,
             Decimal128Array,
@@ -3930,8 +3761,7 @@ mod tests {
             Some(i256::from_i128(3123456)),
             None,
         ];
-        let input_decimal_array = create_decimal256_array(array, 20, 3).unwrap();
-        let array = Arc::new(input_decimal_array) as ArrayRef;
+        let array = create_decimal256_array(array, 20, 3).unwrap();
         generate_cast_test_case!(
             &array,
             Decimal256Array,
@@ -3949,8 +3779,7 @@ mod tests {
     fn test_cast_decimal_to_numeric() {
         let value_array: Vec<Option<i128>> =
             vec![Some(125), Some(225), Some(325), None, Some(525)];
-        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
-        let array = Arc::new(decimal_array) as ArrayRef;
+        let array = create_decimal_array(value_array, 38, 2).unwrap();
         // u8
         generate_cast_test_case!(
             &array,
@@ -4036,33 +3865,55 @@ mod tests {
 
         // overflow test: out of range of max u8
         let value_array: Vec<Option<i128>> = vec![Some(51300)];
-        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
-        let array = Arc::new(decimal_array) as ArrayRef;
-        let casted_array =
-            cast_with_options(&array, &DataType::UInt8, &CastOptions { safe: false });
+        let array = create_decimal_array(value_array, 38, 2).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::UInt8,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!(
             "Cast error: value of 513 is out of range UInt8".to_string(),
             casted_array.unwrap_err().to_string()
         );
 
-        let casted_array =
-            cast_with_options(&array, &DataType::UInt8, &CastOptions { safe: true });
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::UInt8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
 
         // overflow test: out of range of max i8
         let value_array: Vec<Option<i128>> = vec![Some(24400)];
-        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
-        let array = Arc::new(decimal_array) as ArrayRef;
-        let casted_array =
-            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: false });
+        let array = create_decimal_array(value_array, 38, 2).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!(
             "Cast error: value of 244 is out of range Int8".to_string(),
             casted_array.unwrap_err().to_string()
         );
 
-        let casted_array =
-            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: true });
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
 
@@ -4078,8 +3929,7 @@ mod tests {
             Some(112345678),
             Some(112345679),
         ];
-        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
-        let array = Arc::new(decimal_array) as ArrayRef;
+        let array = create_decimal_array(value_array, 38, 2).unwrap();
         generate_cast_test_case!(
             &array,
             Float32Array,
@@ -4106,8 +3956,7 @@ mod tests {
             Some(112345678901234568),
             Some(112345678901234560),
         ];
-        let decimal_array = create_decimal_array(value_array, 38, 2).unwrap();
-        let array = Arc::new(decimal_array) as ArrayRef;
+        let array = create_decimal_array(value_array, 38, 2).unwrap();
         generate_cast_test_case!(
             &array,
             Float64Array,
@@ -4133,8 +3982,7 @@ mod tests {
             None,
             Some(i256::from_i128(525)),
         ];
-        let decimal_array = create_decimal256_array(value_array, 38, 2).unwrap();
-        let array = Arc::new(decimal_array) as ArrayRef;
+        let array = create_decimal256_array(value_array, 38, 2).unwrap();
         // u8
         generate_cast_test_case!(
             &array,
@@ -4220,17 +4068,28 @@ mod tests {
 
         // overflow test: out of range of max i8
         let value_array: Vec<Option<i256>> = vec![Some(i256::from_i128(24400))];
-        let decimal_array = create_decimal256_array(value_array, 38, 2).unwrap();
-        let array = Arc::new(decimal_array) as ArrayRef;
-        let casted_array =
-            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: false });
+        let array = create_decimal256_array(value_array, 38, 2).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert_eq!(
             "Cast error: value of 244 is out of range Int8".to_string(),
             casted_array.unwrap_err().to_string()
         );
 
-        let casted_array =
-            cast_with_options(&array, &DataType::Int8, &CastOptions { safe: true });
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
 
@@ -4246,8 +4105,7 @@ mod tests {
             Some(i256::from_i128(112345678)),
             Some(i256::from_i128(112345679)),
         ];
-        let decimal_array = create_decimal256_array(value_array, 76, 2).unwrap();
-        let array = Arc::new(decimal_array) as ArrayRef;
+        let array = create_decimal256_array(value_array, 76, 2).unwrap();
         generate_cast_test_case!(
             &array,
             Float32Array,
@@ -4274,8 +4132,7 @@ mod tests {
             Some(i256::from_i128(112345678901234568)),
             Some(i256::from_i128(112345678901234560)),
         ];
-        let decimal_array = create_decimal256_array(value_array, 76, 2).unwrap();
-        let array = Arc::new(decimal_array) as ArrayRef;
+        let array = create_decimal256_array(value_array, 76, 2).unwrap();
         generate_cast_test_case!(
             &array,
             Float64Array,
@@ -4391,24 +4248,20 @@ mod tests {
         // test u8 to decimal type with overflow the result type
         // the 100 will be converted to 1000_i128, but it is out of range for max value in the precision 3.
         let array = UInt8Array::from(vec![1, 2, 3, 4, 100]);
-        let array = Arc::new(array) as ArrayRef;
         let casted_array = cast(&array, &DataType::Decimal128(3, 1));
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
-        let array: &Decimal128Array = as_primitive_array(&array);
-        let err = array.validate_decimal_precision(3);
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", err.unwrap_err().to_string());
+        let array: &Decimal128Array = array.as_primitive();
+        assert!(array.is_null(4));
 
         // test i8 to decimal type with overflow the result type
         // the 100 will be converted to 1000_i128, but it is out of range for max value in the precision 3.
         let array = Int8Array::from(vec![1, 2, 3, 4, 100]);
-        let array = Arc::new(array) as ArrayRef;
         let casted_array = cast(&array, &DataType::Decimal128(3, 1));
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
-        let array: &Decimal128Array = as_primitive_array(&array);
-        let err = array.validate_decimal_precision(3);
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", err.unwrap_err().to_string());
+        let array: &Decimal128Array = array.as_primitive();
+        assert!(array.is_null(4));
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
@@ -4445,7 +4298,6 @@ mod tests {
             Some(1.123_456_489_012_345_6), // round down
             Some(1.123_456_789_012_345_6), // round up
         ]);
-        let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
             Decimal128Array,
@@ -4566,9 +4418,8 @@ mod tests {
         let casted_array = cast(&array, &DataType::Decimal256(3, 1));
         assert!(casted_array.is_ok());
         let array = casted_array.unwrap();
-        let array: &Decimal256Array = as_primitive_array(&array);
-        let err = array.validate_decimal_precision(3);
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal256 of precision 3. Max is 999", err.unwrap_err().to_string());
+        let array: &Decimal256Array = array.as_primitive();
+        assert!(array.is_null(4));
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
@@ -4579,7 +4430,6 @@ mod tests {
             Some(1.123_456_4), // round down
             Some(1.123_456_7), // round up
         ]);
-        let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
             Decimal256Array,
@@ -4605,7 +4455,6 @@ mod tests {
             Some(1.123_456_489_012_345_6), // round down
             Some(1.123_456_789_012_345_6), // round up
         ]);
-        let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
             Decimal256Array,
@@ -4625,10 +4474,9 @@ mod tests {
 
     #[test]
     fn test_cast_i32_to_f64() {
-        let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
         let b = cast(&array, &DataType::Float64).unwrap();
-        let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
+        let c = b.as_primitive::<Float64Type>();
         assert_eq!(5.0, c.value(0));
         assert_eq!(6.0, c.value(1));
         assert_eq!(7.0, c.value(2));
@@ -4638,10 +4486,9 @@ mod tests {
 
     #[test]
     fn test_cast_i32_to_u8() {
-        let a = Int32Array::from(vec![-5, 6, -7, 8, 100000000]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Int32Array::from(vec![-5, 6, -7, 8, 100000000]);
         let b = cast(&array, &DataType::UInt8).unwrap();
-        let c = b.as_any().downcast_ref::<UInt8Array>().unwrap();
+        let c = b.as_primitive::<UInt8Type>();
         assert!(!c.is_valid(0));
         assert_eq!(6, c.value(1));
         assert!(!c.is_valid(2));
@@ -4653,10 +4500,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "Can't cast value -5 to type UInt8")]
     fn test_cast_int32_to_u8_with_error() {
-        let a = Int32Array::from(vec![-5, 6, -7, 8, 100000000]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Int32Array::from(vec![-5, 6, -7, 8, 100000000]);
         // overflow with the error
-        let cast_option = CastOptions { safe: false };
+        let cast_option = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
         let result = cast_with_options(&array, &DataType::UInt8, &cast_option);
         assert!(result.is_err());
         result.unwrap();
@@ -4664,15 +4513,12 @@ mod tests {
 
     #[test]
     fn test_cast_i32_to_u8_sliced() {
-        let a = Int32Array::from(vec![-5, 6, -7, 8, 100000000]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Int32Array::from(vec![-5, 6, -7, 8, 100000000]);
         assert_eq!(0, array.offset());
         let array = array.slice(2, 3);
-        assert_eq!(2, array.offset());
         let b = cast(&array, &DataType::UInt8).unwrap();
         assert_eq!(3, b.len());
-        assert_eq!(0, b.offset());
-        let c = b.as_any().downcast_ref::<UInt8Array>().unwrap();
+        let c = b.as_primitive::<UInt8Type>();
         assert!(!c.is_valid(0));
         assert_eq!(8, c.value(1));
         // overflows return None
@@ -4681,10 +4527,9 @@ mod tests {
 
     #[test]
     fn test_cast_i32_to_i32() {
-        let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
         let b = cast(&array, &DataType::Int32).unwrap();
-        let c = b.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = b.as_primitive::<Int32Type>();
         assert_eq!(5, c.value(0));
         assert_eq!(6, c.value(1));
         assert_eq!(7, c.value(2));
@@ -4694,23 +4539,21 @@ mod tests {
 
     #[test]
     fn test_cast_i32_to_list_i32() {
-        let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
         let b = cast(
             &array,
-            &DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         )
         .unwrap();
         assert_eq!(5, b.len());
-        let arr = b.as_any().downcast_ref::<ListArray>().unwrap();
+        let arr = b.as_list::<i32>();
         assert_eq!(&[0, 1, 2, 3, 4, 5], arr.value_offsets());
         assert_eq!(1, arr.value_length(0));
         assert_eq!(1, arr.value_length(1));
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
         assert_eq!(1, arr.value_length(4));
-        let values = arr.values();
-        let c = values.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = arr.values().as_primitive::<Int32Type>();
         assert_eq!(5, c.value(0));
         assert_eq!(6, c.value(1));
         assert_eq!(7, c.value(2));
@@ -4720,24 +4563,23 @@ mod tests {
 
     #[test]
     fn test_cast_i32_to_list_i32_nullable() {
-        let a = Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]);
         let b = cast(
             &array,
-            &DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         )
         .unwrap();
         assert_eq!(5, b.len());
-        assert_eq!(1, b.null_count());
-        let arr = b.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(0, b.null_count());
+        let arr = b.as_list::<i32>();
         assert_eq!(&[0, 1, 2, 3, 4, 5], arr.value_offsets());
         assert_eq!(1, arr.value_length(0));
         assert_eq!(1, arr.value_length(1));
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
         assert_eq!(1, arr.value_length(4));
-        let values = arr.values();
-        let c = values.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let c = arr.values().as_primitive::<Int32Type>();
         assert_eq!(1, c.null_count());
         assert_eq!(5, c.value(0));
         assert!(!c.is_valid(1));
@@ -4748,24 +4590,23 @@ mod tests {
 
     #[test]
     fn test_cast_i32_to_list_f64_nullable_sliced() {
-        let a = Int32Array::from(vec![Some(5), None, Some(7), Some(8), None, Some(10)]);
-        let array = Arc::new(a) as ArrayRef;
+        let array =
+            Int32Array::from(vec![Some(5), None, Some(7), Some(8), None, Some(10)]);
         let array = array.slice(2, 4);
         let b = cast(
             &array,
-            &DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
         )
         .unwrap();
         assert_eq!(4, b.len());
-        assert_eq!(1, b.null_count());
-        let arr = b.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(0, b.null_count());
+        let arr = b.as_list::<i32>();
         assert_eq!(&[0, 1, 2, 3, 4], arr.value_offsets());
         assert_eq!(1, arr.value_length(0));
         assert_eq!(1, arr.value_length(1));
         assert_eq!(1, arr.value_length(2));
         assert_eq!(1, arr.value_length(3));
-        let values = arr.values();
-        let c = values.as_any().downcast_ref::<Float64Array>().unwrap();
+        let c = arr.values().as_primitive::<Float64Type>();
         assert_eq!(1, c.null_count());
         assert_eq!(7.0, c.value(0));
         assert_eq!(8.0, c.value(1));
@@ -4775,10 +4616,9 @@ mod tests {
 
     #[test]
     fn test_cast_utf8_to_i32() {
-        let a = StringArray::from(vec!["5", "6", "seven", "8", "9.1"]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = StringArray::from(vec!["5", "6", "seven", "8", "9.1"]);
         let b = cast(&array, &DataType::Int32).unwrap();
-        let c = b.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = b.as_primitive::<Int32Type>();
         assert_eq!(5, c.value(0));
         assert_eq!(6, c.value(1));
         assert!(!c.is_valid(2));
@@ -4788,10 +4628,15 @@ mod tests {
 
     #[test]
     fn test_cast_with_options_utf8_to_i32() {
-        let a = StringArray::from(vec!["5", "6", "seven", "8", "9.1"]);
-        let array = Arc::new(a) as ArrayRef;
-        let result =
-            cast_with_options(&array, &DataType::Int32, &CastOptions { safe: false });
+        let array = StringArray::from(vec!["5", "6", "seven", "8", "9.1"]);
+        let result = cast_with_options(
+            &array,
+            &DataType::Int32,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         match result {
             Ok(_) => panic!("expected error"),
             Err(e) => {
@@ -4799,8 +4644,7 @@ mod tests {
                     e.to_string().contains(
                         "Cast error: Cannot cast string 'seven' to value of Int32 type",
                     ),
-                    "Error: {}",
-                    e
+                    "Error: {e}"
                 )
             }
         }
@@ -4808,9 +4652,7 @@ mod tests {
 
     #[test]
     fn test_cast_utf8_to_bool() {
-        let strings = Arc::new(StringArray::from(vec![
-            "true", "false", "invalid", " Y ", "",
-        ])) as ArrayRef;
+        let strings = StringArray::from(vec!["true", "false", "invalid", " Y ", ""]);
         let casted = cast(&strings, &DataType::Boolean).unwrap();
         let expected =
             BooleanArray::from(vec![Some(true), Some(false), None, Some(true), None]);
@@ -4819,16 +4661,20 @@ mod tests {
 
     #[test]
     fn test_cast_with_options_utf8_to_bool() {
-        let strings = Arc::new(StringArray::from(vec![
-            "true", "false", "invalid", " Y ", "",
-        ])) as ArrayRef;
-        let casted =
-            cast_with_options(&strings, &DataType::Boolean, &CastOptions { safe: false });
+        let strings = StringArray::from(vec!["true", "false", "invalid", " Y ", ""]);
+        let casted = cast_with_options(
+            &strings,
+            &DataType::Boolean,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
         match casted {
             Ok(_) => panic!("expected error"),
             Err(e) => {
                 assert!(e.to_string().contains(
-                    "Cast error: Cannot cast string 'invalid' to value of Boolean type"
+                    "Cast error: Cannot cast value 'invalid' to value of Boolean type"
                 ))
             }
         }
@@ -4836,21 +4682,39 @@ mod tests {
 
     #[test]
     fn test_cast_bool_to_i32() {
-        let a = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
         let b = cast(&array, &DataType::Int32).unwrap();
-        let c = b.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = b.as_primitive::<Int32Type>();
         assert_eq!(1, c.value(0));
         assert_eq!(0, c.value(1));
         assert!(!c.is_valid(2));
     }
 
     #[test]
+    fn test_cast_bool_to_utf8() {
+        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!("true", c.value(0));
+        assert_eq!("false", c.value(1));
+        assert!(!c.is_valid(2));
+    }
+
+    #[test]
+    fn test_cast_bool_to_large_utf8() {
+        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let b = cast(&array, &DataType::LargeUtf8).unwrap();
+        let c = b.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!("true", c.value(0));
+        assert_eq!("false", c.value(1));
+        assert!(!c.is_valid(2));
+    }
+
+    #[test]
     fn test_cast_bool_to_f64() {
-        let a = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
         let b = cast(&array, &DataType::Float64).unwrap();
-        let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
+        let c = b.as_primitive::<Float64Type>();
         assert_eq!(1.0, c.value(0));
         assert_eq!(0.0, c.value(1));
         assert!(!c.is_valid(2));
@@ -4861,34 +4725,32 @@ mod tests {
         expected = "Casting from Int32 to Timestamp(Microsecond, None) not supported"
     )]
     fn test_cast_int32_to_timestamp() {
-        let a = Int32Array::from(vec![Some(2), Some(10), None]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Int32Array::from(vec![Some(2), Some(10), None]);
         cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
     }
 
     #[test]
     fn test_cast_list_i32_to_list_u16() {
-        let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 100000000])
-            .data()
-            .clone();
+        let value_data =
+            Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 100000000]).into_data();
 
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
         // Construct a list array from the above two
         // [[0,0,0], [-1, -2, -1], [2, 100000000]]
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
             .build()
             .unwrap();
-        let list_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
+        let list_array = ListArray::from(list_data);
 
         let cast_array = cast(
             &list_array,
-            &DataType::List(Box::new(Field::new("item", DataType::UInt16, true))),
+            &DataType::List(Arc::new(Field::new("item", DataType::UInt16, true))),
         )
         .unwrap();
 
@@ -4899,24 +4761,17 @@ mod tests {
         assert_eq!(0, cast_array.null_count());
 
         // offsets should be the same
-        assert_eq!(
-            list_array.data().buffers().to_vec(),
-            cast_array.data().buffers().to_vec()
-        );
-        let array = cast_array
-            .as_ref()
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap();
+        let array = cast_array.as_list::<i32>();
+        assert_eq!(list_array.value_offsets(), array.value_offsets());
+
         assert_eq!(DataType::UInt16, array.value_type());
         assert_eq!(3, array.value_length(0));
         assert_eq!(3, array.value_length(1));
         assert_eq!(2, array.value_length(2));
 
         // expect 4 nulls: negative numbers and overflow
-        let values = array.values();
-        assert_eq!(4, values.null_count());
-        let u16arr = values.as_any().downcast_ref::<UInt16Array>().unwrap();
+        let u16arr = array.values().as_primitive::<UInt16Type>();
+        assert_eq!(4, u16arr.null_count());
 
         // expect 4 nulls: negative numbers and overflow
         let expected: UInt16Array =
@@ -4933,15 +4788,14 @@ mod tests {
     )]
     fn test_cast_list_i32_to_list_timestamp() {
         // Construct a value array
-        let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 8, 100000000])
-            .data()
-            .clone();
+        let value_data =
+            Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 8, 100000000]).into_data();
 
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 9]);
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -4952,7 +4806,7 @@ mod tests {
 
         cast(
             &list_array,
-            &DataType::List(Box::new(Field::new(
+            &DataType::List(Arc::new(Field::new(
                 "item",
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 true,
@@ -4966,7 +4820,7 @@ mod tests {
         let a = Date32Array::from(vec![10000, 17890]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date64).unwrap();
-        let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+        let c = b.as_primitive::<Date64Type>();
         assert_eq!(864000000000, c.value(0));
         assert_eq!(1545696000000, c.value(1));
     }
@@ -4976,7 +4830,7 @@ mod tests {
         let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date32).unwrap();
-        let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+        let c = b.as_primitive::<Date32Type>();
         assert_eq!(10000, c.value(0));
         assert_eq!(17890, c.value(1));
         assert!(c.is_null(2));
@@ -4985,33 +4839,80 @@ mod tests {
     #[test]
     fn test_cast_string_to_timestamp() {
         let a1 = Arc::new(StringArray::from(vec![
-            Some("2020-09-08T12:00:00+00:00"),
+            Some("2020-09-08T12:00:00.123456789+00:00"),
             Some("Not a valid date"),
             None,
         ])) as ArrayRef;
         let a2 = Arc::new(LargeStringArray::from(vec![
-            Some("2020-09-08T12:00:00+00:00"),
+            Some("2020-09-08T12:00:00.123456789+00:00"),
             Some("Not a valid date"),
             None,
         ])) as ArrayRef;
         for array in &[a1, a2] {
-            let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
-            let b = cast(array, &to_type).unwrap();
-            let c = b
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap();
-            assert_eq!(1599566400000000000, c.value(0));
-            assert!(c.is_null(1));
-            assert!(c.is_null(2));
+            for time_unit in &[
+                TimeUnit::Second,
+                TimeUnit::Millisecond,
+                TimeUnit::Microsecond,
+                TimeUnit::Nanosecond,
+            ] {
+                let to_type = DataType::Timestamp(time_unit.clone(), None);
+                let b = cast(array, &to_type).unwrap();
 
-            let options = CastOptions { safe: false };
-            let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(
-                err.to_string(),
-                "Cast error: Error parsing 'Not a valid date' as timestamp"
-            );
+                match time_unit {
+                    TimeUnit::Second => {
+                        let c = b.as_primitive::<TimestampSecondType>();
+                        assert_eq!(1599566400, c.value(0));
+                        assert!(c.is_null(1));
+                        assert!(c.is_null(2));
+                    }
+                    TimeUnit::Millisecond => {
+                        let c = b
+                            .as_any()
+                            .downcast_ref::<TimestampMillisecondArray>()
+                            .unwrap();
+                        assert_eq!(1599566400123, c.value(0));
+                        assert!(c.is_null(1));
+                        assert!(c.is_null(2));
+                    }
+                    TimeUnit::Microsecond => {
+                        let c = b
+                            .as_any()
+                            .downcast_ref::<TimestampMicrosecondArray>()
+                            .unwrap();
+                        assert_eq!(1599566400123456, c.value(0));
+                        assert!(c.is_null(1));
+                        assert!(c.is_null(2));
+                    }
+                    TimeUnit::Nanosecond => {
+                        let c = b
+                            .as_any()
+                            .downcast_ref::<TimestampNanosecondArray>()
+                            .unwrap();
+                        assert_eq!(1599566400123456789, c.value(0));
+                        assert!(c.is_null(1));
+                        assert!(c.is_null(2));
+                    }
+                }
+
+                let options = CastOptions {
+                    safe: false,
+                    format_options: FormatOptions::default(),
+                };
+                let err = cast_with_options(array, &to_type, &options).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    "Parser error: Error parsing timestamp from 'Not a valid date': error parsing date"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn test_cast_string_to_timestamp_overflow() {
+        let array = StringArray::from(vec!["9800-09-08T12:00:00.123456789"]);
+        let result = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
+        let result = result.as_primitive::<TimestampSecondType>();
+        assert_eq!(result.values(), &[247112596800]);
     }
 
     #[test]
@@ -5029,12 +4930,15 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Date32;
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+            let c = b.as_primitive::<Date32Type>();
             assert_eq!(17890, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid date' to value of Date32 type");
         }
@@ -5059,14 +4963,17 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Time32(TimeUnit::Second);
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+            let c = b.as_primitive::<Time32SecondType>();
             assert_eq!(29315, c.value(0));
             assert_eq!(29340, c.value(1));
             assert!(c.is_null(2));
             assert!(c.is_null(3));
             assert!(c.is_null(4));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(Second) type");
         }
@@ -5091,14 +4998,17 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Time32(TimeUnit::Millisecond);
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+            let c = b.as_primitive::<Time32MillisecondType>();
             assert_eq!(29315091, c.value(0));
             assert_eq!(29340091, c.value(1));
             assert!(c.is_null(2));
             assert!(c.is_null(3));
             assert!(c.is_null(4));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(Millisecond) type");
         }
@@ -5119,12 +5029,15 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Time64(TimeUnit::Microsecond);
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+            let c = b.as_primitive::<Time64MicrosecondType>();
             assert_eq!(29315091323, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of Time64(Microsecond) type");
         }
@@ -5145,12 +5058,15 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Time64(TimeUnit::Nanosecond);
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+            let c = b.as_primitive::<Time64NanosecondType>();
             assert_eq!(29315091323414, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of Time64(Nanosecond) type");
         }
@@ -5171,40 +5087,292 @@ mod tests {
         for array in &[a1, a2] {
             let to_type = DataType::Date64;
             let b = cast(array, &to_type).unwrap();
-            let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+            let c = b.as_primitive::<Date64Type>();
             assert_eq!(1599566400000, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
 
-            let options = CastOptions { safe: false };
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid date' to value of Date64 type");
         }
     }
 
+    macro_rules! test_safe_string_to_interval {
+        ($data_vec:expr, $interval_unit:expr, $array_ty:ty, $expect_vec:expr) => {
+            let source_string_array =
+                Arc::new(StringArray::from($data_vec.clone())) as ArrayRef;
+
+            let options = CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            };
+
+            let target_interval_array = cast_with_options(
+                &source_string_array.clone(),
+                &DataType::Interval($interval_unit),
+                &options,
+            )
+            .unwrap()
+            .as_any()
+            .downcast_ref::<$array_ty>()
+            .unwrap()
+            .clone() as $array_ty;
+
+            let target_string_array =
+                cast_with_options(&target_interval_array, &DataType::Utf8, &options)
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .clone();
+
+            let expect_string_array = StringArray::from($expect_vec);
+
+            assert_eq!(target_string_array, expect_string_array);
+
+            let target_large_string_array =
+                cast_with_options(&target_interval_array, &DataType::LargeUtf8, &options)
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .unwrap()
+                    .clone();
+
+            let expect_large_string_array = LargeStringArray::from($expect_vec);
+
+            assert_eq!(target_large_string_array, expect_large_string_array);
+        };
+    }
+
     #[test]
-    fn test_cast_string_to_binary() {
-        let string_1 = "Hi";
-        let string_2 = "Hello";
+    fn test_cast_string_to_interval_year_month() {
+        test_safe_string_to_interval!(
+            vec![
+                Some("1 year 1 month"),
+                Some("1.5 years 13 month"),
+                Some("30 days"),
+                Some("31 days"),
+                Some("2 months 31 days"),
+                Some("2 months 31 days 1 second"),
+                Some("foobar"),
+            ],
+            IntervalUnit::YearMonth,
+            IntervalYearMonthArray,
+            vec![
+                Some("1 years 1 mons 0 days 0 hours 0 mins 0.00 secs"),
+                Some("2 years 7 mons 0 days 0 hours 0 mins 0.00 secs"),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]
+        );
+    }
 
-        let bytes_1 = string_1.as_bytes();
-        let bytes_2 = string_2.as_bytes();
+    #[test]
+    fn test_cast_string_to_interval_day_time() {
+        test_safe_string_to_interval!(
+            vec![
+                Some("1 year 1 month"),
+                Some("1.5 years 13 month"),
+                Some("30 days"),
+                Some("1 day 2 second 3.5 milliseconds"),
+                Some("foobar"),
+            ],
+            IntervalUnit::DayTime,
+            IntervalDayTimeArray,
+            vec![
+                Some("0 years 0 mons 390 days 0 hours 0 mins 0.000 secs"),
+                Some("0 years 0 mons 930 days 0 hours 0 mins 0.000 secs"),
+                Some("0 years 0 mons 30 days 0 hours 0 mins 0.000 secs"),
+                None,
+                None,
+            ]
+        );
+    }
 
-        let string_data = vec![Some(string_1), Some(string_2), None];
-        let a1 = Arc::new(StringArray::from(string_data.clone())) as ArrayRef;
-        let a2 = Arc::new(LargeStringArray::from(string_data)) as ArrayRef;
+    #[test]
+    fn test_cast_string_to_interval_month_day_nano() {
+        test_safe_string_to_interval!(
+            vec![
+                Some("1 year 1 month 1 day"),
+                None,
+                Some("1.5 years 13 month 35 days 1.4 milliseconds"),
+                Some("3 days"),
+                Some("8 seconds"),
+                None,
+                Some("1 day 29800 milliseconds"),
+                Some("3 months 1 second"),
+                Some("6 minutes 120 second"),
+                Some("2 years 39 months 9 days 19 hours 1 minute 83 seconds 399222 milliseconds"),
+                Some("foobar"),
+            ],
+            IntervalUnit::MonthDayNano,
+            IntervalMonthDayNanoArray,
+            vec![
+                Some("0 years 13 mons 1 days 0 hours 0 mins 0.000000000 secs"),
+                None,
+                Some("0 years 31 mons 35 days 0 hours 0 mins 0.001400000 secs"),
+                Some("0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs"),
+                Some("0 years 0 mons 0 days 0 hours 0 mins 8.000000000 secs"),
+                None,
+                Some("0 years 0 mons 1 days 0 hours 0 mins 29.800000000 secs"),
+                Some("0 years 3 mons 0 days 0 hours 0 mins 1.000000000 secs"),
+                Some("0 years 0 mons 0 days 0 hours 8 mins 0.000000000 secs"),
+                Some("0 years 63 mons 9 days 19 hours 9 mins 2.222000000 secs"),
+                None,
+            ]
+        );
+    }
 
-        let mut array_ref = cast(&a1, &DataType::Binary).unwrap();
-        let down_cast = array_ref.as_any().downcast_ref::<BinaryArray>().unwrap();
+    macro_rules! test_unsafe_string_to_interval_err {
+        ($data_vec:expr, $interval_unit:expr, $error_msg:expr) => {
+            let string_array = Arc::new(StringArray::from($data_vec.clone())) as ArrayRef;
+            let options = CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            };
+            let arrow_err = cast_with_options(
+                &string_array.clone(),
+                &DataType::Interval($interval_unit),
+                &options,
+            )
+            .unwrap_err();
+            assert_eq!($error_msg, arrow_err.to_string());
+        };
+    }
+
+    #[test]
+    fn test_cast_string_to_interval_err() {
+        test_unsafe_string_to_interval_err!(
+            vec![Some("foobar")],
+            IntervalUnit::YearMonth,
+            r#"Not yet implemented: Unsupported Interval Expression with value "foobar""#
+        );
+        test_unsafe_string_to_interval_err!(
+            vec![Some("foobar")],
+            IntervalUnit::DayTime,
+            r#"Not yet implemented: Unsupported Interval Expression with value "foobar""#
+        );
+        test_unsafe_string_to_interval_err!(
+            vec![Some("foobar")],
+            IntervalUnit::MonthDayNano,
+            r#"Not yet implemented: Unsupported Interval Expression with value "foobar""#
+        );
+        test_unsafe_string_to_interval_err!(
+            vec![Some("2 months 31 days 1 second")],
+            IntervalUnit::YearMonth,
+            r#"Cast error: Cannot cast 2 months 31 days 1 second to IntervalYearMonth. Only year and month fields are allowed."#
+        );
+        test_unsafe_string_to_interval_err!(
+            vec![Some("1 day 1.5 milliseconds")],
+            IntervalUnit::DayTime,
+            r#"Cast error: Cannot cast 1 day 1.5 milliseconds to IntervalDayTime because the nanos part isn't multiple of milliseconds"#
+        );
+
+        // overflow
+        test_unsafe_string_to_interval_err!(
+            vec![Some(format!(
+                "{} century {} year {} month",
+                i64::MAX - 2,
+                i64::MAX - 2,
+                i64::MAX - 2
+            ))],
+            IntervalUnit::DayTime,
+            format!(
+                "Compute error: Overflow happened on: {} * 100",
+                i64::MAX - 2
+            )
+        );
+        test_unsafe_string_to_interval_err!(
+            vec![Some(format!(
+                "{} year {} month {} day",
+                i64::MAX - 2,
+                i64::MAX - 2,
+                i64::MAX - 2
+            ))],
+            IntervalUnit::MonthDayNano,
+            format!("Compute error: Overflow happened on: {} * 12", i64::MAX - 2)
+        );
+    }
+
+    #[test]
+    fn test_cast_binary_to_fixed_size_binary() {
+        let bytes_1 = "Hiiii".as_bytes();
+        let bytes_2 = "Hello".as_bytes();
+
+        let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
+        let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
+        let a2 = Arc::new(LargeBinaryArray::from(binary_data)) as ArrayRef;
+
+        let array_ref = cast(&a1, &DataType::FixedSizeBinary(5)).unwrap();
+        let down_cast = array_ref
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
         assert_eq!(bytes_1, down_cast.value(0));
         assert_eq!(bytes_2, down_cast.value(1));
         assert!(down_cast.is_null(2));
 
-        array_ref = cast(&a2, &DataType::LargeBinary).unwrap();
+        let array_ref = cast(&a2, &DataType::FixedSizeBinary(5)).unwrap();
         let down_cast = array_ref
             .as_any()
-            .downcast_ref::<LargeBinaryArray>()
+            .downcast_ref::<FixedSizeBinaryArray>()
             .unwrap();
+        assert_eq!(bytes_1, down_cast.value(0));
+        assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        // test error cases when the length of binary are not same
+        let bytes_1 = "Hi".as_bytes();
+        let bytes_2 = "Hello".as_bytes();
+
+        let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
+        let a1 = Arc::new(BinaryArray::from(binary_data.clone())) as ArrayRef;
+        let a2 = Arc::new(LargeBinaryArray::from(binary_data)) as ArrayRef;
+
+        let array_ref = cast_with_options(
+            &a1,
+            &DataType::FixedSizeBinary(5),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(array_ref.is_err());
+
+        let array_ref = cast_with_options(
+            &a2,
+            &DataType::FixedSizeBinary(5),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(array_ref.is_err());
+    }
+
+    #[test]
+    fn test_fixed_size_binary_to_binary() {
+        let bytes_1 = "Hiiii".as_bytes();
+        let bytes_2 = "Hello".as_bytes();
+
+        let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
+        let a1 = Arc::new(FixedSizeBinaryArray::from(binary_data.clone())) as ArrayRef;
+
+        let array_ref = cast(&a1, &DataType::Binary).unwrap();
+        let down_cast = array_ref.as_binary::<i32>();
+        assert_eq!(bytes_1, down_cast.value(0));
+        assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        let array_ref = cast(&a1, &DataType::LargeBinary).unwrap();
+        let down_cast = array_ref.as_binary::<i64>();
         assert_eq!(bytes_1, down_cast.value(0));
         assert_eq!(bytes_2, down_cast.value(1));
         assert!(down_cast.is_null(2));
@@ -5212,35 +5380,32 @@ mod tests {
 
     #[test]
     fn test_cast_date32_to_int32() {
-        let a = Date32Array::from(vec![10000, 17890]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Date32Array::from(vec![10000, 17890]);
         let b = cast(&array, &DataType::Int32).unwrap();
-        let c = b.as_any().downcast_ref::<Int32Array>().unwrap();
+        let c = b.as_primitive::<Int32Type>();
         assert_eq!(10000, c.value(0));
         assert_eq!(17890, c.value(1));
     }
 
     #[test]
     fn test_cast_int32_to_date32() {
-        let a = Int32Array::from(vec![10000, 17890]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Int32Array::from(vec![10000, 17890]);
         let b = cast(&array, &DataType::Date32).unwrap();
-        let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+        let c = b.as_primitive::<Date32Type>();
         assert_eq!(10000, c.value(0));
         assert_eq!(17890, c.value(1));
     }
 
     #[test]
     fn test_cast_timestamp_to_date32() {
-        let a = TimestampMillisecondArray::from(vec![
+        let array = TimestampMillisecondArray::from(vec![
             Some(864000000005),
             Some(1545696000001),
             None,
         ])
         .with_timezone("UTC".to_string());
-        let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date32).unwrap();
-        let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+        let c = b.as_primitive::<Date32Type>();
         assert_eq!(10000, c.value(0));
         assert_eq!(17890, c.value(1));
         assert!(c.is_null(2));
@@ -5248,32 +5413,50 @@ mod tests {
 
     #[test]
     fn test_cast_timestamp_to_date64() {
-        let a = TimestampMillisecondArray::from(vec![
+        let array = TimestampMillisecondArray::from(vec![
             Some(864000000005),
             Some(1545696000001),
             None,
         ]);
-        let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date64).unwrap();
-        let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+        let c = b.as_primitive::<Date64Type>();
         assert_eq!(864000000005, c.value(0));
         assert_eq!(1545696000001, c.value(1));
         assert!(c.is_null(2));
+
+        let array =
+            TimestampSecondArray::from(vec![Some(864000000005), Some(1545696000001)]);
+        let b = cast(&array, &DataType::Date64).unwrap();
+        let c = b.as_primitive::<Date64Type>();
+        assert_eq!(864000000005000, c.value(0));
+        assert_eq!(1545696000001000, c.value(1));
+
+        // test overflow, safe cast
+        let array = TimestampSecondArray::from(vec![Some(i64::MAX)]);
+        let b = cast(&array, &DataType::Date64).unwrap();
+        assert!(b.is_null(0));
+        // test overflow, unsafe cast
+        let array = TimestampSecondArray::from(vec![Some(i64::MAX)]);
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let b = cast_with_options(&array, &DataType::Date64, &options);
+        assert!(b.is_err());
     }
 
     #[test]
     fn test_cast_timestamp_to_time64() {
         // test timestamp secs
-        let a = TimestampSecondArray::from(vec![Some(86405), Some(1), None])
+        let array = TimestampSecondArray::from(vec![Some(86405), Some(1), None])
             .with_timezone("+01:00".to_string());
-        let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
         assert_eq!(3605000000, c.value(0));
         assert_eq!(3601000000, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
         assert_eq!(3605000000000, c.value(0));
         assert_eq!(3601000000000, c.value(1));
         assert!(c.is_null(2));
@@ -5283,12 +5466,12 @@ mod tests {
             .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
         assert_eq!(3605000000, c.value(0));
         assert_eq!(3601000000, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
         assert_eq!(3605000000000, c.value(0));
         assert_eq!(3601000000000, c.value(1));
         assert!(c.is_null(2));
@@ -5299,12 +5482,12 @@ mod tests {
                 .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
         assert_eq!(3605000000, c.value(0));
         assert_eq!(3601000000, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
         assert_eq!(3605000000000, c.value(0));
         assert_eq!(3601000000000, c.value(1));
         assert!(c.is_null(2));
@@ -5318,12 +5501,12 @@ mod tests {
         .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
         assert_eq!(3605000000, c.value(0));
         assert_eq!(3601000000, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
         assert_eq!(3605000000000, c.value(0));
         assert_eq!(3601000000000, c.value(1));
         assert!(c.is_null(2));
@@ -5336,6 +5519,8 @@ mod tests {
         assert!(b.is_err());
         let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond));
         assert!(b.is_err());
+        let b = cast(&array, &DataType::Time64(TimeUnit::Millisecond));
+        assert!(b.is_err());
     }
 
     #[test]
@@ -5345,12 +5530,12 @@ mod tests {
             .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        let c = b.as_primitive::<Time32SecondType>();
         assert_eq!(3605, c.value(0));
         assert_eq!(3601, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        let c = b.as_primitive::<Time32MillisecondType>();
         assert_eq!(3605000, c.value(0));
         assert_eq!(3601000, c.value(1));
         assert!(c.is_null(2));
@@ -5360,12 +5545,12 @@ mod tests {
             .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        let c = b.as_primitive::<Time32SecondType>();
         assert_eq!(3605, c.value(0));
         assert_eq!(3601, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        let c = b.as_primitive::<Time32MillisecondType>();
         assert_eq!(3605000, c.value(0));
         assert_eq!(3601000, c.value(1));
         assert!(c.is_null(2));
@@ -5376,12 +5561,12 @@ mod tests {
                 .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        let c = b.as_primitive::<Time32SecondType>();
         assert_eq!(3605, c.value(0));
         assert_eq!(3601, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        let c = b.as_primitive::<Time32MillisecondType>();
         assert_eq!(3605000, c.value(0));
         assert_eq!(3601000, c.value(1));
         assert!(c.is_null(2));
@@ -5395,12 +5580,12 @@ mod tests {
         .with_timezone("+01:00".to_string());
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Time32(TimeUnit::Second)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+        let c = b.as_primitive::<Time32SecondType>();
         assert_eq!(3605, c.value(0));
         assert_eq!(3601, c.value(1));
         assert!(c.is_null(2));
         let b = cast(&array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
-        let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+        let c = b.as_primitive::<Time32MillisecondType>();
         assert_eq!(3605000, c.value(0));
         assert_eq!(3601000, c.value(1));
         assert!(c.is_null(2));
@@ -5415,12 +5600,89 @@ mod tests {
         assert!(b.is_err());
     }
 
+    // Cast Timestamp(_, None) -> Timestamp(_, Some(timezone))
+    #[test]
+    fn test_cast_timestamp_with_timezone_1() {
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+            Some("2000-01-01T00:00:00.123456789"),
+            Some("2010-01-01T00:00:00.123456789"),
+            None,
+        ]));
+        let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+        let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("+0700".into()));
+        let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+        let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("2000-01-01T00:00:00.123456+07:00", result.value(0));
+        assert_eq!("2010-01-01T00:00:00.123456+07:00", result.value(1));
+        assert!(result.is_null(2));
+    }
+
+    // Cast Timestamp(_, Some(timezone)) -> Timestamp(_, None)
+    #[test]
+    fn test_cast_timestamp_with_timezone_2() {
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+            Some("2000-01-01T07:00:00.123456789"),
+            Some("2010-01-01T07:00:00.123456789"),
+            None,
+        ]));
+        let to_type = DataType::Timestamp(TimeUnit::Millisecond, Some("+0700".into()));
+        let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+        // Check intermediate representation is correct
+        let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("2000-01-01T07:00:00.123+07:00", result.value(0));
+        assert_eq!("2010-01-01T07:00:00.123+07:00", result.value(1));
+        assert!(result.is_null(2));
+
+        let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+        let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("2000-01-01T00:00:00.123", result.value(0));
+        assert_eq!("2010-01-01T00:00:00.123", result.value(1));
+        assert!(result.is_null(2));
+    }
+
+    // Cast Timestamp(_, Some(timezone)) -> Timestamp(_, Some(timezone))
+    #[test]
+    fn test_cast_timestamp_with_timezone_3() {
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![
+            Some("2000-01-01T07:00:00.123456789"),
+            Some("2010-01-01T07:00:00.123456789"),
+            None,
+        ]));
+        let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("+0700".into()));
+        let timestamp_array = cast(&string_array, &to_type).unwrap();
+
+        // Check intermediate representation is correct
+        let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("2000-01-01T07:00:00.123456+07:00", result.value(0));
+        assert_eq!("2010-01-01T07:00:00.123456+07:00", result.value(1));
+        assert!(result.is_null(2));
+
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("-08:00".into()));
+        let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
+
+        let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("1999-12-31T16:00:00-08:00", result.value(0));
+        assert_eq!("2009-12-31T16:00:00-08:00", result.value(1));
+        assert!(result.is_null(2));
+    }
+
     #[test]
     fn test_cast_date64_to_timestamp() {
-        let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-        let array = Arc::new(a) as ArrayRef;
+        let array =
+            Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
-        let c = b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
         assert_eq!(864000000, c.value(0));
         assert_eq!(1545696000, c.value(1));
         assert!(c.is_null(2));
@@ -5428,8 +5690,8 @@ mod tests {
 
     #[test]
     fn test_cast_date64_to_timestamp_ms() {
-        let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-        let array = Arc::new(a) as ArrayRef;
+        let array =
+            Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Millisecond, None)).unwrap();
         let c = b
             .as_any()
@@ -5442,8 +5704,8 @@ mod tests {
 
     #[test]
     fn test_cast_date64_to_timestamp_us() {
-        let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-        let array = Arc::new(a) as ArrayRef;
+        let array =
+            Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
         let c = b
             .as_any()
@@ -5456,8 +5718,8 @@ mod tests {
 
     #[test]
     fn test_cast_date64_to_timestamp_ns() {
-        let a = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
-        let array = Arc::new(a) as ArrayRef;
+        let array =
+            Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
         let c = b
             .as_any()
@@ -5470,15 +5732,14 @@ mod tests {
 
     #[test]
     fn test_cast_timestamp_to_i64() {
-        let a = TimestampMillisecondArray::from(vec![
+        let array = TimestampMillisecondArray::from(vec![
             Some(864000000005),
             Some(1545696000001),
             None,
         ])
         .with_timezone("UTC".to_string());
-        let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Int64).unwrap();
-        let c = b.as_any().downcast_ref::<Int64Array>().unwrap();
+        let c = b.as_primitive::<Int64Type>();
         assert_eq!(&DataType::Int64, c.data_type());
         assert_eq!(864000000005, c.value(0));
         assert_eq!(1545696000001, c.value(1));
@@ -5487,8 +5748,7 @@ mod tests {
 
     #[test]
     fn test_cast_date32_to_string() {
-        let a = Date32Array::from(vec![10000, 17890]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Date32Array::from(vec![10000, 17890]);
         let b = cast(&array, &DataType::Utf8).unwrap();
         let c = b.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(&DataType::Utf8, c.data_type());
@@ -5498,25 +5758,153 @@ mod tests {
 
     #[test]
     fn test_cast_date64_to_string() {
-        let a = Date64Array::from(vec![10000 * 86400000, 17890 * 86400000]);
-        let array = Arc::new(a) as ArrayRef;
+        let array = Date64Array::from(vec![10000 * 86400000, 17890 * 86400000]);
         let b = cast(&array, &DataType::Utf8).unwrap();
         let c = b.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(&DataType::Utf8, c.data_type());
-        assert_eq!("1997-05-19 00:00:00", c.value(0));
-        assert_eq!("2018-12-25 00:00:00", c.value(1));
+        assert_eq!("1997-05-19T00:00:00", c.value(0));
+        assert_eq!("2018-12-25T00:00:00", c.value(1));
     }
 
     #[test]
-    fn test_cast_between_timestamps() {
-        let a = TimestampMillisecondArray::from(vec![
+    fn test_cast_timestamp_to_strings() {
+        // "2018-12-25T00:00:02.001", "1997-05-19T00:00:03.005", None
+        let array = TimestampMillisecondArray::from(vec![
             Some(864000003005),
             Some(1545696002001),
             None,
         ]);
-        let array = Arc::new(a) as ArrayRef;
+        let out = cast(&array, &DataType::Utf8).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19T00:00:03.005"),
+                Some("2018-12-25T00:00:02.001"),
+                None
+            ]
+        );
+        let out = cast(&array, &DataType::LargeUtf8).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19T00:00:03.005"),
+                Some("2018-12-25T00:00:02.001"),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cast_timestamp_to_strings_opt() {
+        let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default()
+                .with_timestamp_format(Some(ts_format))
+                .with_timestamp_tz_format(Some(ts_format)),
+        };
+        // "2018-12-25T00:00:02.001", "1997-05-19T00:00:03.005", None
+        let array_without_tz = TimestampMillisecondArray::from(vec![
+            Some(864000003005),
+            Some(1545696002001),
+            None,
+        ]);
+        let out =
+            cast_with_options(&array_without_tz, &DataType::Utf8, &cast_options).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19 00:00:03.005000"),
+                Some("2018-12-25 00:00:02.001000"),
+                None
+            ]
+        );
+        let out =
+            cast_with_options(&array_without_tz, &DataType::LargeUtf8, &cast_options)
+                .unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19 00:00:03.005000"),
+                Some("2018-12-25 00:00:02.001000"),
+                None
+            ]
+        );
+
+        let array_with_tz = TimestampMillisecondArray::from(vec![
+            Some(864000003005),
+            Some(1545696002001),
+            None,
+        ])
+        .with_timezone(tz.to_string());
+        let out =
+            cast_with_options(&array_with_tz, &DataType::Utf8, &cast_options).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19 05:45:03.005000"),
+                Some("2018-12-25 05:45:02.001000"),
+                None
+            ]
+        );
+        let out = cast_with_options(&array_with_tz, &DataType::LargeUtf8, &cast_options)
+            .unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            out,
+            vec![
+                Some("1997-05-19 05:45:03.005000"),
+                Some("2018-12-25 05:45:02.001000"),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cast_between_timestamps() {
+        let array = TimestampMillisecondArray::from(vec![
+            Some(864000003005),
+            Some(1545696002001),
+            None,
+        ]);
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
-        let c = b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
         assert_eq!(864000003, c.value(0));
         assert_eq!(1545696002, c.value(1));
         assert!(c.is_null(2));
@@ -5536,7 +5924,7 @@ mod tests {
         for arr in duration_arrays {
             assert!(can_cast_types(arr.data_type(), &DataType::Int64));
             let result = cast(&arr, &DataType::Int64).unwrap();
-            let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+            let result = result.as_primitive::<Int64Type>();
             assert_eq!(base.as_slice(), result.values());
         }
     }
@@ -5555,14 +5943,14 @@ mod tests {
         for arr in interval_arrays {
             assert!(can_cast_types(arr.data_type(), &DataType::Int64));
             let result = cast(&arr, &DataType::Int64).unwrap();
-            let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+            let result = result.as_primitive::<Int64Type>();
             assert_eq!(base.as_slice(), result.values());
         }
     }
 
     #[test]
     fn test_cast_to_strings() {
-        let a = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let a = Int32Array::from(vec![1, 2, 3]);
         let out = cast(&a, &DataType::Utf8).unwrap();
         let out = out
             .as_any()
@@ -5583,11 +5971,11 @@ mod tests {
 
     #[test]
     fn test_str_to_str_casts() {
-        for data in vec![
+        for data in [
             vec![Some("foo"), Some("bar"), Some("ham")],
             vec![Some("foo"), None, Some("bar")],
         ] {
-            let a = Arc::new(LargeStringArray::from(data.clone())) as ArrayRef;
+            let a = LargeStringArray::from(data.clone());
             let to = cast(&a, &DataType::Utf8).unwrap();
             let expect = a
                 .as_any()
@@ -5603,7 +5991,7 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(expect, out);
 
-            let a = Arc::new(StringArray::from(data)) as ArrayRef;
+            let a = StringArray::from(data);
             let to = cast(&a, &DataType::LargeUtf8).unwrap();
             let expect = a
                 .as_any()
@@ -6534,7 +6922,7 @@ mod tests {
     #[test]
     fn test_cast_from_int8() {
         let i8_values: Vec<i8> = vec![i8::MIN, 0, i8::MAX];
-        let i8_array: ArrayRef = Arc::new(Int8Array::from(i8_values));
+        let i8_array = Int8Array::from(i8_values);
 
         let f64_expected = vec!["-128.0", "0.0", "127.0"];
         assert_eq!(
@@ -6598,12 +6986,12 @@ mod tests {
     }
 
     /// Convert `array` into a vector of strings by casting to data type dt
-    fn get_cast_values<T>(array: &ArrayRef, dt: &DataType) -> Vec<String>
+    fn get_cast_values<T>(array: &dyn Array, dt: &DataType) -> Vec<String>
     where
         T: ArrowPrimitiveType,
     {
         let c = cast(array, dt).unwrap();
-        let a = c.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+        let a = c.as_primitive::<T>();
         let mut v: Vec<String> = vec![];
         for i in 0..array.len() {
             if a.is_null(i) {
@@ -6692,13 +7080,11 @@ mod tests {
         let cast_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let res = cast(&array, &cast_type);
         assert!(res.is_err());
-        let actual_error = format!("{:?}", res);
+        let actual_error = format!("{res:?}");
         let expected_error = "Could not convert 72 dictionary indexes from Int32 to Int8";
         assert!(
             actual_error.contains(expected_error),
-            "did not find expected error '{}' in actual error '{}'",
-            actual_error,
-            expected_error
+            "did not find expected error '{actual_error}' in actual error '{expected_error}'"
         );
     }
 
@@ -6714,21 +7100,19 @@ mod tests {
         // dictionary indexed by int32, but not a dictionary indexed
         // with int8)
         for i in 0..200 {
-            let val = format!("val{}", i);
+            let val = format!("val{i}");
             builder.append(&val).unwrap();
         }
-        let array: ArrayRef = Arc::new(builder.finish());
+        let array = builder.finish();
 
         let cast_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let res = cast(&array, &cast_type);
         assert!(res.is_err());
-        let actual_error = format!("{:?}", res);
+        let actual_error = format!("{res:?}");
         let expected_error = "Could not convert 72 dictionary indexes from Int32 to Int8";
         assert!(
             actual_error.contains(expected_error),
-            "did not find expected error '{}' in actual error '{}'",
-            actual_error,
-            expected_error
+            "did not find expected error '{actual_error}' in actual error '{expected_error}'"
         );
     }
 
@@ -6811,9 +7195,8 @@ mod tests {
         assert_eq!(array.data_type(), &data_type);
         let cast_array = cast(&array, &DataType::Null).expect("cast failed");
         assert_eq!(cast_array.data_type(), &DataType::Null);
-        for i in 0..4 {
-            assert!(cast_array.is_null(i));
-        }
+        assert_eq!(cast_array.len(), 4);
+        assert_eq!(cast_array.logical_nulls().unwrap().null_count(), 4);
     }
 
     #[test]
@@ -6825,7 +7208,7 @@ mod tests {
                     let expected = $ARR_TYPE::from(vec![None; 6]);
                     let cast_type = DataType::$DATATYPE;
                     let cast_array = cast(&array, &cast_type).expect("cast failed");
-                    let cast_array = as_primitive_array::<$TYPE>(&cast_array);
+                    let cast_array = cast_array.as_primitive::<$TYPE>();
                     assert_eq!(cast_array.data_type(), &cast_type);
                     assert_eq!(cast_array, &expected);
                 }
@@ -6872,12 +7255,12 @@ mod tests {
     fn test_cast_null_from_and_to_nested_type() {
         // Cast null from and to map
         let data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new_struct(
                 "entry",
-                DataType::Struct(vec![
+                vec![
                     Field::new("key", DataType::Utf8, false),
                     Field::new("value", DataType::Int32, true),
-                ]),
+                ],
                 false,
             )),
             false,
@@ -6886,13 +7269,13 @@ mod tests {
 
         // Cast null from and to list
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         cast_from_null_to_other(&data_type);
         let data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         cast_from_null_to_other(&data_type);
         let data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, true)),
+            Arc::new(Field::new("item", DataType::Int32, true)),
             4,
         );
         cast_from_null_to_other(&data_type);
@@ -6906,20 +7289,16 @@ mod tests {
 
         // Cast null from and to struct
         let data_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         cast_from_null_to_other(&data_type);
     }
 
     /// Print the `DictionaryArray` `array` as a vector of strings
     fn array_to_strings(array: &ArrayRef) -> Vec<String> {
+        let options = FormatOptions::new().with_null("null");
+        let formatter = ArrayFormatter::try_new(array.as_ref(), &options).unwrap();
         (0..array.len())
-            .map(|i| {
-                if array.is_null(i) {
-                    "null".to_string()
-                } else {
-                    array_value_to_string(array, i).expect("Convert array to String")
-                }
-            })
+            .map(|i| formatter.value(i).to_string())
             .collect()
     }
 
@@ -6938,7 +7317,7 @@ mod tests {
         ]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date32).unwrap();
-        let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+        let c = b.as_primitive::<Date32Type>();
 
         // test valid inputs
         let date_value = since(
@@ -6975,20 +7354,85 @@ mod tests {
         ]);
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Date64).unwrap();
-        let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+        let c = b.as_primitive::<Date64Type>();
 
         // test valid inputs
         assert!(c.is_valid(0)); // "2000-01-01T12:00:00"
         assert_eq!(946728000000, c.value(0));
         assert!(c.is_valid(1)); // "2020-12-15T12:34:56"
         assert_eq!(1608035696000, c.value(1));
-        assert!(c.is_valid(2)); // "2020-2-2T12:34:56"
-        assert_eq!(1580646896000, c.value(2));
+        assert!(!c.is_valid(2)); // "2020-2-2T12:34:56"
 
-        // test invalid inputs
         assert!(!c.is_valid(3)); // "2000-00-00T12:00:00"
-        assert!(!c.is_valid(4)); // "2000-01-01 12:00:00"
-        assert!(!c.is_valid(5)); // "2000-01-01"
+        assert!(c.is_valid(4)); // "2000-01-01 12:00:00"
+        assert_eq!(946728000000, c.value(4));
+        assert!(c.is_valid(5)); // "2000-01-01"
+        assert_eq!(946684800000, c.value(5));
+    }
+
+    #[test]
+    fn test_can_cast_types_fixed_size_list_to_list() {
+        // DataType::List
+        let array1 = Arc::new(make_fixed_size_list_array()) as ArrayRef;
+        assert!(can_cast_types(
+            array1.data_type(),
+            &DataType::List(Arc::new(Field::new("", DataType::Int32, false)))
+        ));
+
+        // DataType::LargeList
+        let array2 = Arc::new(make_fixed_size_list_array_for_large_list()) as ArrayRef;
+        assert!(can_cast_types(
+            array2.data_type(),
+            &DataType::LargeList(Arc::new(Field::new("", DataType::Int64, false)))
+        ));
+    }
+
+    #[test]
+    fn test_cast_fixed_size_list_to_list() {
+        // DataType::List
+        let array1 = Arc::new(make_fixed_size_list_array()) as ArrayRef;
+        let list_array1 = cast(
+            &array1,
+            &DataType::List(Arc::new(Field::new("", DataType::Int32, false))),
+        )
+        .unwrap();
+        let actual = list_array1.as_any().downcast_ref::<ListArray>().unwrap();
+        let expected = array1
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+
+        assert_eq!(expected.values(), actual.values());
+        assert_eq!(expected.len(), actual.len());
+
+        // DataType::LargeList
+        let array2 = Arc::new(make_fixed_size_list_array_for_large_list()) as ArrayRef;
+        let list_array2 = cast(
+            &array2,
+            &DataType::LargeList(Arc::new(Field::new("", DataType::Int64, false))),
+        )
+        .unwrap();
+        let actual = list_array2
+            .as_any()
+            .downcast_ref::<LargeListArray>()
+            .unwrap();
+        let expected = array2
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(expected.values(), actual.values());
+        assert_eq!(expected.len(), actual.len());
+
+        // Cast previous LargeList to List
+        let array3 = Arc::new(actual.clone()) as ArrayRef;
+        let list_array3 = cast(
+            &array3,
+            &DataType::List(Arc::new(Field::new("", DataType::Int64, false))),
+        )
+        .unwrap();
+        let actual = list_array3.as_any().downcast_ref::<ListArray>().unwrap();
+        let expected = array3.as_any().downcast_ref::<LargeListArray>().unwrap();
+        assert_eq!(expected.values(), actual.values());
     }
 
     #[test]
@@ -6997,7 +7441,7 @@ mod tests {
         let array = Arc::new(make_large_list_array()) as ArrayRef;
         let list_array = cast(
             &array,
-            &DataType::List(Box::new(Field::new("", DataType::Int32, false))),
+            &DataType::List(Arc::new(Field::new("", DataType::Int32, false))),
         )
         .unwrap();
         let actual = list_array.as_any().downcast_ref::<ListArray>().unwrap();
@@ -7011,7 +7455,7 @@ mod tests {
         let array = Arc::new(make_list_array()) as ArrayRef;
         let large_list_array = cast(
             &array,
-            &DataType::LargeList(Box::new(Field::new("", DataType::Int32, false))),
+            &DataType::LargeList(Arc::new(Field::new("", DataType::Int32, false))),
         )
         .unwrap();
         let actual = large_list_array
@@ -7039,7 +7483,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -7063,7 +7507,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -7071,6 +7515,46 @@ mod tests {
             .build()
             .unwrap();
         LargeListArray::from(list_data)
+    }
+
+    fn make_fixed_size_list_array() -> FixedSizeListArray {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        let list_data_type = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            4,
+        );
+        let list_data = ArrayData::builder(list_data_type)
+            .len(2)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+        FixedSizeListArray::from(list_data)
+    }
+
+    fn make_fixed_size_list_array_for_large_list() -> FixedSizeListArray {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int64)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref([0i64, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        let list_data_type = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int64, true)),
+            4,
+        );
+        let list_data = ArrayData::builder(list_data_type)
+            .len(2)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+        FixedSizeListArray::from(list_data)
     }
 
     #[test]
@@ -7092,7 +7576,7 @@ mod tests {
         let array1 = make_list_array().slice(1, 2);
         let array2 = Arc::new(make_list_array()) as ArrayRef;
 
-        let dt = DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+        let dt = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         let out1 = cast(&array1, &dt).unwrap();
         let out2 = cast(&array2, &dt).unwrap();
 
@@ -7103,14 +7587,10 @@ mod tests {
     fn test_list_to_string() {
         let str_array = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "g", "h"]);
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
-        let value_data = ArrayData::builder(DataType::Utf8)
-            .len(str_array.len())
-            .buffers(str_array.data().buffers().to_vec())
-            .build()
-            .unwrap();
+        let value_data = str_array.into_data();
 
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -7214,7 +7694,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal128(38, 30),
-            &CastOptions { safe: true },
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
@@ -7222,7 +7705,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal128(38, 30),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
     }
@@ -7234,7 +7720,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal256(76, 76),
-            &CastOptions { safe: true },
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
@@ -7242,7 +7731,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal256(76, 76),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_err());
     }
@@ -7254,7 +7746,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal128(38, 30),
-            &CastOptions { safe: true },
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
@@ -7262,15 +7757,16 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal128(38, 30),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         let err = casted_array.unwrap_err().to_string();
         let expected_error = "Cast error: Cannot cast to Decimal128(38, 30)";
         assert!(
             err.contains(expected_error),
-            "did not find expected error '{}' in actual error '{}'",
-            expected_error,
-            err
+            "did not find expected error '{expected_error}' in actual error '{err}'"
         );
     }
 
@@ -7281,7 +7777,10 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal256(76, 50),
-            &CastOptions { safe: true },
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
         );
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
@@ -7289,15 +7788,16 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Decimal256(76, 50),
-            &CastOptions { safe: false },
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
         );
         let err = casted_array.unwrap_err().to_string();
         let expected_error = "Cast error: Cannot cast to Decimal256(76, 50)";
         assert!(
             err.contains(expected_error),
-            "did not find expected error '{}' in actual error '{}'",
-            expected_error,
-            err
+            "did not find expected error '{expected_error}' in actual error '{err}'"
         );
     }
 
@@ -7322,7 +7822,7 @@ mod tests {
         );
 
         let casted_array = cast(&array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("1123450", decimal_arr.value_as_string(0));
         assert_eq!("2123460", decimal_arr.value_as_string(1));
@@ -7339,7 +7839,7 @@ mod tests {
         ])) as ArrayRef;
 
         let casted_array = cast(&array, &decimal_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("1123450", decimal_arr.value_as_string(0));
         assert_eq!("2123450", decimal_arr.value_as_string(1));
@@ -7352,7 +7852,7 @@ mod tests {
         ])) as ArrayRef;
 
         let casted_array = cast(&array, &decimal_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("1120", decimal_arr.value_as_string(0));
         assert_eq!("2120", decimal_arr.value_as_string(1));
@@ -7375,7 +7875,7 @@ mod tests {
         );
 
         let casted_array = cast(&array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("1200", decimal_arr.value_as_string(0));
 
@@ -7390,7 +7890,7 @@ mod tests {
         );
 
         let casted_array = cast(&array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("1300", decimal_arr.value_as_string(0));
     }
@@ -7430,7 +7930,7 @@ mod tests {
             Decimal128Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal128Type>("12345", 2).unwrap(),
                 38,
-                2
+                2,
             ),
             "12345.00"
         );
@@ -7438,7 +7938,7 @@ mod tests {
             Decimal128Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal128Type>("0.12345", 2).unwrap(),
                 38,
-                2
+                2,
             ),
             "0.12"
         );
@@ -7446,7 +7946,7 @@ mod tests {
             Decimal128Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal128Type>(".12345", 2).unwrap(),
                 38,
-                2
+                2,
             ),
             "0.12"
         );
@@ -7454,7 +7954,7 @@ mod tests {
             Decimal128Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal128Type>(".1265", 2).unwrap(),
                 38,
-                2
+                2,
             ),
             "0.13"
         );
@@ -7462,7 +7962,7 @@ mod tests {
             Decimal128Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal128Type>(".1265", 2).unwrap(),
                 38,
-                2
+                2,
             ),
             "0.13"
         );
@@ -7471,7 +7971,7 @@ mod tests {
             Decimal256Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal256Type>("123.45", 3).unwrap(),
                 38,
-                3
+                3,
             ),
             "123.450"
         );
@@ -7479,7 +7979,7 @@ mod tests {
             Decimal256Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal256Type>("12345", 3).unwrap(),
                 38,
-                3
+                3,
             ),
             "12345.000"
         );
@@ -7487,7 +7987,7 @@ mod tests {
             Decimal256Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal256Type>("0.12345", 3).unwrap(),
                 38,
-                3
+                3,
             ),
             "0.123"
         );
@@ -7495,7 +7995,7 @@ mod tests {
             Decimal256Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal256Type>(".12345", 3).unwrap(),
                 38,
-                3
+                3,
             ),
             "0.123"
         );
@@ -7503,7 +8003,7 @@ mod tests {
             Decimal256Type::format_decimal(
                 parse_string_to_decimal_native::<Decimal256Type>(".1265", 3).unwrap(),
                 38,
-                3
+                3,
             ),
             "0.127"
         );
@@ -7515,7 +8015,7 @@ mod tests {
         assert!(can_cast_types(array.data_type(), &output_type));
 
         let casted_array = cast(&array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert_eq!("123.45", decimal_arr.value_as_string(0));
         assert_eq!("1.23", decimal_arr.value_as_string(1));
@@ -7536,7 +8036,7 @@ mod tests {
         assert!(can_cast_types(array.data_type(), &output_type));
 
         let casted_array = cast(&array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal256Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal256Type>();
 
         assert_eq!("123.450", decimal_arr.value_as_string(0));
         assert_eq!("1.235", decimal_arr.value_as_string(1));
@@ -7617,7 +8117,10 @@ mod tests {
         let output_type = DataType::Decimal128(38, 2);
         let str_array = StringArray::from(vec!["4.4.5"]);
         let array = Arc::new(str_array) as ArrayRef;
-        let option = CastOptions { safe: false };
+        let option = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
         assert!(casted_err
             .to_string()
@@ -7634,7 +8137,7 @@ mod tests {
     fn test_cast_string_to_decimal128_overflow(overflow_array: ArrayRef) {
         let output_type = DataType::Decimal128(38, 2);
         let casted_array = cast(&overflow_array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal128Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
 
         assert!(decimal_arr.is_null(0));
         assert!(decimal_arr.is_null(1));
@@ -7680,7 +8183,7 @@ mod tests {
     fn test_cast_string_to_decimal256_overflow(overflow_array: ArrayRef) {
         let output_type = DataType::Decimal256(76, 2);
         let casted_array = cast(&overflow_array, &output_type).unwrap();
-        let decimal_arr = as_primitive_array::<Decimal256Type>(&casted_array);
+        let decimal_arr = casted_array.as_primitive::<Decimal256Type>();
 
         assert_eq!(
             "170141183460469231731687303715884105727.00",
@@ -7743,7 +8246,7 @@ mod tests {
         let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
-        let c = b.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
         assert_eq!(1609459200, c.value(0));
         assert_eq!(1640995200, c.value(1));
         assert!(c.is_null(2));
@@ -7789,5 +8292,639 @@ mod tests {
         assert_eq!(1609459200000000000, c.value(0));
         assert_eq!(1640995200000000000, c.value(1));
         assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_timezone_cast() {
+        let a = StringArray::from(vec![
+            "2000-01-01T12:00:00", // date + time valid
+            "2020-12-15T12:34:56", // date + time valid
+        ]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
+        let v = b.as_primitive::<TimestampNanosecondType>();
+
+        assert_eq!(v.value(0), 946728000000000000);
+        assert_eq!(v.value(1), 1608035696000000000);
+
+        let b = cast(
+            &b,
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+        )
+        .unwrap();
+        let v = b.as_primitive::<TimestampNanosecondType>();
+
+        assert_eq!(v.value(0), 946728000000000000);
+        assert_eq!(v.value(1), 1608035696000000000);
+
+        let b = cast(
+            &b,
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("+02:00".into())),
+        )
+        .unwrap();
+        let v = b.as_primitive::<TimestampMillisecondType>();
+
+        assert_eq!(v.value(0), 946728000000);
+        assert_eq!(v.value(1), 1608035696000);
+    }
+
+    #[test]
+    fn test_cast_utf8_to_timestamp() {
+        fn test_tz(tz: Arc<str>) {
+            let valid = StringArray::from(vec![
+                "2023-01-01 04:05:06.789000-08:00",
+                "2023-01-01 04:05:06.789000-07:00",
+                "2023-01-01 04:05:06.789 -0800",
+                "2023-01-01 04:05:06.789 -08:00",
+                "2023-01-01 040506 +0730",
+                "2023-01-01 040506 +07:30",
+                "2023-01-01 04:05:06.789",
+                "2023-01-01 04:05:06",
+                "2023-01-01",
+            ]);
+
+            let array = Arc::new(valid) as ArrayRef;
+            let b = cast_with_options(
+                &array,
+                &DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.clone())),
+                &CastOptions {
+                    safe: false,
+                    format_options: FormatOptions::default(),
+                },
+            )
+            .unwrap();
+
+            let tz = tz.as_ref().parse().unwrap();
+
+            let as_tz = |v: i64| {
+                as_datetime_with_timezone::<TimestampNanosecondType>(v, tz).unwrap()
+            };
+
+            let as_utc = |v: &i64| as_tz(*v).naive_utc().to_string();
+            let as_local = |v: &i64| as_tz(*v).naive_local().to_string();
+
+            let values = b.as_primitive::<TimestampNanosecondType>().values();
+            let utc_results: Vec<_> = values.iter().map(as_utc).collect();
+            let local_results: Vec<_> = values.iter().map(as_local).collect();
+
+            // Absolute timestamps should be parsed preserving the same UTC instant
+            assert_eq!(
+                &utc_results[..6],
+                &[
+                    "2023-01-01 12:05:06.789".to_string(),
+                    "2023-01-01 11:05:06.789".to_string(),
+                    "2023-01-01 12:05:06.789".to_string(),
+                    "2023-01-01 12:05:06.789".to_string(),
+                    "2022-12-31 20:35:06".to_string(),
+                    "2022-12-31 20:35:06".to_string(),
+                ]
+            );
+            // Non-absolute timestamps should be parsed preserving the same local instant
+            assert_eq!(
+                &local_results[6..],
+                &[
+                    "2023-01-01 04:05:06.789".to_string(),
+                    "2023-01-01 04:05:06".to_string(),
+                    "2023-01-01 00:00:00".to_string()
+                ]
+            )
+        }
+
+        test_tz("+00:00".into());
+        test_tz("+02:00".into());
+    }
+
+    #[test]
+    fn test_cast_invalid_utf8() {
+        let v1: &[u8] = b"\xFF invalid";
+        let v2: &[u8] = b"\x00 Foo";
+        let s = BinaryArray::from(vec![v1, v2]);
+        let options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default(),
+        };
+        let array = cast_with_options(&s, &DataType::Utf8, &options).unwrap();
+        let a = array.as_string::<i32>();
+        a.to_data().validate_full().unwrap();
+
+        assert_eq!(a.null_count(), 1);
+        assert_eq!(a.len(), 2);
+        assert!(a.is_null(0));
+        assert_eq!(a.value(0), "");
+        assert_eq!(a.value(1), "\x00 Foo");
+    }
+
+    #[test]
+    fn test_cast_utf8_to_timestamptz() {
+        let valid = StringArray::from(vec!["2023-01-01"]);
+
+        let array = Arc::new(valid) as ArrayRef;
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+        )
+        .unwrap();
+
+        let expect = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into()));
+
+        assert_eq!(b.data_type(), &expect);
+        let c = b
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap();
+        assert_eq!(1672531200000000000, c.value(0));
+    }
+
+    #[test]
+    fn test_cast_decimal_to_utf8() {
+        fn test_decimal_to_string<IN: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
+            output_type: DataType,
+            array: PrimitiveArray<IN>,
+        ) {
+            let b = cast(&array, &output_type).unwrap();
+
+            assert_eq!(b.data_type(), &output_type);
+            let c = b.as_string::<OffsetSize>();
+
+            assert_eq!("1123.454", c.value(0));
+            assert_eq!("2123.456", c.value(1));
+            assert_eq!("-3123.453", c.value(2));
+            assert_eq!("-3123.456", c.value(3));
+            assert_eq!("0.000", c.value(4));
+            assert_eq!("0.123", c.value(5));
+            assert_eq!("1234.567", c.value(6));
+            assert_eq!("-1234.567", c.value(7));
+            assert!(c.is_null(8));
+        }
+        let array128: Vec<Option<i128>> = vec![
+            Some(1123454),
+            Some(2123456),
+            Some(-3123453),
+            Some(-3123456),
+            Some(0),
+            Some(123),
+            Some(123456789),
+            Some(-123456789),
+            None,
+        ];
+
+        let array256: Vec<Option<i256>> =
+            array128.iter().map(|v| v.map(i256::from_i128)).collect();
+
+        test_decimal_to_string::<arrow_array::types::Decimal128Type, i32>(
+            DataType::Utf8,
+            create_decimal_array(array128.clone(), 7, 3).unwrap(),
+        );
+        test_decimal_to_string::<arrow_array::types::Decimal128Type, i64>(
+            DataType::LargeUtf8,
+            create_decimal_array(array128, 7, 3).unwrap(),
+        );
+        test_decimal_to_string::<arrow_array::types::Decimal256Type, i32>(
+            DataType::Utf8,
+            create_decimal256_array(array256.clone(), 7, 3).unwrap(),
+        );
+        test_decimal_to_string::<arrow_array::types::Decimal256Type, i64>(
+            DataType::LargeUtf8,
+            create_decimal256_array(array256, 7, 3).unwrap(),
+        );
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal128_precision_overflow() {
+        let array = Int64Array::from(vec![1234567]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(7, 3),
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let err = cast_with_options(
+            &array,
+            &DataType::Decimal128(7, 3),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal128 of precision 7. Max is 9999999", err.unwrap_err().to_string());
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal256_precision_overflow() {
+        let array = Int64Array::from(vec![1234567]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal256(7, 3),
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let err = cast_with_options(
+            &array,
+            &DataType::Decimal256(7, 3),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal256 of precision 7. Max is 9999999", err.unwrap_err().to_string());
+    }
+
+    /// helper function to test casting from duration to interval
+    fn cast_from_duration_to_interval<T: ArrowTemporalType<Native = i64>>(
+        array: Vec<i64>,
+        cast_options: &CastOptions,
+    ) -> Result<PrimitiveArray<IntervalMonthDayNanoType>, ArrowError> {
+        let array = PrimitiveArray::<T>::new(array.into(), None);
+        let array = Arc::new(array) as ArrayRef;
+        let interval = DataType::Interval(IntervalUnit::MonthDayNano);
+        let out = cast_with_options(&array, &interval, cast_options)?;
+        let out = out.as_primitive::<IntervalMonthDayNanoType>().clone();
+        Ok(out)
+    }
+
+    #[test]
+    fn test_cast_from_duration_to_interval() {
+        // from duration second to interval month day nano
+        let array = vec![1234567];
+        let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
+            array,
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(casted_array.value(0), 1234567000000000);
+
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
+            array.clone(),
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array = cast_from_duration_to_interval::<DurationSecondType>(
+            array,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_err());
+
+        // from duration millisecond to interval month day nano
+        let array = vec![1234567];
+        let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
+            array,
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(casted_array.value(0), 1234567000000);
+
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
+            array.clone(),
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array = cast_from_duration_to_interval::<DurationMillisecondType>(
+            array,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_err());
+
+        // from duration microsecond to interval month day nano
+        let array = vec![1234567];
+        let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
+            array,
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(casted_array.value(0), 1234567000);
+
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
+            array.clone(),
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array = cast_from_duration_to_interval::<DurationMicrosecondType>(
+            array,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_err());
+
+        // from duration nanosecond to interval month day nano
+        let array = vec![1234567];
+        let casted_array = cast_from_duration_to_interval::<DurationNanosecondType>(
+            array,
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(casted_array.value(0), 1234567);
+
+        let array = vec![i64::MAX];
+        let casted_array = cast_from_duration_to_interval::<DurationNanosecondType>(
+            array,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        )
+        .unwrap();
+        assert_eq!(casted_array.value(0), 9223372036854775807);
+    }
+
+    /// helper function to test casting from interval to duration
+    fn cast_from_interval_to_duration<T: ArrowTemporalType>(
+        array: &IntervalMonthDayNanoArray,
+        cast_options: &CastOptions,
+    ) -> Result<PrimitiveArray<T>, ArrowError> {
+        let casted_array = cast_with_options(&array, &T::DATA_TYPE, cast_options)?;
+        casted_array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .ok_or_else(|| {
+                ArrowError::ComputeError(format!(
+                    "Failed to downcast to {}",
+                    T::DATA_TYPE
+                ))
+            })
+            .cloned()
+    }
+
+    #[test]
+    fn test_cast_from_interval_to_duration() {
+        let nullable = CastOptions::default();
+        let fallible = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        // from interval month day nano to duration second
+        let array = vec![1234567].into();
+        let casted_array: DurationSecondArray =
+            cast_from_interval_to_duration(&array, &nullable).unwrap();
+        assert_eq!(casted_array.value(0), 0);
+
+        let array = vec![i128::MAX].into();
+        let casted_array: DurationSecondArray =
+            cast_from_interval_to_duration(&array, &nullable).unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let res = cast_from_interval_to_duration::<DurationSecondType>(&array, &fallible);
+        assert!(res.is_err());
+
+        // from interval month day nano to duration millisecond
+        let array = vec![1234567].into();
+        let casted_array: DurationMillisecondArray =
+            cast_from_interval_to_duration(&array, &nullable).unwrap();
+        assert_eq!(casted_array.value(0), 1);
+
+        let array = vec![i128::MAX].into();
+        let casted_array: DurationMillisecondArray =
+            cast_from_interval_to_duration(&array, &nullable).unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let res =
+            cast_from_interval_to_duration::<DurationMillisecondType>(&array, &fallible);
+        assert!(res.is_err());
+
+        // from interval month day nano to duration microsecond
+        let array = vec![1234567].into();
+        let casted_array: DurationMicrosecondArray =
+            cast_from_interval_to_duration(&array, &nullable).unwrap();
+        assert_eq!(casted_array.value(0), 1234);
+
+        let array = vec![i128::MAX].into();
+        let casted_array =
+            cast_from_interval_to_duration::<DurationMicrosecondType>(&array, &nullable)
+                .unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array =
+            cast_from_interval_to_duration::<DurationMicrosecondType>(&array, &fallible);
+        assert!(casted_array.is_err());
+
+        // from interval month day nano to duration nanosecond
+        let array = vec![1234567].into();
+        let casted_array: DurationNanosecondArray =
+            cast_from_interval_to_duration(&array, &nullable).unwrap();
+        assert_eq!(casted_array.value(0), 1234567);
+
+        let array = vec![i128::MAX].into();
+        let casted_array: DurationNanosecondArray =
+            cast_from_interval_to_duration(&array, &nullable).unwrap();
+        assert!(!casted_array.is_valid(0));
+
+        let casted_array =
+            cast_from_interval_to_duration::<DurationNanosecondType>(&array, &fallible);
+        assert!(casted_array.is_err());
+
+        let array = vec![
+            IntervalMonthDayNanoType::make_value(0, 1, 0),
+            IntervalMonthDayNanoType::make_value(-1, 0, 0),
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+            IntervalMonthDayNanoType::make_value(1, 0, 1),
+            IntervalMonthDayNanoType::make_value(0, 0, -1),
+        ]
+        .into();
+        let casted_array =
+            cast_from_interval_to_duration::<DurationNanosecondType>(&array, &nullable)
+                .unwrap();
+        assert!(!casted_array.is_valid(0));
+        assert!(!casted_array.is_valid(1));
+        assert!(!casted_array.is_valid(2));
+        assert!(!casted_array.is_valid(3));
+        assert!(casted_array.is_valid(4));
+        assert_eq!(casted_array.value(4), -1);
+    }
+
+    /// helper function to test casting from interval year month to interval month day nano
+    fn cast_from_interval_year_month_to_interval_month_day_nano(
+        array: Vec<i32>,
+        cast_options: &CastOptions,
+    ) -> Result<PrimitiveArray<IntervalMonthDayNanoType>, ArrowError> {
+        let array = PrimitiveArray::<IntervalYearMonthType>::from(array);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Interval(IntervalUnit::MonthDayNano),
+            cast_options,
+        )?;
+        casted_array
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .ok_or_else(|| {
+                ArrowError::ComputeError(
+                    "Failed to downcast to IntervalMonthDayNanoArray".to_string(),
+                )
+            })
+            .cloned()
+    }
+
+    #[test]
+    fn test_cast_from_interval_year_month_to_interval_month_day_nano() {
+        // from interval year month to interval month day nano
+        let array = vec![1234567];
+        let casted_array = cast_from_interval_year_month_to_interval_month_day_nano(
+            array,
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(casted_array.value(0), 97812474910747780469848774134464512);
+    }
+
+    /// helper function to test casting from interval day time to interval month day nano
+    fn cast_from_interval_day_time_to_interval_month_day_nano(
+        array: Vec<i64>,
+        cast_options: &CastOptions,
+    ) -> Result<PrimitiveArray<IntervalMonthDayNanoType>, ArrowError> {
+        let array = PrimitiveArray::<IntervalDayTimeType>::from(array);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Interval(IntervalUnit::MonthDayNano),
+            cast_options,
+        )?;
+        Ok(casted_array
+            .as_primitive::<IntervalMonthDayNanoType>()
+            .clone())
+    }
+
+    #[test]
+    fn test_cast_from_interval_day_time_to_interval_month_day_nano() {
+        // from interval day time to interval month day nano
+        let array = vec![123];
+        let casted_array = cast_from_interval_day_time_to_interval_month_day_nano(
+            array,
+            &CastOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            casted_array.data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(casted_array.value(0), 123000000);
+    }
+
+    #[test]
+    fn test_cast_below_unixtimestamp() {
+        let valid = StringArray::from(vec![
+            "1900-01-03 23:59:59",
+            "1969-12-31 00:00:01",
+            "1989-12-31 00:00:01",
+        ]);
+
+        let array = Arc::new(valid) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        )
+        .unwrap();
+
+        let ts_array = casted_array
+            .as_primitive::<TimestampNanosecondType>()
+            .values()
+            .iter()
+            .map(|ts| ts / 1_000_000)
+            .collect::<Vec<_>>();
+
+        let array =
+            TimestampMillisecondArray::from(ts_array).with_timezone("UTC".to_string());
+        let casted_array = cast(&array, &DataType::Date32).unwrap();
+        let date_array = casted_array.as_primitive::<Date32Type>();
+        let casted_array = cast(&date_array, &DataType::Utf8).unwrap();
+        let string_array = casted_array.as_string::<i32>();
+        assert_eq!("1900-01-03", string_array.value(0));
+        assert_eq!("1969-12-31", string_array.value(1));
+        assert_eq!("1989-12-31", string_array.value(2));
+    }
+
+    #[test]
+    fn test_nested_list() {
+        let mut list = ListBuilder::new(Int32Builder::new());
+        list.append_value([Some(1), Some(2), Some(3)]);
+        list.append_value([Some(4), None, Some(6)]);
+        let list = list.finish();
+
+        let to_field = Field::new("nested", list.data_type().clone(), false);
+        let to = DataType::List(Arc::new(to_field));
+        let out = cast(&list, &to).unwrap();
+        let opts = FormatOptions::default().with_null("null");
+        let formatted = ArrayFormatter::try_new(out.as_ref(), &opts).unwrap();
+
+        assert_eq!(formatted.value(0).to_string(), "[[1], [2], [3]]");
+        assert_eq!(formatted.value(1).to_string(), "[[4], [null], [6]]");
+    }
+
+    const CAST_OPTIONS: CastOptions<'static> = CastOptions {
+        safe: true,
+        format_options: FormatOptions::new(),
+    };
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn test_const_options() {
+        assert!(CAST_OPTIONS.safe)
+    }
+
+    #[test]
+    fn test_list_format_options() {
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default().with_null("null"),
+        };
+        let array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![Some(0), None, Some(2)]),
+        ]);
+        let a = cast_with_options(&array, &DataType::Utf8, &options).unwrap();
+        let r: Vec<_> = a.as_string::<i32>().iter().map(|x| x.unwrap()).collect();
+        assert_eq!(r, &["[0, 1, 2]", "[0, null, 2]"]);
     }
 }

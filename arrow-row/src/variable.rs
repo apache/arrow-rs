@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{null_sentinel, Rows};
+use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
@@ -62,12 +62,13 @@ pub fn padded_length(a: Option<usize>) -> usize {
 /// - `0xFF_u8` if this is not the last block for this string
 /// - otherwise the length of the block as a `u8`
 pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
-    out: &mut Rows,
+    data: &mut [u8],
+    offsets: &mut [usize],
     i: I,
     opts: SortOptions,
 ) {
-    for (offset, maybe_val) in out.offsets.iter_mut().skip(1).zip(i) {
-        *offset += encode_one(&mut out.buffer[*offset..], maybe_val, opts);
+    for (offset, maybe_val) in offsets.iter_mut().skip(1).zip(i) {
+        *offset += encode_one(&mut data[*offset..], maybe_val, opts);
     }
 }
 

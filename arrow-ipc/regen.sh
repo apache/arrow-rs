@@ -18,15 +18,13 @@
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-# Change to the toplevel Rust directory
-pushd $DIR/../../
+# Change to the toplevel `arrow-rs` directory
+pushd $DIR/../
 
 echo "Build flatc from source ..."
 
 FB_URL="https://github.com/google/flatbuffers"
-# https://github.com/google/flatbuffers/pull/6393
-FB_COMMIT="408cf5802415e1dea65fef7489a6c2f3740fb381"
-FB_DIR="rust/arrow/.flatbuffers"
+FB_DIR="arrow/.flatbuffers"
 FLATC="$FB_DIR/bazel-bin/flatc"
 
 if [ -z $(which bazel) ]; then
@@ -44,28 +42,21 @@ else
     git -C $FB_DIR pull
 fi
 
-echo "hard reset to $FB_COMMIT"
-git -C $FB_DIR reset --hard $FB_COMMIT
-
 pushd $FB_DIR
 echo "run: bazel build :flatc ..."
 bazel build :flatc
 popd
 
-FB_PATCH="rust/arrow/format-0ed34c83.patch"
-echo "Patch flatbuffer files with ${FB_PATCH} for cargo doc"
-echo "NOTE: the patch MAY need update in case of changes in format/*.fbs"
-git apply --check ${FB_PATCH} && git apply ${FB_PATCH}
 
 # Execute the code generation:
-$FLATC --filename-suffix "" --rust -o rust/arrow/src/ipc/gen/ format/*.fbs
+$FLATC --filename-suffix "" --rust -o arrow-ipc/src/gen/ format/*.fbs
 
 # Reset changes to format/
 git checkout -- format
 
 # Now the files are wrongly named so we have to change that.
 popd
-pushd $DIR/src/ipc/gen
+pushd $DIR/src/gen
 
 PREFIX=$(cat <<'HEREDOC'
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -94,9 +85,9 @@ use flatbuffers::EndianScalar;
 HEREDOC
 )
 
-SCHEMA_IMPORT="\nuse crate::ipc::gen::Schema::*;"
-SPARSE_TENSOR_IMPORT="\nuse crate::ipc::gen::SparseTensor::*;"
-TENSOR_IMPORT="\nuse crate::ipc::gen::Tensor::*;"
+SCHEMA_IMPORT="\nuse crate::gen::Schema::*;"
+SPARSE_TENSOR_IMPORT="\nuse crate::gen::SparseTensor::*;"
+TENSOR_IMPORT="\nuse crate::gen::Tensor::*;"
 
 # For flatbuffer(1.12.0+), remove: use crate::${name}::\*;
 names=("File" "Message" "Schema" "SparseTensor" "Tensor")
@@ -119,8 +110,9 @@ for f in `ls *.rs`; do
     sed -i '' '/}  \/\/ pub mod arrow/d' $f
     sed -i '' '/}  \/\/ pub mod apache/d' $f
     sed -i '' '/}  \/\/ pub mod org/d' $f
-    sed -i '' '/use std::mem;/d' $f
-    sed -i '' '/use std::cmp::Ordering;/d' $f
+    sed -i '' '/use core::mem;/d' $f
+    sed -i '' '/use core::cmp::Ordering;/d' $f
+    sed -i '' '/use self::flatbuffers::{EndianScalar, Follow};/d' $f
 
     # required by flatc 1.12.0+
     sed -i '' "/\#\!\[allow(unused_imports, dead_code)\]/d" $f
@@ -150,7 +142,7 @@ done
 
 # Return back to base directory
 popd
-cargo +stable fmt -- src/ipc/gen/*
+cargo +stable fmt -- src/gen/*
 
 echo "DONE!"
 echo "Please run 'cargo doc' and 'cargo test' with nightly and stable, "

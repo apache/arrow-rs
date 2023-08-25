@@ -28,10 +28,11 @@ use flatbuffers::FlatBufferBuilder;
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
+use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
 use arrow_buffer::bit_util;
-use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_data::{layout, ArrayData, BufferSpec};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_data::{layout, ArrayData, ArrayDataBuilder, BufferSpec};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
@@ -118,8 +119,7 @@ impl IpcWriteOptions {
                 }
             }
             z => Err(ArrowError::InvalidArgumentError(format!(
-                "Unsupported crate::MetadataVersion {:?}",
-                z
+                "Unsupported crate::MetadataVersion {z:?}"
             ))),
         }
     }
@@ -219,11 +219,30 @@ impl IpcDataGenerator {
                     )?;
                 }
             }
+            DataType::RunEndEncoded(_, values) => {
+                let data = column.to_data();
+                if data.child_data().len() != 2 {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "The run encoded array should have exactly two child arrays. Found {}",
+                        data.child_data().len()
+                    )));
+                }
+                // The run_ends array is not expected to be dictionary encoded. Hence encode dictionaries
+                // only for values array.
+                let values_array = make_array(data.child_data()[1].clone());
+                self.encode_dictionaries(
+                    values,
+                    &values_array,
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
             DataType::List(field) => {
                 let list = as_list_array(column);
                 self.encode_dictionaries(
                     field,
-                    &list.values(),
+                    list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
@@ -233,7 +252,7 @@ impl IpcDataGenerator {
                 let list = as_large_list_array(column);
                 self.encode_dictionaries(
                     field,
-                    &list.values(),
+                    list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
@@ -246,7 +265,7 @@ impl IpcDataGenerator {
                     .expect("Unable to downcast to fixed size list array");
                 self.encode_dictionaries(
                     field,
-                    &list.values(),
+                    list.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
@@ -265,7 +284,7 @@ impl IpcDataGenerator {
                 // keys
                 self.encode_dictionaries(
                     keys,
-                    &map_array.keys(),
+                    map_array.keys(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
@@ -274,19 +293,16 @@ impl IpcDataGenerator {
                 // values
                 self.encode_dictionaries(
                     values,
-                    &map_array.values(),
+                    map_array.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,
                 )?;
             }
-            DataType::Union(fields, _, _) => {
+            DataType::Union(fields, _) => {
                 let union = as_union_array(column);
-                for (field, column) in fields
-                    .iter()
-                    .enumerate()
-                    .map(|(n, f)| (f, union.child(n as i8)))
-                {
+                for (type_id, field) in fields.iter() {
+                    let column = union.child(type_id);
                     self.encode_dictionaries(
                         field,
                         column,
@@ -315,7 +331,7 @@ impl IpcDataGenerator {
                 let dict_id = field
                     .dict_id()
                     .expect("All Dictionary types have `dict_id`");
-                let dict_data = column.data();
+                let dict_data = column.to_data();
                 let dict_values = &dict_data.child_data()[0];
 
                 let values = make_array(dict_data.child_data()[0].clone());
@@ -403,9 +419,9 @@ impl IpcDataGenerator {
             batch_compression_type.map(TryInto::try_into).transpose()?;
 
         for array in batch.columns() {
-            let array_data = array.data();
+            let array_data = array.to_data();
             offset = write_array_data(
-                array_data,
+                &array_data,
                 &mut buffers,
                 &mut arrow_data,
                 &mut nodes,
@@ -537,11 +553,86 @@ impl IpcDataGenerator {
     }
 }
 
+pub(crate) fn unslice_run_array(arr: ArrayData) -> Result<ArrayData, ArrowError> {
+    match arr.data_type() {
+        DataType::RunEndEncoded(k, _) => match k.data_type() {
+            DataType::Int16 => Ok(into_zero_offset_run_array(
+                RunArray::<Int16Type>::from(arr),
+            )?
+            .into_data()),
+            DataType::Int32 => Ok(into_zero_offset_run_array(
+                RunArray::<Int32Type>::from(arr),
+            )?
+            .into_data()),
+            DataType::Int64 => Ok(into_zero_offset_run_array(
+                RunArray::<Int64Type>::from(arr),
+            )?
+            .into_data()),
+            d => unreachable!("Unexpected data type {d}"),
+        },
+        d => Err(ArrowError::InvalidArgumentError(format!(
+            "The given array is not a run array. Data type of given array: {d}"
+        ))),
+    }
+}
+
+// Returns a `RunArray` with zero offset and length matching the last value
+// in run_ends array.
+fn into_zero_offset_run_array<R: RunEndIndexType>(
+    run_array: RunArray<R>,
+) -> Result<RunArray<R>, ArrowError> {
+    let run_ends = run_array.run_ends();
+    if run_ends.offset() == 0 && run_ends.max_value() == run_ends.len() {
+        return Ok(run_array);
+    }
+
+    // The physical index of original run_ends array from which the `ArrayData`is sliced.
+    let start_physical_index = run_ends.get_start_physical_index();
+
+    // The physical index of original run_ends array until which the `ArrayData`is sliced.
+    let end_physical_index = run_ends.get_end_physical_index();
+
+    let physical_length = end_physical_index - start_physical_index + 1;
+
+    // build new run_ends array by subtracting offset from run ends.
+    let offset = R::Native::usize_as(run_ends.offset());
+    let mut builder = BufferBuilder::<R::Native>::new(physical_length);
+    for run_end_value in &run_ends.values()[start_physical_index..end_physical_index] {
+        builder.append(run_end_value.sub_wrapping(offset));
+    }
+    builder.append(R::Native::from_usize(run_array.len()).unwrap());
+    let new_run_ends = unsafe {
+        // Safety:
+        // The function builds a valid run_ends array and hence need not be validated.
+        ArrayDataBuilder::new(R::DATA_TYPE)
+            .len(physical_length)
+            .add_buffer(builder.finish())
+            .build_unchecked()
+    };
+
+    // build new values by slicing physical indices.
+    let new_values = run_array
+        .values()
+        .slice(start_physical_index, physical_length)
+        .into_data();
+
+    let builder = ArrayDataBuilder::new(run_array.data_type().clone())
+        .len(run_array.len())
+        .add_child_data(new_run_ends)
+        .add_child_data(new_values);
+    let array_data = unsafe {
+        // Safety:
+        //  This function builds a valid run array and hence can skip validation.
+        builder.build_unchecked()
+    };
+    Ok(array_data.into())
+}
+
 /// Keeps track of dictionaries that have been written, to avoid emitting the same dictionary
 /// multiple times. Can optionally error if an update to an existing dictionary is attempted, which
 /// isn't allowed in the `FileWriter`.
 pub struct DictionaryTracker {
-    written: HashMap<i64, ArrayRef>,
+    written: HashMap<i64, ArrayData>,
     error_on_replacement: bool,
 }
 
@@ -570,18 +661,18 @@ impl DictionaryTracker {
         dict_id: i64,
         column: &ArrayRef,
     ) -> Result<bool, ArrowError> {
-        let dict_data = column.data();
+        let dict_data = column.to_data();
         let dict_values = &dict_data.child_data()[0];
 
         // If a dictionary with this id was already emitted, check if it was the same.
         if let Some(last) = self.written.get(&dict_id) {
-            if ArrayData::ptr_eq(&last.data().child_data()[0], dict_values) {
+            if ArrayData::ptr_eq(&last.child_data()[0], dict_values) {
                 // Same dictionary values => no need to emit it again
                 return Ok(false);
             }
             if self.error_on_replacement {
                 // If error on replacement perform a logical comparison
-                if last.data().child_data()[0] == *dict_values {
+                if last.child_data()[0] == *dict_values {
                     // Same dictionary values => no need to emit it again
                     return Ok(false);
                 }
@@ -594,7 +685,7 @@ impl DictionaryTracker {
             }
         }
 
-        self.written.insert(dict_id, column.clone());
+        self.written.insert(dict_id, dict_data);
         Ok(true)
     }
 }
@@ -616,6 +707,8 @@ pub struct FileWriter<W: Write> {
     finished: bool,
     /// Keeps track of dictionaries that have been written
     dictionary_tracker: DictionaryTracker,
+    /// User level customized metadata
+    custom_metadata: HashMap<String, String>,
 
     data_gen: IpcDataGenerator,
 }
@@ -652,14 +745,19 @@ impl<W: Write> FileWriter<W> {
             record_blocks: vec![],
             finished: false,
             dictionary_tracker: DictionaryTracker::new(true),
+            custom_metadata: HashMap::new(),
             data_gen,
         })
+    }
+
+    pub fn write_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.custom_metadata.insert(key.into(), value.into());
     }
 
     /// Write a record batch to the file
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         if self.finished {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::IpcError(
                 "Cannot write record batch to file writer as it is closed".to_string(),
             ));
         }
@@ -696,7 +794,7 @@ impl<W: Write> FileWriter<W> {
     /// Write footer and closing tag, then mark the writer as done
     pub fn finish(&mut self) -> Result<(), ArrowError> {
         if self.finished {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::IpcError(
                 "Cannot write footer to file writer as it is closed".to_string(),
             ));
         }
@@ -708,6 +806,8 @@ impl<W: Write> FileWriter<W> {
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
         let record_batches = fbb.create_vector(&self.record_blocks);
         let schema = crate::convert::schema_to_fb_offset(&mut fbb, &self.schema);
+        let fb_custom_metadata = (!self.custom_metadata.is_empty())
+            .then(|| crate::convert::metadata_to_fb(&mut fbb, &self.custom_metadata));
 
         let root = {
             let mut footer_builder = crate::FooterBuilder::new(&mut fbb);
@@ -715,6 +815,9 @@ impl<W: Write> FileWriter<W> {
             footer_builder.add_schema(schema);
             footer_builder.add_dictionaries(dictionaries);
             footer_builder.add_recordBatches(record_batches);
+            if let Some(fb_custom_metadata) = fb_custom_metadata {
+                footer_builder.add_custom_metadata(fb_custom_metadata);
+            }
             footer_builder.finish()
         };
         fbb.finish(root, None);
@@ -729,6 +832,18 @@ impl<W: Write> FileWriter<W> {
         Ok(())
     }
 
+    /// Gets a reference to the underlying writer.
+    pub fn get_ref(&self) -> &W {
+        self.writer.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying writer.
+    ///
+    /// It is inadvisable to directly write to the underlying writer.
+    pub fn get_mut(&mut self) -> &mut W {
+        self.writer.get_mut()
+    }
+
     /// Unwraps the BufWriter housed in FileWriter.writer, returning the underlying
     /// writer
     ///
@@ -739,6 +854,16 @@ impl<W: Write> FileWriter<W> {
             self.finish()?;
         }
         self.writer.into_inner().map_err(ArrowError::from)
+    }
+}
+
+impl<W: Write> RecordBatchWriter for FileWriter<W> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        self.write(batch)
+    }
+
+    fn close(mut self) -> Result<(), ArrowError> {
+        self.finish()
     }
 }
 
@@ -784,7 +909,7 @@ impl<W: Write> StreamWriter<W> {
     /// Write a record batch to the stream
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         if self.finished {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::IpcError(
                 "Cannot write record batch to stream writer as it is closed".to_string(),
             ));
         }
@@ -805,7 +930,7 @@ impl<W: Write> StreamWriter<W> {
     /// Write continuation bytes, and mark the stream as done
     pub fn finish(&mut self) -> Result<(), ArrowError> {
         if self.finished {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::IpcError(
                 "Cannot write footer to stream writer as it is closed".to_string(),
             ));
         }
@@ -815,6 +940,18 @@ impl<W: Write> StreamWriter<W> {
         self.finished = true;
 
         Ok(())
+    }
+
+    /// Gets a reference to the underlying writer.
+    pub fn get_ref(&self) -> &W {
+        self.writer.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying writer.
+    ///
+    /// It is inadvisable to directly write to the underlying writer.
+    pub fn get_mut(&mut self) -> &mut W {
+        self.writer.get_mut()
     }
 
     /// Unwraps the BufWriter housed in StreamWriter.writer, returning the underlying
@@ -847,7 +984,7 @@ impl<W: Write> StreamWriter<W> {
     ///     255, 255, 255, 255,   0,   0,   0,   0
     /// ];
     ///
-    /// let schema = Schema::new(vec![]);
+    /// let schema = Schema::empty();
     /// let buffer: Vec<u8> = Vec::new();
     /// let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
     /// let stream_writer = StreamWriter::try_new_with_options(buffer, &schema, options)?;
@@ -861,6 +998,16 @@ impl<W: Write> StreamWriter<W> {
             self.finish()?;
         }
         self.writer.into_inner().map_err(ArrowError::from)
+    }
+}
+
+impl<W: Write> RecordBatchWriter for StreamWriter<W> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        self.write(batch)
+    }
+
+    fn close(mut self) -> Result<(), ArrowError> {
+        self.finish()
     }
 }
 
@@ -962,7 +1109,7 @@ fn write_continuation<W: Write>(
             writer.write_all(&CONTINUATION_MARKER)?;
             writer.write_all(&total_len.to_le_bytes()[..])?;
         }
-        z => panic!("Unsupported crate::MetadataVersion {:?}", z),
+        z => panic!("Unsupported crate::MetadataVersion {z:?}"),
     };
 
     writer.flush()?;
@@ -972,11 +1119,15 @@ fn write_continuation<W: Write>(
 
 /// In V4, null types have no validity bitmap
 /// In V5 and later, null and union types have no validity bitmap
+/// Run end encoded type has no validity bitmap.
 fn has_validity_bitmap(data_type: &DataType, write_options: &IpcWriteOptions) -> bool {
     if write_options.metadata_version < crate::MetadataVersion::V5 {
         !matches!(data_type, DataType::Null)
     } else {
-        !matches!(data_type, DataType::Null | DataType::Union(_, _, _))
+        !matches!(
+            data_type,
+            DataType::Null | DataType::Union(_, _) | DataType::RunEndEncoded(_, _)
+        )
     }
 }
 
@@ -995,99 +1146,38 @@ fn buffer_need_truncate(
 #[inline]
 fn get_buffer_element_width(spec: &BufferSpec) -> usize {
     match spec {
-        BufferSpec::FixedWidth { byte_width } => *byte_width,
+        BufferSpec::FixedWidth { byte_width, .. } => *byte_width,
         _ => 0,
     }
 }
 
-/// Returns byte width for binary value_offset buffer spec.
-#[inline]
-fn get_value_offset_byte_width(data_type: &DataType) -> usize {
-    match data_type {
-        DataType::Binary | DataType::Utf8 => 4,
-        DataType::LargeBinary | DataType::LargeUtf8 => 8,
-        _ => unreachable!(),
+/// Returns the values and offsets [`Buffer`] for a ByteArray with offset type `O`
+///
+/// In particular, this handles re-encoding the offsets if they don't start at `0`,
+/// slicing the values buffer as appropriate. This helps reduce the encoded
+/// size of sliced arrays, as values that have been sliced away are not encoded
+fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
+    if data.is_empty() {
+        return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
     }
-}
 
-/// Returns the number of total bytes in base binary arrays.
-fn get_binary_buffer_len(array_data: &ArrayData) -> usize {
-    if array_data.is_empty() {
-        return 0;
-    }
-    match array_data.data_type() {
-        DataType::Binary => {
-            let array: BinaryArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-            (offsets[array_data.len()] - offsets[0]) as usize
-        }
-        DataType::LargeBinary => {
-            let array: LargeBinaryArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-            (offsets[array_data.len()] - offsets[0]) as usize
-        }
-        DataType::Utf8 => {
-            let array: StringArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-            (offsets[array_data.len()] - offsets[0]) as usize
-        }
-        DataType::LargeUtf8 => {
-            let array: LargeStringArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-            (offsets[array_data.len()] - offsets[0]) as usize
-        }
-        _ => unreachable!(),
-    }
-}
+    let buffers = data.buffers();
+    let offsets: &[O] = buffers[0].typed_data::<O>();
+    let offset_slice = &offsets[data.offset()..data.offset() + data.len() + 1];
 
-/// Rebase value offsets for given ArrayData to zero-based.
-fn get_zero_based_value_offsets<OffsetSize: OffsetSizeTrait>(
-    array_data: &ArrayData,
-) -> Buffer {
-    match array_data.data_type() {
-        DataType::Binary | DataType::LargeBinary => {
-            let array: GenericBinaryArray<OffsetSize> = array_data.clone().into();
-            let offsets = array.value_offsets();
-            let start_offset = offsets[0];
+    let start_offset = offset_slice.first().unwrap();
+    let end_offset = offset_slice.last().unwrap();
 
-            let mut builder = BufferBuilder::<OffsetSize>::new(array_data.len() + 1);
-            for x in offsets {
-                builder.append(*x - start_offset);
-            }
+    let offsets = match start_offset.as_usize() {
+        0 => buffers[0].clone(),
+        _ => offset_slice.iter().map(|x| *x - *start_offset).collect(),
+    };
 
-            builder.finish()
-        }
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let array: GenericStringArray<OffsetSize> = array_data.clone().into();
-            let offsets = array.value_offsets();
-            let start_offset = offsets[0];
-
-            let mut builder = BufferBuilder::<OffsetSize>::new(array_data.len() + 1);
-            for x in offsets {
-                builder.append(*x - start_offset);
-            }
-
-            builder.finish()
-        }
-        _ => unreachable!(),
-    }
-}
-
-/// Returns the start offset of base binary array.
-fn get_buffer_offset<OffsetSize: OffsetSizeTrait>(array_data: &ArrayData) -> OffsetSize {
-    match array_data.data_type() {
-        DataType::Binary | DataType::LargeBinary => {
-            let array: GenericBinaryArray<OffsetSize> = array_data.clone().into();
-            let offsets = array.value_offsets();
-            offsets[0]
-        }
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let array: GenericStringArray<OffsetSize> = array_data.clone().into();
-            let offsets = array.value_offsets();
-            offsets[0]
-        }
-        _ => unreachable!(),
-    }
+    let values = buffers[1].slice_with_length(
+        start_offset.as_usize(),
+        end_offset.as_usize() - start_offset.as_usize(),
+    );
+    (offsets, values)
 }
 
 /// Write array data to a vector of bytes
@@ -1113,7 +1203,7 @@ fn write_array_data(
     }
     if has_validity_bitmap(array_data.data_type(), write_options) {
         // write null buffer if exists
-        let null_buffer = match array_data.null_buffer() {
+        let null_buffer = match array_data.nulls() {
             None => {
                 // create a buffer and fill it with valid bits
                 let num_bytes = bit_util::ceil(num_rows, 8);
@@ -1121,7 +1211,7 @@ fn write_array_data(
                 let buffer = buffer.with_bitset(num_bytes, true);
                 buffer.into()
             }
-            Some(buffer) => buffer.bit_slice(array_data.offset(), array_data.len()),
+            Some(buffer) => buffer.inner().sliced(),
         };
 
         offset = write_buffer(
@@ -1134,65 +1224,27 @@ fn write_array_data(
     }
 
     let data_type = array_data.data_type();
-    if matches!(
-        data_type,
-        DataType::Binary | DataType::LargeBinary | DataType::Utf8 | DataType::LargeUtf8
-    ) {
-        let offset_buffer = &array_data.buffers()[0];
-        let value_offset_byte_width = get_value_offset_byte_width(data_type);
-        let min_length = (array_data.len() + 1) * value_offset_byte_width;
-        if buffer_need_truncate(
-            array_data.offset(),
-            offset_buffer,
-            &BufferSpec::FixedWidth {
-                byte_width: value_offset_byte_width,
-            },
-            min_length,
-        ) {
-            // Rebase offsets and truncate values
-            let (new_offsets, byte_offset) =
-                if matches!(data_type, DataType::Binary | DataType::Utf8) {
-                    (
-                        get_zero_based_value_offsets::<i32>(array_data),
-                        get_buffer_offset::<i32>(array_data) as usize,
-                    )
-                } else {
-                    (
-                        get_zero_based_value_offsets::<i64>(array_data),
-                        get_buffer_offset::<i64>(array_data) as usize,
-                    )
-                };
-
+    if matches!(data_type, DataType::Binary | DataType::Utf8) {
+        let (offsets, values) = get_byte_array_buffers::<i32>(array_data);
+        for buffer in [offsets, values] {
             offset = write_buffer(
-                new_offsets.as_slice(),
+                buffer.as_slice(),
                 buffers,
                 arrow_data,
                 offset,
                 compression_codec,
             )?;
-
-            let total_bytes = get_binary_buffer_len(array_data);
-            let value_buffer = &array_data.buffers()[1];
-            let buffer_length = min(total_bytes, value_buffer.len() - byte_offset);
-            let buffer_slice =
-                &value_buffer.as_slice()[byte_offset..(byte_offset + buffer_length)];
+        }
+    } else if matches!(data_type, DataType::LargeBinary | DataType::LargeUtf8) {
+        let (offsets, values) = get_byte_array_buffers::<i64>(array_data);
+        for buffer in [offsets, values] {
             offset = write_buffer(
-                buffer_slice,
+                buffer.as_slice(),
                 buffers,
                 arrow_data,
                 offset,
                 compression_codec,
             )?;
-        } else {
-            for buffer in array_data.buffers() {
-                offset = write_buffer(
-                    buffer.as_slice(),
-                    buffers,
-                    arrow_data,
-                    offset,
-                    compression_codec,
-                )?;
-            }
         }
     } else if DataType::is_numeric(data_type)
         || DataType::is_temporal(data_type)
@@ -1246,24 +1298,45 @@ fn write_array_data(
         }
     }
 
-    if !matches!(array_data.data_type(), DataType::Dictionary(_, _)) {
-        // recursively write out nested structures
-        for data_ref in array_data.child_data() {
-            // write the nested data (e.g list data)
-            offset = write_array_data(
-                data_ref,
-                buffers,
-                arrow_data,
-                nodes,
-                offset,
-                data_ref.len(),
-                data_ref.null_count(),
-                compression_codec,
-                write_options,
-            )?;
+    match array_data.data_type() {
+        DataType::Dictionary(_, _) => {}
+        DataType::RunEndEncoded(_, _) => {
+            // unslice the run encoded array.
+            let arr = unslice_run_array(array_data.clone())?;
+            // recursively write out nested structures
+            for data_ref in arr.child_data() {
+                // write the nested data (e.g list data)
+                offset = write_array_data(
+                    data_ref,
+                    buffers,
+                    arrow_data,
+                    nodes,
+                    offset,
+                    data_ref.len(),
+                    data_ref.null_count(),
+                    compression_codec,
+                    write_options,
+                )?;
+            }
+        }
+        _ => {
+            // recursively write out nested structures
+            for data_ref in array_data.child_data() {
+                // write the nested data (e.g list data)
+                offset = write_array_data(
+                    data_ref,
+                    buffers,
+                    arrow_data,
+                    nodes,
+                    offset,
+                    data_ref.len(),
+                    data_ref.null_count(),
+                    compression_codec,
+                    write_options,
+                )?;
+            }
         }
     }
-
     Ok(offset)
 }
 
@@ -1296,8 +1369,7 @@ fn write_buffer(
     .try_into()
     .map_err(|e| {
         ArrowError::InvalidArgumentError(format!(
-            "Could not convert compressed size to i64: {}",
-            e
+            "Could not convert compressed size to i64: {e}"
         ))
     })?;
 
@@ -1318,18 +1390,19 @@ fn pad_to_8(len: u32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::io::Cursor;
     use std::io::Seek;
     use std::sync::Arc;
 
-    use crate::MetadataVersion;
-
-    use crate::reader::*;
     use arrow_array::builder::UnionBuilder;
+    use arrow_array::builder::{ListBuilder, PrimitiveRunBuilder, UInt32Builder};
     use arrow_array::types::*;
     use arrow_schema::DataType;
+
+    use crate::reader::*;
+    use crate::MetadataVersion;
+
+    use super::*;
 
     #[test]
     #[cfg(feature = "lz4")]
@@ -1639,8 +1712,13 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
-        let dctfield =
-            Field::new_dict("dict", array.data_type().clone(), false, 2, false);
+        let dctfield = Arc::new(Field::new_dict(
+            "dict",
+            array.data_type().clone(),
+            false,
+            2,
+            false,
+        ));
 
         let s = StructArray::from(vec![(dctfield, array)]);
         let struct_array = Arc::new(s) as ArrayRef;
@@ -1663,17 +1741,14 @@ mod tests {
     }
 
     fn write_union_file(options: IpcWriteOptions) {
-        let schema = Schema::new(vec![Field::new(
+        let schema = Schema::new(vec![Field::new_union(
             "union",
-            DataType::Union(
-                vec![
-                    Field::new("a", DataType::Int32, false),
-                    Field::new("c", DataType::Float64, false),
-                ],
-                vec![0, 1],
-                UnionMode::Sparse,
-            ),
-            true,
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("c", DataType::Float64, false),
+            ],
+            UnionMode::Sparse,
         )]);
         let mut builder = UnionBuilder::with_capacity_sparse(5);
         builder.append::<Int32Type>("a", 1).unwrap();
@@ -1815,7 +1890,7 @@ mod tests {
             let keys: Int32Array =
                 [Some(0), Some(2), None, Some(1)].into_iter().collect();
 
-            let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+            let array = DictionaryArray::new(keys, Arc::new(values));
 
             let schema =
                 Schema::new(vec![Field::new("dict", array.data_type().clone(), true)]);
@@ -1846,11 +1921,11 @@ mod tests {
 
             let struct_array = StructArray::from(vec![
                 (
-                    Field::new("s", DataType::Utf8, true),
+                    Arc::new(Field::new("s", DataType::Utf8, true)),
                     Arc::new(strings) as ArrayRef,
                 ),
                 (
-                    Field::new("c", DataType::Int32, true),
+                    Arc::new(Field::new("c", DataType::Int32, true)),
                     Arc::new(ints) as ArrayRef,
                 ),
             ]);
@@ -1909,15 +1984,11 @@ mod tests {
         );
 
         let sliced = array.slice(1, 2);
-        let read_sliced: &UInt32Array = as_primitive_array(&sliced);
-        assert_eq!(
-            vec![Some(2), Some(3)],
-            read_sliced.iter().collect::<Vec<_>>()
-        );
+        assert_eq!(vec![Some(2), Some(3)], sliced.iter().collect::<Vec<_>>());
 
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, true)])),
-            vec![sliced],
+            vec![Arc::new(sliced)],
         )
         .expect("new batch");
 
@@ -1929,7 +2000,7 @@ mod tests {
         let mut reader = StreamReader::try_new(&outbuf[..], None).expect("new reader");
         let read_batch = reader.next().unwrap().expect("read batch");
 
-        let read_array: &UInt32Array = as_primitive_array(read_batch.column(0));
+        let read_array: &UInt32Array = read_batch.column(0).as_primitive();
         assert_eq!(
             vec![Some(2), Some(3)],
             read_array.iter().collect::<Vec<_>>()
@@ -1994,6 +2065,99 @@ mod tests {
         let data = writer.into_inner().unwrap();
 
         let mut reader = StreamReader::try_new(Cursor::new(data), None).unwrap();
+        let batch2 = reader.next().unwrap().unwrap();
+        assert_eq!(batch, batch2);
+    }
+
+    #[test]
+    fn test_run_array_unslice() {
+        let total_len = 80;
+        let vals: Vec<Option<i32>> =
+            vec![Some(1), None, Some(2), Some(3), Some(4), None, Some(5)];
+        let repeats: Vec<usize> = vec![3, 4, 1, 2];
+        let mut input_array: Vec<Option<i32>> = Vec::with_capacity(total_len);
+        for ix in 0_usize..32 {
+            let repeat: usize = repeats[ix % repeats.len()];
+            let val: Option<i32> = vals[ix % vals.len()];
+            input_array.resize(input_array.len() + repeat, val);
+        }
+
+        // Encode the input_array to run array
+        let mut builder =
+            PrimitiveRunBuilder::<Int16Type, Int32Type>::with_capacity(input_array.len());
+        builder.extend(input_array.iter().copied());
+        let run_array = builder.finish();
+
+        // test for all slice lengths.
+        for slice_len in 1..=total_len {
+            // test for offset = 0, slice length = slice_len
+            let sliced_run_array: RunArray<Int16Type> =
+                run_array.slice(0, slice_len).into_data().into();
+
+            // Create unsliced run array.
+            let unsliced_run_array =
+                into_zero_offset_run_array(sliced_run_array).unwrap();
+            let typed = unsliced_run_array
+                .downcast::<PrimitiveArray<Int32Type>>()
+                .unwrap();
+            let expected: Vec<Option<i32>> =
+                input_array.iter().take(slice_len).copied().collect();
+            let actual: Vec<Option<i32>> = typed.into_iter().collect();
+            assert_eq!(expected, actual);
+
+            // test for offset = total_len - slice_len, length = slice_len
+            let sliced_run_array: RunArray<Int16Type> = run_array
+                .slice(total_len - slice_len, slice_len)
+                .into_data()
+                .into();
+
+            // Create unsliced run array.
+            let unsliced_run_array =
+                into_zero_offset_run_array(sliced_run_array).unwrap();
+            let typed = unsliced_run_array
+                .downcast::<PrimitiveArray<Int32Type>>()
+                .unwrap();
+            let expected: Vec<Option<i32>> = input_array
+                .iter()
+                .skip(total_len - slice_len)
+                .copied()
+                .collect();
+            let actual: Vec<Option<i32>> = typed.into_iter().collect();
+            assert_eq!(expected, actual);
+        }
+    }
+
+    #[test]
+    fn encode_lists() {
+        let val_inner = Field::new("item", DataType::UInt32, true);
+        let val_list_field = Field::new_list("val", val_inner, false);
+
+        let schema = Arc::new(Schema::new(vec![val_list_field]));
+
+        let values = {
+            let u32 = UInt32Builder::new();
+            let mut ls = ListBuilder::new(u32);
+
+            for list in [vec![1u32, 2, 3], vec![4, 5, 6], vec![7, 8, 9, 10]] {
+                for value in list {
+                    ls.values().append_value(value);
+                }
+                ls.append(true)
+            }
+
+            ls.finish()
+        };
+
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)]).unwrap();
+        let batch = batch.slice(1, 1);
+
+        let mut writer = FileWriter::try_new(Vec::<u8>::new(), &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        let data = writer.into_inner().unwrap();
+
+        let mut reader = FileReader::try_new(Cursor::new(data), None).unwrap();
         let batch2 = reader.next().unwrap().unwrap();
         assert_eq!(batch, batch2);
     }

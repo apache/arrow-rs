@@ -21,15 +21,16 @@
 use std::sync::Arc;
 
 use arrow::array::new_empty_array;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
-use arrow::array::{Array, ArrayData, ArrayRef, Int64Array, make_array};
+use arrow::array::{make_array, Array, ArrayData, ArrayRef, Int64Array};
 use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
 use arrow::ffi_stream::ArrowArrayStreamReader;
-use arrow::pyarrow::{PyArrowConvert, PyArrowException, PyArrowType};
+use arrow::pyarrow::{FromPyArrow, PyArrowException, PyArrowType, ToPyArrow};
 use arrow::record_batch::RecordBatch;
 
 fn to_py_err(err: ArrowError) -> PyErr {
@@ -49,10 +50,10 @@ fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
         .ok_or_else(|| ArrowError::ParseError("Expects an int64".to_string()))
         .map_err(to_py_err)?;
 
-    let array = kernels::arithmetic::add(array, array).map_err(to_py_err)?;
+    let array = kernels::numeric::add(array, array).map_err(to_py_err)?;
 
     // export
-    array.data().to_pyarrow(py)
+    array.to_data().to_pyarrow(py)
 }
 
 /// calls a lambda function that receives and returns an array
@@ -64,7 +65,7 @@ fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
     let expected = Arc::new(Int64Array::from(vec![Some(2), None, Some(6)])) as ArrayRef;
 
     // to py
-    let pyarray = array.data().to_pyarrow(py)?;
+    let pyarray = array.to_data().to_pyarrow(py)?;
     let pyarray = lambda.call1((pyarray,))?;
     let array = make_array(ArrayData::from_pyarrow(pyarray)?);
 
@@ -75,7 +76,7 @@ fn double_py(lambda: &PyAny, py: Python) -> PyResult<bool> {
 fn make_empty_array(datatype: PyArrowType<DataType>, py: Python) -> PyResult<PyObject> {
     let array = new_empty_array(&datatype.0);
 
-    array.data().to_pyarrow(py)
+    array.to_data().to_pyarrow(py)
 }
 
 /// Returns the substring
@@ -88,9 +89,10 @@ fn substring(
     let array = make_array(array.0);
 
     // substring
-    let array = kernels::substring::substring(array.as_ref(), start, None).map_err(to_py_err)?;
+    let array =
+        kernels::substring::substring(array.as_ref(), start, None).map_err(to_py_err)?;
 
-    Ok(array.data().to_owned().into())
+    Ok(array.to_data().into())
 }
 
 /// Returns the concatenate
@@ -99,9 +101,10 @@ fn concatenate(array: PyArrowType<ArrayData>, py: Python) -> PyResult<PyObject> 
     let array = make_array(array.0);
 
     // concat
-    let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).map_err(to_py_err)?;
+    let array =
+        kernels::concat::concat(&[array.as_ref(), array.as_ref()]).map_err(to_py_err)?;
 
-    array.data().to_pyarrow(py)
+    array.to_data().to_pyarrow(py)
 }
 
 #[pyfunction]
@@ -138,6 +141,17 @@ fn round_trip_record_batch_reader(
     Ok(obj)
 }
 
+#[pyfunction]
+fn reader_return_errors(obj: PyArrowType<ArrowArrayStreamReader>) -> PyResult<()> {
+    // This makes sure we can correctly consume a RBR and return the error,
+    // ensuring the error can live beyond the lifetime of the RBR.
+    let batches = obj.0.collect::<Result<Vec<RecordBatch>, ArrowError>>();
+    match batches {
+        Ok(_) => Ok(()),
+        Err(err) => Err(PyValueError::new_err(err.to_string())),
+    }
+}
+
 #[pymodule]
 fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(double))?;
@@ -151,5 +165,6 @@ fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> 
     m.add_wrapped(wrap_pyfunction!(round_trip_array))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_record_batch))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_record_batch_reader))?;
+    m.add_wrapped(wrap_pyfunction!(reader_return_errors))?;
     Ok(())
 }

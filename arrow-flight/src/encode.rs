@@ -17,14 +17,14 @@
 
 use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
-use crate::{error::Result, FlightData, SchemaAsIpc};
-use arrow_array::{ArrayRef, RecordBatch};
+use crate::{error::Result, FlightData, FlightDescriptor, SchemaAsIpc};
+use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{ready, stream::BoxStream, Stream, StreamExt};
 
-/// Creates a [`Stream`](futures::Stream) of [`FlightData`]s from a
+/// Creates a [`Stream`] of [`FlightData`]s from a
 /// `Stream` of [`Result`]<[`RecordBatch`], [`FlightError`]>.
 ///
 /// This can be used to implement [`FlightService::do_get`] in an
@@ -70,6 +70,10 @@ pub struct FlightDataEncoderBuilder {
     options: IpcWriteOptions,
     /// Metadata to add to the schema message
     app_metadata: Bytes,
+    /// Optional schema, if known before data.
+    schema: Option<SchemaRef>,
+    /// Optional flight descriptor, if known before data.
+    descriptor: Option<FlightDescriptor>,
 }
 
 /// Default target size for encoded [`FlightData`].
@@ -84,6 +88,8 @@ impl Default for FlightDataEncoderBuilder {
             max_flight_data_size: GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES,
             options: IpcWriteOptions::default(),
             app_metadata: Bytes::new(),
+            schema: None,
+            descriptor: None,
         }
     }
 }
@@ -122,7 +128,25 @@ impl FlightDataEncoderBuilder {
         self
     }
 
-    /// Return a [`Stream`](futures::Stream) of [`FlightData`],
+    /// Specify a schema for the RecordBatches being sent. If a schema
+    /// is not specified, an encoded Schema message will be sent when
+    /// the first [`RecordBatch`], if any, is encoded. Some clients
+    /// expect a Schema message even if there is no data sent.
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    /// Specify a flight descriptor in the first FlightData message.
+    pub fn with_flight_descriptor(
+        mut self,
+        descriptor: Option<FlightDescriptor>,
+    ) -> Self {
+        self.descriptor = descriptor;
+        self
+    }
+
+    /// Return a [`Stream`] of [`FlightData`],
     /// consuming self. More details on [`FlightDataEncoder`]
     pub fn build<S>(self, input: S) -> FlightDataEncoder
     where
@@ -132,9 +156,18 @@ impl FlightDataEncoderBuilder {
             max_flight_data_size,
             options,
             app_metadata,
+            schema,
+            descriptor,
         } = self;
 
-        FlightDataEncoder::new(input.boxed(), max_flight_data_size, options, app_metadata)
+        FlightDataEncoder::new(
+            input.boxed(),
+            schema,
+            max_flight_data_size,
+            options,
+            app_metadata,
+            descriptor,
+        )
     }
 }
 
@@ -157,16 +190,20 @@ pub struct FlightDataEncoder {
     queue: VecDeque<FlightData>,
     /// Is this stream done (inner is empty or errored)
     done: bool,
+    /// cleared after the first FlightData message is sent
+    descriptor: Option<FlightDescriptor>,
 }
 
 impl FlightDataEncoder {
     fn new(
         inner: BoxStream<'static, Result<RecordBatch>>,
+        schema: Option<SchemaRef>,
         max_flight_data_size: usize,
         options: IpcWriteOptions,
         app_metadata: Bytes,
+        descriptor: Option<FlightDescriptor>,
     ) -> Self {
-        Self {
+        let mut encoder = Self {
             inner,
             schema: None,
             max_flight_data_size,
@@ -174,11 +211,22 @@ impl FlightDataEncoder {
             app_metadata: Some(app_metadata),
             queue: VecDeque::new(),
             done: false,
+            descriptor,
+        };
+
+        // If schema is known up front, enqueue it immediately
+        if let Some(schema) = schema {
+            encoder.encode_schema(&schema);
         }
+
+        encoder
     }
 
     /// Place the `FlightData` in the queue to send
-    fn queue_message(&mut self, data: FlightData) {
+    fn queue_message(&mut self, mut data: FlightData) {
+        if let Some(descriptor) = self.descriptor.take() {
+            data.flight_descriptor = Some(descriptor);
+        }
         self.queue.push_back(data);
     }
 
@@ -189,26 +237,30 @@ impl FlightDataEncoder {
         }
     }
 
+    /// Encodes schema as a [`FlightData`] in self.queue.
+    /// Updates `self.schema` and returns the new schema
+    fn encode_schema(&mut self, schema: &SchemaRef) -> SchemaRef {
+        // The first message is the schema message, and all
+        // batches have the same schema
+        let schema = Arc::new(prepare_schema_for_flight(schema));
+        let mut schema_flight_data = self.encoder.encode_schema(&schema);
+
+        // attach any metadata requested
+        if let Some(app_metadata) = self.app_metadata.take() {
+            schema_flight_data.app_metadata = app_metadata;
+        }
+        self.queue_message(schema_flight_data);
+        // remember schema
+        self.schema = Some(schema.clone());
+        schema
+    }
+
     /// Encodes batch into one or more `FlightData` messages in self.queue
     fn encode_batch(&mut self, batch: RecordBatch) -> Result<()> {
         let schema = match &self.schema {
             Some(schema) => schema.clone(),
-            None => {
-                let batch_schema = batch.schema();
-                // The first message is the schema message, and all
-                // batches have the same schema
-                let schema = Arc::new(prepare_schema_for_flight(&batch_schema));
-                let mut schema_flight_data = self.encoder.encode_schema(&schema);
-
-                // attach any metadata requested
-                if let Some(app_metadata) = self.app_metadata.take() {
-                    schema_flight_data.app_metadata = app_metadata;
-                }
-                self.queue_message(schema_flight_data);
-                // remember schema
-                self.schema = Some(schema.clone());
-                schema
-            }
+            // encode the schema if this is the first time we have seen it
+            None => self.encode_schema(&batch.schema()),
         };
 
         // encode the batch
@@ -279,7 +331,7 @@ impl Stream for FlightDataEncoder {
 ///
 /// See hydrate_dictionary for more information
 fn prepare_schema_for_flight(schema: &Schema) -> Schema {
-    let fields = schema
+    let fields: Fields = schema
         .fields()
         .iter()
         .map(|field| match field.data_type() {
@@ -289,11 +341,11 @@ fn prepare_schema_for_flight(schema: &Schema) -> Schema {
                 field.is_nullable(),
             )
             .with_metadata(field.metadata().clone()),
-            _ => field.clone(),
+            _ => field.as_ref().clone(),
         })
         .collect();
 
-    Schema::new(fields)
+    Schema::new(fields).with_metadata(schema.metadata().clone())
 }
 
 /// Split [`RecordBatch`] so it hopefully fits into a gRPC response.
@@ -392,8 +444,11 @@ fn prepare_batch_for_flight(
         .iter()
         .map(hydrate_dictionary)
         .collect::<Result<Vec<_>>>()?;
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
 
-    Ok(RecordBatch::try_new(schema, columns)?)
+    Ok(RecordBatch::try_new_with_options(
+        schema, columns, &options,
+    )?)
 }
 
 /// Hydrates a dictionary to its underlying type
@@ -420,14 +475,10 @@ fn hydrate_dictionary(array: &ArrayRef) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::{
-        array::{UInt32Array, UInt8Array},
-        compute::concat_batches,
-        datatypes::Int32Type,
-    };
-    use arrow_array::{
-        DictionaryArray, Int16Array, Int32Array, Int64Array, StringArray, UInt64Array,
-    };
+    use arrow_array::types::*;
+    use arrow_array::*;
+    use arrow_cast::pretty::pretty_format_batches;
+    use std::collections::HashMap;
 
     use super::*;
 
@@ -435,7 +486,7 @@ mod tests {
     /// ensure only the batch's used data (not the allocated data) is sent
     /// <https://github.com/apache/arrow-rs/issues/208>
     fn test_encode_flight_data() {
-        let options = arrow::ipc::writer::IpcWriteOptions::default();
+        let options = IpcWriteOptions::default();
         let c1 = UInt32Array::from(vec![1, 2, 3, 4, 5, 6]);
 
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c1) as ArrayRef)])
@@ -467,6 +518,29 @@ mod tests {
             baseline_flight_batch.data_body.len()
                 > optimized_small_flight_batch.data_body.len()
         );
+    }
+
+    #[test]
+    fn test_schema_metadata_encoded() {
+        let schema =
+            Schema::new(vec![Field::new("data", DataType::Int32, false)]).with_metadata(
+                HashMap::from([("some_key".to_owned(), "some_value".to_owned())]),
+            );
+
+        let got = prepare_schema_for_flight(&schema);
+        assert!(got.metadata().contains_key("some_key"));
+    }
+
+    #[test]
+    fn test_encode_no_column_batch() {
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(10)),
+        )
+        .expect("cannot create record batch");
+
+        prepare_batch_for_flight(&batch, batch.schema()).expect("failed to optimize");
     }
 
     pub fn make_flight_data(
@@ -512,7 +586,9 @@ mod tests {
             split.iter().map(|batch| batch.num_rows()).sum::<usize>(),
             n_rows
         );
-        assert_eq!(concat_batches(&batch.schema(), &split).unwrap(), batch);
+        let a = pretty_format_batches(&split).unwrap().to_string();
+        let b = pretty_format_batches(&[batch]).unwrap().to_string();
+        assert_eq!(a, b);
     }
 
     #[test]
@@ -665,7 +741,7 @@ mod tests {
         // large dictionary (1024 distinct values) that are used throughout the array
         let values = StringArray::from_iter_values((0..1024).map(|i| "******".repeat(i)));
         let keys = Int32Array::from_iter_values((0..3000).map(|i| (3000 - i) % 1024));
-        let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+        let array = DictionaryArray::new(keys, Arc::new(values));
 
         let batch =
             RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();

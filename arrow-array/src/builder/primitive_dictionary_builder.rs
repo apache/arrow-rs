@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::builder::{ArrayBuilder, PrimitiveBuilder};
+use crate::types::ArrowDictionaryKeyType;
 use crate::{Array, ArrayRef, ArrowPrimitiveType, DictionaryArray};
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
@@ -44,9 +45,7 @@ impl<T: ToByteSlice> PartialEq for Value<T> {
 
 impl<T: ToByteSlice> Eq for Value<T> {}
 
-/// Array builder for `DictionaryArray`. For example to map a set of byte indices
-/// to f32 values. Note that the use of a `HashMap` here will not scale to very large
-/// arrays or result in an ordered dictionary.
+/// Builder for [`DictionaryArray`] of [`PrimitiveArray`](crate::array::PrimitiveArray)
 ///
 /// # Example:
 ///
@@ -86,7 +85,7 @@ where
 {
     keys_builder: PrimitiveBuilder<K>,
     values_builder: PrimitiveBuilder<V>,
-    map: HashMap<Value<V::Native>, K::Native>,
+    map: HashMap<Value<V::Native>, usize>,
 }
 
 impl<K, V> Default for PrimitiveDictionaryBuilder<K, V>
@@ -113,6 +112,50 @@ where
         }
     }
 
+    /// Creates a new `PrimitiveDictionaryBuilder` from the provided keys and values builders.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if `keys_builder` or `values_builder` is not empty.
+    pub fn new_from_empty_builders(
+        keys_builder: PrimitiveBuilder<K>,
+        values_builder: PrimitiveBuilder<V>,
+    ) -> Self {
+        assert!(
+            keys_builder.is_empty() && values_builder.is_empty(),
+            "keys and values builders must be empty"
+        );
+        Self {
+            keys_builder,
+            values_builder,
+            map: HashMap::new(),
+        }
+    }
+
+    /// Creates a new `PrimitiveDictionaryBuilder` from existing `PrimitiveBuilder`s of keys and values.
+    ///
+    /// # Safety
+    ///
+    /// caller must ensure that the passed in builders are valid for DictionaryArray.
+    pub unsafe fn new_from_builders(
+        keys_builder: PrimitiveBuilder<K>,
+        values_builder: PrimitiveBuilder<V>,
+    ) -> Self {
+        let keys = keys_builder.values_slice();
+        let values = values_builder.values_slice();
+        let mut map = HashMap::with_capacity(values.len());
+
+        keys.iter().zip(values.iter()).for_each(|(key, value)| {
+            map.insert(Value(*value), K::Native::to_usize(*key).unwrap());
+        });
+
+        Self {
+            keys_builder,
+            values_builder,
+            map,
+        }
+    }
+
     /// Creates a new `PrimitiveDictionaryBuilder` with the provided capacities
     ///
     /// `keys_capacity`: the number of keys, i.e. length of array to build
@@ -128,7 +171,7 @@ where
 
 impl<K, V> ArrayBuilder for PrimitiveDictionaryBuilder<K, V>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     V: ArrowPrimitiveType,
 {
     /// Returns the builder as an non-mutable `Any` reference.
@@ -151,11 +194,6 @@ where
         self.keys_builder.len()
     }
 
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.keys_builder.is_empty()
-    }
-
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
@@ -169,7 +207,7 @@ where
 
 impl<K, V> PrimitiveDictionaryBuilder<K, V>
 where
-    K: ArrowPrimitiveType,
+    K: ArrowDictionaryKeyType,
     V: ArrowPrimitiveType,
 {
     /// Append a primitive value to the array. Return an existing index
@@ -180,17 +218,27 @@ where
         let key = match self.map.entry(Value(value)) {
             Entry::Vacant(vacant) => {
                 // Append new value.
-                let key = K::Native::from_usize(self.values_builder.len())
-                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+                let key = self.values_builder.len();
                 self.values_builder.append_value(value);
                 vacant.insert(key);
-                key
+                K::Native::from_usize(key)
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?
             }
-            Entry::Occupied(o) => *o.get(),
+            Entry::Occupied(o) => K::Native::usize_as(*o.get()),
         };
 
         self.keys_builder.append_value(key);
         Ok(key)
+    }
+
+    /// Infallibly append a value to this builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    #[inline]
+    pub fn append_value(&mut self, value: V::Native) {
+        self.append(value).expect("dictionary key overflow");
     }
 
     /// Appends a null slot into the builder
@@ -199,14 +247,29 @@ where
         self.keys_builder.append_null()
     }
 
+    /// Append an `Option` value into the builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of the dictionary values array would exceed `T::Native::MAX`
+    #[inline]
+    pub fn append_option(&mut self, value: Option<V::Native>) {
+        match value {
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
+        };
+    }
+
     /// Builds the `DictionaryArray` and reset this builder.
     pub fn finish(&mut self) -> DictionaryArray<K> {
         self.map.clear();
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
-        let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+        let data_type = DataType::Dictionary(
+            Box::new(K::DATA_TYPE),
+            Box::new(values.data_type().clone()),
+        );
 
         let builder = keys
             .into_data()
@@ -233,6 +296,27 @@ where
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
+
+    /// Returns the current dictionary values buffer as a slice
+    pub fn values_slice(&self) -> &[V::Native] {
+        self.values_builder.values_slice()
+    }
+
+    /// Returns the current dictionary values buffer as a mutable slice
+    pub fn values_slice_mut(&mut self) -> &mut [V::Native] {
+        self.values_builder.values_slice_mut()
+    }
+}
+
+impl<K: ArrowDictionaryKeyType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
+    for PrimitiveDictionaryBuilder<K, P>
+{
+    #[inline]
+    fn extend<T: IntoIterator<Item = Option<P::Native>>>(&mut self, iter: T) {
+        for v in iter {
+            self.append_option(v)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -242,7 +326,8 @@ mod tests {
     use crate::array::Array;
     use crate::array::UInt32Array;
     use crate::array::UInt8Array;
-    use crate::types::{UInt32Type, UInt8Type};
+    use crate::builder::Decimal128Builder;
+    use crate::types::{Decimal128Type, Int32Type, UInt32Type, UInt8Type};
 
     #[test]
     fn test_primitive_dictionary_builder() {
@@ -271,6 +356,19 @@ mod tests {
     }
 
     #[test]
+    fn test_extend() {
+        let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 2, 3, 1, 2, 3, 1, 2, 3].into_iter().map(Some));
+        builder.extend([4, 5, 1, 3, 1].into_iter().map(Some));
+        let dict = builder.finish();
+        assert_eq!(
+            dict.keys().values(),
+            &[0, 1, 2, 0, 1, 2, 0, 1, 2, 3, 4, 0, 2, 0]
+        );
+        assert_eq!(dict.values().len(), 5);
+    }
+
+    #[test]
     #[should_panic(expected = "DictionaryKeyOverflowError")]
     fn test_primitive_dictionary_overflow() {
         let mut builder =
@@ -281,5 +379,26 @@ mod tests {
         }
         // Special error if the key overflows (256th entry)
         builder.append(1257).unwrap();
+    }
+
+    #[test]
+    fn test_primitive_dictionary_with_builders() {
+        let keys_builder = PrimitiveBuilder::<Int32Type>::new();
+        let values_builder =
+            Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int32Type, Decimal128Type>::new_from_empty_builders(
+                keys_builder,
+                values_builder,
+            );
+        let dict_array = builder.finish();
+        assert_eq!(dict_array.value_type(), DataType::Decimal128(1, 2));
+        assert_eq!(
+            dict_array.data_type(),
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Decimal128(1, 2)),
+            )
+        );
     }
 }

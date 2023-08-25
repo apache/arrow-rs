@@ -107,7 +107,8 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
             Self::Values { values } => Ok(values),
             Self::Dict { keys, values } => {
                 let mut spilled = OffsetBuffer::default();
-                let dict_buffers = values.data().buffers();
+                let data = values.to_data();
+                let dict_buffers = data.buffers();
                 let dict_offsets = dict_buffers[0].typed_data::<V>();
                 let dict_values = dict_buffers[1].as_slice();
 
@@ -151,8 +152,15 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                     let min = K::from_usize(0).unwrap();
                     let max = K::from_usize(values.len()).unwrap();
 
-                    // It may be possible to use SIMD here
-                    if keys.as_slice().iter().any(|x| *x < min || *x >= max) {
+                    // using copied and fold gets auto-vectorized since rust 1.70
+                    // all/any would allow early exit on invalid values
+                    // but in the happy case all values have to be checked anyway
+                    if !keys
+                        .as_slice()
+                        .iter()
+                        .copied()
+                        .fold(true, |a, x| a && x >= min && x < max)
+                    {
                         return Err(general_err!(
                             "dictionary key beyond bounds of dictionary: 0..{}",
                             values.len()
@@ -226,14 +234,14 @@ impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> BufferQueue
     type Output = Self;
     type Slice = Self;
 
-    fn split_off(&mut self, len: usize) -> Self::Output {
+    fn consume(&mut self) -> Self::Output {
         match self {
             Self::Dict { keys, values } => Self::Dict {
-                keys: keys.take(len),
+                keys: std::mem::take(keys),
                 values: values.clone(),
             },
             Self::Values { values } => Self::Values {
-                values: values.split_off(len),
+                values: values.consume(),
             },
         }
     }
@@ -274,20 +282,6 @@ mod tests {
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
         buffer.pad_nulls(0, values.len(), valid.len(), valid_buffer.as_slice());
 
-        // Split off some data
-
-        let split = buffer.split_off(4);
-        let null_buffer = Buffer::from_iter(valid.drain(0..4));
-        let array = split.into_array(Some(null_buffer), &dict_type).unwrap();
-        assert_eq!(array.data_type(), &dict_type);
-
-        let strings = cast(&array, &ArrowType::Utf8).unwrap();
-        let strings = strings.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(
-            strings.iter().collect::<Vec<_>>(),
-            vec![None, None, Some("world"), Some("hello")]
-        );
-
         // Read some data not preserving the dictionary
 
         let values = buffer.spill_values().unwrap();
@@ -299,8 +293,8 @@ mod tests {
         let null_buffer = Buffer::from_iter(valid.iter().cloned());
         buffer.pad_nulls(read_offset, 2, 5, null_buffer.as_slice());
 
-        assert_eq!(buffer.len(), 9);
-        let split = buffer.split_off(9);
+        assert_eq!(buffer.len(), 13);
+        let split = buffer.consume();
 
         let array = split.into_array(Some(null_buffer), &dict_type).unwrap();
         assert_eq!(array.data_type(), &dict_type);
@@ -310,6 +304,10 @@ mod tests {
         assert_eq!(
             strings.iter().collect::<Vec<_>>(),
             vec![
+                None,
+                None,
+                Some("world"),
+                Some("hello"),
                 None,
                 Some("a"),
                 Some(""),
@@ -331,7 +329,7 @@ mod tests {
             .unwrap()
             .extend_from_slice(&[0, 1, 0, 1]);
 
-        let array = buffer.split_off(4).into_array(None, &dict_type).unwrap();
+        let array = buffer.consume().into_array(None, &dict_type).unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
         let strings = cast(&array, &ArrowType::Utf8).unwrap();

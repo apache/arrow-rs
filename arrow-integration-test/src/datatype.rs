@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode};
+use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionMode};
 use arrow::error::{ArrowError, Result};
+use std::sync::Arc;
 
 /// Parse a data type from a JSON representation.
 pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
     use serde_json::Value;
-    let default_field = Field::new("", DataType::Boolean, true);
+    let default_field = Arc::new(Field::new("", DataType::Boolean, true));
     match *json {
         Value::Object(ref map) => match map.get("name") {
             Some(s) if s == "null" => Ok(DataType::Null),
@@ -89,7 +90,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                 };
                 let tz = match map.get("timezone") {
                     None => Ok(None),
-                    Some(serde_json::Value::String(tz)) => Ok(Some(tz.clone())),
+                    Some(Value::String(tz)) => Ok(Some(tz.as_str().into())),
                     _ => Err(ArrowError::ParseError(
                         "timezone must be a string".to_string(),
                     )),
@@ -152,7 +153,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             },
             Some(s) if s == "int" => match map.get("isSigned") {
                 Some(&Value::Bool(true)) => match map.get("bitWidth") {
-                    Some(&Value::Number(ref n)) => match n.as_u64() {
+                    Some(Value::Number(n)) => match n.as_u64() {
                         Some(8) => Ok(DataType::Int8),
                         Some(16) => Ok(DataType::Int16),
                         Some(32) => Ok(DataType::Int32),
@@ -166,7 +167,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                     )),
                 },
                 Some(&Value::Bool(false)) => match map.get("bitWidth") {
-                    Some(&Value::Number(ref n)) => match n.as_u64() {
+                    Some(Value::Number(n)) => match n.as_u64() {
                         Some(8) => Ok(DataType::UInt8),
                         Some(16) => Ok(DataType::UInt16),
                         Some(32) => Ok(DataType::UInt32),
@@ -185,17 +186,17 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             },
             Some(s) if s == "list" => {
                 // return a list with any type as its child isn't defined in the map
-                Ok(DataType::List(Box::new(default_field)))
+                Ok(DataType::List(default_field))
             }
             Some(s) if s == "largelist" => {
                 // return a largelist with any type as its child isn't defined in the map
-                Ok(DataType::LargeList(Box::new(default_field)))
+                Ok(DataType::LargeList(default_field))
             }
             Some(s) if s == "fixedsizelist" => {
                 // return a list with any type as its child isn't defined in the map
                 if let Some(Value::Number(size)) = map.get("listSize") {
                     Ok(DataType::FixedSizeList(
-                        Box::new(default_field),
+                        default_field,
                         size.as_i64().unwrap() as i32,
                     ))
                 } else {
@@ -206,12 +207,12 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             }
             Some(s) if s == "struct" => {
                 // return an empty `struct` type as its children aren't defined in the map
-                Ok(DataType::Struct(vec![]))
+                Ok(DataType::Struct(Fields::empty()))
             }
             Some(s) if s == "map" => {
                 if let Some(Value::Bool(keys_sorted)) = map.get("keysSorted") {
                     // Return a map with an empty type as its children aren't defined in the map
-                    Ok(DataType::Map(Box::new(default_field), *keys_sorted))
+                    Ok(DataType::Map(default_field, *keys_sorted))
                 } else {
                     Err(ArrowError::ParseError(
                         "Expecting a keysSorted for map".to_string(),
@@ -226,24 +227,17 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                         UnionMode::Dense
                     } else {
                         return Err(ArrowError::ParseError(format!(
-                            "Unknown union mode {:?} for union",
-                            mode
+                            "Unknown union mode {mode:?} for union"
                         )));
                     };
-                    if let Some(type_ids) = map.get("typeIds") {
-                        let type_ids = type_ids
-                            .as_array()
-                            .unwrap()
+                    if let Some(values) = map.get("typeIds") {
+                        let values = values.as_array().unwrap();
+                        let fields = values
                             .iter()
-                            .map(|t| t.as_i64().unwrap() as i8)
-                            .collect::<Vec<_>>();
+                            .map(|t| (t.as_i64().unwrap() as i8, default_field.clone()))
+                            .collect();
 
-                        let default_fields = type_ids
-                            .iter()
-                            .map(|_| default_field.clone())
-                            .collect::<Vec<_>>();
-
-                        Ok(DataType::Union(default_fields, type_ids, union_mode))
+                        Ok(DataType::Union(fields, union_mode))
                     } else {
                         Err(ArrowError::ParseError(
                             "Expecting a typeIds for union ".to_string(),
@@ -256,8 +250,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                 }
             }
             Some(other) => Err(ArrowError::ParseError(format!(
-                "invalid or unsupported type name: {} in {:?}",
-                other, json
+                "invalid or unsupported type name: {other} in {json:?}"
             ))),
             None => Err(ArrowError::ParseError("type name missing".to_string())),
         },
@@ -292,7 +285,7 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
             json!({"name": "fixedsizebinary", "byteWidth": byte_width})
         }
         DataType::Struct(_) => json!({"name": "struct"}),
-        DataType::Union(_, _, _) => json!({"name": "union"}),
+        DataType::Union(_, _) => json!({"name": "union"}),
         DataType::List(_) => json!({ "name": "list"}),
         DataType::LargeList(_) => json!({ "name": "largelist"}),
         DataType::FixedSizeList(_, length) => {
@@ -357,6 +350,7 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
         DataType::Map(_, keys_sorted) => {
             json!({"name": "map", "keysSorted": keys_sorted})
         }
+        DataType::RunEndEncoded(_, _) => todo!(),
     }
 }
 

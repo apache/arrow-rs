@@ -735,13 +735,13 @@ pub const ENUM_MIN_TYPE: u8 = 0;
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
-pub const ENUM_MAX_TYPE: u8 = 21;
+pub const ENUM_MAX_TYPE: u8 = 22;
 #[deprecated(
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_TYPE: [Type; 22] = [
+pub const ENUM_VALUES_TYPE: [Type; 23] = [
     Type::NONE,
     Type::Null,
     Type::Int,
@@ -764,6 +764,7 @@ pub const ENUM_VALUES_TYPE: [Type; 22] = [
     Type::LargeBinary,
     Type::LargeUtf8,
     Type::LargeList,
+    Type::RunEndEncoded,
 ];
 
 /// ----------------------------------------------------------------------
@@ -796,9 +797,10 @@ impl Type {
     pub const LargeBinary: Self = Self(19);
     pub const LargeUtf8: Self = Self(20);
     pub const LargeList: Self = Self(21);
+    pub const RunEndEncoded: Self = Self(22);
 
     pub const ENUM_MIN: u8 = 0;
-    pub const ENUM_MAX: u8 = 21;
+    pub const ENUM_MAX: u8 = 22;
     pub const ENUM_VALUES: &'static [Self] = &[
         Self::NONE,
         Self::Null,
@@ -822,6 +824,7 @@ impl Type {
         Self::LargeBinary,
         Self::LargeUtf8,
         Self::LargeList,
+        Self::RunEndEncoded,
     ];
     /// Returns the variant's name or "" if unknown.
     pub fn variant_name(self) -> Option<&'static str> {
@@ -848,6 +851,7 @@ impl Type {
             Self::LargeBinary => Some("LargeBinary"),
             Self::LargeUtf8 => Some("LargeUtf8"),
             Self::LargeList => Some("LargeList"),
+            Self::RunEndEncoded => Some("RunEndEncoded"),
             _ => None,
         }
     }
@@ -2646,6 +2650,90 @@ impl core::fmt::Debug for Bool<'_> {
         ds.finish()
     }
 }
+pub enum RunEndEncodedOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+/// Contains two child arrays, run_ends and values.
+/// The run_ends child array must be a 16/32/64-bit integer array
+/// which encodes the indices at which the run with the value in
+/// each corresponding index in the values child array ends.
+/// Like list/struct types, the value array can be of any type.
+pub struct RunEndEncoded<'a> {
+    pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for RunEndEncoded<'a> {
+    type Inner = RunEndEncoded<'a>;
+    #[inline]
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        Self {
+            _tab: flatbuffers::Table::new(buf, loc),
+        }
+    }
+}
+
+impl<'a> RunEndEncoded<'a> {
+    #[inline]
+    pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+        RunEndEncoded { _tab: table }
+    }
+    #[allow(unused_mut)]
+    pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
+        _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
+        _args: &'args RunEndEncodedArgs,
+    ) -> flatbuffers::WIPOffset<RunEndEncoded<'bldr>> {
+        let mut builder = RunEndEncodedBuilder::new(_fbb);
+        builder.finish()
+    }
+}
+
+impl flatbuffers::Verifiable for RunEndEncoded<'_> {
+    #[inline]
+    fn run_verifier(
+        v: &mut flatbuffers::Verifier,
+        pos: usize,
+    ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+        use flatbuffers::Verifiable;
+        v.visit_table(pos)?.finish();
+        Ok(())
+    }
+}
+pub struct RunEndEncodedArgs {}
+impl<'a> Default for RunEndEncodedArgs {
+    #[inline]
+    fn default() -> Self {
+        RunEndEncodedArgs {}
+    }
+}
+
+pub struct RunEndEncodedBuilder<'a: 'b, 'b> {
+    fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
+    start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b> RunEndEncodedBuilder<'a, 'b> {
+    #[inline]
+    pub fn new(
+        _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>,
+    ) -> RunEndEncodedBuilder<'a, 'b> {
+        let start = _fbb.start_table();
+        RunEndEncodedBuilder {
+            fbb_: _fbb,
+            start_: start,
+        }
+    }
+    #[inline]
+    pub fn finish(self) -> flatbuffers::WIPOffset<RunEndEncoded<'a>> {
+        let o = self.fbb_.end_table(self.start_);
+        flatbuffers::WIPOffset::new(o.value())
+    }
+}
+
+impl core::fmt::Debug for RunEndEncoded<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut ds = f.debug_struct("RunEndEncoded");
+        ds.finish()
+    }
+}
 pub enum DecimalOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -4316,6 +4404,21 @@ impl<'a> Field<'a> {
             None
         }
     }
+
+    #[inline]
+    #[allow(non_snake_case)]
+    pub fn type_as_run_end_encoded(&self) -> Option<RunEndEncoded<'a>> {
+        if self.type_type() == Type::RunEndEncoded {
+            self.type_().map(|t| {
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                unsafe { RunEndEncoded::init_from_table(t) }
+            })
+        } else {
+            None
+        }
+    }
 }
 
 impl flatbuffers::Verifiable for Field<'_> {
@@ -4351,6 +4454,7 @@ impl flatbuffers::Verifiable for Field<'_> {
           Type::LargeBinary => v.verify_union_variant::<flatbuffers::ForwardsUOffset<LargeBinary>>("Type::LargeBinary", pos),
           Type::LargeUtf8 => v.verify_union_variant::<flatbuffers::ForwardsUOffset<LargeUtf8>>("Type::LargeUtf8", pos),
           Type::LargeList => v.verify_union_variant::<flatbuffers::ForwardsUOffset<LargeList>>("Type::LargeList", pos),
+          Type::RunEndEncoded => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RunEndEncoded>>("Type::RunEndEncoded", pos),
           _ => Ok(()),
         }
      })?
@@ -4678,6 +4782,16 @@ impl core::fmt::Debug for Field<'_> {
             }
             Type::LargeList => {
                 if let Some(x) = self.type_as_large_list() {
+                    ds.field("type_", &x)
+                } else {
+                    ds.field(
+                        "type_",
+                        &"InvalidFlatbuffer: Union discriminant does not match value.",
+                    )
+                }
+            }
+            Type::RunEndEncoded => {
+                if let Some(x) = self.type_as_run_end_encoded() {
                     ds.field("type_", &x)
                 } else {
                     ds.field(

@@ -17,20 +17,16 @@
 
 [package]
 name = "arrow-data"
-version = "31.0.0"
+version = { workspace = true }
 description = "Array data abstractions for Apache Arrow"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = ["arrow"]
-include = [
-    "benches/*.rs",
-    "src/**/*.rs",
-    "Cargo.toml",
-]
-edition = "2021"
-rust-version = "1.62"
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+include = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "arrow_data"
@@ -42,11 +38,16 @@ bench = false
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
 force_validate = []
+# Enable ffi support
+ffi = ["arrow-schema/ffi"]
+
+[package.metadata.docs.rs]
+features = ["ffi"]
 
 [dependencies]
 
-arrow-buffer = { version = "31.0.0", path = "../arrow-buffer" }
-arrow-schema = { version = "31.0.0", path = "../arrow-schema" }
+arrow-buffer = { workspace = true }
+arrow-schema = { workspace = true }
 
 num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false }

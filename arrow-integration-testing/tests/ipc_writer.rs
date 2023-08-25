@@ -27,7 +27,7 @@ use std::io::Seek;
 fn write_0_1_4() {
     let testdata = arrow_test_data();
     let version = "0.14.1";
-    let paths = vec![
+    let paths = [
         "generated_interval",
         "generated_datetime",
         "generated_dictionary",
@@ -48,7 +48,7 @@ fn write_0_1_4() {
 fn write_0_1_7() {
     let testdata = arrow_test_data();
     let version = "0.17.1";
-    let paths = vec!["generated_union"];
+    let paths = ["generated_union"];
     paths.iter().for_each(|path| {
         roundtrip_arrow_file(&testdata, version, path);
         roundtrip_arrow_stream(&testdata, version, path);
@@ -59,7 +59,7 @@ fn write_0_1_7() {
 fn write_1_0_0_littleendian() {
     let testdata = arrow_test_data();
     let version = "1.0.0-littleendian";
-    let paths = vec![
+    let paths = [
         "generated_datetime",
         "generated_custom_metadata",
         "generated_decimal",
@@ -94,10 +94,10 @@ fn write_1_0_0_littleendian() {
 fn write_2_0_0_compression() {
     let testdata = arrow_test_data();
     let version = "2.0.0-compression";
-    let paths = vec!["generated_lz4", "generated_zstd"];
+    let paths = ["generated_lz4", "generated_zstd"];
 
     // writer options for each compression type
-    let all_options = vec![
+    let all_options = [
         IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
             .unwrap()
             .try_with_compression(Some(ipc::CompressionType::LZ4_FRAME))
@@ -143,10 +143,8 @@ fn roundtrip_arrow_file_with_options(
     path: &str,
     options: IpcWriteOptions,
 ) {
-    let filename = format!(
-        "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
-        testdata, version, path
-    );
+    let filename =
+        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.arrow_file");
     println!("Verifying {filename}");
 
     let mut tempfile = tempfile::tempfile().unwrap();
@@ -189,11 +187,12 @@ fn roundtrip_arrow_file_with_options(
         let rewrite_reader = FileReader::try_new(&tempfile, None).unwrap();
 
         // Compare to original reader
-        reader.into_iter().zip(rewrite_reader.into_iter()).for_each(
-            |(batch1, batch2)| {
+        reader
+            .into_iter()
+            .zip(rewrite_reader)
+            .for_each(|(batch1, batch2)| {
                 assert_eq!(batch1.unwrap(), batch2.unwrap());
-            },
-        );
+            });
     }
 }
 
@@ -222,10 +221,8 @@ fn roundtrip_arrow_stream_with_options(
     path: &str,
     options: IpcWriteOptions,
 ) {
-    let filename = format!(
-        "{}/arrow-ipc-stream/integration/{}/{}.stream",
-        testdata, version, path
-    );
+    let filename =
+        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
     println!("Verifying {filename}");
 
     let mut tempfile = tempfile::tempfile().unwrap();
@@ -268,10 +265,11 @@ fn roundtrip_arrow_stream_with_options(
         let rewrite_reader = StreamReader::try_new(&tempfile, None).unwrap();
 
         // Compare to original reader
-        reader.into_iter().zip(rewrite_reader.into_iter()).for_each(
-            |(batch1, batch2)| {
+        reader
+            .into_iter()
+            .zip(rewrite_reader)
+            .for_each(|(batch1, batch2)| {
                 assert_eq!(batch1.unwrap(), batch2.unwrap());
-            },
-        );
+            });
     }
 }

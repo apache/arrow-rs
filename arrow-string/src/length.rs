@@ -17,167 +17,76 @@
 
 //! Defines kernel for length of string arrays and binary arrays
 
-use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::Buffer;
-use arrow_data::ArrayData;
+use arrow_array::{cast::AsArray, types::*};
+use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::sync::Arc;
 
-macro_rules! unary_offsets {
-    ($array: expr, $data_type: expr, $op: expr) => {{
-        let slice = $array.value_offsets();
-
-        let lengths = slice.windows(2).map(|offset| $op(offset[1] - offset[0]));
-
-        // JUSTIFICATION
-        //  Benefit
-        //      ~60% speedup
-        //  Soundness
-        //      `values` come from a slice iterator with a known size.
-        let buffer = unsafe { Buffer::from_trusted_len_iter(lengths) };
-
-        let null_bit_buffer = $array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice($array.offset(), $array.len()));
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                $data_type,
-                $array.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![buffer],
-                vec![],
-            )
-        };
-        make_array(data)
-    }};
+fn length_impl<P: ArrowPrimitiveType>(
+    offsets: &OffsetBuffer<P::Native>,
+    nulls: Option<&NullBuffer>,
+) -> ArrayRef {
+    let v: Vec<_> = offsets
+        .windows(2)
+        .map(|w| w[1].sub_wrapping(w[0]))
+        .collect();
+    Arc::new(PrimitiveArray::<P>::new(v.into(), nulls.cloned()))
 }
 
-macro_rules! kernel_dict {
-    ($array: ident, $kernel: expr, $kt: ident, $($t: ident: $gt: ident), *) => {
-        match $kt.as_ref() {
-            $(&DataType::$t => {
-                let dict = $array
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<$gt>>()
-                    .unwrap_or_else(|| {
-                        panic!("Expect 'DictionaryArray<{}>' but got array of data type {:?}",
-                            stringify!($gt), $array.data_type())
-                    });
-                let values = $kernel(dict.values())?;
-                let result = DictionaryArray::try_new(dict.keys(), &values)?;
-                    Ok(Arc::new(result))
-                },
-            )*
-            t => panic!("Unsupported dictionary key type: {}", t)
-        }
-    }
-}
-
-fn length_list<O, T>(array: &dyn Array) -> ArrayRef
-where
-    O: OffsetSizeTrait,
-    T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
-{
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericListArray<O>>()
-        .unwrap();
-    unary_offsets!(array, T::DATA_TYPE, |x| x)
-}
-
-fn length_binary<O, T>(array: &dyn Array) -> ArrayRef
-where
-    O: OffsetSizeTrait,
-    T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
-{
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericBinaryArray<O>>()
-        .unwrap();
-    unary_offsets!(array, T::DATA_TYPE, |x| x)
-}
-
-fn length_string<O, T>(array: &dyn Array) -> ArrayRef
-where
-    O: OffsetSizeTrait,
-    T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
-{
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<O>>()
-        .unwrap();
-    unary_offsets!(array, T::DATA_TYPE, |x| x)
-}
-
-fn bit_length_binary<O, T>(array: &dyn Array) -> ArrayRef
-where
-    O: OffsetSizeTrait,
-    T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
-{
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericBinaryArray<O>>()
-        .unwrap();
-    let bits_in_bytes = O::from_usize(8).unwrap();
-    unary_offsets!(array, T::DATA_TYPE, |x| x * bits_in_bytes)
-}
-
-fn bit_length_string<O, T>(array: &dyn Array) -> ArrayRef
-where
-    O: OffsetSizeTrait,
-    T: ArrowPrimitiveType,
-    T::Native: OffsetSizeTrait,
-{
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<O>>()
-        .unwrap();
-    let bits_in_bytes = O::from_usize(8).unwrap();
-    unary_offsets!(array, T::DATA_TYPE, |x| x * bits_in_bytes)
+fn bit_length_impl<P: ArrowPrimitiveType>(
+    offsets: &OffsetBuffer<P::Native>,
+    nulls: Option<&NullBuffer>,
+) -> ArrayRef {
+    let bits = P::Native::usize_as(8);
+    let c = |w: &[P::Native]| w[1].sub_wrapping(w[0]).mul_wrapping(bits);
+    let v: Vec<_> = offsets.windows(2).map(c).collect();
+    Arc::new(PrimitiveArray::<P>::new(v.into(), nulls.cloned()))
 }
 
 /// Returns an array of Int32/Int64 denoting the length of each value in the array.
 /// For list array, length is the number of elements in each list.
 /// For string array and binary array, length is the number of bytes of each value.
 ///
-/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray and BinaryArray/LargeBinaryArray,
+/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray, BinaryArray/LargeBinaryArray, and FixedSizeListArray,
 ///   or DictionaryArray with above Arrays as values
 /// * length of null is null.
 pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    if let Some(d) = array.as_any_dictionary_opt() {
+        let lengths = length(d.values().as_ref())?;
+        return Ok(d.with_values(lengths));
+    }
+
     match array.data_type() {
-        DataType::Dictionary(kt, _) => {
-            kernel_dict!(
-                array,
-                |a| { length(a) },
-                kt,
-                Int8: Int8Type,
-                Int16: Int16Type,
-                Int32: Int32Type,
-                Int64: Int64Type,
-                UInt8: UInt8Type,
-                UInt16: UInt16Type,
-                UInt32: UInt32Type,
-                UInt64: UInt64Type
-            )
+        DataType::List(_) => {
+            let list = array.as_list::<i32>();
+            Ok(length_impl::<Int32Type>(list.offsets(), list.nulls()))
         }
-        DataType::List(_) => Ok(length_list::<i32, Int32Type>(array)),
-        DataType::LargeList(_) => Ok(length_list::<i64, Int64Type>(array)),
-        DataType::Utf8 => Ok(length_string::<i32, Int32Type>(array)),
-        DataType::LargeUtf8 => Ok(length_string::<i64, Int64Type>(array)),
-        DataType::Binary => Ok(length_binary::<i32, Int32Type>(array)),
-        DataType::LargeBinary => Ok(length_binary::<i64, Int64Type>(array)),
+        DataType::LargeList(_) => {
+            let list = array.as_list::<i64>();
+            Ok(length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::Utf8 => {
+            let list = array.as_string::<i32>();
+            Ok(length_impl::<Int32Type>(list.offsets(), list.nulls()))
+        }
+        DataType::LargeUtf8 => {
+            let list = array.as_string::<i64>();
+            Ok(length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::Binary => {
+            let list = array.as_binary::<i32>();
+            Ok(length_impl::<Int32Type>(list.offsets(), list.nulls()))
+        }
+        DataType::LargeBinary => {
+            let list = array.as_binary::<i64>();
+            Ok(length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::FixedSizeBinary(len) | DataType::FixedSizeList(_, len) => Ok(Arc::new(
+            Int32Array::new(vec![*len; array.len()].into(), array.nulls().cloned()),
+        )),
         other => Err(ArrowError::ComputeError(format!(
-            "length not supported for {:?}",
-            other
+            "length not supported for {other:?}"
         ))),
     }
 }
@@ -189,29 +98,42 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 /// * bit_length of null is null.
 /// * bit_length is in number of bits
 pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    if let Some(d) = array.as_any_dictionary_opt() {
+        let lengths = bit_length(d.values().as_ref())?;
+        return Ok(d.with_values(lengths));
+    }
+
     match array.data_type() {
-        DataType::Dictionary(kt, _) => {
-            kernel_dict!(
-                array,
-                |a| { bit_length(a) },
-                kt,
-                Int8: Int8Type,
-                Int16: Int16Type,
-                Int32: Int32Type,
-                Int64: Int64Type,
-                UInt8: UInt8Type,
-                UInt16: UInt16Type,
-                UInt32: UInt32Type,
-                UInt64: UInt64Type
-            )
+        DataType::List(_) => {
+            let list = array.as_list::<i32>();
+            Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
         }
-        DataType::Utf8 => Ok(bit_length_string::<i32, Int32Type>(array)),
-        DataType::LargeUtf8 => Ok(bit_length_string::<i64, Int64Type>(array)),
-        DataType::Binary => Ok(bit_length_binary::<i32, Int32Type>(array)),
-        DataType::LargeBinary => Ok(bit_length_binary::<i64, Int64Type>(array)),
+        DataType::LargeList(_) => {
+            let list = array.as_list::<i64>();
+            Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::Utf8 => {
+            let list = array.as_string::<i32>();
+            Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
+        }
+        DataType::LargeUtf8 => {
+            let list = array.as_string::<i64>();
+            Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::Binary => {
+            let list = array.as_binary::<i32>();
+            Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
+        }
+        DataType::LargeBinary => {
+            let list = array.as_binary::<i64>();
+            Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::FixedSizeBinary(len) => Ok(Arc::new(Int32Array::new(
+            vec![*len * 8; array.len()].into(),
+            array.nulls().cloned(),
+        ))),
         other => Err(ArrowError::ComputeError(format!(
-            "bit_length not supported for {:?}",
-            other
+            "bit_length not supported for {other:?}"
         ))),
     }
 }
@@ -219,20 +141,16 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::cast::as_primitive_array;
-
-    fn double_vec<T: Clone>(v: Vec<T>) -> Vec<T> {
-        [&v[..], &v[..]].concat()
-    }
+    use arrow_array::cast::AsArray;
+    use arrow_buffer::{Buffer, NullBuffer};
+    use arrow_data::ArrayData;
+    use arrow_schema::Field;
 
     fn length_cases_string() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
-        let mut values = vec!["one", "on", "o", ""];
-        let mut expected = vec![3, 2, 1, 0];
-        for _ in 0..10 {
-            values = double_vec(values);
-            expected = double_vec(expected);
-        }
+        let values = ["one", "on", "o", ""];
+        let values = values.into_iter().cycle().take(4096).collect();
+        let expected = [3, 2, 1, 0].into_iter().cycle().take(4096).collect();
 
         vec![
             (vec!["hello", " ", "world"], 3, vec![5, 1, 5]),
@@ -248,7 +166,7 @@ mod tests {
             let result = $kernel(&array).unwrap();
             let result = result.as_any().downcast_ref::<$result_ty>().unwrap();
             let expected: $result_ty = $expected.into();
-            assert_eq!(expected.data(), result.data());
+            assert_eq!(&expected, result);
         }};
     }
 
@@ -261,12 +179,11 @@ mod tests {
             let result = length(&array).unwrap();
             let result = result.as_any().downcast_ref::<$result_ty>().unwrap();
             let expected: $result_ty = $expected.into();
-            assert_eq!(expected.data(), result.data());
+            assert_eq!(&expected, result);
         }};
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // running forever
     fn length_test_string() {
         length_cases_string()
             .into_iter()
@@ -282,7 +199,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // running forever
     fn length_test_large_string() {
         length_cases_string()
             .into_iter()
@@ -354,7 +270,7 @@ mod tests {
                 let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
 
                 let expected: Int32Array = expected.into();
-                assert_eq!(expected.data(), result.data());
+                assert_eq!(&expected, result);
             })
     }
 
@@ -374,7 +290,7 @@ mod tests {
                     .map(|e| e.map(|e| e as i64))
                     .collect::<Vec<_>>()
                     .into();
-                assert_eq!(expected.data(), result.data());
+                assert_eq!(&expected, result);
             })
     }
 
@@ -431,8 +347,8 @@ mod tests {
     fn length_offsets_string() {
         let a = StringArray::from(vec![Some("hello"), Some(" "), Some("world"), None]);
         let b = a.slice(1, 3);
-        let result = length(b.as_ref()).unwrap();
-        let result: &Int32Array = as_primitive_array(&result);
+        let result = length(&b).unwrap();
+        let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(1), Some(5), None]);
         assert_eq!(&expected, result);
@@ -444,8 +360,8 @@ mod tests {
             vec![Some(b"hello"), Some(b" "), Some(&[0xff, 0xf8]), None];
         let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
-        let result = length(b.as_ref()).unwrap();
-        let result: &Int32Array = as_primitive_array(&result);
+        let result = length(&b).unwrap();
+        let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(1), Some(2), None]);
         assert_eq!(&expected, result);
@@ -453,12 +369,9 @@ mod tests {
 
     fn bit_length_cases() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
-        let mut values = vec!["one", "on", "o", ""];
-        let mut expected = vec![24, 16, 8, 0];
-        for _ in 0..10 {
-            values = double_vec(values);
-            expected = double_vec(expected);
-        }
+        let values = ["one", "on", "o", ""];
+        let values = values.into_iter().cycle().take(4096).collect();
+        let expected = [24, 16, 8, 0].into_iter().cycle().take(4096).collect();
 
         vec![
             (vec!["hello", " ", "world", "!"], 4, vec![40, 8, 40, 8]),
@@ -469,7 +382,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // error: this test uses too much memory to run on CI
     fn bit_length_test_string() {
         bit_length_cases()
             .into_iter()
@@ -485,7 +397,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // error: this test uses too much memory to run on CI
     fn bit_length_test_large_string() {
         bit_length_cases()
             .into_iter()
@@ -533,7 +444,7 @@ mod tests {
                 let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
 
                 let expected: Int32Array = expected.into();
-                assert_eq!(expected.data(), result.data());
+                assert_eq!(&expected, result);
             })
     }
 
@@ -553,7 +464,7 @@ mod tests {
                     .map(|e| e.map(|e| e as i64))
                     .collect::<Vec<_>>()
                     .into();
-                assert_eq!(expected.data(), result.data());
+                assert_eq!(&expected, result);
             })
     }
 
@@ -586,8 +497,8 @@ mod tests {
     fn bit_length_offsets_string() {
         let a = StringArray::from(vec![Some("hello"), Some(" "), Some("world"), None]);
         let b = a.slice(1, 3);
-        let result = bit_length(b.as_ref()).unwrap();
-        let result: &Int32Array = as_primitive_array(&result);
+        let result = bit_length(&b).unwrap();
+        let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(8), Some(40), None]);
         assert_eq!(&expected, result);
@@ -599,8 +510,8 @@ mod tests {
             vec![Some(b"hello"), Some(&[]), Some(b"world"), None];
         let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
-        let result = bit_length(b.as_ref()).unwrap();
-        let result: &Int32Array = as_primitive_array(&result);
+        let result = bit_length(&b).unwrap();
+        let result: &Int32Array = result.as_primitive();
 
         let expected = Int32Array::from(vec![Some(0), Some(40), None]);
         assert_eq!(&expected, result);
@@ -700,5 +611,45 @@ mod tests {
         for i in 0..TOTAL as usize {
             assert_eq!(expected[i], actual[i],);
         }
+    }
+
+    #[test]
+    fn test_fixed_size_list_length() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(9)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8]))
+            .build()
+            .unwrap();
+        let list_data_type = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int32, false)),
+            3,
+        );
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        let list_data = ArrayData::builder(list_data_type)
+            .len(3)
+            .add_child_data(value_data)
+            .nulls(Some(nulls))
+            .build()
+            .unwrap();
+        let list_array = FixedSizeListArray::from(list_data);
+
+        let lengths = length(&list_array).unwrap();
+        let lengths = lengths.as_primitive::<Int32Type>();
+
+        assert_eq!(lengths.len(), 3);
+        assert_eq!(lengths.value(0), 3);
+        assert!(lengths.is_null(1));
+        assert_eq!(lengths.value(2), 3);
+    }
+
+    #[test]
+    fn test_fixed_size_binary() {
+        let array = FixedSizeBinaryArray::new(4, [0; 16].into(), None);
+        let result = length(&array).unwrap();
+        assert_eq!(result.as_ref(), &Int32Array::from(vec![4; 4]));
+
+        let result = bit_length(&array).unwrap();
+        assert_eq!(result.as_ref(), &Int32Array::from(vec![32; 4]));
     }
 }

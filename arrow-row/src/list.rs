@@ -57,23 +57,23 @@ fn encoded_len(rows: &Rows, range: Option<Range<usize>>) -> usize {
 ///
 /// `rows` should contain the encoded child elements
 pub fn encode<O: OffsetSizeTrait>(
-    out: &mut Rows,
+    data: &mut [u8],
+    offsets: &mut [usize],
     rows: &Rows,
     opts: SortOptions,
     array: &GenericListArray<O>,
 ) {
     let mut temporary = vec![];
-    let offsets = array.value_offsets().windows(2);
-    out.offsets
+    offsets
         .iter_mut()
         .skip(1)
-        .zip(offsets)
+        .zip(array.value_offsets().windows(2))
         .enumerate()
         .for_each(|(idx, (offset, offsets))| {
             let start = offsets[0].as_usize();
             let end = offsets[1].as_usize();
             let range = array.is_valid(idx).then_some(start..end);
-            let out = &mut out.buffer[*offset..];
+            let out = &mut data[*offset..];
             *offset += encode_one(out, &mut temporary, rows, range, opts)
         });
 }
@@ -164,12 +164,11 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
 
     let child = converter.convert_raw(&mut child_rows, validate_utf8)?;
     assert_eq!(child.len(), 1);
-    let child_data = child[0].data().clone();
+    let child_data = child[0].to_data();
 
     let builder = ArrayDataBuilder::new(field.data_type.clone())
         .len(rows.len())
-        .null_count(canonical.null_count())
-        .null_bit_buffer(canonical.data().null_buffer().cloned())
+        .nulls(canonical.nulls().cloned())
         .add_buffer(offsets.finish())
         .add_child_data(child_data);
 

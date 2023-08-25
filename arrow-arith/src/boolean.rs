@@ -23,222 +23,9 @@
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
 use arrow_array::*;
-use arrow_buffer::bit_util::ceil;
-use arrow_buffer::buffer::{
-    bitwise_bin_op_helper, bitwise_quaternary_op_helper, buffer_bin_and, buffer_bin_or,
-    buffer_unary_not,
-};
-use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType};
-
-/// Updates null buffer based on data buffer and null buffer of the operand at other side
-/// in boolean AND kernel with Kleene logic. In short, because for AND kernel, null AND false
-/// results false. So we cannot simply AND two null buffers. This function updates null buffer
-/// of one side if other side is a false value.
-pub(crate) fn build_null_buffer_for_and_kleene(
-    left_data: &ArrayData,
-    left_offset: usize,
-    right_data: &ArrayData,
-    right_offset: usize,
-    len_in_bits: usize,
-) -> Option<Buffer> {
-    let left_buffer = &left_data.buffers()[0];
-    let right_buffer = &right_data.buffers()[0];
-
-    let left_null_buffer = left_data.null_buffer();
-    let right_null_buffer = right_data.null_buffer();
-
-    match (left_null_buffer, right_null_buffer) {
-        (None, None) => None,
-        (Some(left_null_buffer), None) => {
-            // The right side has no null values.
-            // The final null bit is set only if:
-            // 1. left null bit is set, or
-            // 2. right data bit is false (because null AND false = false).
-            Some(bitwise_bin_op_helper(
-                left_null_buffer,
-                left_offset,
-                right_buffer,
-                right_offset,
-                len_in_bits,
-                |a, b| a | !b,
-            ))
-        }
-        (None, Some(right_null_buffer)) => {
-            // Same as above
-            Some(bitwise_bin_op_helper(
-                right_null_buffer,
-                right_offset,
-                left_buffer,
-                left_offset,
-                len_in_bits,
-                |a, b| a | !b,
-            ))
-        }
-        (Some(left_null_buffer), Some(right_null_buffer)) => {
-            // Follow the same logic above. Both sides have null values.
-            // Assume a is left null bits, b is left data bits, c is right null bits,
-            // d is right data bits.
-            // The final null bits are:
-            // (a | (c & !d)) & (c | (a & !b))
-            Some(bitwise_quaternary_op_helper(
-                [
-                    left_null_buffer,
-                    left_buffer,
-                    right_null_buffer,
-                    right_buffer,
-                ],
-                [left_offset, left_offset, right_offset, right_offset],
-                len_in_bits,
-                |a, b, c, d| (a | (c & !d)) & (c | (a & !b)),
-            ))
-        }
-    }
-}
-
-/// For AND/OR kernels, the result of null buffer is simply a bitwise `and` operation.
-pub(crate) fn build_null_buffer_for_and_or(
-    left_data: &ArrayData,
-    _left_offset: usize,
-    right_data: &ArrayData,
-    _right_offset: usize,
-    len_in_bits: usize,
-) -> Option<Buffer> {
-    // `arrays` are not empty, so safely do `unwrap` directly.
-    combine_option_bitmap(&[left_data, right_data], len_in_bits)
-}
-
-/// Updates null buffer based on data buffer and null buffer of the operand at other side
-/// in boolean OR kernel with Kleene logic. In short, because for OR kernel, null OR true
-/// results true. So we cannot simply AND two null buffers. This function updates null
-/// buffer of one side if other side is a true value.
-pub(crate) fn build_null_buffer_for_or_kleene(
-    left_data: &ArrayData,
-    left_offset: usize,
-    right_data: &ArrayData,
-    right_offset: usize,
-    len_in_bits: usize,
-) -> Option<Buffer> {
-    let left_buffer = &left_data.buffers()[0];
-    let right_buffer = &right_data.buffers()[0];
-
-    let left_null_buffer = left_data.null_buffer();
-    let right_null_buffer = right_data.null_buffer();
-
-    match (left_null_buffer, right_null_buffer) {
-        (None, None) => None,
-        (Some(left_null_buffer), None) => {
-            // The right side has no null values.
-            // The final null bit is set only if:
-            // 1. left null bit is set, or
-            // 2. right data bit is true (because null OR true = true).
-            Some(bitwise_bin_op_helper(
-                left_null_buffer,
-                left_offset,
-                right_buffer,
-                right_offset,
-                len_in_bits,
-                |a, b| a | b,
-            ))
-        }
-        (None, Some(right_null_buffer)) => {
-            // Same as above
-            Some(bitwise_bin_op_helper(
-                right_null_buffer,
-                right_offset,
-                left_buffer,
-                left_offset,
-                len_in_bits,
-                |a, b| a | b,
-            ))
-        }
-        (Some(left_null_buffer), Some(right_null_buffer)) => {
-            // Follow the same logic above. Both sides have null values.
-            // Assume a is left null bits, b is left data bits, c is right null bits,
-            // d is right data bits.
-            // The final null bits are:
-            // (a | (c & d)) & (c | (a & b))
-            Some(bitwise_quaternary_op_helper(
-                [
-                    left_null_buffer,
-                    left_buffer,
-                    right_null_buffer,
-                    right_buffer,
-                ],
-                [left_offset, left_offset, right_offset, right_offset],
-                len_in_bits,
-                |a, b, c, d| (a | (c & d)) & (c | (a & b)),
-            ))
-        }
-    }
-}
-
-/// Helper function to implement binary kernels
-pub(crate) fn binary_boolean_kernel<F, U>(
-    left: &BooleanArray,
-    right: &BooleanArray,
-    op: F,
-    null_op: U,
-) -> Result<BooleanArray, ArrowError>
-where
-    F: Fn(&Buffer, usize, &Buffer, usize, usize) -> Buffer,
-    U: Fn(&ArrayData, usize, &ArrayData, usize, usize) -> Option<Buffer>,
-{
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform bitwise operation on arrays of different length".to_string(),
-        ));
-    }
-
-    let len = left.len();
-
-    let left_data = left.data_ref();
-    let right_data = right.data_ref();
-
-    let left_buffer = &left_data.buffers()[0];
-    let right_buffer = &right_data.buffers()[0];
-    let left_offset = left.offset();
-    let right_offset = right.offset();
-
-    let null_bit_buffer = null_op(left_data, left_offset, right_data, right_offset, len);
-
-    let values = op(left_buffer, left_offset, right_buffer, right_offset, len);
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            len,
-            None,
-            null_bit_buffer,
-            0,
-            vec![values],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
-}
-
-/// Performs `AND` operation on two arrays. If either left or right value is null then the
-/// result is also null.
-/// # Error
-/// This function errors when the arrays have different lengths.
-/// # Example
-/// ```rust
-/// # use arrow_array::BooleanArray;
-/// # use arrow_arith::boolean::and;
-/// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
-/// let b = BooleanArray::from(vec![Some(true), Some(true), Some(false)]);
-/// let and_ab = and(&a, &b).unwrap();
-/// assert_eq!(and_ab, BooleanArray::from(vec![Some(false), Some(true), None]));
-/// ```
-pub fn and(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
-    binary_boolean_kernel(left, right, buffer_bin_and, build_null_buffer_for_and_or)
-}
+use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
+use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_schema::ArrowError;
 
 /// Logical 'and' boolean values with Kleene logic
 ///
@@ -274,29 +61,68 @@ pub fn and_kleene(
     left: &BooleanArray,
     right: &BooleanArray,
 ) -> Result<BooleanArray, ArrowError> {
-    binary_boolean_kernel(
-        left,
-        right,
-        buffer_bin_and,
-        build_null_buffer_for_and_kleene,
-    )
-}
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform bitwise operation on arrays of different length".to_string(),
+        ));
+    }
 
-/// Performs `OR` operation on two arrays. If either left or right value is null then the
-/// result is also null.
-/// # Error
-/// This function errors when the arrays have different lengths.
-/// # Example
-/// ```rust
-/// # use arrow_array::BooleanArray;
-/// # use arrow_arith::boolean::or;
-/// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
-/// let b = BooleanArray::from(vec![Some(true), Some(true), Some(false)]);
-/// let or_ab = or(&a, &b).unwrap();
-/// assert_eq!(or_ab, BooleanArray::from(vec![Some(true), Some(true), None]));
-/// ```
-pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
-    binary_boolean_kernel(left, right, buffer_bin_or, build_null_buffer_for_and_or)
+    let left_values = left.values();
+    let right_values = right.values();
+
+    let buffer = match (left.nulls(), right.nulls()) {
+        (None, None) => None,
+        (Some(left_null_buffer), None) => {
+            // The right side has no null values.
+            // The final null bit is set only if:
+            // 1. left null bit is set, or
+            // 2. right data bit is false (because null AND false = false).
+            Some(bitwise_bin_op_helper(
+                left_null_buffer.buffer(),
+                left_null_buffer.offset(),
+                right_values.inner(),
+                right_values.offset(),
+                left.len(),
+                |a, b| a | !b,
+            ))
+        }
+        (None, Some(right_null_buffer)) => {
+            // Same as above
+            Some(bitwise_bin_op_helper(
+                right_null_buffer.buffer(),
+                right_null_buffer.offset(),
+                left_values.inner(),
+                left_values.offset(),
+                left.len(),
+                |a, b| a | !b,
+            ))
+        }
+        (Some(left_null_buffer), Some(right_null_buffer)) => {
+            // Follow the same logic above. Both sides have null values.
+            // Assume a is left null bits, b is left data bits, c is right null bits,
+            // d is right data bits.
+            // The final null bits are:
+            // (a | (c & !d)) & (c | (a & !b))
+            Some(bitwise_quaternary_op_helper(
+                [
+                    left_null_buffer.buffer(),
+                    left_values.inner(),
+                    right_null_buffer.buffer(),
+                    right_values.inner(),
+                ],
+                [
+                    left_null_buffer.offset(),
+                    left_values.offset(),
+                    right_null_buffer.offset(),
+                    right_values.offset(),
+                ],
+                left.len(),
+                |a, b, c, d| (a | (c & !d)) & (c | (a & !b)),
+            ))
+        }
+    };
+    let nulls = buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, left.len())));
+    Ok(BooleanArray::new(left_values & right_values, nulls))
 }
 
 /// Logical 'or' boolean values with Kleene logic
@@ -333,7 +159,126 @@ pub fn or_kleene(
     left: &BooleanArray,
     right: &BooleanArray,
 ) -> Result<BooleanArray, ArrowError> {
-    binary_boolean_kernel(left, right, buffer_bin_or, build_null_buffer_for_or_kleene)
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform bitwise operation on arrays of different length".to_string(),
+        ));
+    }
+
+    let left_values = left.values();
+    let right_values = right.values();
+
+    let buffer = match (left.nulls(), right.nulls()) {
+        (None, None) => None,
+        (Some(left_nulls), None) => {
+            // The right side has no null values.
+            // The final null bit is set only if:
+            // 1. left null bit is set, or
+            // 2. right data bit is true (because null OR true = true).
+            Some(bitwise_bin_op_helper(
+                left_nulls.buffer(),
+                left_nulls.offset(),
+                right_values.inner(),
+                right_values.offset(),
+                left.len(),
+                |a, b| a | b,
+            ))
+        }
+        (None, Some(right_nulls)) => {
+            // Same as above
+            Some(bitwise_bin_op_helper(
+                right_nulls.buffer(),
+                right_nulls.offset(),
+                left_values.inner(),
+                left_values.offset(),
+                left.len(),
+                |a, b| a | b,
+            ))
+        }
+        (Some(left_nulls), Some(right_nulls)) => {
+            // Follow the same logic above. Both sides have null values.
+            // Assume a is left null bits, b is left data bits, c is right null bits,
+            // d is right data bits.
+            // The final null bits are:
+            // (a | (c & d)) & (c | (a & b))
+            Some(bitwise_quaternary_op_helper(
+                [
+                    left_nulls.buffer(),
+                    left_values.inner(),
+                    right_nulls.buffer(),
+                    right_values.inner(),
+                ],
+                [
+                    left_nulls.offset(),
+                    left_values.offset(),
+                    right_nulls.offset(),
+                    right_values.offset(),
+                ],
+                left.len(),
+                |a, b, c, d| (a | (c & d)) & (c | (a & b)),
+            ))
+        }
+    };
+
+    let nulls = buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, left.len())));
+    Ok(BooleanArray::new(left_values | right_values, nulls))
+}
+
+/// Helper function to implement binary kernels
+pub(crate) fn binary_boolean_kernel<F>(
+    left: &BooleanArray,
+    right: &BooleanArray,
+    op: F,
+) -> Result<BooleanArray, ArrowError>
+where
+    F: Fn(&BooleanBuffer, &BooleanBuffer) -> BooleanBuffer,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform bitwise operation on arrays of different length".to_string(),
+        ));
+    }
+
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+    let values = op(left.values(), right.values());
+    Ok(BooleanArray::new(values, nulls))
+}
+
+/// Performs `AND` operation on two arrays. If either left or right value is null then the
+/// result is also null.
+/// # Error
+/// This function errors when the arrays have different lengths.
+/// # Example
+/// ```rust
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::and;
+/// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
+/// let b = BooleanArray::from(vec![Some(true), Some(true), Some(false)]);
+/// let and_ab = and(&a, &b).unwrap();
+/// assert_eq!(and_ab, BooleanArray::from(vec![Some(false), Some(true), None]));
+/// ```
+pub fn and(
+    left: &BooleanArray,
+    right: &BooleanArray,
+) -> Result<BooleanArray, ArrowError> {
+    binary_boolean_kernel(left, right, |a, b| a & b)
+}
+
+/// Performs `OR` operation on two arrays. If either left or right value is null then the
+/// result is also null.
+/// # Error
+/// This function errors when the arrays have different lengths.
+/// # Example
+/// ```rust
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::or;
+/// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
+/// let b = BooleanArray::from(vec![Some(true), Some(true), Some(false)]);
+/// let or_ab = or(&a, &b).unwrap();
+/// assert_eq!(or_ab, BooleanArray::from(vec![Some(true), Some(true), None]));
+/// ```
+pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
+    binary_boolean_kernel(left, right, |a, b| a | b)
 }
 
 /// Performs unary `NOT` operation on an arrays. If value is null then the result is also
@@ -349,29 +294,9 @@ pub fn or_kleene(
 /// assert_eq!(not_a, BooleanArray::from(vec![Some(true), Some(false), None]));
 /// ```
 pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
-    let left_offset = left.offset();
-    let len = left.len();
-
-    let data = left.data_ref();
-    let null_bit_buffer = data
-        .null_bitmap()
-        .as_ref()
-        .map(|b| b.buffer().bit_slice(left_offset, len));
-
-    let values = buffer_unary_not(&data.buffers()[0], left_offset, len);
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            len,
-            None,
-            null_bit_buffer,
-            0,
-            vec![values],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    let nulls = left.nulls().cloned();
+    let values = !left.values();
+    Ok(BooleanArray::new(values, nulls))
 }
 
 /// Returns a non-null [BooleanArray] with whether each value of the array is null.
@@ -386,29 +311,12 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
 /// assert_eq!(a_is_null, BooleanArray::from(vec![false, false, true]));
 /// ```
 pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    let len = input.len();
-
-    let output = match input.data_ref().null_buffer() {
-        None => {
-            let len_bytes = ceil(len, 8);
-            MutableBuffer::from_len_zeroed(len_bytes).into()
-        }
-        Some(buffer) => buffer_unary_not(buffer, input.offset(), len),
+    let values = match input.logical_nulls() {
+        None => BooleanBuffer::new_unset(input.len()),
+        Some(nulls) => !nulls.inner(),
     };
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            len,
-            None,
-            None,
-            0,
-            vec![output],
-            vec![],
-        )
-    };
-
-    Ok(BooleanArray::from(data))
+    Ok(BooleanArray::new(values, None))
 }
 
 /// Returns a non-null [BooleanArray] with whether each value of the array is not null.
@@ -423,31 +331,11 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
 /// assert_eq!(a_is_not_null, BooleanArray::from(vec![true, true, false]));
 /// ```
 pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    let len = input.len();
-
-    let output = match input.data_ref().null_buffer() {
-        None => {
-            let len_bytes = ceil(len, 8);
-            MutableBuffer::new(len_bytes)
-                .with_bitset(len_bytes, true)
-                .into()
-        }
-        Some(buffer) => buffer.bit_slice(input.offset(), len),
+    let values = match input.logical_nulls() {
+        None => BooleanBuffer::new_set(input.len()),
+        Some(n) => n.inner().clone(),
     };
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            len,
-            None,
-            None,
-            0,
-            vec![output],
-            vec![],
-        )
-    };
-
-    Ok(BooleanArray::from(data))
+    Ok(BooleanArray::new(values, None))
 }
 
 #[cfg(test)]
@@ -615,7 +503,7 @@ mod tests {
         let a = BooleanArray::from(vec![false, false, false, true, true, true]);
 
         // ensure null bitmap of a is absent
-        assert!(a.data_ref().null_bitmap().is_none());
+        assert!(a.nulls().is_none());
 
         let b = BooleanArray::from(vec![
             Some(true),
@@ -627,7 +515,7 @@ mod tests {
         ]);
 
         // ensure null bitmap of b is present
-        assert!(b.data_ref().null_bitmap().is_some());
+        assert!(b.nulls().is_some());
 
         let c = or_kleene(&a, &b).unwrap();
 
@@ -655,12 +543,12 @@ mod tests {
         ]);
 
         // ensure null bitmap of b is absent
-        assert!(a.data_ref().null_bitmap().is_some());
+        assert!(a.nulls().is_some());
 
         let b = BooleanArray::from(vec![false, false, false, true, true, true]);
 
         // ensure null bitmap of a is present
-        assert!(b.data_ref().null_bitmap().is_none());
+        assert!(b.nulls().is_none());
 
         let c = or_kleene(&a, &b).unwrap();
 
@@ -857,7 +745,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, false, false, false]);
 
         assert_eq!(expected, res);
-        assert_eq!(None, res.data_ref().null_bitmap());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -865,12 +753,12 @@ mod tests {
         let a = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
         let a = a.slice(8, 4);
 
-        let res = is_null(a.as_ref()).unwrap();
+        let res = is_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![false, false, false, false]);
 
         assert_eq!(expected, res);
-        assert_eq!(None, res.data_ref().null_bitmap());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -882,7 +770,7 @@ mod tests {
         let expected = BooleanArray::from(vec![true, true, true, true]);
 
         assert_eq!(expected, res);
-        assert_eq!(None, res.data_ref().null_bitmap());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -890,12 +778,12 @@ mod tests {
         let a = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
         let a = a.slice(8, 4);
 
-        let res = is_not_null(a.as_ref()).unwrap();
+        let res = is_not_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![true, true, true, true]);
 
         assert_eq!(expected, res);
-        assert_eq!(None, res.data_ref().null_bitmap());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -907,7 +795,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, true, false, true]);
 
         assert_eq!(expected, res);
-        assert_eq!(None, res.data_ref().null_bitmap());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -933,12 +821,12 @@ mod tests {
         ]);
         let a = a.slice(8, 4);
 
-        let res = is_null(a.as_ref()).unwrap();
+        let res = is_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![false, true, false, true]);
 
         assert_eq!(expected, res);
-        assert_eq!(None, res.data_ref().null_bitmap());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -950,7 +838,7 @@ mod tests {
         let expected = BooleanArray::from(vec![true, false, true, false]);
 
         assert_eq!(expected, res);
-        assert_eq!(None, res.data_ref().null_bitmap());
+        assert!(res.nulls().is_none());
     }
 
     #[test]
@@ -976,11 +864,35 @@ mod tests {
         ]);
         let a = a.slice(8, 4);
 
-        let res = is_not_null(a.as_ref()).unwrap();
+        let res = is_not_null(&a).unwrap();
 
         let expected = BooleanArray::from(vec![true, false, true, false]);
 
         assert_eq!(expected, res);
-        assert_eq!(None, res.data_ref().null_bitmap());
+        assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_null_array_is_null() {
+        let a = NullArray::new(3);
+
+        let res = is_null(&a).unwrap();
+
+        let expected = BooleanArray::from(vec![true, true, true]);
+
+        assert_eq!(expected, res);
+        assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_null_array_is_not_null() {
+        let a = NullArray::new(3);
+
+        let res = is_not_null(&a).unwrap();
+
+        let expected = BooleanArray::from(vec![false, false, false]);
+
+        assert_eq!(expected, res);
+        assert!(res.nulls().is_none());
     }
 }

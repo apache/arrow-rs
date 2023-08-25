@@ -17,6 +17,7 @@
 
 //! Data types that connect Parquet physical types with their Rust-specific
 //! representations.
+use bytes::Bytes;
 use std::cmp::Ordering;
 use std::fmt;
 use std::mem;
@@ -27,10 +28,7 @@ use crate::basic::Type;
 use crate::column::reader::{ColumnReader, ColumnReaderImpl};
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
-use crate::util::{
-    bit_util::{from_le_slice, from_ne_slice, FromBytes},
-    memory::ByteBufferPtr,
-};
+use crate::util::{bit_util::FromBytes, memory::ByteBufferPtr};
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
@@ -108,7 +106,7 @@ pub struct ByteArray {
     data: Option<ByteBufferPtr>,
 }
 
-// Special case Debug that prints out byte arrays that are vaid utf8 as &str's
+// Special case Debug that prints out byte arrays that are valid utf8 as &str's
 impl std::fmt::Debug for ByteArray {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug_struct = f.debug_struct("ByteArray");
@@ -201,6 +199,16 @@ impl From<Vec<u8>> for ByteArray {
     }
 }
 
+impl<'a> From<&'a [u8]> for ByteArray {
+    fn from(b: &'a [u8]) -> ByteArray {
+        let mut v = Vec::new();
+        v.extend_from_slice(b);
+        Self {
+            data: Some(ByteBufferPtr::new(v)),
+        }
+    }
+}
+
 impl<'a> From<&'a str> for ByteArray {
     fn from(s: &'a str) -> ByteArray {
         let mut v = Vec::new();
@@ -214,6 +222,12 @@ impl<'a> From<&'a str> for ByteArray {
 impl From<ByteBufferPtr> for ByteArray {
     fn from(ptr: ByteBufferPtr) -> ByteArray {
         Self { data: Some(ptr) }
+    }
+}
+
+impl From<Bytes> for ByteArray {
+    fn from(value: Bytes) -> Self {
+        ByteBufferPtr::from(value).into()
     }
 }
 
@@ -245,7 +259,7 @@ impl fmt::Display for ByteArray {
 /// types, although there are code paths in the Rust (and potentially the C++) versions that
 /// warrant this.
 ///
-/// With this wrapper type the compiler generates more targetted code paths matching the higher
+/// With this wrapper type the compiler generates more targeted code paths matching the higher
 /// level logical types, removing the data-hazard from all decoding and encoding paths.
 #[repr(transparent)]
 #[derive(Clone, Debug, Default)]
@@ -469,7 +483,7 @@ macro_rules! gen_as_bytes {
                 unsafe {
                     std::slice::from_raw_parts(
                         self_.as_ptr() as *const u8,
-                        std::mem::size_of::<$source_ty>() * self_.len(),
+                        std::mem::size_of_val(self_),
                     )
                 }
             }
@@ -479,7 +493,7 @@ macro_rules! gen_as_bytes {
             unsafe fn slice_as_bytes_mut(self_: &mut [Self]) -> &mut [u8] {
                 std::slice::from_raw_parts_mut(
                     self_.as_mut_ptr() as *mut u8,
-                    std::mem::size_of::<$source_ty>() * self_.len(),
+                    std::mem::size_of_val(self_),
                 )
             }
         }
@@ -721,7 +735,7 @@ pub(crate) mod private {
                     let raw = unsafe {
                         std::slice::from_raw_parts(
                             values.as_ptr() as *const u8,
-                            std::mem::size_of::<$ty>() * values.len(),
+                            std::mem::size_of_val(values),
                         )
                     };
                     writer.write_all(raw)?;
@@ -1223,60 +1237,6 @@ impl AsRef<[u8]> for ByteArray {
 impl AsRef<[u8]> for FixedLenByteArray {
     fn as_ref(&self) -> &[u8] {
         self.as_bytes()
-    }
-}
-
-impl FromBytes for Int96 {
-    type Buffer = [u8; 12];
-    fn from_le_bytes(bs: Self::Buffer) -> Self {
-        let mut i = Int96::new();
-        i.set_data(
-            from_le_slice(&bs[0..4]),
-            from_le_slice(&bs[4..8]),
-            from_le_slice(&bs[8..12]),
-        );
-        i
-    }
-    fn from_be_bytes(_bs: Self::Buffer) -> Self {
-        unimplemented!()
-    }
-    fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        let mut i = Int96::new();
-        i.set_data(
-            from_ne_slice(&bs[0..4]),
-            from_ne_slice(&bs[4..8]),
-            from_ne_slice(&bs[8..12]),
-        );
-        i
-    }
-}
-
-// FIXME Needed to satisfy the constraint of many decoding functions but ByteArray does not
-// appear to actual be converted directly from bytes
-impl FromBytes for ByteArray {
-    type Buffer = Vec<u8>;
-    fn from_le_bytes(bs: Self::Buffer) -> Self {
-        ByteArray::from(bs)
-    }
-    fn from_be_bytes(_bs: Self::Buffer) -> Self {
-        unreachable!()
-    }
-    fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        ByteArray::from(bs)
-    }
-}
-
-impl FromBytes for FixedLenByteArray {
-    type Buffer = Vec<u8>;
-
-    fn from_le_bytes(bs: Self::Buffer) -> Self {
-        Self(ByteArray::from(bs))
-    }
-    fn from_be_bytes(_bs: Self::Buffer) -> Self {
-        unreachable!()
-    }
-    fn from_ne_bytes(bs: Self::Buffer) -> Self {
-        Self(ByteArray::from(bs))
     }
 }
 

@@ -18,14 +18,14 @@
 [package]
 name = "arrow-integration-testing"
 description = "Binaries used in the Arrow integration tests (NOT PUBLISHED TO crates.io)"
-version = "31.0.0"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-edition = "2021"
+version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
 publish = false
-rust-version = "1.62"
+rust-version = { workspace = true }
 
 [features]
 logging = ["tracing-subscriber"]
@@ -43,7 +43,7 @@ prost = { version = "0.11", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["rc", "derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 tokio = { version = "1.0", default-features = false }
-tonic = { version = "0.8", default-features = false }
+tonic = { version = "0.9", default-features = false }
 tracing-subscriber = { version = "0.3.1", default-features = false, features = ["fmt"], optional = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

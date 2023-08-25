@@ -93,7 +93,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
             Box::new(K::DATA_TYPE),
             Box::new(merged.values.data_type().clone()),
         ))
-        .child_data(vec![merged.values.data().clone()]);
+        .child_data(vec![merged.values.to_data()]);
 
     let data = unsafe { builder.build_unchecked() };
     Ok(Arc::new(DictionaryArray::<K>::from(data)))
@@ -143,7 +143,8 @@ fn concat_fallback(
     arrays: &[&dyn Array],
     capacity: Capacities,
 ) -> Result<ArrayRef, ArrowError> {
-    let array_data = arrays.iter().map(|a| a.data()).collect::<Vec<_>>();
+    let array_data: Vec<_> = arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+    let array_data = array_data.iter().collect();
     let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
 
     for (i, a) in arrays.iter().enumerate() {
@@ -158,6 +159,14 @@ pub fn concat_batches<'a>(
     schema: &SchemaRef,
     input_batches: impl IntoIterator<Item = &'a RecordBatch>,
 ) -> Result<RecordBatch, ArrowError> {
+    // When schema is empty, sum the number of the rows of all batches
+    if schema.fields().is_empty() {
+        let num_rows: usize = input_batches.into_iter().map(RecordBatch::num_rows).sum();
+        let mut options = RecordBatchOptions::default();
+        options.row_count = Some(num_rows);
+        return RecordBatch::try_new_with_options(schema.clone(), vec![], &options);
+    }
+
     let batches: Vec<&RecordBatch> = input_batches.into_iter().collect();
     if batches.is_empty() {
         return Ok(RecordBatch::new_empty(schema.clone()));
@@ -168,8 +177,12 @@ pub fn concat_batches<'a>(
         .find(|&(_, batch)| batch.schema() != *schema)
     {
         return Err(ArrowError::InvalidArgumentError(format!(
-            "batches[{}] schema is different with argument schema.",
-            i
+            "batches[{i}] schema is different with argument schema.
+            batches[{i}] schema: {:?},
+            argument schema: {:?}
+            ",
+            batches[i].schema(),
+            *schema
         )));
     }
     let field_num = schema.fields().len();
@@ -190,6 +203,7 @@ pub fn concat_batches<'a>(
 mod tests {
     use super::*;
     use arrow_array::builder::StringDictionaryBuilder;
+    use arrow_array::cast::AsArray;
     use arrow_schema::{Field, Schema};
     use std::sync::Arc;
 
@@ -197,6 +211,21 @@ mod tests {
     fn test_concat_empty_vec() {
         let re = concat(&[]);
         assert!(re.is_err());
+    }
+
+    #[test]
+    fn test_concat_batches_no_columns() {
+        // Test concat using empty schema / batches without columns
+        let schema = Arc::new(Schema::empty());
+
+        let mut options = RecordBatchOptions::default();
+        options.row_count = Some(100);
+        let batch =
+            RecordBatch::try_new_with_options(schema.clone(), vec![], &options).unwrap();
+        // put in 2 batches of 100 rows each
+        let re = concat_batches(&schema, &[batch.clone(), batch]).unwrap();
+
+        assert_eq!(re.num_rows(), 200);
     }
 
     #[test]
@@ -302,7 +331,7 @@ mod tests {
             None,
         ])
         .slice(1, 3);
-        let arr = concat(&[input_1.as_ref(), input_2.as_ref()]).unwrap();
+        let arr = concat(&[&input_1, &input_2]).unwrap();
 
         let expected_output = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
@@ -372,10 +401,7 @@ mod tests {
 
         let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
 
-        let expected = list1
-            .into_iter()
-            .chain(list2.into_iter())
-            .chain(list3.into_iter());
+        let expected = list1.into_iter().chain(list2).chain(list3);
         let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
@@ -383,7 +409,7 @@ mod tests {
 
     #[test]
     fn test_concat_struct_arrays() {
-        let field = Field::new("field", DataType::Int64, true);
+        let field = Arc::new(Field::new("field", DataType::Int64, true));
         let input_primitive_1: ArrayRef =
             Arc::new(PrimitiveArray::<Int64Type>::from(vec![
                 Some(-1),
@@ -438,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_concat_struct_array_slices() {
-        let field = Field::new("field", DataType::Int64, true);
+        let field = Arc::new(Field::new("field", DataType::Int64, true));
         let input_primitive_1: ArrayRef =
             Arc::new(PrimitiveArray::<Int64Type>::from(vec![
                 Some(-1),
@@ -458,11 +484,8 @@ mod tests {
             ]));
         let input_struct_2 = StructArray::from(vec![(field, input_primitive_2)]);
 
-        let arr = concat(&[
-            input_struct_1.slice(1, 3).as_ref(),
-            input_struct_2.slice(1, 2).as_ref(),
-        ])
-        .unwrap();
+        let arr =
+            concat(&[&input_struct_1.slice(1, 3), &input_struct_2.slice(1, 2)]).unwrap();
 
         let expected_primitive_output = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
             Some(-1),
@@ -485,8 +508,7 @@ mod tests {
         let input_1 = StringArray::from(vec!["hello", "A", "B", "C"]);
         let input_2 = StringArray::from(vec!["world", "D", "E", "Z"]);
 
-        let arr = concat(&[input_1.slice(1, 3).as_ref(), input_2.slice(1, 2).as_ref()])
-            .unwrap();
+        let arr = concat(&[&input_1.slice(1, 3), &input_2.slice(1, 2)]).unwrap();
 
         let expected_output = StringArray::from(vec!["A", "B", "C", "D", "E"]);
 
@@ -499,8 +521,7 @@ mod tests {
         let input_1 = StringArray::from(vec![Some("hello"), None, Some("A"), Some("C")]);
         let input_2 = StringArray::from(vec![None, Some("world"), Some("D"), None]);
 
-        let arr = concat(&[input_1.slice(1, 3).as_ref(), input_2.slice(1, 2).as_ref()])
-            .unwrap();
+        let arr = concat(&[&input_1.slice(1, 3), &input_2.slice(1, 2)]).unwrap();
 
         let expected_output =
             StringArray::from(vec![None, Some("A"), Some("C"), Some("world"), Some("D")]);
@@ -609,7 +630,7 @@ mod tests {
 
         let arr = concat(&[&a, &b, &c]).unwrap();
         // this would have been 1280 if we did not precompute the value lengths.
-        assert_eq!(arr.data().buffers()[1].capacity(), 960);
+        assert_eq!(arr.to_data().buffers()[1].capacity(), 960);
     }
 
     #[test]
@@ -632,8 +653,7 @@ mod tests {
         assert_eq!(
             combined.values(),
             &(Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef),
-            "Actual: {:#?}",
-            combined
+            "Actual: {combined:#?}"
         );
 
         assert_eq!(
@@ -642,16 +662,20 @@ mod tests {
         );
 
         // Should have reused the dictionary
-        assert!(array.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
-        assert!(copy.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
+        assert!(array
+            .values()
+            .to_data()
+            .ptr_eq(&combined.values().to_data()));
+        assert!(copy.values().to_data().ptr_eq(&combined.values().to_data()));
 
         let new: DictionaryArray<Int8Type> = vec!["d"].into_iter().collect();
         let combined = concat(&[&copy as _, &array as _, &new as _]).unwrap();
+        let com = combined.as_dictionary::<Int8Type>();
 
         // Should not have reused the dictionary
-        assert!(!array.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
-        assert!(!copy.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
-        assert!(!new.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
+        assert!(!array.values().to_data().ptr_eq(&com.values().to_data()));
+        assert!(!copy.values().to_data().ptr_eq(&com.values().to_data()));
+        assert!(!new.values().to_data().ptr_eq(&com.values().to_data()));
     }
 
     #[test]
@@ -726,7 +750,7 @@ mod tests {
         let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Invalid argument error: batches[1] schema is different with argument schema.",
+            "Invalid argument error: batches[1] schema is different with argument schema.\n            batches[1] schema: Schema { fields: [Field { name: \"c\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"d\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} },\n            argument schema: Schema { fields: [Field { name: \"a\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }\n            "
         );
     }
 
@@ -735,12 +759,12 @@ mod tests {
         let a = Int32Array::from_iter_values(0..100);
         let b = Int32Array::from_iter_values(10..20);
         let a = concat(&[&a, &b]).unwrap();
-        let data = a.data();
+        let data = a.to_data();
         assert_eq!(data.buffers()[0].len(), 440);
         assert_eq!(data.buffers()[0].capacity(), 448); // Nearest multiple of 64
 
         let a = concat(&[&a.slice(10, 20), &b]).unwrap();
-        let data = a.data();
+        let data = a.to_data();
         assert_eq!(data.buffers()[0].len(), 120);
         assert_eq!(data.buffers()[0].capacity(), 128); // Nearest multiple of 64
 
@@ -748,7 +772,7 @@ mod tests {
         let b = StringArray::from(vec!["bingo", "bongo", "lorem", ""]);
 
         let a = concat(&[&a, &b]).unwrap();
-        let data = a.data();
+        let data = a.to_data();
         // (100 + 4 + 1) * size_of<i32>()
         assert_eq!(data.buffers()[0].len(), 420);
         assert_eq!(data.buffers()[0].capacity(), 448); // Nearest multiple of 64
@@ -758,7 +782,7 @@ mod tests {
         assert_eq!(data.buffers()[1].capacity(), 320); // Nearest multiple of 64
 
         let a = concat(&[&a.slice(10, 40), &b]).unwrap();
-        let data = a.data();
+        let data = a.to_data();
         // (40 + 4 + 5) * size_of<i32>()
         assert_eq!(data.buffers()[0].len(), 180);
         assert_eq!(data.buffers()[0].capacity(), 192); // Nearest multiple of 64
@@ -772,7 +796,7 @@ mod tests {
             LargeBinaryArray::from_iter_values(std::iter::repeat(b"cupcakes").take(10));
 
         let a = concat(&[&a, &b]).unwrap();
-        let data = a.data();
+        let data = a.to_data();
         // (100 + 10 + 1) * size_of<i64>()
         assert_eq!(data.buffers()[0].len(), 888);
         assert_eq!(data.buffers()[0].capacity(), 896); // Nearest multiple of 64
@@ -782,7 +806,7 @@ mod tests {
         assert_eq!(data.buffers()[1].capacity(), 384); // Nearest multiple of 64
 
         let a = concat(&[&a.slice(10, 40), &b]).unwrap();
-        let data = a.data();
+        let data = a.to_data();
         // (40 + 10 + 1) * size_of<i64>()
         assert_eq!(data.buffers()[0].len(), 408);
         assert_eq!(data.buffers()[0].capacity(), 448); // Nearest multiple of 64

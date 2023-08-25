@@ -85,7 +85,7 @@ pub fn flight_data_to_arrow_batch(
 ) -> Result<RecordBatch, ArrowError> {
     // check that the data_header is a record batch message
     let message = arrow_ipc::root_as_message(&data.data_header[..]).map_err(|err| {
-        ArrowError::ParseError(format!("Unable to get root as message: {:?}", err))
+        ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
     })?;
 
     message
@@ -147,11 +147,11 @@ pub fn ipc_message_from_arrow_schema(
 
 /// Convert `RecordBatch`es to wire protocol `FlightData`s
 pub fn batches_to_flight_data(
-    schema: Schema,
+    schema: &Schema,
     batches: Vec<RecordBatch>,
 ) -> Result<Vec<FlightData>, ArrowError> {
     let options = IpcWriteOptions::default();
-    let schema_flight_data: FlightData = SchemaAsIpc::new(&schema, &options).into();
+    let schema_flight_data: FlightData = SchemaAsIpc::new(schema, &options).into();
     let mut dictionaries = vec![];
     let mut flight_data = vec![];
 
@@ -166,8 +166,8 @@ pub fn batches_to_flight_data(
         flight_data.push(encoded_batch.into());
     }
     let mut stream = vec![schema_flight_data];
-    stream.extend(dictionaries.into_iter());
-    stream.extend(flight_data.into_iter());
+    stream.extend(dictionaries);
+    stream.extend(flight_data);
     let flight_data: Vec<_> = stream.into_iter().collect();
     Ok(flight_data)
 }

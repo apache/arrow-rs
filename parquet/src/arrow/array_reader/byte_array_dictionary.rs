@@ -355,7 +355,8 @@ where
 
                         assert_eq!(dict.data_type(), &self.value_type);
 
-                        let dict_buffers = dict.data().buffers();
+                        let data = dict.to_data();
+                        let dict_buffers = data.buffers();
                         let dict_offsets = dict_buffers[0].typed_data::<V>();
                         let dict_values = dict_buffers[1].as_slice();
 
@@ -391,8 +392,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{Array, StringArray};
     use arrow::compute::cast;
+    use arrow_array::{Array, StringArray};
 
     use crate::arrow::array_reader::test_util::{
         byte_array_all_encodings, encode_dictionary, utf8_column,
@@ -509,7 +510,7 @@ mod tests {
         assert_eq!(decoder.read(&mut output, 4..5).unwrap(), 1);
         assert_eq!(decoder.skip_values(4).unwrap(), 0);
 
-        let valid = vec![true, true, true, true, true];
+        let valid = [true, true, true, true, true];
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
         output.pad_nulls(0, 5, 5, valid_buffer.as_slice());
 

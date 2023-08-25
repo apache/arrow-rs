@@ -39,6 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
+    defaults:
+      run:
+        working-directory: object_store
     steps:
       - uses: actions/checkout@v3
       - name: Setup Rust toolchain
@@ -50,19 +53,35 @@ jobs:
       # features that might be enabled by dev-dependencies of other
       # targets.
       - name: Run clippy with default features
-        run: cargo clippy -p object_store -- -D warnings
+        run: cargo clippy -- -D warnings
       - name: Run clippy with aws feature
-        run: cargo clippy -p object_store --features aws -- -D warnings
-      - name: Run clippy with aws_profile feature
-        run: cargo clippy -p object_store --features aws_profile -- -D warnings
+        run: cargo clippy --features aws -- -D warnings
       - name: Run clippy with gcp feature
-        run: cargo clippy -p object_store --features gcp -- -D warnings
+        run: cargo clippy --features gcp -- -D warnings
       - name: Run clippy with azure feature
-        run: cargo clippy -p object_store --features azure -- -D warnings
+        run: cargo clippy --features azure -- -D warnings
       - name: Run clippy with all features
-        run: cargo clippy -p object_store --all-features -- -D warnings
+        run: cargo clippy --all-features -- -D warnings
       - name: Run clippy with all features and all targets
-        run: cargo clippy -p object_store --all-features --all-targets -- -D warnings
+        run: cargo clippy --all-features --all-targets -- -D warnings
+
+  # test doc links still work
+  #
+  # Note that since object_store is not part of the main workspace,
+  # this needs a separate docs job as it is not covered by
+  # `cargo doc --workspace`
+  docs:
+    name: Rustdocs
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: object_store
+    env:
+      RUSTDOCFLAGS: "-Dwarnings"
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run cargo doc
+        run: cargo doc --document-private-items --no-deps --workspace --all-features
 
   # test the crate
   # This runs outside a container to workaround lack of support for passing arguments
@@ -70,6 +89,9 @@ jobs:
   linux-test:
     name: Emulator Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: object_store
     env:
       # Disable full debug symbol generation to speed up CI build and keep memory down
       # "1" means line tables only, which is useful for panic tracebacks.
@@ -78,19 +100,27 @@ jobs:
       # Run integration tests
       TEST_INTEGRATION: 1
       EC2_METADATA_ENDPOINT: http://localhost:1338
-      AZURE_USE_EMULATOR: "1"
+      AZURE_CONTAINER_NAME: test-bucket
+      AZURE_STORAGE_USE_EMULATOR: "1"
       AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
       AZURITE_QUEUE_STORAGE_URL: "http://localhost:10001"
+      AWS_BUCKET: test-bucket
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT: http://localhost:4566
+      AWS_ALLOW_HTTP: true
       HTTP_URL: "http://localhost:8080"
+      GOOGLE_BUCKET: test-bucket
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
-      OBJECT_STORE_BUCKET: test-bucket
 
     steps:
       - uses: actions/checkout@v3
 
       - name: Configure Fake GCS Server (GCP emulation)
+        # Custom image - see fsouza/fake-gcs-server#1164
         run: |
-          docker run -d -p 4443:4443 fsouza/fake-gcs-server -scheme http
+          docker run -d -p 4443:4443 tustvold/fake-gcs-server -scheme http -backend memory -public-host localhost:4443
           # Give the container a moment to start up prior to configuring it
           sleep 1
           curl -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
@@ -100,13 +130,8 @@ jobs:
         run: docker run -d -p 8080:80 rclone/rclone serve webdav /data --addr :80
 
       - name: Setup LocalStack (AWS emulation)
-        env:
-          AWS_DEFAULT_REGION: "us-east-1"
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          AWS_ENDPOINT: http://localhost:4566
         run: |
-          docker run -d -p 4566:4566 localstack/localstack:0.14.4
+          docker run -d -p 4566:4566 localstack/localstack:2.0
           docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
 
@@ -123,12 +148,7 @@ jobs:
           rustup default stable
 
       - name: Run object_store tests
-        env:
-          OBJECT_STORE_AWS_DEFAULT_REGION: "us-east-1"
-          OBJECT_STORE_AWS_ACCESS_KEY_ID: test
-          OBJECT_STORE_AWS_SECRET_ACCESS_KEY: test
-          OBJECT_STORE_AWS_ENDPOINT: http://localhost:4566
-        run: cargo test -p object_store --features=aws,azure,gcp,http
+        run: cargo test --features=aws,azure,gcp,http
 
   # test the object_store crate builds against wasm32 in stable rust
   wasm32-build:
@@ -136,6 +156,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
+    defaults:
+      run:
+        working-directory: object_store
     steps:
       - uses: actions/checkout@v3
         with:
@@ -145,6 +168,6 @@ jobs:
         with:
           target: wasm32-unknown-unknown,wasm32-wasi
       - name: Build wasm32-unknown-unknown
-        run: cargo build -p object_store --target wasm32-unknown-unknown
+        run: cargo build --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
-        run: cargo build -p object_store --target wasm32-wasi
+        run: cargo build --target wasm32-wasi

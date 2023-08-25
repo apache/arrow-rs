@@ -22,9 +22,9 @@ use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_data::bit_iterator::BitIndexIterator;
 use arrow_schema::ArrowError;
 use arrow_schema::*;
+use std::ops::{BitAnd, BitOr, BitXor};
 
 /// Generic test for NaN, the optimizer should be able to remove this for integer types.
 #[inline]
@@ -117,10 +117,9 @@ where
             .map(|i| unsafe { array.value_unchecked(i) })
             .reduce(|acc, item| if cmp(&acc, &item) { item } else { acc })
     } else {
-        let null_buffer = array.data_ref().null_buffer().unwrap();
-        let iter = BitIndexIterator::new(null_buffer, array.offset(), array.len());
+        let nulls = array.nulls().unwrap();
         unsafe {
-            let idx = iter.reduce(|acc_idx, idx| {
+            let idx = nulls.valid_indices().reduce(|acc_idx, idx| {
                 let acc = array.value_unchecked(acc_idx);
                 let item = array.value_unchecked(idx);
                 if cmp(&acc, &item) {
@@ -288,7 +287,7 @@ where
 
     let data: &[T::Native] = array.values();
 
-    match array.data().null_buffer() {
+    match array.nulls() {
         None => {
             let sum = data.iter().fold(T::default_value(), |accumulator, value| {
                 accumulator.add_wrapping(*value)
@@ -296,12 +295,12 @@ where
 
             Some(sum)
         }
-        Some(buffer) => {
+        Some(nulls) => {
             let mut sum = T::default_value();
             let data_chunks = data.chunks_exact(64);
             let remainder = data_chunks.remainder();
 
-            let bit_chunks = buffer.bit_chunks(array.offset(), array.len());
+            let bit_chunks = nulls.inner().bit_chunks();
             data_chunks
                 .zip(bit_chunks.iter())
                 .for_each(|(chunk, mask)| {
@@ -328,6 +327,115 @@ where
     }
 }
 
+macro_rules! bit_operation {
+    ($NAME:ident, $OP:ident, $NATIVE:ident, $DEFAULT:expr, $DOC:expr) => {
+        #[doc = $DOC]
+        ///
+        /// Returns `None` if the array is empty or only contains null values.
+        pub fn $NAME<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
+        where
+            T: ArrowNumericType,
+            T::Native: $NATIVE<Output = T::Native> + ArrowNativeTypeOp,
+        {
+            let default;
+            if $DEFAULT == -1 {
+                default = T::Native::ONE.neg_wrapping();
+            } else {
+                default = T::default_value();
+            }
+
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return None;
+            }
+
+            let data: &[T::Native] = array.values();
+
+            match array.nulls() {
+                None => {
+                    let result = data
+                        .iter()
+                        .fold(default, |accumulator, value| accumulator.$OP(*value));
+
+                    Some(result)
+                }
+                Some(nulls) => {
+                    let mut result = default;
+                    let data_chunks = data.chunks_exact(64);
+                    let remainder = data_chunks.remainder();
+
+                    let bit_chunks = nulls.inner().bit_chunks();
+                    data_chunks
+                        .zip(bit_chunks.iter())
+                        .for_each(|(chunk, mask)| {
+                            // index_mask has value 1 << i in the loop
+                            let mut index_mask = 1;
+                            chunk.iter().for_each(|value| {
+                                if (mask & index_mask) != 0 {
+                                    result = result.$OP(*value);
+                                }
+                                index_mask <<= 1;
+                            });
+                        });
+
+                    let remainder_bits = bit_chunks.remainder_bits();
+
+                    remainder.iter().enumerate().for_each(|(i, value)| {
+                        if remainder_bits & (1 << i) != 0 {
+                            result = result.$OP(*value);
+                        }
+                    });
+
+                    Some(result)
+                }
+            }
+        }
+    };
+}
+
+bit_operation!(
+    bit_and,
+    bitand,
+    BitAnd,
+    -1,
+    "Returns the bitwise and of all non-null input values."
+);
+bit_operation!(
+    bit_or,
+    bitor,
+    BitOr,
+    0,
+    "Returns the bitwise or of all non-null input values."
+);
+bit_operation!(
+    bit_xor,
+    bitxor,
+    BitXor,
+    0,
+    "Returns the bitwise xor of all non-null input values."
+);
+
+/// Returns true if all non-null input values are true, otherwise false.
+///
+/// Returns `None` if the array is empty or only contains null values.
+pub fn bool_and(array: &BooleanArray) -> Option<bool> {
+    if array.null_count() == array.len() {
+        return None;
+    }
+    Some(array.false_count() == 0)
+}
+
+/// Returns true if any non-null input value is true, otherwise false.
+///
+/// Returns `None` if the array is empty or only contains null values.
+pub fn bool_or(array: &BooleanArray) -> Option<bool> {
+    if array.null_count() == array.len() {
+        return None;
+    }
+    Some(array.true_count() != 0)
+}
+
 /// Returns the sum of values in the primitive array.
 ///
 /// Returns `Ok(None)` if the array is empty or only contains null values.
@@ -347,7 +455,7 @@ where
 
     let data: &[T::Native] = array.values();
 
-    match array.data().null_buffer() {
+    match array.nulls() {
         None => {
             let sum = data
                 .iter()
@@ -357,14 +465,14 @@ where
 
             Ok(Some(sum))
         }
-        Some(buffer) => {
+        Some(nulls) => {
             let mut sum = T::default_value();
 
             try_for_each_valid_idx(
-                array.len(),
-                array.offset(),
-                null_count,
-                Some(buffer.as_slice()),
+                nulls.len(),
+                nulls.offset(),
+                nulls.null_count(),
+                Some(nulls.validity()),
                 |idx| {
                     unsafe { sum = sum.add_checked(array.value_unchecked(idx))? };
                     Ok::<_, ArrowError>(())
@@ -665,7 +773,7 @@ mod simd {
         let mut chunk_acc = A::init_accumulator_chunk();
         let mut rem_acc = A::init_accumulator_scalar();
 
-        match array.data().null_buffer() {
+        match array.nulls() {
             None => {
                 let data_chunks = data.chunks_exact(64);
                 let remainder = data_chunks.remainder();
@@ -681,12 +789,12 @@ mod simd {
                     A::accumulate_scalar(&mut rem_acc, *value);
                 });
             }
-            Some(buffer) => {
+            Some(nulls) => {
                 // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
                 let data_chunks = data.chunks_exact(64);
                 let remainder = data_chunks.remainder();
 
-                let bit_chunks = buffer.bit_chunks(array.offset(), array.len());
+                let bit_chunks = nulls.inner().bit_chunks();
                 let remainder_bits = bit_chunks.remainder_bits();
 
                 data_chunks.zip(bit_chunks).for_each(|(chunk, mut mask)| {
@@ -759,8 +867,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arithmetic::add;
     use arrow_array::types::*;
+    use arrow_buffer::NullBuffer;
+    use std::sync::Arc;
 
     #[test]
     fn test_primitive_array_sum() {
@@ -788,55 +897,127 @@ mod tests {
 
     #[test]
     fn test_primitive_array_sum_large_64() {
-        let a: Int64Array = (1..=100)
-            .map(|i| if i % 3 == 0 { Some(i) } else { None })
-            .collect();
-        let b: Int64Array = (1..=100)
-            .map(|i| if i % 3 == 0 { Some(0) } else { Some(i) })
-            .collect();
         // create an array that actually has non-zero values at the invalid indices
-        let c = add(&a, &b).unwrap();
+        let validity = NullBuffer::new((1..=100).map(|x| x % 3 == 0).collect());
+        let c = Int64Array::new((1..=100).collect(), Some(validity));
+
         assert_eq!(Some((1..=100).filter(|i| i % 3 == 0).sum()), sum(&c));
     }
 
     #[test]
     fn test_primitive_array_sum_large_32() {
-        let a: Int32Array = (1..=100)
-            .map(|i| if i % 3 == 0 { Some(i) } else { None })
-            .collect();
-        let b: Int32Array = (1..=100)
-            .map(|i| if i % 3 == 0 { Some(0) } else { Some(i) })
-            .collect();
         // create an array that actually has non-zero values at the invalid indices
-        let c = add(&a, &b).unwrap();
+        let validity = NullBuffer::new((1..=100).map(|x| x % 3 == 0).collect());
+        let c = Int32Array::new((1..=100).collect(), Some(validity));
         assert_eq!(Some((1..=100).filter(|i| i % 3 == 0).sum()), sum(&c));
     }
 
     #[test]
     fn test_primitive_array_sum_large_16() {
-        let a: Int16Array = (1..=100)
-            .map(|i| if i % 3 == 0 { Some(i) } else { None })
-            .collect();
-        let b: Int16Array = (1..=100)
-            .map(|i| if i % 3 == 0 { Some(0) } else { Some(i) })
-            .collect();
         // create an array that actually has non-zero values at the invalid indices
-        let c = add(&a, &b).unwrap();
+        let validity = NullBuffer::new((1..=100).map(|x| x % 3 == 0).collect());
+        let c = Int16Array::new((1..=100).collect(), Some(validity));
         assert_eq!(Some((1..=100).filter(|i| i % 3 == 0).sum()), sum(&c));
     }
 
     #[test]
     fn test_primitive_array_sum_large_8() {
         // include fewer values than other large tests so the result does not overflow the u8
-        let a: UInt8Array = (1..=100)
-            .map(|i| if i % 33 == 0 { Some(i) } else { None })
-            .collect();
-        let b: UInt8Array = (1..=100)
-            .map(|i| if i % 33 == 0 { Some(0) } else { Some(i) })
-            .collect();
         // create an array that actually has non-zero values at the invalid indices
-        let c = add(&a, &b).unwrap();
+        let validity = NullBuffer::new((1..=100).map(|x| x % 33 == 0).collect());
+        let c = UInt8Array::new((1..=100).collect(), Some(validity));
         assert_eq!(Some((1..=100).filter(|i| i % 33 == 0).sum()), sum(&c));
+    }
+
+    #[test]
+    fn test_primitive_array_bit_and() {
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(0, bit_and(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_and_with_nulls() {
+        let a = Int32Array::from(vec![None, Some(2), Some(3), None, None]);
+        assert_eq!(2, bit_and(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_and_all_nulls() {
+        let a = Int32Array::from(vec![None, None, None]);
+        assert_eq!(None, bit_and(&a));
+    }
+
+    #[test]
+    fn test_primitive_array_bit_or() {
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(7, bit_or(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_or_with_nulls() {
+        let a = Int32Array::from(vec![None, Some(2), Some(3), None, Some(5)]);
+        assert_eq!(7, bit_or(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_or_all_nulls() {
+        let a = Int32Array::from(vec![None, None, None]);
+        assert_eq!(None, bit_or(&a));
+    }
+
+    #[test]
+    fn test_primitive_array_bit_xor() {
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(1, bit_xor(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_xor_with_nulls() {
+        let a = Int32Array::from(vec![None, Some(2), Some(3), None, Some(5)]);
+        assert_eq!(4, bit_xor(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bit_xor_all_nulls() {
+        let a = Int32Array::from(vec![None, None, None]);
+        assert_eq!(None, bit_xor(&a));
+    }
+
+    #[test]
+    fn test_primitive_array_bool_and() {
+        let a = BooleanArray::from(vec![true, false, true, false, true]);
+        assert!(!bool_and(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bool_and_with_nulls() {
+        let a = BooleanArray::from(vec![None, Some(true), Some(true), None, Some(true)]);
+        assert!(bool_and(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bool_and_all_nulls() {
+        let a = BooleanArray::from(vec![None, None, None]);
+        assert_eq!(None, bool_and(&a));
+    }
+
+    #[test]
+    fn test_primitive_array_bool_or() {
+        let a = BooleanArray::from(vec![true, false, true, false, true]);
+        assert!(bool_or(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bool_or_with_nulls() {
+        let a =
+            BooleanArray::from(vec![None, Some(false), Some(false), None, Some(false)]);
+        assert!(!bool_or(&a).unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_bool_or_all_nulls() {
+        let a = BooleanArray::from(vec![None, None, None]);
+        assert_eq!(None, bool_or(&a));
     }
 
     #[test]
@@ -1072,7 +1253,8 @@ mod tests {
 
     #[test]
     fn test_string_min_max_all_nulls() {
-        let a = StringArray::from(vec![None, None]);
+        let v: Vec<Option<&str>> = vec![None, None];
+        let a = StringArray::from(v);
         assert_eq!(None, min_string(&a));
         assert_eq!(None, max_string(&a));
     }
@@ -1143,9 +1325,10 @@ mod tests {
     #[test]
     fn test_sum_dyn() {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let values = Arc::new(values) as ArrayRef;
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
 
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert_eq!(39, sum_array::<Int8Type, _>(array).unwrap());
 
@@ -1153,12 +1336,12 @@ mod tests {
         assert_eq!(15, sum_array::<Int32Type, _>(&a).unwrap());
 
         let keys = Int8Array::from(vec![Some(2_i8), None, Some(4)]);
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert_eq!(26, sum_array::<Int8Type, _>(array).unwrap());
 
         let keys = Int8Array::from(vec![None, None, None]);
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert!(sum_array::<Int8Type, _>(array).is_none());
     }
@@ -1167,8 +1350,9 @@ mod tests {
     fn test_max_min_dyn() {
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
         let keys = Int8Array::from_iter_values([2_i8, 3, 4]);
+        let values = Arc::new(values) as ArrayRef;
 
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert_eq!(14, max_array::<Int8Type, _>(array).unwrap());
 
@@ -1180,14 +1364,14 @@ mod tests {
         assert_eq!(1, min_array::<Int32Type, _>(&a).unwrap());
 
         let keys = Int8Array::from(vec![Some(2_i8), None, Some(7)]);
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert_eq!(17, max_array::<Int8Type, _>(array).unwrap());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert_eq!(12, min_array::<Int8Type, _>(array).unwrap());
 
         let keys = Int8Array::from(vec![None, None, None]);
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, values.clone());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
         assert!(max_array::<Int8Type, _>(array).is_none());
         let array = dict_array.downcast_dict::<Int8Array>().unwrap();
@@ -1199,7 +1383,7 @@ mod tests {
         let values = Float32Array::from(vec![5.0_f32, 2.0_f32, f32::NAN]);
         let keys = Int8Array::from_iter_values([0_i8, 1, 2]);
 
-        let dict_array = DictionaryArray::try_new(&keys, &values).unwrap();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
         let array = dict_array.downcast_dict::<Float32Array>().unwrap();
         assert!(max_array::<Float32Type, _>(array).unwrap().is_nan());
 
@@ -1220,13 +1404,12 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_primitive_array::<Float64Type>(&sliced_input);
 
-        assert_eq!(sliced_input, &input);
+        assert_eq!(&sliced_input, &input);
 
-        let actual = min(sliced_input);
+        let actual = min(&sliced_input);
         assert_eq!(actual, expected);
-        let actual = max(sliced_input);
+        let actual = max(&sliced_input);
         assert_eq!(actual, expected);
     }
 
@@ -1243,13 +1426,12 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_boolean_array(&sliced_input);
 
-        assert_eq!(sliced_input, &input);
+        assert_eq!(sliced_input, input);
 
-        let actual = min_boolean(sliced_input);
+        let actual = min_boolean(&sliced_input);
         assert_eq!(actual, expected);
-        let actual = max_boolean(sliced_input);
+        let actual = max_boolean(&sliced_input);
         assert_eq!(actual, expected);
     }
 
@@ -1266,13 +1448,12 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_string_array(&sliced_input);
 
-        assert_eq!(sliced_input, &input);
+        assert_eq!(&sliced_input, &input);
 
-        let actual = min_string(sliced_input);
+        let actual = min_string(&sliced_input);
         assert_eq!(actual, expected);
-        let actual = max_string(sliced_input);
+        let actual = max_string(&sliced_input);
         assert_eq!(actual, expected);
     }
 
@@ -1289,13 +1470,12 @@ mod tests {
             .into_iter()
             .collect();
         let sliced_input = sliced_input.slice(4, 2);
-        let sliced_input = as_generic_binary_array::<i32>(&sliced_input);
 
-        assert_eq!(sliced_input, &input);
+        assert_eq!(&sliced_input, &input);
 
-        let actual = min_binary(sliced_input);
+        let actual = min_binary(&sliced_input);
         assert_eq!(actual, expected);
-        let actual = max_binary(sliced_input);
+        let actual = max_binary(&sliced_input);
         assert_eq!(actual, expected);
     }
 

@@ -18,50 +18,71 @@
 [package]
 name = "arrow-flight"
 description = "Apache Arrow Flight"
-version = "31.0.0"
-edition = "2021"
-rust-version = "1.62"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-license = "Apache-2.0"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = "1.70.0"
+authors = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
 
 [dependencies]
-arrow-array = { version = "31.0.0", path = "../arrow-array" }
-arrow-buffer = { version = "31.0.0", path = "../arrow-buffer" }
+arrow-arith = { workspace = true, optional = true }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
 # Cast is needed to work around https://github.com/apache/arrow-rs/issues/3389
-arrow-cast = { version = "31.0.0", path = "../arrow-cast" }
-arrow-ipc = { version = "31.0.0", path = "../arrow-ipc" }
-arrow-schema = { version = "31.0.0", path = "../arrow-schema" }
+arrow-cast = { workspace = true }
+arrow-data = { workspace = true, optional = true }
+arrow-ipc = { workspace = true }
+arrow-ord = { workspace = true, optional = true }
+arrow-row = { workspace = true, optional = true }
+arrow-select = { workspace = true, optional = true }
+arrow-schema = { workspace = true }
+arrow-string = { workspace = true, optional = true }
 base64 = { version = "0.21", default-features = false, features = ["std"] }
-tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }
-prost = { version = "0.11", default-features = false }
-prost-derive = { version = "0.11", default-features = false }
-tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
+once_cell = { version = "1", optional = true }
+paste = { version = "1.0" }
+prost = { version = "0.11", default-features = false, features = ["prost-derive"] }
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
+tonic = { version = "0.9", default-features = false, features = ["transport", "codegen", "prost"] }
+
+# CLI-related dependencies
+clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
+tracing-log = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3.1", default-features = false, features = ["ansi", "fmt"], optional = true }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
 default = []
-flight-sql-experimental = []
+flight-sql-experimental = ["arrow-arith", "arrow-data", "arrow-ord", "arrow-row", "arrow-select", "arrow-string", "once_cell"]
 tls = ["tonic/tls"]
 
+# Enable CLI tools
+cli = ["arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subscriber", "tonic/tls-webpki-roots"]
+
 [dev-dependencies]
-arrow = { version = "31.0.0", path = "../arrow", features = ["prettyprint"] }
+arrow-cast = { workspace = true, features = ["prettyprint"] }
+assert_cmd = "2.0.8"
+http = "0.2.9"
+http-body = "0.4.5"
+pin-project-lite = "0.2"
 tempfile = "3.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = "0.4.13"
 
-[build-dependencies]
-# Pin specific version of the tonic-build dependencies to avoid auto-generated
-# (and checked in) arrow.flight.protocol.rs from changing
-proc-macro2 = { version = "=1.0.50", default-features = false }
-prost-build = { version = "=0.11.6", default-features = false }
-tonic-build = { version = "=0.8.4", default-features = false, features = ["transport", "prost"] }
-
 [[example]]
 name = "flight_sql_server"
-required-features = ["flight-sql-experimental"]
+required-features = ["flight-sql-experimental", "tls"]
+
+[[bin]]
+name = "flight_sql_client"
+required-features = ["cli", "flight-sql-experimental", "tls"]
+
+[[test]]
+name = "flight_sql_client_cli"
+path = "tests/flight_sql_client_cli.rs"
+required-features = ["cli", "flight-sql-experimental", "tls"]

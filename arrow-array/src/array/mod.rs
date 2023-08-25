@@ -20,7 +20,7 @@
 mod binary_array;
 
 use crate::types::*;
-use arrow_buffer::{Buffer, MutableBuffer, ToByteSlice};
+use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
@@ -64,10 +64,12 @@ pub use struct_array::*;
 mod union_array;
 pub use union_array::*;
 
-/// Trait for dealing with different types of array at runtime when the type of the
-/// array is not known in advance.
+mod run_array;
+pub use run_array::*;
+
+/// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
-    /// Returns the array as [`Any`](std::any::Any) so that it can be
+    /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
     ///
     /// # Example:
@@ -91,18 +93,15 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn as_any(&self) -> &dyn Any;
 
-    /// Returns a reference to the underlying data of this array.
-    fn data(&self) -> &ArrayData;
+    /// Returns the underlying data of this array
+    fn to_data(&self) -> ArrayData;
 
-    /// Returns the underlying data of this array.
+    /// Returns the underlying data of this array
+    ///
+    /// Unlike [`Array::to_data`] this consumes self, allowing it avoid unnecessary clones
     fn into_data(self) -> ArrayData;
 
-    /// Returns a reference-counted pointer to the underlying data of this array.
-    fn data_ref(&self) -> &ArrayData {
-        self.data()
-    }
-
-    /// Returns a reference to the [`DataType`](arrow_schema::DataType) of this array.
+    /// Returns a reference to the [`DataType`] of this array.
     ///
     /// # Example:
     ///
@@ -114,9 +113,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(*array.data_type(), DataType::Int32);
     /// ```
-    fn data_type(&self) -> &DataType {
-        self.data_ref().data_type()
-    }
+    fn data_type(&self) -> &DataType;
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     ///
@@ -129,11 +126,9 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// // Make slice over the values [2, 3, 4]
     /// let array_slice = array.slice(1, 3);
     ///
-    /// assert_eq!(array_slice.as_ref(), &Int32Array::from(vec![2, 3, 4]));
+    /// assert_eq!(&array_slice, &Int32Array::from(vec![2, 3, 4]));
     /// ```
-    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        make_array(self.data_ref().slice(offset, length))
-    }
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef;
 
     /// Returns the length (i.e., number of elements) of this array.
     ///
@@ -146,9 +141,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(array.len(), 5);
     /// ```
-    fn len(&self) -> usize {
-        self.data_ref().len()
-    }
+    fn len(&self) -> usize;
 
     /// Returns whether this array is empty.
     ///
@@ -161,9 +154,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(array.is_empty(), false);
     /// ```
-    fn is_empty(&self) -> bool {
-        self.data_ref().is_empty()
-    }
+    fn is_empty(&self) -> bool;
 
     /// Returns the offset into the underlying data used by this array(-slice).
     /// Note that the underlying data can be shared by many arrays.
@@ -172,21 +163,42 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// # Example:
     ///
     /// ```
-    /// use arrow_array::{Array, Int32Array};
+    /// use arrow_array::{Array, BooleanArray};
     ///
-    /// let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
-    /// // Make slice over the values [2, 3, 4]
+    /// let array = BooleanArray::from(vec![false, false, true, true]);
     /// let array_slice = array.slice(1, 3);
     ///
     /// assert_eq!(array.offset(), 0);
     /// assert_eq!(array_slice.offset(), 1);
     /// ```
-    fn offset(&self) -> usize {
-        self.data_ref().offset()
+    fn offset(&self) -> usize;
+
+    /// Returns the null buffer of this array if any
+    ///
+    /// Note: some arrays can encode their nullability in their children, for example,
+    /// [`DictionaryArray::values`] values or [`RunArray::values`], or without a null buffer,
+    /// such as [`NullArray`]. Use [`Array::logical_nulls`] to obtain a computed mask encoding this
+    fn nulls(&self) -> Option<&NullBuffer>;
+
+    /// Returns the logical null buffer of this array if any
+    ///
+    /// In most cases this will be the same as [`Array::nulls`], except for:
+    ///
+    /// * DictionaryArray where [`DictionaryArray::values`] contains nulls
+    /// * RunArray where [`RunArray::values`] contains nulls
+    /// * NullArray where all indices are nulls
+    ///
+    /// In these cases a logical [`NullBuffer`] will be computed, encoding the logical nullability
+    /// of these arrays, beyond what is encoded in [`Array::nulls`]
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        self.nulls().cloned()
     }
 
     /// Returns whether the element at `index` is null.
     /// When using this function on a slice, the index is relative to the slice.
+    ///
+    /// Note: this method returns the physical nullability, i.e. that encoded in [`Array::nulls`]
+    /// see [`Array::logical_nulls`] for logical nullability
     ///
     /// # Example:
     ///
@@ -199,11 +211,14 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.is_null(1), true);
     /// ```
     fn is_null(&self, index: usize) -> bool {
-        self.data_ref().is_null(index)
+        self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
     }
 
     /// Returns whether the element at `index` is not null.
     /// When using this function on a slice, the index is relative to the slice.
+    ///
+    /// Note: this method returns the physical nullability, i.e. that encoded in [`Array::nulls`]
+    /// see [`Array::logical_nulls`] for logical nullability
     ///
     /// # Example:
     ///
@@ -216,10 +231,13 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.is_valid(1), false);
     /// ```
     fn is_valid(&self, index: usize) -> bool {
-        self.data_ref().is_valid(index)
+        !self.is_null(index)
     }
 
-    /// Returns the total number of null values in this array.
+    /// Returns the total number of physical null values in this array.
+    ///
+    /// Note: this method returns the physical null count, i.e. that encoded in [`Array::nulls`],
+    /// see [`Array::logical_nulls`] for logical nullability
     ///
     /// # Example:
     ///
@@ -232,27 +250,33 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.null_count(), 2);
     /// ```
     fn null_count(&self) -> usize {
-        self.data_ref().null_count()
+        self.nulls().map(|n| n.null_count()).unwrap_or_default()
+    }
+
+    /// Returns `false` if the array is guaranteed to not contain any logical nulls
+    ///
+    /// In general this will be equivalent to `Array::null_count() != 0` but may differ in the
+    /// presence of logical nullability, see [`Array::logical_nulls`].
+    ///
+    /// Implementations will return `true` unless they can cheaply prove no logical nulls
+    /// are present. For example a [`DictionaryArray`] with nullable values will still return true,
+    /// even if the nulls present in [`DictionaryArray::values`] are not referenced by any key,
+    /// and therefore would not appear in [`Array::logical_nulls`].
+    fn is_nullable(&self) -> bool {
+        self.null_count() != 0
     }
 
     /// Returns the total number of bytes of memory pointed to by this array.
     /// The buffers store bytes in the Arrow memory format, and include the data as well as the validity map.
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data_ref().get_buffer_memory_size()
-    }
+    fn get_buffer_memory_size(&self) -> usize;
 
     /// Returns the total number of bytes of memory occupied physically by this array.
     /// This value will always be greater than returned by `get_buffer_memory_size()` and
     /// includes the overhead of the data structures that contain the pointers to the various buffers.
-    fn get_array_memory_size(&self) -> usize {
-        // both data.get_array_memory_size and size_of_val(self) include ArrayData fields,
-        // to only count additional fields of this array substract size_of(ArrayData)
-        self.data_ref().get_array_memory_size() + std::mem::size_of_val(self)
-            - std::mem::size_of::<ArrayData>()
-    }
+    fn get_array_memory_size(&self) -> usize;
 }
 
-/// A reference-counted reference to a generic `Array`.
+/// A reference-counted reference to a generic `Array`
 pub type ArrayRef = Arc<dyn Array>;
 
 /// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
@@ -261,16 +285,12 @@ impl Array for ArrayRef {
         self.as_ref().as_any()
     }
 
-    fn data(&self) -> &ArrayData {
-        self.as_ref().data()
+    fn to_data(&self) -> ArrayData {
+        self.as_ref().to_data()
     }
 
     fn into_data(self) -> ArrayData {
-        self.data().clone()
-    }
-
-    fn data_ref(&self) -> &ArrayData {
-        self.as_ref().data_ref()
+        self.to_data()
     }
 
     fn data_type(&self) -> &DataType {
@@ -293,6 +313,14 @@ impl Array for ArrayRef {
         self.as_ref().offset()
     }
 
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.as_ref().nulls()
+    }
+
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        self.as_ref().logical_nulls()
+    }
+
     fn is_null(&self, index: usize) -> bool {
         self.as_ref().is_null(index)
     }
@@ -303,6 +331,10 @@ impl Array for ArrayRef {
 
     fn null_count(&self) -> usize {
         self.as_ref().null_count()
+    }
+
+    fn is_nullable(&self) -> bool {
+        self.as_ref().is_nullable()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -319,16 +351,12 @@ impl<'a, T: Array> Array for &'a T {
         T::as_any(self)
     }
 
-    fn data(&self) -> &ArrayData {
-        T::data(self)
+    fn to_data(&self) -> ArrayData {
+        T::to_data(self)
     }
 
     fn into_data(self) -> ArrayData {
-        self.data().clone()
-    }
-
-    fn data_ref(&self) -> &ArrayData {
-        T::data_ref(self)
+        self.to_data()
     }
 
     fn data_type(&self) -> &DataType {
@@ -351,6 +379,14 @@ impl<'a, T: Array> Array for &'a T {
         T::offset(self)
     }
 
+    fn nulls(&self) -> Option<&NullBuffer> {
+        T::nulls(self)
+    }
+
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        T::logical_nulls(self)
+    }
+
     fn is_null(&self, index: usize) -> bool {
         T::is_null(self, index)
     }
@@ -361,6 +397,10 @@ impl<'a, T: Array> Array for &'a T {
 
     fn null_count(&self) -> usize {
         T::null_count(self)
+    }
+
+    fn is_nullable(&self) -> bool {
+        T::is_nullable(self)
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -396,81 +436,81 @@ pub trait ArrayAccessor: Array {
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
 }
 
-impl PartialEq for dyn Array {
+impl PartialEq for dyn Array + '_ {
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
-impl<T: Array> PartialEq<T> for dyn Array {
+impl<T: Array> PartialEq<T> for dyn Array + '_ {
     fn eq(&self, other: &T) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for NullArray {
     fn eq(&self, other: &NullArray) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl<T: ArrowPrimitiveType> PartialEq for PrimitiveArray<T> {
     fn eq(&self, other: &PrimitiveArray<T>) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
-impl<K: ArrowPrimitiveType> PartialEq for DictionaryArray<K> {
+impl<K: ArrowDictionaryKeyType> PartialEq for DictionaryArray<K> {
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for BooleanArray {
     fn eq(&self, other: &BooleanArray) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericStringArray<OffsetSize> {
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericBinaryArray<OffsetSize> {
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for FixedSizeBinaryArray {
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListArray<OffsetSize> {
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for MapArray {
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for FixedSizeListArray {
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
 impl PartialEq for StructArray {
     fn eq(&self, other: &Self) -> bool {
-        self.data().eq(other.data())
+        self.to_data().eq(&other.to_data())
     }
 }
 
@@ -548,7 +588,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
-        DataType::Union(_, _, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
+        DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
         DataType::FixedSizeList(_, _) => {
             Arc::new(FixedSizeListArray::from(data)) as ArrayRef
         }
@@ -577,12 +617,26 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             DataType::UInt64 => {
                 Arc::new(DictionaryArray::<UInt64Type>::from(data)) as ArrayRef
             }
-            dt => panic!("Unexpected dictionary key type {:?}", dt),
+            dt => panic!("Unexpected dictionary key type {dt:?}"),
         },
+        DataType::RunEndEncoded(ref run_ends_type, _) => {
+            match run_ends_type.data_type() {
+                DataType::Int16 => {
+                    Arc::new(RunArray::<Int16Type>::from(data)) as ArrayRef
+                }
+                DataType::Int32 => {
+                    Arc::new(RunArray::<Int32Type>::from(data)) as ArrayRef
+                }
+                DataType::Int64 => {
+                    Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef
+                }
+                dt => panic!("Unexpected data type for run_ends array {dt:?}"),
+            }
+        }
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
-        dt => panic!("Unexpected data type {:?}", dt),
+        dt => panic!("Unexpected data type {dt:?}"),
     }
 }
 
@@ -617,210 +671,32 @@ pub fn new_empty_array(data_type: &DataType) -> ArrayRef {
 /// assert_eq!(&array, &null_array);
 /// ```
 pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
-    // context: https://github.com/apache/arrow/pull/9469#discussion_r574761687
-    match data_type {
-        DataType::Null => Arc::new(NullArray::new(length)),
-        DataType::Boolean => {
-            let null_buf: Buffer = MutableBuffer::new_null(length).into();
-            make_array(unsafe {
-                ArrayData::new_unchecked(
-                    data_type.clone(),
-                    length,
-                    Some(length),
-                    Some(null_buf.clone()),
-                    0,
-                    vec![null_buf],
-                    vec![],
-                )
-            })
-        }
-        DataType::Int8 => new_null_sized_array::<Int8Type>(data_type, length),
-        DataType::UInt8 => new_null_sized_array::<UInt8Type>(data_type, length),
-        DataType::Int16 => new_null_sized_array::<Int16Type>(data_type, length),
-        DataType::UInt16 => new_null_sized_array::<UInt16Type>(data_type, length),
-        DataType::Float16 => new_null_sized_array::<Float16Type>(data_type, length),
-        DataType::Int32 => new_null_sized_array::<Int32Type>(data_type, length),
-        DataType::UInt32 => new_null_sized_array::<UInt32Type>(data_type, length),
-        DataType::Float32 => new_null_sized_array::<Float32Type>(data_type, length),
-        DataType::Date32 => new_null_sized_array::<Date32Type>(data_type, length),
-        // expanding this into Date23{unit}Type results in needless branching
-        DataType::Time32(_) => new_null_sized_array::<Int32Type>(data_type, length),
-        DataType::Int64 => new_null_sized_array::<Int64Type>(data_type, length),
-        DataType::UInt64 => new_null_sized_array::<UInt64Type>(data_type, length),
-        DataType::Float64 => new_null_sized_array::<Float64Type>(data_type, length),
-        DataType::Date64 => new_null_sized_array::<Date64Type>(data_type, length),
-        // expanding this into Timestamp{unit}Type results in needless branching
-        DataType::Timestamp(_, _) => new_null_sized_array::<Int64Type>(data_type, length),
-        DataType::Time64(_) => new_null_sized_array::<Int64Type>(data_type, length),
-        DataType::Duration(_) => new_null_sized_array::<Int64Type>(data_type, length),
-        DataType::Interval(unit) => match unit {
-            IntervalUnit::YearMonth => {
-                new_null_sized_array::<IntervalYearMonthType>(data_type, length)
-            }
-            IntervalUnit::DayTime => {
-                new_null_sized_array::<IntervalDayTimeType>(data_type, length)
-            }
-            IntervalUnit::MonthDayNano => {
-                new_null_sized_array::<IntervalMonthDayNanoType>(data_type, length)
-            }
-        },
-        DataType::FixedSizeBinary(value_len) => make_array(unsafe {
-            ArrayData::new_unchecked(
-                data_type.clone(),
-                length,
-                Some(length),
-                Some(MutableBuffer::new_null(length).into()),
-                0,
-                vec![Buffer::from(vec![0u8; *value_len as usize * length])],
-                vec![],
-            )
-        }),
-        DataType::Binary | DataType::Utf8 => {
-            new_null_binary_array::<i32>(data_type, length)
-        }
-        DataType::LargeBinary | DataType::LargeUtf8 => {
-            new_null_binary_array::<i64>(data_type, length)
-        }
-        DataType::List(field) => {
-            new_null_list_array::<i32>(data_type, field.data_type(), length)
-        }
-        DataType::LargeList(field) => {
-            new_null_list_array::<i64>(data_type, field.data_type(), length)
-        }
-        DataType::FixedSizeList(field, value_len) => make_array(unsafe {
-            ArrayData::new_unchecked(
-                data_type.clone(),
-                length,
-                Some(length),
-                Some(MutableBuffer::new_null(length).into()),
-                0,
-                vec![],
-                vec![
-                    new_null_array(field.data_type(), *value_len as usize * length)
-                        .data()
-                        .clone(),
-                ],
-            )
-        }),
-        DataType::Struct(fields) => {
-            let fields: Vec<_> = fields
-                .iter()
-                .map(|field| (field.clone(), new_null_array(field.data_type(), length)))
-                .collect();
+    make_array(ArrayData::new_null(data_type, length))
+}
 
-            let null_buffer = MutableBuffer::new_null(length);
-            Arc::new(StructArray::from((fields, null_buffer.into())))
+/// Helper function that gets offset from an [`ArrayData`]
+///
+/// # Safety
+///
+/// - ArrayData must contain a valid [`OffsetBuffer`] as its first buffer
+unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
+    match data.is_empty() && data.buffers()[0].is_empty() {
+        true => OffsetBuffer::new_empty(),
+        false => {
+            let buffer = ScalarBuffer::new(
+                data.buffers()[0].clone(),
+                data.offset(),
+                data.len() + 1,
+            );
+            // Safety:
+            // ArrayData is valid
+            unsafe { OffsetBuffer::new_unchecked(buffer) }
         }
-        DataType::Map(field, _keys_sorted) => {
-            new_null_list_array::<i32>(data_type, field.data_type(), length)
-        }
-        DataType::Union(_, _, _) => {
-            unimplemented!("Creating null Union array not yet supported")
-        }
-        DataType::Dictionary(key, value) => {
-            let keys = new_null_array(key, length);
-            let keys = keys.data();
-
-            make_array(unsafe {
-                ArrayData::new_unchecked(
-                    data_type.clone(),
-                    length,
-                    Some(length),
-                    keys.null_buffer().cloned(),
-                    0,
-                    keys.buffers().into(),
-                    vec![new_empty_array(value.as_ref()).into_data()],
-                )
-            })
-        }
-        DataType::Decimal128(_, _) => {
-            new_null_sized_decimal(data_type, length, std::mem::size_of::<i128>())
-        }
-        DataType::Decimal256(_, _) => new_null_sized_decimal(data_type, length, 32),
     }
 }
 
-#[inline]
-fn new_null_list_array<OffsetSize: OffsetSizeTrait>(
-    data_type: &DataType,
-    child_data_type: &DataType,
-    length: usize,
-) -> ArrayRef {
-    make_array(unsafe {
-        ArrayData::new_unchecked(
-            data_type.clone(),
-            length,
-            Some(length),
-            Some(MutableBuffer::new_null(length).into()),
-            0,
-            vec![Buffer::from(
-                vec![OffsetSize::zero(); length + 1].to_byte_slice(),
-            )],
-            vec![ArrayData::new_empty(child_data_type)],
-        )
-    })
-}
-
-#[inline]
-fn new_null_binary_array<OffsetSize: OffsetSizeTrait>(
-    data_type: &DataType,
-    length: usize,
-) -> ArrayRef {
-    make_array(unsafe {
-        ArrayData::new_unchecked(
-            data_type.clone(),
-            length,
-            Some(length),
-            Some(MutableBuffer::new_null(length).into()),
-            0,
-            vec![
-                Buffer::from(vec![OffsetSize::zero(); length + 1].to_byte_slice()),
-                MutableBuffer::new(0).into(),
-            ],
-            vec![],
-        )
-    })
-}
-
-#[inline]
-fn new_null_sized_array<T: ArrowPrimitiveType>(
-    data_type: &DataType,
-    length: usize,
-) -> ArrayRef {
-    make_array(unsafe {
-        ArrayData::new_unchecked(
-            data_type.clone(),
-            length,
-            Some(length),
-            Some(MutableBuffer::new_null(length).into()),
-            0,
-            vec![Buffer::from(vec![0u8; length * T::get_byte_width()])],
-            vec![],
-        )
-    })
-}
-
-#[inline]
-fn new_null_sized_decimal(
-    data_type: &DataType,
-    length: usize,
-    byte_width: usize,
-) -> ArrayRef {
-    make_array(unsafe {
-        ArrayData::new_unchecked(
-            data_type.clone(),
-            length,
-            Some(length),
-            Some(MutableBuffer::new_null(length).into()),
-            0,
-            vec![Buffer::from(vec![0u8; length * byte_width])],
-            vec![],
-        )
-    })
-}
-
-// Helper function for printing potentially long arrays.
-pub(crate) fn print_long_array<A, F>(
+/// Helper function for printing potentially long arrays.
+fn print_long_array<A, F>(
     array: &A,
     f: &mut std::fmt::Formatter,
     print_item: F,
@@ -863,8 +739,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cast::downcast_array;
-    use arrow_schema::Field;
+    use crate::cast::{as_union_array, downcast_array};
+    use crate::downcast_run_array;
+    use arrow_buffer::MutableBuffer;
+    use arrow_schema::{Field, Fields, UnionFields, UnionMode};
 
     #[test]
     fn test_empty_primitive() {
@@ -886,7 +764,7 @@ mod tests {
     #[test]
     fn test_empty_list_primitive() {
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
         let array = new_empty_array(&data_type);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 0);
@@ -918,7 +796,7 @@ mod tests {
         // It is possible to create a null struct containing a non-nullable child
         // see https://github.com/apache/arrow-rs/pull/3244 for details
         let struct_type =
-            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         let array = new_null_array(&struct_type, 9);
 
         let a = array.as_any().downcast_ref::<StructArray>().unwrap();
@@ -946,7 +824,7 @@ mod tests {
     #[test]
     fn test_null_list_primitive() {
         let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let array = new_null_array(&data_type, 9);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 9);
@@ -959,12 +837,12 @@ mod tests {
     #[test]
     fn test_null_map() {
         let data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entry",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("key", DataType::Utf8, false),
                     Field::new("value", DataType::Int32, true),
-                ]),
+                ])),
                 false,
             )),
             false,
@@ -989,9 +867,84 @@ mod tests {
         let null_array = new_null_array(array.data_type(), 9);
         assert_eq!(&array, &null_array);
         assert_eq!(
-            array.data().buffers()[0].len(),
-            null_array.data().buffers()[0].len()
+            array.to_data().buffers()[0].len(),
+            null_array.to_data().buffers()[0].len()
         );
+    }
+
+    #[test]
+    fn test_null_union() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let data_type = DataType::Union(
+                UnionFields::new(
+                    vec![2, 1],
+                    vec![
+                        Field::new("foo", DataType::Int32, true),
+                        Field::new("bar", DataType::Int64, true),
+                    ],
+                ),
+                mode,
+            );
+            let array = new_null_array(&data_type, 4);
+
+            let array = as_union_array(array.as_ref());
+            assert_eq!(array.len(), 4);
+            assert_eq!(array.null_count(), 0);
+
+            for i in 0..4 {
+                let a = array.value(i);
+                assert_eq!(a.len(), 1);
+                assert_eq!(a.null_count(), 1);
+                assert!(a.is_null(0))
+            }
+
+            array.to_data().validate_full().unwrap();
+        }
+    }
+
+    #[test]
+    #[allow(unused_parens)]
+    fn test_null_runs() {
+        for r in [DataType::Int16, DataType::Int32, DataType::Int64] {
+            let data_type = DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", r, false)),
+                Arc::new(Field::new("values", DataType::Utf8, true)),
+            );
+
+            let array = new_null_array(&data_type, 4);
+            let array = array.as_ref();
+
+            downcast_run_array! {
+                array => {
+                    assert_eq!(array.len(), 4);
+                    assert_eq!(array.null_count(), 0);
+                    assert_eq!(array.values().len(), 1);
+                    assert_eq!(array.values().null_count(), 1);
+                    assert_eq!(array.run_ends().len(), 4);
+                    assert_eq!(array.run_ends().values(), &[4]);
+
+                    let idx = array.get_physical_indices(&[0, 1, 2, 3]).unwrap();
+                    assert_eq!(idx, &[0,0,0,0]);
+                }
+                d => unreachable!("{d}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_null_fixed_size_binary() {
+        for size in [1, 2, 7] {
+            let array = new_null_array(&DataType::FixedSizeBinary(size), 6);
+            let array = array
+                .as_ref()
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap();
+
+            assert_eq!(array.len(), 6);
+            assert_eq!(array.null_count(), 6);
+            array.iter().for_each(|x| assert!(x.is_none()));
+        }
     }
 
     #[test]
@@ -1000,12 +953,8 @@ mod tests {
 
         assert_eq!(0, null_arr.get_buffer_memory_size());
         assert_eq!(
-            std::mem::size_of::<NullArray>(),
+            std::mem::size_of::<usize>(),
             null_arr.get_array_memory_size()
-        );
-        assert_eq!(
-            std::mem::size_of::<NullArray>(),
-            std::mem::size_of::<ArrayData>(),
         );
     }
 
@@ -1015,7 +964,7 @@ mod tests {
         let empty =
             PrimitiveArray::<Int64Type>::from(ArrayData::new_empty(arr.data_type()));
 
-        // substract empty array to avoid magic numbers for the size of additional fields
+        // subtract empty array to avoid magic numbers for the size of additional fields
         assert_eq!(
             arr.get_array_memory_size() - empty.get_array_memory_size(),
             128 * std::mem::size_of::<i64>()
@@ -1039,12 +988,11 @@ mod tests {
         // which includes the optional validity buffer
         // plus one buffer on the heap
         assert_eq!(
-            std::mem::size_of::<PrimitiveArray<Int64Type>>()
-                + std::mem::size_of::<Buffer>(),
+            std::mem::size_of::<PrimitiveArray<Int64Type>>(),
             empty_with_bitmap.get_array_memory_size()
         );
 
-        // substract empty array to avoid magic numbers for the size of additional fields
+        // subtract empty array to avoid magic numbers for the size of additional fields
         // the size of the validity bitmap is rounded up to 64 bytes
         assert_eq!(
             arr.get_array_memory_size() - empty_with_bitmap.get_array_memory_size(),
@@ -1059,19 +1007,17 @@ mod tests {
             (0..256).map(|i| (i % values.len()) as i16),
         );
 
-        let dict_data = ArrayData::builder(DataType::Dictionary(
+        let dict_data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
             Box::new(values.data_type().clone()),
-        ))
-        .len(keys.len())
-        .buffers(keys.data_ref().buffers().to_vec())
-        .child_data(vec![ArrayData::builder(DataType::Int64)
-            .len(values.len())
-            .buffers(values.data_ref().buffers().to_vec())
+        );
+        let dict_data = keys
+            .into_data()
+            .into_builder()
+            .data_type(dict_data_type)
+            .child_data(vec![values.into_data()])
             .build()
-            .unwrap()])
-        .build()
-        .unwrap();
+            .unwrap();
 
         let empty_data = ArrayData::new_empty(&DataType::Dictionary(
             Box::new(DataType::Int16),

@@ -19,11 +19,13 @@
 //! [schema](arrow_schema::Schema).
 
 use crate::{new_empty_array, Array, ArrayRef, StructArray};
-use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
+use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use std::ops::Index;
 use std::sync::Arc;
 
 /// Trait for types that can read `RecordBatch`'s.
+///
+/// To create from an iterator, see [RecordBatchIterator].
 pub trait RecordBatchReader: Iterator<Item = Result<RecordBatch, ArrowError>> {
     /// Returns the schema of this `RecordBatchReader`.
     ///
@@ -39,6 +41,21 @@ pub trait RecordBatchReader: Iterator<Item = Result<RecordBatch, ArrowError>> {
     fn next_batch(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         self.next().transpose()
     }
+}
+
+impl<R: RecordBatchReader + ?Sized> RecordBatchReader for Box<R> {
+    fn schema(&self) -> SchemaRef {
+        self.as_ref().schema()
+    }
+}
+
+/// Trait for types that can write `RecordBatch`'s.
+pub trait RecordBatchWriter {
+    /// Write a single batch to the writer.
+    fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError>;
+
+    /// Write footer or termination data, then mark the writer as done.
+    fn close(self) -> Result<(), ArrowError>;
 }
 
 /// A two-dimensional batch of column-oriented data with a defined
@@ -141,7 +158,6 @@ impl RecordBatch {
             )));
         }
 
-        // check that all columns have the same row count
         let row_count = options
             .row_count
             .or_else(|| columns.first().map(|col| col.len()))
@@ -160,6 +176,7 @@ impl RecordBatch {
             }
         }
 
+        // check that all columns have the same row count
         if columns.iter().any(|c| c.len() != row_count) {
             let err = match options.row_count {
                 Some(_) => {
@@ -192,10 +209,7 @@ impl RecordBatch {
 
         if let Some((i, (col_type, field_type))) = not_match {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "column types must match schema types, expected {:?} but found {:?} at column index {}",
-                field_type,
-                col_type,
-                i)));
+                "column types must match schema types, expected {field_type:?} but found {col_type:?} at column index {i}")));
         }
 
         Ok(RecordBatch {
@@ -205,7 +219,26 @@ impl RecordBatch {
         })
     }
 
-    /// Returns the [`Schema`](arrow_schema::Schema) of the record batch.
+    /// Override the schema of this [`RecordBatch`]
+    ///
+    /// Returns an error if `schema` is not a superset of the current schema
+    /// as determined by [`Schema::contains`]
+    pub fn with_schema(self, schema: SchemaRef) -> Result<Self, ArrowError> {
+        if !schema.contains(self.schema.as_ref()) {
+            return Err(ArrowError::SchemaError(format!(
+                "{schema} is not a superset of {}",
+                self.schema
+            )));
+        }
+
+        Ok(Self {
+            schema,
+            columns: self.columns,
+            row_count: self.row_count,
+        })
+    }
+
+    /// Returns the [`Schema`] of the record batch.
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -388,19 +421,18 @@ impl RecordBatch {
         I: IntoIterator<Item = (F, ArrayRef, bool)>,
         F: AsRef<str>,
     {
-        // TODO: implement `TryFrom` trait, once
-        // https://github.com/rust-lang/rust/issues/50133 is no longer an
-        // issue
-        let (fields, columns) = value
-            .into_iter()
-            .map(|(field_name, array, nullable)| {
-                let field_name = field_name.as_ref();
-                let field = Field::new(field_name, array.data_type().clone(), nullable);
-                (field, array)
-            })
-            .unzip();
+        let iter = value.into_iter();
+        let capacity = iter.size_hint().0;
+        let mut schema = SchemaBuilder::with_capacity(capacity);
+        let mut columns = Vec::with_capacity(capacity);
 
-        let schema = Arc::new(Schema::new(fields));
+        for (field_name, array, nullable) in iter {
+            let field_name = field_name.as_ref();
+            schema.push(Field::new(field_name, array.data_type().clone(), nullable));
+            columns.push(array);
+        }
+
+        let schema = Arc::new(schema.finish());
         RecordBatch::try_new(schema, columns)
     }
 
@@ -448,36 +480,23 @@ impl Default for RecordBatchOptions {
         Self::new()
     }
 }
-impl From<&StructArray> for RecordBatch {
-    /// Create a record batch from struct array, where each field of
-    /// the `StructArray` becomes a `Field` in the schema.
-    ///
-    /// This currently does not flatten and nested struct types
-    fn from(struct_array: &StructArray) -> Self {
-        if let DataType::Struct(fields) = struct_array.data_type() {
-            let schema = Schema::new(fields.clone());
-            let columns = struct_array.boxed_fields.clone();
-            RecordBatch {
-                schema: Arc::new(schema),
-                row_count: struct_array.len(),
-                columns,
-            }
-        } else {
-            unreachable!("unable to get datatype as struct")
+impl From<StructArray> for RecordBatch {
+    fn from(value: StructArray) -> Self {
+        let row_count = value.len();
+        let (fields, columns, nulls) = value.into_parts();
+        assert_eq!(nulls.map(|n| n.null_count()).unwrap_or_default(), 0, "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation");
+
+        RecordBatch {
+            schema: Arc::new(Schema::new(fields)),
+            row_count,
+            columns,
         }
     }
 }
 
-impl From<RecordBatch> for StructArray {
-    fn from(batch: RecordBatch) -> Self {
-        batch
-            .schema
-            .fields
-            .iter()
-            .zip(batch.columns.iter())
-            .map(|t| (t.0.clone(), t.1.clone()))
-            .collect::<Vec<(Field, ArrayRef)>>()
-            .into()
+impl From<&StructArray> for RecordBatch {
+    fn from(struct_array: &StructArray) -> Self {
+        struct_array.clone().into()
     }
 }
 
@@ -494,6 +513,78 @@ impl Index<&str> for RecordBatch {
     }
 }
 
+/// Generic implementation of [RecordBatchReader] that wraps an iterator.
+///
+/// # Example
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray, RecordBatchIterator, RecordBatchReader};
+/// #
+/// let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+/// let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+///
+/// let record_batch = RecordBatch::try_from_iter(vec![
+///   ("a", a),
+///   ("b", b),
+/// ]).unwrap();
+///
+/// let batches: Vec<RecordBatch> = vec![record_batch.clone(), record_batch.clone()];
+///
+/// let mut reader = RecordBatchIterator::new(batches.into_iter().map(Ok), record_batch.schema());
+///
+/// assert_eq!(reader.schema(), record_batch.schema());
+/// assert_eq!(reader.next().unwrap().unwrap(), record_batch);
+/// # assert_eq!(reader.next().unwrap().unwrap(), record_batch);
+/// # assert!(reader.next().is_none());
+/// ```
+pub struct RecordBatchIterator<I>
+where
+    I: IntoIterator<Item = Result<RecordBatch, ArrowError>>,
+{
+    inner: I::IntoIter,
+    inner_schema: SchemaRef,
+}
+
+impl<I> RecordBatchIterator<I>
+where
+    I: IntoIterator<Item = Result<RecordBatch, ArrowError>>,
+{
+    /// Create a new [RecordBatchIterator].
+    ///
+    /// If `iter` is an infallible iterator, use `.map(Ok)`.
+    pub fn new(iter: I, schema: SchemaRef) -> Self {
+        Self {
+            inner: iter.into_iter(),
+            inner_schema: schema,
+        }
+    }
+}
+
+impl<I> Iterator for RecordBatchIterator<I>
+where
+    I: IntoIterator<Item = Result<RecordBatch, ArrowError>>,
+{
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<I> RecordBatchReader for RecordBatchIterator<I>
+where
+    I: IntoIterator<Item = Result<RecordBatch, ArrowError>>,
+{
+    fn schema(&self) -> SchemaRef {
+        self.inner_schema.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,7 +592,8 @@ mod tests {
         BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray,
     };
     use arrow_buffer::{Buffer, ToByteSlice};
-    use arrow_data::ArrayDataBuilder;
+    use arrow_data::{ArrayData, ArrayDataBuilder};
+    use arrow_schema::Fields;
 
     #[test]
     fn create_record_batch() {
@@ -532,7 +624,7 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
                 .unwrap();
-        assert_eq!(record_batch.get_array_memory_size(), 592);
+        assert_eq!(record_batch.get_array_memory_size(), 364);
     }
 
     fn check_batch(record_batch: RecordBatch, num_rows: usize) {
@@ -540,8 +632,8 @@ mod tests {
         assert_eq!(2, record_batch.num_columns());
         assert_eq!(&DataType::Int32, record_batch.schema().field(0).data_type());
         assert_eq!(&DataType::Utf8, record_batch.schema().field(1).data_type());
-        assert_eq!(num_rows, record_batch.column(0).data().len());
-        assert_eq!(num_rows, record_batch.column(1).data().len());
+        assert_eq!(num_rows, record_batch.column(0).len());
+        assert_eq!(num_rows, record_batch.column(1).len());
     }
 
     #[test]
@@ -582,7 +674,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "assertion failed: (offset + length) <= self.num_rows()")]
     fn create_record_batch_slice_empty_batch() {
-        let schema = Schema::new(vec![]);
+        let schema = Schema::empty();
 
         let record_batch = RecordBatch::new_empty(Arc::new(schema));
 
@@ -650,34 +742,29 @@ mod tests {
 
     #[test]
     fn create_record_batch_field_name_mismatch() {
-        let struct_fields = vec![
+        let fields = vec![
             Field::new("a1", DataType::Int32, false),
-            Field::new(
-                "a2",
-                DataType::List(Box::new(Field::new("item", DataType::Int8, false))),
-                false,
-            ),
+            Field::new_list("a2", Field::new("item", DataType::Int8, false), false),
         ];
-        let struct_type = DataType::Struct(struct_fields);
-        let schema = Arc::new(Schema::new(vec![Field::new("a", struct_type, true)]));
+        let schema = Arc::new(Schema::new(vec![Field::new_struct("a", fields, true)]));
 
         let a1: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let a2_child = Int8Array::from(vec![1, 2, 3, 4]);
-        let a2 = ArrayDataBuilder::new(DataType::List(Box::new(Field::new(
+        let a2 = ArrayDataBuilder::new(DataType::List(Arc::new(Field::new(
             "array",
             DataType::Int8,
             false,
         ))))
         .add_child_data(a2_child.into_data())
         .len(2)
-        .add_buffer(Buffer::from(vec![0i32, 3, 4].to_byte_slice()))
+        .add_buffer(Buffer::from([0i32, 3, 4].to_byte_slice()))
         .build()
         .unwrap();
         let a2: ArrayRef = Arc::new(ListArray::from(a2));
-        let a = ArrayDataBuilder::new(DataType::Struct(vec![
+        let a = ArrayDataBuilder::new(DataType::Struct(Fields::from(vec![
             Field::new("aa1", DataType::Int32, false),
             Field::new("a2", a2.data_type().clone(), false),
-        ]))
+        ])))
         .add_child_data(a1.into_data())
         .add_child_data(a2.into_data())
         .len(2)
@@ -716,11 +803,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
         let struct_array = StructArray::from(vec![
             (
-                Field::new("b", DataType::Boolean, false),
+                Arc::new(Field::new("b", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Field::new("c", DataType::Int32, false),
+                Arc::new(Field::new("c", DataType::Int32, false)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -730,7 +817,7 @@ mod tests {
         assert_eq!(4, batch.num_rows());
         assert_eq!(
             struct_array.data_type(),
-            &DataType::Struct(batch.schema().fields().to_vec())
+            &DataType::Struct(batch.schema().fields().clone())
         );
         assert_eq!(batch.column(0).as_ref(), boolean.as_ref());
         assert_eq!(batch.column(1).as_ref(), int.as_ref());
@@ -953,7 +1040,7 @@ mod tests {
 
     #[test]
     fn test_no_column_record_batch() {
-        let schema = Arc::new(Schema::new(vec![]));
+        let schema = Arc::new(Schema::empty());
 
         let err = RecordBatch::try_new(schema.clone(), vec![]).unwrap_err();
         assert!(err
@@ -992,5 +1079,64 @@ mod tests {
             .with_row_count(Some(20));
         assert!(!options.match_field_names);
         assert_eq!(options.row_count.unwrap(), 20)
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot convert nullable StructArray to RecordBatch")]
+    fn test_from_struct() {
+        let s = StructArray::from(ArrayData::new_null(
+            // Note child is not nullable
+            &DataType::Struct(vec![Field::new("foo", DataType::Int32, false)].into()),
+            2,
+        ));
+        let _ = RecordBatch::from(s);
+    }
+
+    #[test]
+    fn test_with_schema() {
+        let required_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let required_schema = Arc::new(required_schema);
+        let nullable_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let nullable_schema = Arc::new(nullable_schema);
+
+        let batch = RecordBatch::try_new(
+            required_schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as _],
+        )
+        .unwrap();
+
+        // Can add nullability
+        let batch = batch.with_schema(nullable_schema.clone()).unwrap();
+
+        // Cannot remove nullability
+        batch.clone().with_schema(required_schema).unwrap_err();
+
+        // Can add metadata
+        let metadata = vec![("foo".to_string(), "bar".to_string())]
+            .into_iter()
+            .collect();
+        let metadata_schema = nullable_schema.as_ref().clone().with_metadata(metadata);
+        let batch = batch.with_schema(Arc::new(metadata_schema)).unwrap();
+
+        // Cannot remove metadata
+        batch.with_schema(nullable_schema).unwrap_err();
+    }
+
+    #[test]
+    fn test_boxed_reader() {
+        // Make sure we can pass a boxed reader to a function generic over
+        // RecordBatchReader.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Arc::new(schema);
+
+        let reader = RecordBatchIterator::new(std::iter::empty(), schema);
+        let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
+
+        fn get_size(reader: impl RecordBatchReader) -> usize {
+            reader.size_hint().0
+        }
+
+        let size = get_size(reader);
+        assert_eq!(size, 0);
     }
 }

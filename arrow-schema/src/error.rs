@@ -35,12 +35,14 @@ pub enum ArrowError {
     DivideByZero,
     CsvError(String),
     JsonError(String),
-    IoError(String),
+    IoError(String, std::io::Error),
+    IpcError(String),
     InvalidArgumentError(String),
     ParquetError(String),
     /// Error during import or export to/from the C Data Interface
     CDataInterface(String),
     DictionaryKeyOverflowError,
+    RunEndIndexOverflowError,
 }
 
 impl ArrowError {
@@ -52,7 +54,7 @@ impl ArrowError {
 
 impl From<std::io::Error> for ArrowError {
     fn from(error: std::io::Error) -> Self {
-        ArrowError::IoError(error.to_string())
+        ArrowError::IoError(error.to_string(), error)
     }
 }
 
@@ -64,7 +66,7 @@ impl From<std::string::FromUtf8Error> for ArrowError {
 
 impl<W: Write> From<std::io::IntoInnerError<W>> for ArrowError {
     fn from(error: std::io::IntoInnerError<W>) -> Self {
-        ArrowError::IoError(error.to_string())
+        ArrowError::IoError(error.to_string(), error.into())
     }
 }
 
@@ -75,29 +77,71 @@ impl Display for ArrowError {
                 write!(f, "Not yet implemented: {}", &source)
             }
             ArrowError::ExternalError(source) => write!(f, "External error: {}", &source),
-            ArrowError::CastError(desc) => write!(f, "Cast error: {}", desc),
-            ArrowError::MemoryError(desc) => write!(f, "Memory error: {}", desc),
-            ArrowError::ParseError(desc) => write!(f, "Parser error: {}", desc),
-            ArrowError::SchemaError(desc) => write!(f, "Schema error: {}", desc),
-            ArrowError::ComputeError(desc) => write!(f, "Compute error: {}", desc),
+            ArrowError::CastError(desc) => write!(f, "Cast error: {desc}"),
+            ArrowError::MemoryError(desc) => write!(f, "Memory error: {desc}"),
+            ArrowError::ParseError(desc) => write!(f, "Parser error: {desc}"),
+            ArrowError::SchemaError(desc) => write!(f, "Schema error: {desc}"),
+            ArrowError::ComputeError(desc) => write!(f, "Compute error: {desc}"),
             ArrowError::DivideByZero => write!(f, "Divide by zero error"),
-            ArrowError::CsvError(desc) => write!(f, "Csv error: {}", desc),
-            ArrowError::JsonError(desc) => write!(f, "Json error: {}", desc),
-            ArrowError::IoError(desc) => write!(f, "Io error: {}", desc),
+            ArrowError::CsvError(desc) => write!(f, "Csv error: {desc}"),
+            ArrowError::JsonError(desc) => write!(f, "Json error: {desc}"),
+            ArrowError::IoError(desc, _) => write!(f, "Io error: {desc}"),
+            ArrowError::IpcError(desc) => write!(f, "Ipc error: {desc}"),
             ArrowError::InvalidArgumentError(desc) => {
-                write!(f, "Invalid argument error: {}", desc)
+                write!(f, "Invalid argument error: {desc}")
             }
             ArrowError::ParquetError(desc) => {
-                write!(f, "Parquet argument error: {}", desc)
+                write!(f, "Parquet argument error: {desc}")
             }
             ArrowError::CDataInterface(desc) => {
-                write!(f, "C Data interface error: {}", desc)
+                write!(f, "C Data interface error: {desc}")
             }
             ArrowError::DictionaryKeyOverflowError => {
                 write!(f, "Dictionary key bigger than the key type")
+            }
+            ArrowError::RunEndIndexOverflowError => {
+                write!(f, "Run end encoded array index overflow error")
             }
         }
     }
 }
 
-impl Error for ArrowError {}
+impl Error for ArrowError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        if let Self::ExternalError(e) = self {
+            Some(e.as_ref())
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn error_source() {
+        let e1 = ArrowError::DivideByZero;
+        assert!(e1.source().is_none());
+
+        // one level of wrapping
+        let e2 = ArrowError::ExternalError(Box::new(e1));
+        let source = e2.source().unwrap().downcast_ref::<ArrowError>().unwrap();
+        assert!(matches!(source, ArrowError::DivideByZero));
+
+        // two levels of wrapping
+        let e3 = ArrowError::ExternalError(Box::new(e2));
+        let source = e3
+            .source()
+            .unwrap()
+            .downcast_ref::<ArrowError>()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<ArrowError>()
+            .unwrap();
+
+        assert!(matches!(source, ArrowError::DivideByZero));
+    }
+}

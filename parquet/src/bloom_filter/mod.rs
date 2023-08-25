@@ -156,7 +156,7 @@ fn read_bloom_filter_header_and_length(
     let mut buf_reader = buffer.reader();
     let mut prot = TCompactInputProtocol::new(&mut buf_reader);
     let header = BloomFilterHeader::read_from_in_protocol(&mut prot).map_err(|e| {
-        ParquetError::General(format!("Could not read bloom filter header: {}", e))
+        ParquetError::General(format!("Could not read bloom filter header: {e}"))
     })?;
     Ok((
         header,
@@ -190,8 +190,7 @@ impl Sbbf {
     pub(crate) fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Result<Self, ParquetError> {
         if !(0.0..1.0).contains(&fpp) {
             return Err(ParquetError::General(format!(
-                "False positive probability must be between 0.0 and 1.0, got {}",
-                fpp
+                "False positive probability must be between 0.0 and 1.0, got {fpp}"
             )));
         }
         let num_bits = num_of_bits_from_ndv_fpp(ndv, fpp);
@@ -227,7 +226,7 @@ impl Sbbf {
         let mut protocol = TCompactOutputProtocol::new(&mut writer);
         let header = self.header();
         header.write_to_out_protocol(&mut protocol).map_err(|e| {
-            ParquetError::General(format!("Could not write bloom filter header: {}", e))
+            ParquetError::General(format!("Could not write bloom filter header: {e}"))
         })?;
         protocol.flush()?;
         self.write_bitset(&mut writer)?;
@@ -241,8 +240,7 @@ impl Sbbf {
                 .write_all(block.to_le_bytes().as_slice())
                 .map_err(|e| {
                     ParquetError::General(format!(
-                        "Could not write bloom filter bit set: {}",
-                        e
+                        "Could not write bloom filter bit set: {e}"
                     ))
                 })?;
         }
@@ -389,7 +387,7 @@ mod tests {
         ];
         let sbbf = Sbbf::new(bitset);
         for a in 0..10i64 {
-            let value = format!("a{}", a);
+            let value = format!("a{a}");
             assert!(sbbf.check(&value.as_str()));
         }
     }

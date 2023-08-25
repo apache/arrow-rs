@@ -23,15 +23,15 @@ use core::slice;
 use std::ptr::NonNull;
 use std::{fmt::Debug, fmt::Formatter};
 
-use crate::alloc;
 use crate::alloc::Deallocation;
 
 /// A continuous, fixed-size, immutable memory region that knows how to de-allocate itself.
+///
 /// This structs' API is inspired by the `bytes::Bytes`, but it is not limited to using rust's
 /// global allocator nor u8 alignment.
 ///
-/// In the most common case, this buffer is allocated using [`allocate_aligned`](crate::alloc::allocate_aligned)
-/// and deallocated accordingly [`free_aligned`](crate::alloc::free_aligned).
+/// In the most common case, this buffer is allocated using [`alloc`](std::alloc::alloc)
+/// with an alignment of [`ALIGNMENT`](crate::alloc::ALIGNMENT)
 ///
 /// When the region is allocated by a different allocator, [Deallocation::Custom], this calls the
 /// custom deallocator to deallocate the region when it is no longer needed.
@@ -53,7 +53,7 @@ impl Bytes {
     ///
     /// * `ptr` - Pointer to raw parts
     /// * `len` - Length of raw parts in **bytes**
-    /// * `capacity` - Total allocated memory for the pointer `ptr`, in **bytes**
+    /// * `deallocation` - Type of allocation
     ///
     /// # Safety
     ///
@@ -61,7 +61,7 @@ impl Bytes {
     /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
     #[inline]
     pub(crate) unsafe fn new(
-        ptr: std::ptr::NonNull<u8>,
+        ptr: NonNull<u8>,
         len: usize,
         deallocation: Deallocation,
     ) -> Bytes {
@@ -93,7 +93,7 @@ impl Bytes {
 
     pub fn capacity(&self) -> usize {
         match self.deallocation {
-            Deallocation::Arrow(capacity) => capacity,
+            Deallocation::Standard(layout) => layout.size(),
             // we cannot determine this in general,
             // and thus we state that this is externally-owned memory
             Deallocation::Custom(_) => 0,
@@ -115,9 +115,10 @@ impl Drop for Bytes {
     #[inline]
     fn drop(&mut self) {
         match &self.deallocation {
-            Deallocation::Arrow(capacity) => {
-                unsafe { alloc::free_aligned(self.ptr, *capacity) };
-            }
+            Deallocation::Standard(layout) => match layout.size() {
+                0 => {} // Nothing to do
+                _ => unsafe { std::alloc::dealloc(self.ptr.as_ptr(), *layout) },
+            },
             // The automatic drop implementation will free the memory once the reference count reaches zero
             Deallocation::Custom(_allocation) => (),
         }
@@ -145,5 +146,33 @@ impl Debug for Bytes {
         f.debug_list().entries(self.iter()).finish()?;
 
         write!(f, " }}")
+    }
+}
+
+impl From<bytes::Bytes> for Bytes {
+    fn from(value: bytes::Bytes) -> Self {
+        Self {
+            len: value.len(),
+            ptr: NonNull::new(value.as_ptr() as _).unwrap(),
+            deallocation: Deallocation::Custom(std::sync::Arc::new(value)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_bytes() {
+        let bytes = bytes::Bytes::from(vec![1, 2, 3, 4]);
+        let arrow_bytes: Bytes = bytes.clone().into();
+
+        assert_eq!(bytes.as_ptr(), arrow_bytes.as_ptr());
+
+        drop(bytes);
+        drop(arrow_bytes);
+
+        let _ = Bytes::from(bytes::Bytes::new());
     }
 }

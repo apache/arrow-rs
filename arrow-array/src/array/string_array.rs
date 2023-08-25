@@ -16,17 +16,10 @@
 // under the License.
 
 use crate::types::GenericStringType;
-use crate::{
-    Array, GenericBinaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait,
-};
-use arrow_buffer::{bit_util, MutableBuffer};
-use arrow_data::ArrayData;
-use arrow_schema::DataType;
+use crate::{GenericBinaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait};
+use arrow_schema::{ArrowError, DataType};
 
-/// Generic struct for \[Large\]StringArray
-///
-/// See [`StringArray`] and [`LargeStringArray`] for storing
-/// specific string data.
+/// A [`GenericByteArray`] for storing `str`
 pub type GenericStringArray<OffsetSize> = GenericByteArray<GenericStringType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
@@ -43,86 +36,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     /// please use the function [`value_length`](#method.value_length) which has O(1) time complexity.
     pub fn num_chars(&self, i: usize) -> usize {
         self.value(i).chars().count()
-    }
-
-    /// Convert a list array to a string array.
-    ///
-    /// Note: this performs potentially expensive UTF-8 validation, consider using
-    /// [`StringBuilder`][crate::builder::StringBuilder] to avoid this
-    ///
-    /// # Panics
-    ///
-    /// This method panics if the array contains non-UTF-8 data
-    fn from_list(v: GenericListArray<OffsetSize>) -> Self {
-        assert_eq!(
-            v.data_ref().child_data().len(),
-            1,
-            "StringArray can only be created from list array of u8 values \
-             (i.e. List<PrimitiveArray<u8>>)."
-        );
-        let child_data = &v.data_ref().child_data()[0];
-
-        assert_eq!(
-            child_data.child_data().len(),
-            0,
-            "StringArray can only be created from list array of u8 values \
-             (i.e. List<PrimitiveArray<u8>>)."
-        );
-        assert_eq!(
-            child_data.data_type(),
-            &DataType::UInt8,
-            "StringArray can only be created from List<u8> arrays, mismatched data types."
-        );
-        assert_eq!(
-            child_data.null_count(),
-            0,
-            "The child array cannot contain null values."
-        );
-
-        let builder = ArrayData::builder(Self::DATA_TYPE)
-            .len(v.len())
-            .offset(v.offset())
-            .add_buffer(v.data().buffers()[0].clone())
-            .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
-            .null_bit_buffer(v.data().null_buffer().cloned());
-
-        Self::from(builder.build().unwrap())
-    }
-
-    /// Creates a [`GenericStringArray`] based on an iterator of values without nulls
-    pub fn from_iter_values<Ptr, I>(iter: I) -> Self
-    where
-        Ptr: AsRef<str>,
-        I: IntoIterator<Item = Ptr>,
-    {
-        let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
-
-        let mut offsets =
-            MutableBuffer::new((data_len + 1) * std::mem::size_of::<OffsetSize>());
-        let mut values = MutableBuffer::new(0);
-
-        let mut length_so_far = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        for i in iter {
-            let s = i.as_ref();
-            length_so_far += OffsetSize::from_usize(s.len()).unwrap();
-            offsets.push(length_so_far);
-            values.extend_from_slice(s.as_bytes());
-        }
-
-        // iterator size hint may not be correct so compute the actual number of offsets
-        assert!(!offsets.is_empty()); // wrote at least one
-        let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
-
-        let array_data = ArrayData::builder(Self::DATA_TYPE)
-            .len(actual_len)
-            .add_buffer(offsets.into())
-            .add_buffer(values.into());
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
     }
 
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
@@ -143,64 +56,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     ) -> impl Iterator<Item = Option<&str>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
-}
 
-impl<'a, Ptr, OffsetSize: OffsetSizeTrait> FromIterator<&'a Option<Ptr>>
-    for GenericStringArray<OffsetSize>
-where
-    Ptr: AsRef<str> + 'a,
-{
-    /// Creates a [`GenericStringArray`] based on an iterator of `Option` references.
-    fn from_iter<I: IntoIterator<Item = &'a Option<Ptr>>>(iter: I) -> Self {
-        // Convert each owned Ptr into &str and wrap in an owned `Option`
-        let iter = iter.into_iter().map(|o| o.as_ref().map(|p| p.as_ref()));
-        // Build a `GenericStringArray` with the resulting iterator
-        iter.collect::<GenericStringArray<OffsetSize>>()
-    }
-}
-
-impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
-    for GenericStringArray<OffsetSize>
-where
-    Ptr: AsRef<str>,
-{
-    /// Creates a [`GenericStringArray`] based on an iterator of [`Option`]s
-    fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
-        let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
-
-        let offset_size = std::mem::size_of::<OffsetSize>();
-        let mut offsets = MutableBuffer::new((data_len + 1) * offset_size);
-        let mut values = MutableBuffer::new(0);
-        let mut null_buf = MutableBuffer::new_null(data_len);
-        let null_slice = null_buf.as_slice_mut();
-        let mut length_so_far = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        for (i, s) in iter.enumerate() {
-            let value_bytes = if let Some(ref s) = s {
-                // set null bit
-                bit_util::set_bit(null_slice, i);
-                let s_bytes = s.as_ref().as_bytes();
-                length_so_far += OffsetSize::from_usize(s_bytes.len()).unwrap();
-                s_bytes
-            } else {
-                b""
-            };
-            values.extend_from_slice(value_bytes);
-            offsets.push(length_so_far);
-        }
-
-        // calculate actual data_len, which may be different from the iterator's upper bound
-        let data_len = (offsets.len() / offset_size) - 1;
-        let array_data = ArrayData::builder(Self::DATA_TYPE)
-            .len(data_len)
-            .add_buffer(offsets.into())
-            .add_buffer(values.into())
-            .null_bit_buffer(Some(null_buf.into()));
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
+    /// Fallibly creates a [`GenericStringArray`] from a [`GenericBinaryArray`] returning
+    /// an error if [`GenericBinaryArray`] contains invalid UTF-8 data
+    pub fn try_from_binary(
+        v: GenericBinaryArray<OffsetSize>,
+    ) -> Result<Self, ArrowError> {
+        let (offsets, values, nulls) = v.into_parts();
+        Self::try_new(offsets, values, nulls)
     }
 }
 
@@ -208,7 +71,7 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: GenericListArray<OffsetSize>) -> Self {
-        GenericStringArray::<OffsetSize>::from_list(v)
+        GenericBinaryArray::<OffsetSize>::from(v).into()
     }
 }
 
@@ -216,22 +79,7 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: GenericBinaryArray<OffsetSize>) -> Self {
-        let offsets = v.value_offsets();
-        let values = v.value_data();
-
-        // We only need to validate that all values are valid UTF-8
-        let validated = std::str::from_utf8(values).expect("Invalid UTF-8 sequence");
-        for offset in offsets.iter() {
-            assert!(
-                validated.is_char_boundary(offset.as_usize()),
-                "Invalid UTF-8 sequence"
-            )
-        }
-
-        let builder = v.into_data().into_builder().data_type(Self::DATA_TYPE);
-        // SAFETY:
-        // Validated UTF-8 above
-        Self::from(unsafe { builder.build_unchecked() })
+        Self::try_from_binary(v).unwrap()
     }
 }
 
@@ -249,42 +97,84 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<&str>> for GenericStringArray<OffsetS
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<String>>>
+    for GenericStringArray<OffsetSize>
+{
+    fn from(v: Vec<Option<String>>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<OffsetSize> {
     fn from(v: Vec<String>) -> Self {
         Self::from_iter_values(v)
     }
 }
 
-/// An array where each element is a variable-sized sequence of bytes representing a string
-/// whose maximum length (in bytes) is represented by a i32.
+/// A [`GenericStringArray`] of `str` using `i32` offsets
 ///
-/// Example
+/// # Examples
+///
+/// Construction
 ///
 /// ```
-/// use arrow_array::StringArray;
+/// # use arrow_array::StringArray;
+/// // Create from Vec<Option<&str>>
+/// let arr = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
+/// // Create from Vec<&str>
+/// let arr = StringArray::from(vec!["foo", "bar", "baz"]);
+/// // Create from iter/collect (requires Option<&str>)
+/// let arr: StringArray = std::iter::repeat(Some("foo")).take(10).collect();
+/// ```
+///
+/// Construction and Access
+///
+/// ```
+/// # use arrow_array::StringArray;
 /// let array = StringArray::from(vec![Some("foo"), None, Some("bar")]);
 /// assert_eq!(array.value(0), "foo");
 /// ```
+///
+/// See [`GenericByteArray`] for more information and examples
 pub type StringArray = GenericStringArray<i32>;
 
-/// An array where each element is a variable-sized sequence of bytes representing a string
-/// whose maximum length (in bytes) is represented by a i64.
+/// A [`GenericStringArray`] of `str` using `i64` offsets
 ///
-/// Example
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::LargeStringArray;
+/// // Create from Vec<Option<&str>>
+/// let arr = LargeStringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
+/// // Create from Vec<&str>
+/// let arr = LargeStringArray::from(vec!["foo", "bar", "baz"]);
+/// // Create from iter/collect (requires Option<&str>)
+/// let arr: LargeStringArray = std::iter::repeat(Some("foo")).take(10).collect();
+/// ```
+///
+/// Construction and Access
 ///
 /// ```
 /// use arrow_array::LargeStringArray;
 /// let array = LargeStringArray::from(vec![Some("foo"), None, Some("bar")]);
 /// assert_eq!(array.value(2), "bar");
 /// ```
+///
+/// See [`GenericByteArray`] for more information and examples
 pub type LargeStringArray = GenericStringArray<i64>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{ListBuilder, StringBuilder};
+    use crate::builder::{ListBuilder, PrimitiveBuilder, StringBuilder};
+    use crate::types::UInt8Type;
+    use crate::Array;
     use arrow_buffer::Buffer;
+    use arrow_data::ArrayData;
     use arrow_schema::Field;
+    use std::sync::Arc;
 
     #[test]
     fn test_string_array_from_u8_slice() {
@@ -398,7 +288,7 @@ mod tests {
         let arr: StringArray = vec!["hello", "arrow"].into();
         assert_eq!(
             "StringArray\n[\n  \"hello\",\n  \"arrow\",\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -407,7 +297,7 @@ mod tests {
         let arr: LargeStringArray = vec!["hello", "arrow"].into();
         assert_eq!(
             "LargeStringArray\n[\n  \"hello\",\n  \"arrow\",\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -434,11 +324,18 @@ mod tests {
 
     #[test]
     fn test_string_array_from_iter_values() {
-        let data = vec!["hello", "hello2"];
+        let data = ["hello", "hello2"];
         let array1 = StringArray::from_iter_values(data.iter());
 
         assert_eq!(array1.value(0), "hello");
         assert_eq!(array1.value(1), "hello2");
+
+        // Also works with String types.
+        let data2 = ["goodbye".to_string(), "goodbye2".to_string()];
+        let array2 = StringArray::from_iter_values(data2.iter());
+
+        assert_eq!(array2.value(0), "goodbye");
+        assert_eq!(array2.value(1), "goodbye2");
     }
 
     #[test]
@@ -448,7 +345,7 @@ mod tests {
             .scan(0usize, |pos, i| {
                 if *pos < 10 {
                     *pos += 1;
-                    Some(Some(format!("value {}", i)))
+                    Some(Some(format!("value {i}")))
                 } else {
                     // actually returns up to 10 values
                     None
@@ -467,20 +364,20 @@ mod tests {
 
     #[test]
     fn test_string_array_all_null() {
-        let data = vec![None];
+        let data: Vec<Option<&str>> = vec![None];
         let array = StringArray::from(data);
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }
 
     #[test]
     fn test_large_string_array_all_null() {
-        let data = vec![None];
+        let data: Vec<Option<&str>> = vec![None];
         let array = LargeStringArray::from(data);
         array
-            .data()
+            .into_data()
             .validate_full()
             .expect("All null array has valid array data");
     }
@@ -563,7 +460,7 @@ mod tests {
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
         let null_buffer = Buffer::from_slice_ref([0b101]);
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, false),
         ));
 
@@ -611,7 +508,7 @@ mod tests {
 
         // It is possible to create a null struct containing a non-nullable child
         // see https://github.com/apache/arrow-rs/pull/3244 for details
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt8, true),
         ));
 
@@ -628,7 +525,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "The child array cannot contain null values.")]
-    fn test_stirng_array_from_list_array_with_child_nulls_failed() {
+    fn test_string_array_from_list_array_with_child_nulls_failed() {
         _test_generic_string_array_from_list_array_with_child_nulls_failed::<i32>();
     }
 
@@ -647,7 +544,7 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 2, 3].map(|n| O::from_usize(n).unwrap());
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
             Field::new("item", DataType::UInt16, false),
         ));
 
@@ -663,7 +560,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "StringArray can only be created from List<u8> arrays, mismatched data types."
+        expected = "BinaryArray can only be created from List<u8> arrays, mismatched data types."
     )]
     fn test_string_array_from_list_array_wrong_type() {
         _test_generic_string_array_from_list_array_wrong_type::<i32>();
@@ -671,10 +568,22 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "StringArray can only be created from List<u8> arrays, mismatched data types."
+        expected = "BinaryArray can only be created from List<u8> arrays, mismatched data types."
     )]
     fn test_large_string_array_from_list_array_wrong_type() {
-        _test_generic_string_array_from_list_array_wrong_type::<i32>();
+        _test_generic_string_array_from_list_array_wrong_type::<i64>();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+    )]
+    fn test_list_array_utf8_validation() {
+        let mut builder = ListBuilder::new(PrimitiveBuilder::<UInt8Type>::new());
+        builder.values().append_value(0xFF);
+        builder.append(true);
+        let list = builder.finish();
+        let _ = StringArray::from(list);
     }
 
     #[test]

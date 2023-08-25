@@ -18,32 +18,13 @@
 //! Defines kernels suitable to perform operations to primitive arrays.
 
 use arrow_array::builder::BufferBuilder;
-use arrow_array::iterator::ArrayIter;
+use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
+use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_data::bit_iterator::try_for_each_valid_idx;
-use arrow_data::bit_mask::combine_option_bitmap;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 use std::sync::Arc;
-
-#[inline]
-unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
-    len: usize,
-    buffer: Buffer,
-    null_count: usize,
-    null_buffer: Option<Buffer>,
-) -> PrimitiveArray<O> {
-    PrimitiveArray::from(ArrayData::new_unchecked(
-        O::DATA_TYPE,
-        len,
-        Some(null_count),
-        null_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    ))
-}
 
 /// See [`PrimitiveArray::unary`]
 pub fn unary<I, F, O>(array: &PrimitiveArray<I>, op: F) -> PrimitiveArray<O>
@@ -59,7 +40,7 @@ where
 pub fn unary_mut<I, F>(
     array: PrimitiveArray<I>,
     op: F,
-) -> std::result::Result<PrimitiveArray<I>, PrimitiveArray<I>>
+) -> Result<PrimitiveArray<I>, PrimitiveArray<I>>
 where
     I: ArrowPrimitiveType,
     F: Fn(I::Native) -> I::Native,
@@ -95,13 +76,13 @@ where
 /// A helper function that applies an infallible unary function to a dictionary array with primitive value type.
 fn unary_dict<K, F, T>(array: &DictionaryArray<K>, op: F) -> Result<ArrayRef, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowDictionaryKeyType + ArrowNumericType,
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> T::Native,
 {
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = unary::<T, F, T>(dict_values, op);
-    Ok(Arc::new(array.with_values(&values)))
+    Ok(Arc::new(array.with_values(Arc::new(values))))
 }
 
 /// A helper function that applies a fallible unary function to a dictionary array with primitive value type.
@@ -110,7 +91,7 @@ fn try_unary_dict<K, F, T>(
     op: F,
 ) -> Result<ArrayRef, ArrowError>
 where
-    K: ArrowNumericType,
+    K: ArrowDictionaryKeyType + ArrowNumericType,
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> Result<T::Native, ArrowError>,
 {
@@ -124,10 +105,11 @@ where
 
     let dict_values = array.values().as_any().downcast_ref().unwrap();
     let values = try_unary::<T, F, T>(dict_values, op)?;
-    Ok(Arc::new(array.with_values(&values)))
+    Ok(Arc::new(array.with_values(Arc::new(values))))
 }
 
 /// Applies an infallible unary function to an array with primitive values.
+#[deprecated(note = "Use arrow_array::AnyDictionaryArray")]
 pub fn unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
@@ -153,6 +135,7 @@ where
 }
 
 /// Applies a fallible unary function to an array with primitive values.
+#[deprecated(note = "Use arrow_array::AnyDictionaryArray")]
 pub fn try_unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
@@ -212,17 +195,12 @@ where
             "Cannot perform binary operation on arrays of different length".to_string(),
         ));
     }
-    let len = a.len();
 
     if a.is_empty() {
         return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
     }
 
-    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
-    let null_count = null_buffer
-        .as_ref()
-        .map(|x| len - x.count_set_bits_offset(0, len))
-        .unwrap_or_default();
+    let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
 
     let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
     // JUSTIFICATION
@@ -231,8 +209,7 @@ where
     //  Soundness
     //      `values` is an iterator with a known size from a PrimitiveArray
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-
-    Ok(unsafe { build_primitive_array(len, buffer, null_count, null_buffer) })
+    Ok(PrimitiveArray::new(buffer.into(), nulls))
 }
 
 /// Given two arrays of length `len`, calls `op(a[i], b[i])` for `i` in `0..len`, mutating
@@ -273,13 +250,7 @@ where
         ))));
     }
 
-    let len = a.len();
-
-    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
-    let null_count = null_buffer
-        .as_ref()
-        .map(|x| len - x.count_set_bits_offset(0, len))
-        .unwrap_or_default();
+    let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
 
     let mut builder = a.into_builder()?;
 
@@ -289,13 +260,7 @@ where
         .zip(b.values())
         .for_each(|(l, r)| *l = op(*l, *r));
 
-    let array_builder = builder
-        .finish()
-        .data()
-        .clone()
-        .into_builder()
-        .null_bit_buffer(null_buffer)
-        .null_count(null_count);
+    let array_builder = builder.finish().into_data().into_builder().nulls(nulls);
 
     let array_data = unsafe { array_builder.build_unchecked() };
     Ok(Ok(PrimitiveArray::<T>::from(array_data)))
@@ -333,18 +298,15 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls(len, a, b, op)
     } else {
-        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
-
-        let null_count = null_buffer
-            .as_ref()
-            .map(|x| len - x.count_set_bits_offset(0, len))
-            .unwrap_or_default();
+        let nulls =
+            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref())
+                .unwrap();
 
         let mut buffer = BufferBuilder::<O::Native>::new(len);
         buffer.append_n_zeroed(len);
         let slice = buffer.as_slice_mut();
 
-        try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        nulls.try_for_each_valid_idx(|idx| {
             unsafe {
                 *slice.get_unchecked_mut(idx) =
                     op(a.value_unchecked(idx), b.value_unchecked(idx))?
@@ -352,9 +314,8 @@ where
             Ok::<_, ArrowError>(())
         })?;
 
-        Ok(unsafe {
-            build_primitive_array(len, buffer.finish(), null_count, null_buffer)
-        })
+        let values = buffer.finish().into();
+        Ok(PrimitiveArray::new(values, Some(nulls)))
     }
 }
 
@@ -398,17 +359,15 @@ where
     if a.null_count() == 0 && b.null_count() == 0 {
         try_binary_no_nulls_mut(len, a, b, op)
     } else {
-        let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
-        let null_count = null_buffer
-            .as_ref()
-            .map(|x| len - x.count_set_bits_offset(0, len))
-            .unwrap_or_default();
+        let nulls =
+            NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref())
+                .unwrap();
 
         let mut builder = a.into_builder()?;
 
         let slice = builder.values_slice_mut();
 
-        match try_for_each_valid_idx(len, 0, null_count, null_buffer.as_deref(), |idx| {
+        match nulls.try_for_each_valid_idx(|idx| {
             unsafe {
                 *slice.get_unchecked_mut(idx) =
                     op(*slice.get_unchecked(idx), b.value_unchecked(idx))?
@@ -419,15 +378,8 @@ where
             Err(err) => return Ok(Err(err)),
         };
 
-        let array_builder = builder
-            .finish()
-            .data()
-            .clone()
-            .into_builder()
-            .null_bit_buffer(null_buffer)
-            .null_count(null_count);
-
-        let array_data = unsafe { array_builder.build_unchecked() };
+        let array_builder = builder.finish().into_data().into_builder();
+        let array_data = unsafe { array_builder.nulls(Some(nulls)).build_unchecked() };
         Ok(Ok(PrimitiveArray::<T>::from(array_data)))
     }
 }
@@ -450,7 +402,7 @@ where
             buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
         };
     }
-    Ok(unsafe { build_primitive_array(len, buffer.into(), 0, None) })
+    Ok(PrimitiveArray::new(buffer.into(), None))
 }
 
 /// This intentional inline(never) attribute helps LLVM optimize the loop.
@@ -479,96 +431,25 @@ where
     Ok(Ok(builder.finish()))
 }
 
-#[inline(never)]
-fn try_binary_opt_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
-    len: usize,
-    a: A,
-    b: B,
-    op: F,
-) -> Result<PrimitiveArray<O>, ArrowError>
-where
-    O: ArrowPrimitiveType,
-    F: Fn(A::Item, B::Item) -> Option<O::Native>,
-{
-    let mut buffer = Vec::with_capacity(10);
-    for idx in 0..len {
-        unsafe {
-            buffer.push(op(a.value_unchecked(idx), b.value_unchecked(idx)));
-        };
-    }
-    Ok(buffer.iter().collect())
-}
-
-/// Applies the provided binary operation across `a` and `b`, collecting the optional results
-/// into a [`PrimitiveArray`]. If any index is null in either `a` or `b`, the corresponding
-/// index in the result will also be null. The binary operation could return `None` which
-/// results in a new null in the collected [`PrimitiveArray`].
-///
-/// The function is only evaluated for non-null indices
-///
-/// # Error
-///
-/// This function gives error if the arrays have different lengths
-pub(crate) fn binary_opt<A: ArrayAccessor + Array, B: ArrayAccessor + Array, F, O>(
-    a: A,
-    b: B,
-    op: F,
-) -> Result<PrimitiveArray<O>, ArrowError>
-where
-    O: ArrowPrimitiveType,
-    F: Fn(A::Item, B::Item) -> Option<O::Native>,
-{
-    if a.len() != b.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform binary operation on arrays of different length".to_string(),
-        ));
-    }
-
-    if a.is_empty() {
-        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
-    }
-
-    if a.null_count() == 0 && b.null_count() == 0 {
-        return try_binary_opt_no_nulls(a.len(), a, b, op);
-    }
-
-    let iter_a = ArrayIter::new(a);
-    let iter_b = ArrayIter::new(b);
-
-    let values = iter_a
-        .into_iter()
-        .zip(iter_b.into_iter())
-        .map(|(item_a, item_b)| {
-            if let (Some(a), Some(b)) = (item_a, item_b) {
-                op(a, b)
-            } else {
-                None
-            }
-        });
-
-    Ok(values.collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::builder::*;
-    use arrow_array::cast::*;
     use arrow_array::types::*;
 
     #[test]
+    #[allow(deprecated)]
     fn test_unary_f64_slice() {
         let input =
             Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
         let input_slice = input.slice(1, 4);
-        let input_slice: &Float64Array = as_primitive_array(&input_slice);
-        let result = unary(input_slice, |n| n.round());
+        let result = unary(&input_slice, |n| n.round());
         assert_eq!(
             result,
             Float64Array::from(vec![None, Some(7.0), None, Some(7.0)])
         );
 
-        let result = unary_dyn::<_, Float64Type>(input_slice, |n| n + 1.0).unwrap();
+        let result = unary_dyn::<_, Float64Type>(&input_slice, |n| n + 1.0).unwrap();
 
         assert_eq!(
             result.as_any().downcast_ref::<Float64Array>().unwrap(),
@@ -577,6 +458,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_unary_dict_and_unary_dyn() {
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(5).unwrap();
@@ -653,5 +535,21 @@ mod tests {
         })
         .unwrap()
         .expect_err("should got error");
+    }
+
+    #[test]
+    fn test_unary_dict_mut() {
+        let values = Int32Array::from(vec![Some(10), Some(20), None]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 2]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+
+        let updated = dictionary.unary_mut::<_, Int32Type>(|x| x + 1).unwrap();
+        let typed = updated.downcast_dict::<Int32Array>().unwrap();
+        assert_eq!(typed.value(0), 11);
+        assert_eq!(typed.value(1), 11);
+        assert_eq!(typed.value(2), 21);
+
+        let values = updated.values();
+        assert!(values.is_null(2));
     }
 }

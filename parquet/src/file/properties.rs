@@ -15,55 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Writer properties.
-//!
-//! # Usage
-//!
-//! ```rust
-//! use parquet::{
-//!     basic::{Compression, Encoding},
-//!     file::properties::*,
-//!     schema::types::ColumnPath,
-//! };
-//!
-//! // Create properties with default configuration.
-//! let props = WriterProperties::builder().build();
-//!
-//! // Use properties builder to set certain options and assemble the configuration.
-//! let props = WriterProperties::builder()
-//!     .set_writer_version(WriterVersion::PARQUET_1_0)
-//!     .set_encoding(Encoding::PLAIN)
-//!     .set_column_encoding(ColumnPath::from("col1"), Encoding::DELTA_BINARY_PACKED)
-//!     .set_compression(Compression::SNAPPY)
-//!     .build();
-//!
-//! assert_eq!(props.writer_version(), WriterVersion::PARQUET_1_0);
-//! assert_eq!(
-//!     props.encoding(&ColumnPath::from("col1")),
-//!     Some(Encoding::DELTA_BINARY_PACKED)
-//! );
-//! assert_eq!(
-//!     props.encoding(&ColumnPath::from("col2")),
-//!     Some(Encoding::PLAIN)
-//! );
-//! ```
-//!
-//! Reader properties.
-//!
-//! # Usage
-//!
-//! ```rust
-//! use parquet::file::properties::ReaderProperties;
-//!
-//! // Create properties with default configuration.
-//! let props = ReaderProperties::builder().build();
-//!
-//! // Use properties builder to set certain options and assemble the configuration.
-//! let props = ReaderProperties::builder()
-//!     .set_backward_compatible_lz4(false)
-//!     .build();
-//! ```
-
+//! Configuration via [`WriterProperties`] and [`ReaderProperties`]
 use std::{collections::HashMap, sync::Arc};
 
 use crate::basic::{Compression, Encoding};
@@ -72,20 +24,32 @@ use crate::file::metadata::KeyValue;
 use crate::format::SortingColumn;
 use crate::schema::types::ColumnPath;
 
-const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
-const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
-const DEFAULT_WRITER_VERSION: WriterVersion = WriterVersion::PARQUET_1_0;
-const DEFAULT_COMPRESSION: Compression = Compression::UNCOMPRESSED;
-const DEFAULT_DICTIONARY_ENABLED: bool = true;
-const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
-const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
-const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
-const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
-const DEFAULT_CREATED_BY: &str =
+/// Default value for [`WriterProperties::data_page_size_limit`]
+pub const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
+/// Default value for [`WriterProperties::write_batch_size`]
+pub const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
+/// Default value for [`WriterProperties::writer_version`]
+pub const DEFAULT_WRITER_VERSION: WriterVersion = WriterVersion::PARQUET_1_0;
+/// Default value for [`WriterProperties::compression`]
+pub const DEFAULT_COMPRESSION: Compression = Compression::UNCOMPRESSED;
+/// Default value for [`WriterProperties::dictionary_enabled`]
+pub const DEFAULT_DICTIONARY_ENABLED: bool = true;
+/// Default value for [`WriterProperties::dictionary_page_size_limit`]
+pub const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
+/// Default value for [`WriterProperties::statistics_enabled`]
+pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
+/// Default value for [`WriterProperties::max_statistics_size`]
+pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
+/// Default value for [`WriterProperties::max_row_group_size`]
+pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
+/// Default value for [`WriterProperties::created_by`]
+pub const DEFAULT_CREATED_BY: &str =
     concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
-/// default value for the false positive probability used in a bloom filter.
+/// Default value for [`WriterProperties::column_index_truncate_length`]
+pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
+/// Default value for [`BloomFilterProperties::fpp`]
 pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
-/// default value for the expected number of distinct values used in a bloom filter.
+/// Default value for [`BloomFilterProperties::ndv`]
 pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
 
 /// Parquet writer version.
@@ -111,14 +75,45 @@ impl WriterVersion {
 /// Reference counted writer properties.
 pub type WriterPropertiesPtr = Arc<WriterProperties>;
 
-/// Writer properties.
+/// Configuration settings for writing parquet files.
 ///
 /// All properties except the key-value metadata are immutable,
 /// use [`WriterPropertiesBuilder`] to assemble these properties.
+///
+/// # Example
+///
+/// ```rust
+/// use parquet::{
+///     basic::{Compression, Encoding},
+///     file::properties::*,
+///     schema::types::ColumnPath,
+/// };
+///
+/// // Create properties with default configuration.
+/// let props = WriterProperties::default();
+///
+/// // Use properties builder to set certain options and assemble the configuration.
+/// let props = WriterProperties::builder()
+///     .set_writer_version(WriterVersion::PARQUET_1_0)
+///     .set_encoding(Encoding::PLAIN)
+///     .set_column_encoding(ColumnPath::from("col1"), Encoding::DELTA_BINARY_PACKED)
+///     .set_compression(Compression::SNAPPY)
+///     .build();
+///
+/// assert_eq!(props.writer_version(), WriterVersion::PARQUET_1_0);
+/// assert_eq!(
+///     props.encoding(&ColumnPath::from("col1")),
+///     Some(Encoding::DELTA_BINARY_PACKED)
+/// );
+/// assert_eq!(
+///     props.encoding(&ColumnPath::from("col2")),
+///     Some(Encoding::PLAIN)
+/// );
+/// ```
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
-    data_pagesize_limit: usize,
-    dictionary_pagesize_limit: usize,
+    data_page_size_limit: usize,
+    dictionary_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
@@ -128,9 +123,23 @@ pub struct WriterProperties {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
+    column_index_truncate_length: Option<usize>,
+}
+
+impl Default for WriterProperties {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 impl WriterProperties {
+    /// Create a new [`WriterProperties`] with the default settings
+    ///
+    /// See [`WriterProperties::builder`] for customising settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Returns builder for writer properties with default values.
     pub fn builder() -> WriterPropertiesBuilder {
         WriterPropertiesBuilder::with_defaults()
@@ -139,23 +148,42 @@ impl WriterProperties {
     /// Returns data page size limit.
     ///
     /// Note: this is a best effort limit based on the write batch size
+    #[deprecated(since = "41.0.0", note = "Use data_page_size_limit")]
     pub fn data_pagesize_limit(&self) -> usize {
-        self.data_pagesize_limit
+        self.data_page_size_limit
+    }
+
+    /// Returns data page size limit.
+    ///
+    /// Note: this is a best effort limit based on the write batch size
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_data_page_size_limit`]
+    pub fn data_page_size_limit(&self) -> usize {
+        self.data_page_size_limit
     }
 
     /// Returns dictionary page size limit.
     ///
     /// Note: this is a best effort limit based on the write batch size
+    #[deprecated(since = "41.0.0", note = "Use dictionary_page_size_limit")]
     pub fn dictionary_pagesize_limit(&self) -> usize {
-        self.dictionary_pagesize_limit
+        self.dictionary_page_size_limit
+    }
+
+    /// Returns dictionary page size limit.
+    ///
+    /// Note: this is a best effort limit based on the write batch size
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_dictionary_page_size_limit`]
+    pub fn dictionary_page_size_limit(&self) -> usize {
+        self.dictionary_page_size_limit
     }
 
     /// Returns the maximum page row count
     ///
-    /// This can be used to limit the number of rows within a page to
-    /// yield better page pruning
-    ///
     /// Note: this is a best effort limit based on the write batch size
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_data_page_row_count_limit`]
     pub fn data_page_row_count_limit(&self) -> usize {
         self.data_page_row_count_limit
     }
@@ -192,6 +220,13 @@ impl WriterProperties {
     /// Returns sorting columns.
     pub fn sorting_columns(&self) -> Option<&Vec<SortingColumn>> {
         self.sorting_columns.as_ref()
+    }
+
+    /// Returns the maximum length of truncated min/max values in the column index.
+    ///
+    /// `None` if truncation is disabled, must be greater than 0 otherwise.
+    pub fn column_index_truncate_length(&self) -> Option<usize> {
+        self.column_index_truncate_length
     }
 
     /// Returns encoding for a data page, when dictionary encoding is enabled.
@@ -275,10 +310,11 @@ impl WriterProperties {
     }
 }
 
-/// Writer properties builder.
+/// Builder for parquet file writer configuration. See example on
+/// [`WriterProperties`]
 pub struct WriterPropertiesBuilder {
-    data_pagesize_limit: usize,
-    dictionary_pagesize_limit: usize,
+    data_page_size_limit: usize,
+    dictionary_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
@@ -288,14 +324,15 @@ pub struct WriterPropertiesBuilder {
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
+    column_index_truncate_length: Option<usize>,
 }
 
 impl WriterPropertiesBuilder {
     /// Returns default state of the builder.
     fn with_defaults() -> Self {
         Self {
-            data_pagesize_limit: DEFAULT_PAGE_SIZE,
-            dictionary_pagesize_limit: DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT,
+            data_page_size_limit: DEFAULT_PAGE_SIZE,
+            dictionary_page_size_limit: DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT,
             data_page_row_count_limit: usize::MAX,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
             max_row_group_size: DEFAULT_MAX_ROW_GROUP_SIZE,
@@ -305,14 +342,15 @@ impl WriterPropertiesBuilder {
             default_column_properties: Default::default(),
             column_properties: HashMap::new(),
             sorting_columns: None,
+            column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
         }
     }
 
     /// Finalizes the configuration and returns immutable writer properties struct.
     pub fn build(self) -> WriterProperties {
         WriterProperties {
-            data_pagesize_limit: self.data_pagesize_limit,
-            dictionary_pagesize_limit: self.dictionary_pagesize_limit,
+            data_page_size_limit: self.data_page_size_limit,
+            dictionary_page_size_limit: self.dictionary_page_size_limit,
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
             max_row_group_size: self.max_row_group_size,
@@ -322,6 +360,7 @@ impl WriterPropertiesBuilder {
             default_column_properties: self.default_column_properties,
             column_properties: self.column_properties,
             sorting_columns: self.sorting_columns,
+            column_index_truncate_length: self.column_index_truncate_length,
         }
     }
 
@@ -338,16 +377,32 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
+    #[deprecated(since = "41.0.0", note = "Use set_data_page_size_limit")]
     pub fn set_data_pagesize_limit(mut self, value: usize) -> Self {
-        self.data_pagesize_limit = value;
+        self.data_page_size_limit = value;
+        self
+    }
+
+    /// Sets best effort maximum size of a data page in bytes.
+    ///
+    /// The parquet writer will attempt to limit the sizes of each
+    /// `DataPage` to this many bytes. Reducing this value will result
+    /// in larger parquet files, but may improve the effectiveness of
+    /// page index based predicate pushdown during reading.
+    ///
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
+    pub fn set_data_page_size_limit(mut self, value: usize) -> Self {
+        self.data_page_size_limit = value;
         self
     }
 
     /// Sets best effort maximum number of rows in a data page.
     ///
-    ///
-    /// This can be used to limit the number of rows within a page to
-    /// yield better page pruning.
+    /// The parquet writer will attempt to limit the number of rows in
+    /// each `DataPage` to this value. Reducing this value will result
+    /// in larger parquet files, but may improve the effectiveness of
+    /// page index based predicate pushdown during reading.
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
@@ -360,8 +415,24 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
+    #[deprecated(since = "41.0.0", note = "Use set_dictionary_page_size_limit")]
     pub fn set_dictionary_pagesize_limit(mut self, value: usize) -> Self {
-        self.dictionary_pagesize_limit = value;
+        self.dictionary_page_size_limit = value;
+        self
+    }
+
+    /// Sets best effort maximum dictionary page size, in bytes.
+    ///
+    /// The parquet writer will attempt to limit the size of each
+    /// `DataPage` used to store dictionaries to this many
+    /// bytes. Reducing this value will result in larger parquet
+    /// files, but may improve the effectiveness of page index based
+    /// predicate pushdown during reading.
+    ///
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
+    pub fn set_dictionary_page_size_limit(mut self, value: usize) -> Self {
+        self.dictionary_page_size_limit = value;
         self
     }
 
@@ -562,6 +633,17 @@ impl WriterPropertiesBuilder {
         self.get_mut_props(col).set_bloom_filter_ndv(value);
         self
     }
+
+    /// Sets the max length of min/max value fields in the column index. Must be greater than 0.
+    /// If set to `None` - there's no effective limit.
+    pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
+        if let Some(value) = max_length {
+            assert!(value > 0, "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+        }
+
+        self.column_index_truncate_length = max_length;
+        self
+    }
 }
 
 /// Controls the level of statistics to be computed by the writer
@@ -690,8 +772,7 @@ impl ColumnProperties {
     fn set_bloom_filter_fpp(&mut self, value: f64) {
         assert!(
             value > 0. && value < 1.0,
-            "fpp must be between 0 and 1 exclusive, got {}",
-            value
+            "fpp must be between 0 and 1 exclusive, got {value}"
         );
 
         self.bloom_filter_properties
@@ -746,10 +827,24 @@ pub type ReaderPropertiesPtr = Arc<ReaderProperties>;
 
 const DEFAULT_READ_BLOOM_FILTER: bool = false;
 
-/// Reader properties.
+/// Configuration settings for reading parquet files.
 ///
 /// All properties are immutable and `Send` + `Sync`.
 /// Use [`ReaderPropertiesBuilder`] to assemble these properties.
+///
+/// # Example
+///
+/// ```rust
+/// use parquet::file::properties::ReaderProperties;
+///
+/// // Create properties with default configuration.
+/// let props = ReaderProperties::builder().build();
+///
+/// // Use properties builder to set certain options and assemble the configuration.
+/// let props = ReaderProperties::builder()
+///     .set_backward_compatible_lz4(false)
+///     .build();
+/// ```
 pub struct ReaderProperties {
     codec_options: CodecOptions,
     read_bloom_filter: bool,
@@ -772,7 +867,8 @@ impl ReaderProperties {
     }
 }
 
-/// Reader properties builder.
+/// Builder for parquet file reader configuration. See example on
+/// [`ReaderProperties`]
 pub struct ReaderPropertiesBuilder {
     codec_options_builder: CodecOptionsBuilder,
     read_bloom_filter: Option<bool>,
@@ -837,10 +933,10 @@ mod tests {
 
     #[test]
     fn test_writer_properties_default_settings() {
-        let props = WriterProperties::builder().build();
-        assert_eq!(props.data_pagesize_limit(), DEFAULT_PAGE_SIZE);
+        let props = WriterProperties::default();
+        assert_eq!(props.data_page_size_limit(), DEFAULT_PAGE_SIZE);
         assert_eq!(
-            props.dictionary_pagesize_limit(),
+            props.dictionary_page_size_limit(),
             DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT
         );
         assert_eq!(props.write_batch_size(), DEFAULT_WRITE_BATCH_SIZE);
@@ -927,8 +1023,8 @@ mod tests {
         let props = WriterProperties::builder()
             // file settings
             .set_writer_version(WriterVersion::PARQUET_2_0)
-            .set_data_pagesize_limit(10)
-            .set_dictionary_pagesize_limit(20)
+            .set_data_page_size_limit(10)
+            .set_dictionary_page_size_limit(20)
             .set_write_batch_size(30)
             .set_max_row_group_size(40)
             .set_created_by("default".to_owned())
@@ -938,7 +1034,7 @@ mod tests {
             )]))
             // global column settings
             .set_encoding(Encoding::DELTA_BINARY_PACKED)
-            .set_compression(Compression::GZIP)
+            .set_compression(Compression::GZIP(Default::default()))
             .set_dictionary_enabled(false)
             .set_statistics_enabled(EnabledStatistics::None)
             .set_max_statistics_size(50)
@@ -957,8 +1053,8 @@ mod tests {
             .build();
 
         assert_eq!(props.writer_version(), WriterVersion::PARQUET_2_0);
-        assert_eq!(props.data_pagesize_limit(), 10);
-        assert_eq!(props.dictionary_pagesize_limit(), 20);
+        assert_eq!(props.data_page_size_limit(), 10);
+        assert_eq!(props.dictionary_page_size_limit(), 20);
         assert_eq!(props.write_batch_size(), 30);
         assert_eq!(props.max_row_group_size(), 40);
         assert_eq!(props.created_by(), "default");
@@ -973,7 +1069,10 @@ mod tests {
             props.encoding(&ColumnPath::from("a")),
             Some(Encoding::DELTA_BINARY_PACKED)
         );
-        assert_eq!(props.compression(&ColumnPath::from("a")), Compression::GZIP);
+        assert_eq!(
+            props.compression(&ColumnPath::from("a")),
+            Compression::GZIP(Default::default())
+        );
         assert!(!props.dictionary_enabled(&ColumnPath::from("a")));
         assert_eq!(
             props.statistics_enabled(&ColumnPath::from("a")),
@@ -1005,7 +1104,7 @@ mod tests {
     fn test_writer_properties_builder_partial_defaults() {
         let props = WriterProperties::builder()
             .set_encoding(Encoding::DELTA_BINARY_PACKED)
-            .set_compression(Compression::GZIP)
+            .set_compression(Compression::GZIP(Default::default()))
             .set_bloom_filter_enabled(true)
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .build();
@@ -1016,7 +1115,7 @@ mod tests {
         );
         assert_eq!(
             props.compression(&ColumnPath::from("col")),
-            Compression::GZIP
+            Compression::GZIP(Default::default())
         );
         assert_eq!(
             props.dictionary_enabled(&ColumnPath::from("col")),

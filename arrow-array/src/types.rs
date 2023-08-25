@@ -17,17 +17,21 @@
 
 //! Zero-sized types used to parameterize generic array implementations
 
-use crate::array::ArrowPrimitiveType;
-use crate::delta::shift_months;
-use crate::OffsetSizeTrait;
-use arrow_buffer::i256;
+use crate::delta::{
+    add_days_datetime, add_months_datetime, shift_months, sub_days_datetime,
+    sub_months_datetime,
+};
+use crate::temporal_conversions::as_datetime_with_timezone;
+use crate::timezone::Tz;
+use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
+use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{validate_decimal256_precision, validate_decimal_precision};
 use arrow_schema::{
     ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
     DECIMAL_DEFAULT_SCALE,
 };
-use chrono::{Duration, NaiveDate};
+use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
 use std::marker::PhantomData;
 use std::ops::{Add, Sub};
@@ -39,8 +43,36 @@ use std::ops::{Add, Sub};
 pub struct BooleanType {}
 
 impl BooleanType {
-    /// Type represetings is arrow [`DataType`]
+    /// The corresponding Arrow data type
     pub const DATA_TYPE: DataType = DataType::Boolean;
+}
+
+/// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
+/// static-typed nature of rust types ([`ArrowNativeType`]) for all types that implement [`ArrowNativeType`].
+///
+/// [`ArrowNativeType`]: arrow_buffer::ArrowNativeType
+pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
+    /// Corresponding Rust native type for the primitive type.
+    type Native: ArrowNativeTypeOp;
+
+    /// the corresponding Arrow data type of this primitive type.
+    const DATA_TYPE: DataType;
+
+    /// Returns the byte width of this primitive type.
+    fn get_byte_width() -> usize {
+        std::mem::size_of::<Self::Native>()
+    }
+
+    /// Returns a default value of this primitive type.
+    ///
+    /// This is useful for aggregate array ops like `sum()`, `mean()`.
+    fn default_value() -> Self::Native {
+        Default::default()
+    }
+}
+
+mod primitive {
+    pub trait PrimitiveTypeSealed {}
 }
 
 macro_rules! make_type {
@@ -53,6 +85,8 @@ macro_rules! make_type {
             type Native = $native_ty;
             const DATA_TYPE: DataType = $data_ty;
         }
+
+        impl primitive::PrimitiveTypeSealed for $name {}
     };
 }
 
@@ -151,7 +185,7 @@ make_type!(
     Date64Type,
     i64,
     DataType::Date64,
-    "A 64-bit date type representing the elapsed time since UNIX epoch in days(32 bits)."
+    "A 64-bit date type representing the elapsed time since UNIX epoch in milliseconds(64 bits)."
 );
 make_type!(
     Time32SecondType,
@@ -240,6 +274,17 @@ impl ArrowDictionaryKeyType for UInt32Type {}
 
 impl ArrowDictionaryKeyType for UInt64Type {}
 
+/// A subtype of primitive type that is used as run-ends index
+/// in `RunArray`.
+/// See <https://arrow.apache.org/docs/format/Columnar.html>
+pub trait RunEndIndexType: ArrowPrimitiveType {}
+
+impl RunEndIndexType for Int16Type {}
+
+impl RunEndIndexType for Int32Type {}
+
+impl RunEndIndexType for Int64Type {}
+
 /// A subtype of primitive type that represents temporal values.
 pub trait ArrowTemporalType: ArrowPrimitiveType {}
 
@@ -262,29 +307,508 @@ impl ArrowTemporalType for DurationMicrosecondType {}
 impl ArrowTemporalType for DurationNanosecondType {}
 
 /// A timestamp type allows us to create array builders that take a timestamp.
-pub trait ArrowTimestampType: ArrowTemporalType {
+pub trait ArrowTimestampType: ArrowTemporalType<Native = i64> {
+    /// The [`TimeUnit`] of this timestamp.
+    const UNIT: TimeUnit;
+
     /// Returns the `TimeUnit` of this timestamp.
-    fn get_time_unit() -> TimeUnit;
+    #[deprecated(note = "Use Self::UNIT")]
+    fn get_time_unit() -> TimeUnit {
+        Self::UNIT
+    }
+
+    /// Creates a ArrowTimestampType::Native from the provided [`NaiveDateTime`]
+    ///
+    /// See [`DataType::Timestamp`] for more information on timezone handling
+    fn make_value(naive: NaiveDateTime) -> Option<i64>;
 }
 
 impl ArrowTimestampType for TimestampSecondType {
-    fn get_time_unit() -> TimeUnit {
-        TimeUnit::Second
+    const UNIT: TimeUnit = TimeUnit::Second;
+
+    fn make_value(naive: NaiveDateTime) -> Option<i64> {
+        Some(naive.timestamp())
     }
 }
 impl ArrowTimestampType for TimestampMillisecondType {
-    fn get_time_unit() -> TimeUnit {
-        TimeUnit::Millisecond
+    const UNIT: TimeUnit = TimeUnit::Millisecond;
+
+    fn make_value(naive: NaiveDateTime) -> Option<i64> {
+        let millis = naive.timestamp().checked_mul(1_000)?;
+        millis.checked_add(naive.timestamp_subsec_millis() as i64)
     }
 }
 impl ArrowTimestampType for TimestampMicrosecondType {
-    fn get_time_unit() -> TimeUnit {
-        TimeUnit::Microsecond
+    const UNIT: TimeUnit = TimeUnit::Microsecond;
+
+    fn make_value(naive: NaiveDateTime) -> Option<i64> {
+        let micros = naive.timestamp().checked_mul(1_000_000)?;
+        micros.checked_add(naive.timestamp_subsec_micros() as i64)
     }
 }
 impl ArrowTimestampType for TimestampNanosecondType {
-    fn get_time_unit() -> TimeUnit {
-        TimeUnit::Nanosecond
+    const UNIT: TimeUnit = TimeUnit::Nanosecond;
+
+    fn make_value(naive: NaiveDateTime) -> Option<i64> {
+        let nanos = naive.timestamp().checked_mul(1_000_000_000)?;
+        nanos.checked_add(naive.timestamp_subsec_nanos() as i64)
+    }
+}
+
+fn add_year_months<T: ArrowTimestampType>(
+    timestamp: <T as ArrowPrimitiveType>::Native,
+    delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    tz: Tz,
+) -> Option<<T as ArrowPrimitiveType>::Native> {
+    let months = IntervalYearMonthType::to_months(delta);
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)?;
+    let res = add_months_datetime(res, months)?;
+    let res = res.naive_utc();
+    T::make_value(res)
+}
+
+fn add_day_time<T: ArrowTimestampType>(
+    timestamp: <T as ArrowPrimitiveType>::Native,
+    delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    tz: Tz,
+) -> Option<<T as ArrowPrimitiveType>::Native> {
+    let (days, ms) = IntervalDayTimeType::to_parts(delta);
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)?;
+    let res = add_days_datetime(res, days)?;
+    let res = res.checked_add_signed(Duration::milliseconds(ms as i64))?;
+    let res = res.naive_utc();
+    T::make_value(res)
+}
+
+fn add_month_day_nano<T: ArrowTimestampType>(
+    timestamp: <T as ArrowPrimitiveType>::Native,
+    delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    tz: Tz,
+) -> Option<<T as ArrowPrimitiveType>::Native> {
+    let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)?;
+    let res = add_months_datetime(res, months)?;
+    let res = add_days_datetime(res, days)?;
+    let res = res.checked_add_signed(Duration::nanoseconds(nanos))?;
+    let res = res.naive_utc();
+    T::make_value(res)
+}
+
+fn subtract_year_months<T: ArrowTimestampType>(
+    timestamp: <T as ArrowPrimitiveType>::Native,
+    delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    tz: Tz,
+) -> Option<<T as ArrowPrimitiveType>::Native> {
+    let months = IntervalYearMonthType::to_months(delta);
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)?;
+    let res = sub_months_datetime(res, months)?;
+    let res = res.naive_utc();
+    T::make_value(res)
+}
+
+fn subtract_day_time<T: ArrowTimestampType>(
+    timestamp: <T as ArrowPrimitiveType>::Native,
+    delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    tz: Tz,
+) -> Option<<T as ArrowPrimitiveType>::Native> {
+    let (days, ms) = IntervalDayTimeType::to_parts(delta);
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)?;
+    let res = sub_days_datetime(res, days)?;
+    let res = res.checked_sub_signed(Duration::milliseconds(ms as i64))?;
+    let res = res.naive_utc();
+    T::make_value(res)
+}
+
+fn subtract_month_day_nano<T: ArrowTimestampType>(
+    timestamp: <T as ArrowPrimitiveType>::Native,
+    delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    tz: Tz,
+) -> Option<<T as ArrowPrimitiveType>::Native> {
+    let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+    let res = as_datetime_with_timezone::<T>(timestamp, tz)?;
+    let res = sub_months_datetime(res, months)?;
+    let res = sub_days_datetime(res, days)?;
+    let res = res.checked_sub_signed(Duration::nanoseconds(nanos))?;
+    let res = res.naive_utc();
+    T::make_value(res)
+}
+
+impl TimestampSecondType {
+    /// Adds the given IntervalYearMonthType to an arrow TimestampSecondType.
+    ///
+    /// Returns `None` when it will result in overflow.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_year_months(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_year_months::<Self>(timestamp, delta, tz)
+    }
+
+    /// Adds the given IntervalDayTimeType to an arrow TimestampSecondType.
+    ///
+    /// Returns `None` when it will result in overflow.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_day_time(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_day_time::<Self>(timestamp, delta, tz)
+    }
+
+    /// Adds the given IntervalMonthDayNanoType to an arrow TimestampSecondType
+    ///
+    /// Returns `None` when it will result in overflow.
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_month_day_nano(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_month_day_nano::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalYearMonthType to an arrow TimestampSecondType
+    ///
+    /// Returns `None` when it will result in overflow.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_year_months(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_year_months::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalDayTimeType to an arrow TimestampSecondType
+    ///
+    /// Returns `None` when it will result in overflow.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_day_time(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_day_time::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalMonthDayNanoType to an arrow TimestampSecondType
+    ///
+    /// Returns `None` when it will result in overflow.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_month_day_nano(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_month_day_nano::<Self>(timestamp, delta, tz)
+    }
+}
+
+impl TimestampMicrosecondType {
+    /// Adds the given IntervalYearMonthType to an arrow TimestampMicrosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_year_months(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_year_months::<Self>(timestamp, delta, tz)
+    }
+
+    /// Adds the given IntervalDayTimeType to an arrow TimestampMicrosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_day_time(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_day_time::<Self>(timestamp, delta, tz)
+    }
+
+    /// Adds the given IntervalMonthDayNanoType to an arrow TimestampMicrosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_month_day_nano(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_month_day_nano::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalYearMonthType to an arrow TimestampMicrosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_year_months(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_year_months::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalDayTimeType to an arrow TimestampMicrosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_day_time(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_day_time::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalMonthDayNanoType to an arrow TimestampMicrosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_month_day_nano(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_month_day_nano::<Self>(timestamp, delta, tz)
+    }
+}
+
+impl TimestampMillisecondType {
+    /// Adds the given IntervalYearMonthType to an arrow TimestampMillisecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_year_months(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_year_months::<Self>(timestamp, delta, tz)
+    }
+
+    /// Adds the given IntervalDayTimeType to an arrow TimestampMillisecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_day_time(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_day_time::<Self>(timestamp, delta, tz)
+    }
+
+    /// Adds the given IntervalMonthDayNanoType to an arrow TimestampMillisecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_month_day_nano(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_month_day_nano::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalYearMonthType to an arrow TimestampMillisecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_year_months(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_year_months::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalDayTimeType to an arrow TimestampMillisecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_day_time(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_day_time::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalMonthDayNanoType to an arrow TimestampMillisecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_month_day_nano(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_month_day_nano::<Self>(timestamp, delta, tz)
+    }
+}
+
+impl TimestampNanosecondType {
+    /// Adds the given IntervalYearMonthType to an arrow TimestampNanosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_year_months(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_year_months::<Self>(timestamp, delta, tz)
+    }
+
+    /// Adds the given IntervalDayTimeType to an arrow TimestampNanosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_day_time(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_day_time::<Self>(timestamp, delta, tz)
+    }
+
+    /// Adds the given IntervalMonthDayNanoType to an arrow TimestampNanosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn add_month_day_nano(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        add_month_day_nano::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalYearMonthType to an arrow TimestampNanosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_year_months(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_year_months::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalDayTimeType to an arrow TimestampNanosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_day_time(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_day_time::<Self>(timestamp, delta, tz)
+    }
+
+    /// Subtracts the given IntervalMonthDayNanoType to an arrow TimestampNanosecondType
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    /// * `tz` - The timezone in which to interpret `timestamp`
+    pub fn subtract_month_day_nano(
+        timestamp: <Self as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+        tz: Tz,
+    ) -> Option<<Self as ArrowPrimitiveType>::Native> {
+        subtract_month_day_nano::<Self>(timestamp, delta, tz)
     }
 }
 
@@ -295,6 +819,7 @@ impl IntervalYearMonthType {
     ///
     /// * `years` - The number of years (+/-) represented in this interval
     /// * `months` - The number of months (+/-) represented in this interval
+    #[inline]
     pub fn make_value(
         years: i32,
         months: i32,
@@ -309,6 +834,7 @@ impl IntervalYearMonthType {
     /// # Arguments
     ///
     /// * `i` - The IntervalYearMonthType::Native to convert
+    #[inline]
     pub fn to_months(i: <IntervalYearMonthType as ArrowPrimitiveType>::Native) -> i32 {
         i
     }
@@ -321,6 +847,7 @@ impl IntervalDayTimeType {
     ///
     /// * `days` - The number of days (+/-) represented in this interval
     /// * `millis` - The number of milliseconds (+/-) represented in this interval
+    #[inline]
     pub fn make_value(
         days: i32,
         millis: i32,
@@ -347,6 +874,7 @@ impl IntervalDayTimeType {
     /// # Arguments
     ///
     /// * `i` - The IntervalDayTimeType to convert
+    #[inline]
     pub fn to_parts(
         i: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> (i32, i32) {
@@ -364,6 +892,7 @@ impl IntervalMonthDayNanoType {
     /// * `months` - The number of months (+/-) represented in this interval
     /// * `days` - The number of days (+/-) represented in this interval
     /// * `nanos` - The number of nanoseconds (+/-) represented in this interval
+    #[inline]
     pub fn make_value(
         months: i32,
         days: i32,
@@ -392,6 +921,7 @@ impl IntervalMonthDayNanoType {
     /// # Arguments
     ///
     /// * `i` - The IntervalMonthDayNanoType to convert
+    #[inline]
     pub fn to_parts(
         i: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> (i32, i32, i64) {
@@ -473,6 +1003,57 @@ impl Date32Type {
         let res = res.add(Duration::nanoseconds(nanos));
         Date32Type::from_naive_date(res)
     }
+
+    /// Subtract the given IntervalYearMonthType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    pub fn subtract_year_months(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        let prior = Date32Type::to_naive_date(date);
+        let months = IntervalYearMonthType::to_months(-delta);
+        let posterior = shift_months(prior, months);
+        Date32Type::from_naive_date(posterior)
+    }
+
+    /// Subtract the given IntervalDayTimeType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    pub fn subtract_day_time(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
+        let res = Date32Type::to_naive_date(date);
+        let res = res.sub(Duration::days(days as i64));
+        let res = res.sub(Duration::milliseconds(ms as i64));
+        Date32Type::from_naive_date(res)
+    }
+
+    /// Subtract the given IntervalMonthDayNanoType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    pub fn subtract_month_day_nano(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+        let res = Date32Type::to_naive_date(date);
+        let res = shift_months(res, -months);
+        let res = res.sub(Duration::days(days as i64));
+        let res = res.sub(Duration::nanoseconds(nanos));
+        Date32Type::from_naive_date(res)
+    }
 }
 
 impl Date64Type {
@@ -546,6 +1127,57 @@ impl Date64Type {
         let res = res.add(Duration::nanoseconds(nanos));
         Date64Type::from_naive_date(res)
     }
+
+    /// Subtract the given IntervalYearMonthType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    pub fn subtract_year_months(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let prior = Date64Type::to_naive_date(date);
+        let months = IntervalYearMonthType::to_months(-delta);
+        let posterior = shift_months(prior, months);
+        Date64Type::from_naive_date(posterior)
+    }
+
+    /// Subtract the given IntervalDayTimeType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    pub fn subtract_day_time(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
+        let res = Date64Type::to_naive_date(date);
+        let res = res.sub(Duration::days(days as i64));
+        let res = res.sub(Duration::milliseconds(ms as i64));
+        Date64Type::from_naive_date(res)
+    }
+
+    /// Subtract the given IntervalMonthDayNanoType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    pub fn subtract_month_day_nano(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+        let res = Date64Type::to_naive_date(date);
+        let res = shift_months(res, -months);
+        let res = res.sub(Duration::days(days as i64));
+        let res = res.sub(Duration::nanoseconds(nanos));
+        Date64Type::from_naive_date(res)
+    }
 }
 
 /// Crate private types for Decimal Arrays
@@ -595,6 +1227,46 @@ pub trait DecimalType:
     ) -> Result<(), ArrowError>;
 }
 
+/// Validate that `precision` and `scale` are valid for `T`
+///
+/// Returns an Error if:
+/// - `precision` is zero
+/// - `precision` is larger than `T:MAX_PRECISION`
+/// - `scale` is larger than `T::MAX_SCALE`
+/// - `scale` is > `precision`
+pub fn validate_decimal_precision_and_scale<T: DecimalType>(
+    precision: u8,
+    scale: i8,
+) -> Result<(), ArrowError> {
+    if precision == 0 {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "precision cannot be 0, has to be between [1, {}]",
+            T::MAX_PRECISION
+        )));
+    }
+    if precision > T::MAX_PRECISION {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "precision {} is greater than max {}",
+            precision,
+            T::MAX_PRECISION
+        )));
+    }
+    if scale > T::MAX_SCALE {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "scale {} is greater than max {}",
+            scale,
+            T::MAX_SCALE
+        )));
+    }
+    if scale > 0 && scale as u8 > precision {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "scale {scale} is greater than precision {precision}"
+        )));
+    }
+
+    Ok(())
+}
+
 /// The decimal type for a Decimal128Array
 #[derive(Debug)]
 pub struct Decimal128Type {}
@@ -622,6 +1294,8 @@ impl ArrowPrimitiveType for Decimal128Type {
 
     const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
 }
+
+impl primitive::PrimitiveTypeSealed for Decimal128Type {}
 
 /// The decimal type for a Decimal256Array
 #[derive(Debug)]
@@ -651,6 +1325,8 @@ impl ArrowPrimitiveType for Decimal256Type {
     const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
 }
 
+impl primitive::PrimitiveTypeSealed for Decimal256Type {}
+
 fn format_decimal_str(value_str: &str, precision: usize, scale: i8) -> String {
     let (sign, rest) = match value_str.strip_prefix('-') {
         Some(stripped) => ("-", stripped),
@@ -663,11 +1339,11 @@ fn format_decimal_str(value_str: &str, precision: usize, scale: i8) -> String {
         value_str.to_string()
     } else if scale < 0 {
         let padding = value_str.len() + scale.unsigned_abs() as usize;
-        format!("{:0<width$}", value_str, width = padding)
+        format!("{value_str:0<padding$}")
     } else if rest.len() > scale as usize {
         // Decimal separator is in the middle of the string
         let (whole, decimal) = value_str.split_at(value_str.len() - scale as usize);
-        format!("{}.{}", whole, decimal)
+        format!("{whole}.{decimal}")
     } else {
         // String has to be padded
         format!("{}0.{:0>width$}", sign, rest, width = scale as usize)
@@ -714,10 +1390,18 @@ pub trait ByteArrayType: 'static + Send + Sync + bytes::ByteArrayTypeSealed {
     /// Utf8Array will have native type has &str
     /// BinaryArray will have type as [u8]
     type Native: bytes::ByteArrayNativeType + AsRef<Self::Native> + AsRef<[u8]> + ?Sized;
+
     /// "Binary" or "String", for use in error messages
     const PREFIX: &'static str;
+
     /// Datatype of array elements
     const DATA_TYPE: DataType;
+
+    /// Verifies that every consecutive pair of `offsets` denotes a valid slice of `values`
+    fn validate(
+        offsets: &OffsetBuffer<Self::Offset>,
+        values: &Buffer,
+    ) -> Result<(), ArrowError>;
 }
 
 /// [`ByteArrayType`] for string arrays
@@ -735,6 +1419,33 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericStringType<O> {
     } else {
         DataType::Utf8
     };
+
+    fn validate(
+        offsets: &OffsetBuffer<Self::Offset>,
+        values: &Buffer,
+    ) -> Result<(), ArrowError> {
+        // Verify that the slice as a whole is valid UTF-8
+        let validated = std::str::from_utf8(values).map_err(|e| {
+            ArrowError::InvalidArgumentError(format!("Encountered non UTF-8 data: {e}"))
+        })?;
+
+        // Verify each offset is at a valid character boundary in this UTF-8 array
+        for offset in offsets.iter() {
+            let o = offset.as_usize();
+            if !validated.is_char_boundary(o) {
+                if o < validated.len() {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Split UTF-8 codepoint at offset {o}"
+                    )));
+                }
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Offset of {o} exceeds length of values {}",
+                    validated.len()
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// An arrow utf8 array with i32 offsets
@@ -757,6 +1468,21 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
     } else {
         DataType::Binary
     };
+
+    fn validate(
+        offsets: &OffsetBuffer<Self::Offset>,
+        values: &Buffer,
+    ) -> Result<(), ArrowError> {
+        // offsets are guaranteed to be monotonically increasing and non-empty
+        let max_offset = offsets.last().unwrap().as_usize();
+        if values.len() < max_offset {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Maximum offset of {max_offset} is larger than values of length {}",
+                values.len()
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// An arrow binary array with i32 offsets
@@ -768,7 +1494,6 @@ pub type LargeBinaryType = GenericBinaryType<i64>;
 mod tests {
     use super::*;
     use arrow_data::{layout, BufferSpec};
-    use std::mem::size_of;
 
     #[test]
     fn month_day_nano_should_roundtrip() {
@@ -815,7 +1540,8 @@ mod tests {
         assert_eq!(
             spec,
             &BufferSpec::FixedWidth {
-                byte_width: size_of::<T::Native>()
+                byte_width: std::mem::size_of::<T::Native>(),
+                alignment: std::mem::align_of::<T::Native>(),
             }
         );
     }
@@ -833,6 +1559,12 @@ mod tests {
         test_layout::<Float16Type>();
         test_layout::<Float32Type>();
         test_layout::<Float64Type>();
+        test_layout::<Decimal128Type>();
+        test_layout::<Decimal256Type>();
+        test_layout::<TimestampNanosecondType>();
+        test_layout::<TimestampMillisecondType>();
+        test_layout::<TimestampMicrosecondType>();
+        test_layout::<TimestampNanosecondType>();
         test_layout::<TimestampSecondType>();
         test_layout::<Date32Type>();
         test_layout::<Date64Type>();
@@ -846,5 +1578,6 @@ mod tests {
         test_layout::<DurationNanosecondType>();
         test_layout::<DurationMicrosecondType>();
         test_layout::<DurationMillisecondType>();
+        test_layout::<DurationSecondType>();
     }
 }

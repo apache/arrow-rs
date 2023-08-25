@@ -35,7 +35,7 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
         .prefix()
         .into_iter()
         .chain(unaligned.chunks().iter().cloned())
-        .chain(unaligned.suffix().into_iter());
+        .chain(unaligned.suffix());
 
     iter.rev().flat_map(move |mut chunk| {
         let chunk_idx = chunk_end_idx - 64;
@@ -53,7 +53,7 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
 
 /// Performs big endian sign extension
 pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
-    assert!(b.len() <= N, "Array too large, expected less than {}", N);
+    assert!(b.len() <= N, "Array too large, expected less than {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
     let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
     for (d, s) in result.iter_mut().skip(N - b.len()).zip(b) {

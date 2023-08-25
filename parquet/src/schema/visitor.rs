@@ -49,7 +49,7 @@ pub trait TypeVisitor<R, C> {
     fn visit_list(&mut self, list_type: TypePtr, context: C) -> Result<R> {
         match list_type.as_ref() {
             Type::PrimitiveType { .. } => {
-                panic!("{:?} is a list type and must be a group type", list_type)
+                panic!("{list_type:?} is a list type and must be a group type")
             }
             Type::GroupType {
                 basic_info: _,

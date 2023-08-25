@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains file reader API and provides methods to access file metadata, row group
-//! readers to read individual column chunks, or access record iterator.
+//! File reader API and methods to access file metadata, row group
+//! readers to read individual column chunks, or access record
+//! iterator.
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
+use std::fs::File;
+use std::io::{BufReader, Seek, SeekFrom};
 use std::{boxed::Box, io::Read, sync::Arc};
 
 use crate::bloom_filter::Sbbf;
@@ -28,7 +31,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::*;
 pub use crate::file::serialized_reader::{SerializedFileReader, SerializedPageReader};
 use crate::record::reader::RowIter;
-use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, Type as SchemaType};
+use crate::schema::types::Type as SchemaType;
 
 use crate::basic::Type;
 
@@ -43,19 +46,47 @@ pub trait Length {
 }
 
 /// The ChunkReader trait generates readers of chunks of a source.
-/// For a file system reader, each chunk might contain a clone of File bounded on a given range.
-/// For an object store reader, each read can be mapped to a range request.
+///
+/// For more information see [`File::try_clone`]
 pub trait ChunkReader: Length + Send + Sync {
-    type T: Read + Send;
-    /// Get a serially readable slice of the current reader
-    /// This should fail if the slice exceeds the current bounds
-    fn get_read(&self, start: u64, length: usize) -> Result<Self::T>;
+    type T: Read;
+
+    /// Get a [`Read`] starting at the provided file offset
+    ///
+    /// Subsequent or concurrent calls to [`Self::get_read`] or [`Self::get_bytes`] may
+    /// side-effect on previously returned [`Self::T`]. Care should be taken to avoid this
+    ///
+    /// See [`File::try_clone`] for more information
+    fn get_read(&self, start: u64) -> Result<Self::T>;
 
     /// Get a range as bytes
-    /// This should fail if the exact number of bytes cannot be read
+    ///
+    /// Concurrent calls to [`Self::get_bytes`] may result in interleaved output
+    ///
+    /// See [`File::try_clone`] for more information
+    fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes>;
+}
+
+impl Length for File {
+    fn len(&self) -> u64 {
+        self.metadata().map(|m| m.len()).unwrap_or(0u64)
+    }
+}
+
+impl ChunkReader for File {
+    type T = BufReader<File>;
+
+    fn get_read(&self, start: u64) -> Result<Self::T> {
+        let mut reader = self.try_clone()?;
+        reader.seek(SeekFrom::Start(start))?;
+        Ok(BufReader::new(self.try_clone()?))
+    }
+
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(length);
-        let read = self.get_read(start, length)?.read_to_end(&mut buffer)?;
+        let mut reader = self.try_clone()?;
+        reader.seek(SeekFrom::Start(start))?;
+        let read = reader.take(length as _).read_to_end(&mut buffer)?;
 
         if read != length {
             return Err(eof_err!(
@@ -65,6 +96,26 @@ pub trait ChunkReader: Length + Send + Sync {
             ));
         }
         Ok(buffer.into())
+    }
+}
+
+impl Length for Bytes {
+    fn len(&self) -> u64 {
+        self.len() as u64
+    }
+}
+
+impl ChunkReader for Bytes {
+    type T = bytes::buf::Reader<Bytes>;
+
+    fn get_read(&self, start: u64) -> Result<Self::T> {
+        let start = start as usize;
+        Ok(self.slice(start..).reader())
+    }
+
+    fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
+        let start = start as usize;
+        Ok(self.slice(start..start + length))
     }
 }
 
@@ -213,16 +264,4 @@ impl Iterator for FilePageIterator {
     }
 }
 
-impl PageIterator for FilePageIterator {
-    fn schema(&mut self) -> Result<SchemaDescPtr> {
-        Ok(self
-            .file_reader
-            .metadata()
-            .file_metadata()
-            .schema_descr_ptr())
-    }
-
-    fn column_schema(&mut self) -> Result<ColumnDescPtr> {
-        self.schema().map(|s| s.column(self.column_index))
-    }
-}
+impl PageIterator for FilePageIterator {}

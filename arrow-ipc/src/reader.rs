@@ -20,7 +20,7 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
-use arrow_buffer::i256;
+use flatbuffers::VectorIter;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -28,12 +28,11 @@ use std::sync::Arc;
 
 use arrow_array::*;
 use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_cast::cast;
 use arrow_data::ArrayData;
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
-use crate::CONTINUATION_MARKER;
+use crate::{FieldNode, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Read a buffer based on offset and length
@@ -48,7 +47,7 @@ use DataType::*;
 fn read_buffer(
     buf: &crate::Buffer,
     a_data: &Buffer,
-    compression_codec: &Option<CompressionCodec>,
+    compression_codec: Option<CompressionCodec>,
 ) -> Result<Buffer, ArrowError> {
     let start_offset = buf.offset() as usize;
     let buf_data = a_data.slice_with_length(start_offset, buf.length() as usize);
@@ -68,122 +67,46 @@ fn read_buffer(
 ///     - check if the bit width of non-64-bit numbers is 64, and
 ///     - read the buffer as 64-bit (signed integer or float), and
 ///     - cast the 64-bit array to the appropriate data type
-#[allow(clippy::too_many_arguments)]
-fn create_array(
-    nodes: flatbuffers::Vector<'_, crate::FieldNode>,
-    field: &Field,
-    data: &Buffer,
-    buffers: flatbuffers::Vector<'_, crate::Buffer>,
-    dictionaries_by_id: &HashMap<i64, ArrayRef>,
-    mut node_index: usize,
-    mut buffer_index: usize,
-    compression_codec: &Option<CompressionCodec>,
-    metadata: &crate::MetadataVersion,
-) -> Result<(ArrayRef, usize, usize), ArrowError> {
+fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, ArrowError> {
     let data_type = field.data_type();
-    let array = match data_type {
-        Utf8 | Binary | LargeBinary | LargeUtf8 => {
-            let array = create_primitive_array(
-                nodes.get(node_index),
-                data_type,
-                &[
-                    read_buffer(buffers.get(buffer_index), data, compression_codec)?,
-                    read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
-                    read_buffer(buffers.get(buffer_index + 2), data, compression_codec)?,
-                ],
-            )?;
-            node_index += 1;
-            buffer_index += 3;
-            array
-        }
-        FixedSizeBinary(_) => {
-            let array = create_primitive_array(
-                nodes.get(node_index),
-                data_type,
-                &[
-                    read_buffer(buffers.get(buffer_index), data, compression_codec)?,
-                    read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
-                ],
-            )?;
-            node_index += 1;
-            buffer_index += 2;
-            array
-        }
+    match data_type {
+        Utf8 | Binary | LargeBinary | LargeUtf8 => create_primitive_array(
+            reader.next_node(field)?,
+            data_type,
+            &[
+                reader.next_buffer()?,
+                reader.next_buffer()?,
+                reader.next_buffer()?,
+            ],
+        ),
+        FixedSizeBinary(_) => create_primitive_array(
+            reader.next_node(field)?,
+            data_type,
+            &[reader.next_buffer()?, reader.next_buffer()?],
+        ),
         List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
-            let list_node = nodes.get(node_index);
-            let list_buffers = [
-                read_buffer(buffers.get(buffer_index), data, compression_codec)?,
-                read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
-            ];
-            node_index += 1;
-            buffer_index += 2;
-            let triple = create_array(
-                nodes,
-                list_field,
-                data,
-                buffers,
-                dictionaries_by_id,
-                node_index,
-                buffer_index,
-                compression_codec,
-                metadata,
-            )?;
-            node_index = triple.1;
-            buffer_index = triple.2;
-
-            create_list_array(list_node, data_type, &list_buffers, triple.0)?
+            let list_node = reader.next_node(field)?;
+            let list_buffers = [reader.next_buffer()?, reader.next_buffer()?];
+            let values = create_array(reader, list_field)?;
+            create_list_array(list_node, data_type, &list_buffers, values)
         }
         FixedSizeList(ref list_field, _) => {
-            let list_node = nodes.get(node_index);
-            let list_buffers = [read_buffer(
-                buffers.get(buffer_index),
-                data,
-                compression_codec,
-            )?];
-            node_index += 1;
-            buffer_index += 1;
-            let triple = create_array(
-                nodes,
-                list_field,
-                data,
-                buffers,
-                dictionaries_by_id,
-                node_index,
-                buffer_index,
-                compression_codec,
-                metadata,
-            )?;
-            node_index = triple.1;
-            buffer_index = triple.2;
-
-            create_list_array(list_node, data_type, &list_buffers, triple.0)?
+            let list_node = reader.next_node(field)?;
+            let list_buffers = [reader.next_buffer()?];
+            let values = create_array(reader, list_field)?;
+            create_list_array(list_node, data_type, &list_buffers, values)
         }
         Struct(struct_fields) => {
-            let struct_node = nodes.get(node_index);
-            let null_buffer =
-                read_buffer(buffers.get(buffer_index), data, compression_codec)?;
-            node_index += 1;
-            buffer_index += 1;
+            let struct_node = reader.next_node(field)?;
+            let null_buffer = reader.next_buffer()?;
 
             // read the arrays for each field
             let mut struct_arrays = vec![];
             // TODO investigate whether just knowing the number of buffers could
             // still work
             for struct_field in struct_fields {
-                let triple = create_array(
-                    nodes,
-                    struct_field,
-                    data,
-                    buffers,
-                    dictionaries_by_id,
-                    node_index,
-                    buffer_index,
-                    compression_codec,
-                    metadata,
-                )?;
-                node_index = triple.1;
-                buffer_index = triple.2;
-                struct_arrays.push((struct_field.clone(), triple.0));
+                let child = create_array(reader, struct_field)?;
+                struct_arrays.push((struct_field.clone(), child));
             }
             let null_count = struct_node.null_count() as usize;
             let struct_array = if null_count > 0 {
@@ -192,215 +115,109 @@ fn create_array(
             } else {
                 StructArray::from(struct_arrays)
             };
-            Arc::new(struct_array)
+            Ok(Arc::new(struct_array))
+        }
+        RunEndEncoded(run_ends_field, values_field) => {
+            let run_node = reader.next_node(field)?;
+            let run_ends = create_array(reader, run_ends_field)?;
+            let values = create_array(reader, values_field)?;
+
+            let run_array_length = run_node.length() as usize;
+            let data = ArrayData::builder(data_type.clone())
+                .len(run_array_length)
+                .offset(0)
+                .add_child_data(run_ends.into_data())
+                .add_child_data(values.into_data())
+                .build_aligned()?;
+
+            Ok(make_array(data))
         }
         // Create dictionary array from RecordBatch
         Dictionary(_, _) => {
-            let index_node = nodes.get(node_index);
-            let index_buffers = [
-                read_buffer(buffers.get(buffer_index), data, compression_codec)?,
-                read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
-            ];
+            let index_node = reader.next_node(field)?;
+            let index_buffers = [reader.next_buffer()?, reader.next_buffer()?];
 
             let dict_id = field.dict_id().ok_or_else(|| {
-                ArrowError::IoError(format!("Field {} does not have dict id", field))
+                ArrowError::ParseError(format!("Field {field} does not have dict id"))
             })?;
 
-            let value_array = dictionaries_by_id.get(&dict_id).ok_or_else(|| {
-                ArrowError::IoError(format!(
-                    "Cannot find a dictionary batch with dict id: {}",
-                    dict_id
-                ))
-            })?;
-            node_index += 1;
-            buffer_index += 2;
+            let value_array =
+                reader.dictionaries_by_id.get(&dict_id).ok_or_else(|| {
+                    ArrowError::ParseError(format!(
+                        "Cannot find a dictionary batch with dict id: {dict_id}"
+                    ))
+                })?;
 
             create_dictionary_array(
                 index_node,
                 data_type,
                 &index_buffers,
                 value_array.clone(),
-            )?
+            )
         }
-        Union(fields, field_type_ids, mode) => {
-            let union_node = nodes.get(node_index);
-            node_index += 1;
-
+        Union(fields, mode) => {
+            let union_node = reader.next_node(field)?;
             let len = union_node.length() as usize;
 
             // In V4, union types has validity bitmap
             // In V5 and later, union types have no validity bitmap
-            if metadata < &crate::MetadataVersion::V5 {
-                read_buffer(buffers.get(buffer_index), data, compression_codec)?;
-                buffer_index += 1;
+            if reader.version < MetadataVersion::V5 {
+                reader.next_buffer()?;
             }
 
-            let type_ids: Buffer =
-                read_buffer(buffers.get(buffer_index), data, compression_codec)?[..len]
-                    .into();
-
-            buffer_index += 1;
+            let type_ids: Buffer = reader.next_buffer()?[..len].into();
 
             let value_offsets = match mode {
                 UnionMode::Dense => {
-                    let buffer =
-                        read_buffer(buffers.get(buffer_index), data, compression_codec)?;
-                    buffer_index += 1;
+                    let buffer = reader.next_buffer()?;
                     Some(buffer[..len * 4].into())
                 }
                 UnionMode::Sparse => None,
             };
 
-            let mut children = vec![];
+            let mut children = Vec::with_capacity(fields.len());
+            let mut ids = Vec::with_capacity(fields.len());
 
-            for field in fields {
-                let triple = create_array(
-                    nodes,
-                    field,
-                    data,
-                    buffers,
-                    dictionaries_by_id,
-                    node_index,
-                    buffer_index,
-                    compression_codec,
-                    metadata,
-                )?;
-
-                node_index = triple.1;
-                buffer_index = triple.2;
-
-                children.push((field.clone(), triple.0));
+            for (id, field) in fields.iter() {
+                let child = create_array(reader, field)?;
+                children.push((field.as_ref().clone(), child));
+                ids.push(id);
             }
 
-            let array =
-                UnionArray::try_new(field_type_ids, type_ids, value_offsets, children)?;
-            Arc::new(array)
+            let array = UnionArray::try_new(&ids, type_ids, value_offsets, children)?;
+            Ok(Arc::new(array))
         }
         Null => {
-            let node = nodes.get(node_index);
+            let node = reader.next_node(field)?;
             let length = node.length();
             let null_count = node.null_count();
 
             if length != null_count {
-                return Err(ArrowError::IoError(format!(
-                    "Field {} of NullArray has unequal null_count {} and len {}",
-                    field, null_count, length
+                return Err(ArrowError::SchemaError(format!(
+                    "Field {field} of NullArray has unequal null_count {null_count} and len {length}"
                 )));
             }
 
             let data = ArrayData::builder(data_type.clone())
                 .len(length as usize)
                 .offset(0)
-                .build()
+                .build_aligned()
                 .unwrap();
-            node_index += 1;
             // no buffer increases
-            make_array(data)
+            Ok(Arc::new(NullArray::from(data)))
         }
-        _ => {
-            if nodes.len() <= node_index {
-                return Err(ArrowError::IoError(format!(
-                    "Invalid data for schema. {} refers to node index {} but only {} in schema",
-                    field, node_index, nodes.len()
-                )));
-            }
-            let array = create_primitive_array(
-                nodes.get(node_index),
-                data_type,
-                &[
-                    read_buffer(buffers.get(buffer_index), data, compression_codec)?,
-                    read_buffer(buffers.get(buffer_index + 1), data, compression_codec)?,
-                ],
-            )?;
-            node_index += 1;
-            buffer_index += 2;
-            array
-        }
-    };
-    Ok((array, node_index, buffer_index))
-}
-
-/// Skip fields based on data types to advance `node_index` and `buffer_index`.
-/// This function should be called when doing projection in fn `read_record_batch`.
-/// The advancement logic references fn `create_array`.
-fn skip_field(
-    data_type: &DataType,
-    mut node_index: usize,
-    mut buffer_index: usize,
-) -> Result<(usize, usize), ArrowError> {
-    match data_type {
-        Utf8 | Binary | LargeBinary | LargeUtf8 => {
-            node_index += 1;
-            buffer_index += 3;
-        }
-        FixedSizeBinary(_) => {
-            node_index += 1;
-            buffer_index += 2;
-        }
-        List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
-            node_index += 1;
-            buffer_index += 2;
-            let tuple = skip_field(list_field.data_type(), node_index, buffer_index)?;
-            node_index = tuple.0;
-            buffer_index = tuple.1;
-        }
-        FixedSizeList(ref list_field, _) => {
-            node_index += 1;
-            buffer_index += 1;
-            let tuple = skip_field(list_field.data_type(), node_index, buffer_index)?;
-            node_index = tuple.0;
-            buffer_index = tuple.1;
-        }
-        Struct(struct_fields) => {
-            node_index += 1;
-            buffer_index += 1;
-
-            // skip for each field
-            for struct_field in struct_fields {
-                let tuple =
-                    skip_field(struct_field.data_type(), node_index, buffer_index)?;
-                node_index = tuple.0;
-                buffer_index = tuple.1;
-            }
-        }
-        Dictionary(_, _) => {
-            node_index += 1;
-            buffer_index += 2;
-        }
-        Union(fields, _field_type_ids, mode) => {
-            node_index += 1;
-            buffer_index += 1;
-
-            match mode {
-                UnionMode::Dense => {
-                    buffer_index += 1;
-                }
-                UnionMode::Sparse => {}
-            };
-
-            for field in fields {
-                let tuple = skip_field(field.data_type(), node_index, buffer_index)?;
-
-                node_index = tuple.0;
-                buffer_index = tuple.1;
-            }
-        }
-        Null => {
-            node_index += 1;
-            // no buffer increases
-        }
-        _ => {
-            node_index += 1;
-            buffer_index += 2;
-        }
-    };
-    Ok((node_index, buffer_index))
+        _ => create_primitive_array(
+            reader.next_node(field)?,
+            data_type,
+            &[reader.next_buffer()?, reader.next_buffer()?],
+        ),
+    }
 }
 
 /// Reads the correct number of buffers based on data type and null_count, and creates a
 /// primitive array ref
 fn create_primitive_array(
-    field_node: &crate::FieldNode,
+    field_node: &FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
 ) -> Result<ArrayRef, ArrowError> {
@@ -413,94 +230,17 @@ fn create_primitive_array(
                 .len(length)
                 .buffers(buffers[1..3].to_vec())
                 .null_bit_buffer(null_buffer)
-                .build()?
+                .build_aligned()?
         }
-        FixedSizeBinary(_) => {
+        _ if data_type.is_primitive()
+            || matches!(data_type, Boolean | FixedSizeBinary(_)) =>
+        {
             // read 2 buffers: null buffer (optional) and data buffer
             ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffers[1].clone())
                 .null_bit_buffer(null_buffer)
-                .build()?
-        }
-        Int8
-        | Int16
-        | Int32
-        | UInt8
-        | UInt16
-        | UInt32
-        | Time32(_)
-        | Date32
-        | Interval(IntervalUnit::YearMonth) => {
-            if buffers[1].len() / 8 == length && length != 1 {
-                // interpret as a signed i64, and cast appropriately
-                let data = ArrayData::builder(DataType::Int64)
-                    .len(length)
-                    .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
-                    .build()?;
-                let values = Arc::new(Int64Array::from(data)) as ArrayRef;
-                let casted = cast(&values, data_type)?;
-                casted.into_data()
-            } else {
-                ArrayData::builder(data_type.clone())
-                    .len(length)
-                    .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
-                    .build()?
-            }
-        }
-        Float32 => {
-            if buffers[1].len() / 8 == length && length != 1 {
-                // interpret as a f64, and cast appropriately
-                let data = ArrayData::builder(DataType::Float64)
-                    .len(length)
-                    .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
-                    .build()?;
-                let values = Arc::new(Float64Array::from(data)) as ArrayRef;
-                let casted = cast(&values, data_type)?;
-                casted.into_data()
-            } else {
-                ArrayData::builder(data_type.clone())
-                    .len(length)
-                    .add_buffer(buffers[1].clone())
-                    .null_bit_buffer(null_buffer)
-                    .build()?
-            }
-        }
-        Boolean
-        | Int64
-        | UInt64
-        | Float64
-        | Time64(_)
-        | Timestamp(_, _)
-        | Date64
-        | Duration(_)
-        | Interval(IntervalUnit::DayTime) => ArrayData::builder(data_type.clone())
-            .len(length)
-            .add_buffer(buffers[1].clone())
-            .null_bit_buffer(null_buffer)
-            .build()?,
-        Interval(IntervalUnit::MonthDayNano) | Decimal128(_, _) => {
-            let buffer = get_aligned_buffer::<i128>(&buffers[1], length);
-
-            // read 2 buffers: null buffer (optional) and data buffer
-            ArrayData::builder(data_type.clone())
-                .len(length)
-                .add_buffer(buffer)
-                .null_bit_buffer(null_buffer)
-                .build()?
-        }
-        Decimal256(_, _) => {
-            let buffer = get_aligned_buffer::<i256>(&buffers[1], length);
-
-            // read 2 buffers: null buffer (optional) and data buffer
-            ArrayData::builder(data_type.clone())
-                .len(length)
-                .add_buffer(buffer)
-                .null_bit_buffer(null_buffer)
-                .build()?
+                .build_aligned()?
         }
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
@@ -508,28 +248,10 @@ fn create_primitive_array(
     Ok(make_array(array_data))
 }
 
-/// Checks if given `Buffer` is properly aligned with `T`.
-/// If not, copying the data and padded it for alignment.
-fn get_aligned_buffer<T>(buffer: &Buffer, length: usize) -> Buffer {
-    let ptr = buffer.as_ptr();
-    let align_req = std::mem::align_of::<T>();
-    let align_offset = ptr.align_offset(align_req);
-    // The buffer is not aligned properly. The writer might use a smaller alignment
-    // e.g. 8 bytes, but on some platform (e.g. ARM) i128 requires 16 bytes alignment.
-    // We need to copy the buffer as fallback.
-    if align_offset != 0 {
-        let len_in_bytes = (length * std::mem::size_of::<T>()).min(buffer.len());
-        let slice = &buffer.as_slice()[0..len_in_bytes];
-        Buffer::from_slice_ref(slice)
-    } else {
-        buffer.clone()
-    }
-}
-
 /// Reads the correct number of buffers based on list type and null_count, and creates a
 /// list array ref
 fn create_list_array(
-    field_node: &crate::FieldNode,
+    field_node: &FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
     child_array: ArrayRef,
@@ -551,13 +273,13 @@ fn create_list_array(
 
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
-    Ok(make_array(builder.build()?))
+    Ok(make_array(builder.build_aligned()?))
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
 /// list array ref
 fn create_dictionary_array(
-    field_node: &crate::FieldNode,
+    field_node: &FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
     value_array: ArrayRef,
@@ -570,9 +292,103 @@ fn create_dictionary_array(
             .add_child_data(value_array.into_data())
             .null_bit_buffer(null_buffer);
 
-        Ok(make_array(builder.build()?))
+        Ok(make_array(builder.build_aligned()?))
     } else {
         unreachable!("Cannot create dictionary array from {:?}", data_type)
+    }
+}
+
+/// State for decoding arrays from an encoded [`RecordBatch`]
+struct ArrayReader<'a> {
+    /// Decoded dictionaries indexed by dictionary id
+    dictionaries_by_id: &'a HashMap<i64, ArrayRef>,
+    /// Optional compression codec
+    compression: Option<CompressionCodec>,
+    /// The format version
+    version: MetadataVersion,
+    /// The raw data buffer
+    data: &'a Buffer,
+    /// The fields comprising this array
+    nodes: VectorIter<'a, FieldNode>,
+    /// The buffers comprising this array
+    buffers: VectorIter<'a, crate::Buffer>,
+}
+
+impl<'a> ArrayReader<'a> {
+    fn next_buffer(&mut self) -> Result<Buffer, ArrowError> {
+        read_buffer(self.buffers.next().unwrap(), self.data, self.compression)
+    }
+
+    fn skip_buffer(&mut self) {
+        self.buffers.next().unwrap();
+    }
+
+    fn next_node(&mut self, field: &Field) -> Result<&'a FieldNode, ArrowError> {
+        self.nodes.next().ok_or_else(|| {
+            ArrowError::SchemaError(format!(
+                "Invalid data for schema. {} refers to node not found in schema",
+                field
+            ))
+        })
+    }
+
+    fn skip_field(&mut self, field: &Field) -> Result<(), ArrowError> {
+        self.next_node(field)?;
+
+        match field.data_type() {
+            Utf8 | Binary | LargeBinary | LargeUtf8 => {
+                for _ in 0..3 {
+                    self.skip_buffer()
+                }
+            }
+            FixedSizeBinary(_) => {
+                self.skip_buffer();
+                self.skip_buffer();
+            }
+            List(list_field) | LargeList(list_field) | Map(list_field, _) => {
+                self.skip_buffer();
+                self.skip_buffer();
+                self.skip_field(list_field)?;
+            }
+            FixedSizeList(list_field, _) => {
+                self.skip_buffer();
+                self.skip_field(list_field)?;
+            }
+            Struct(struct_fields) => {
+                self.skip_buffer();
+
+                // skip for each field
+                for struct_field in struct_fields {
+                    self.skip_field(struct_field)?
+                }
+            }
+            RunEndEncoded(run_ends_field, values_field) => {
+                self.skip_field(run_ends_field)?;
+                self.skip_field(values_field)?;
+            }
+            Dictionary(_, _) => {
+                self.skip_buffer(); // Nulls
+                self.skip_buffer(); // Indices
+            }
+            Union(fields, mode) => {
+                self.skip_buffer(); // Nulls
+
+                match mode {
+                    UnionMode::Dense => self.skip_buffer(),
+                    UnionMode::Sparse => {}
+                };
+
+                for (_, field) in fields.iter() {
+                    self.skip_field(field)?
+                }
+            }
+            Null => {} // No buffer increases
+            _ => {
+                self.skip_buffer();
+                self.skip_buffer();
+            }
+        };
+        Ok(())
     }
 }
 
@@ -583,78 +399,56 @@ pub fn read_record_batch(
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
-    metadata: &crate::MetadataVersion,
+    metadata: &MetadataVersion,
 ) -> Result<RecordBatch, ArrowError> {
     let buffers = batch.buffers().ok_or_else(|| {
-        ArrowError::IoError("Unable to get buffers from IPC RecordBatch".to_string())
+        ArrowError::IpcError("Unable to get buffers from IPC RecordBatch".to_string())
     })?;
     let field_nodes = batch.nodes().ok_or_else(|| {
-        ArrowError::IoError("Unable to get field nodes from IPC RecordBatch".to_string())
+        ArrowError::IpcError("Unable to get field nodes from IPC RecordBatch".to_string())
     })?;
     let batch_compression = batch.compression();
-    let compression_codec: Option<CompressionCodec> = batch_compression
+    let compression = batch_compression
         .map(|batch_compression| batch_compression.codec().try_into())
         .transpose()?;
 
-    // keep track of buffer and node index, the functions that create arrays mutate these
-    let mut buffer_index = 0;
-    let mut node_index = 0;
-    let mut arrays = vec![];
+    let mut reader = ArrayReader {
+        dictionaries_by_id,
+        compression,
+        version: *metadata,
+        data: buf,
+        nodes: field_nodes.iter(),
+        buffers: buffers.iter(),
+    };
 
     let options = RecordBatchOptions::new().with_row_count(Some(batch.length() as usize));
 
     if let Some(projection) = projection {
+        let mut arrays = vec![];
         // project fields
         for (idx, field) in schema.fields().iter().enumerate() {
             // Create array for projected field
-            if projection.contains(&idx) {
-                let triple = create_array(
-                    field_nodes,
-                    field,
-                    buf,
-                    buffers,
-                    dictionaries_by_id,
-                    node_index,
-                    buffer_index,
-                    &compression_codec,
-                    metadata,
-                )?;
-                node_index = triple.1;
-                buffer_index = triple.2;
-                arrays.push(triple.0);
+            if let Some(proj_idx) = projection.iter().position(|p| p == &idx) {
+                let child = create_array(&mut reader, field)?;
+                arrays.push((proj_idx, child));
             } else {
-                // Skip field.
-                // This must be called to advance `node_index` and `buffer_index`.
-                let tuple = skip_field(field.data_type(), node_index, buffer_index)?;
-                node_index = tuple.0;
-                buffer_index = tuple.1;
+                reader.skip_field(field)?;
             }
         }
-
+        arrays.sort_by_key(|t| t.0);
         RecordBatch::try_new_with_options(
             Arc::new(schema.project(projection)?),
-            arrays,
+            arrays.into_iter().map(|t| t.1).collect(),
             &options,
         )
     } else {
+        let mut children = vec![];
         // keep track of index as lists require more than one node
         for field in schema.fields() {
-            let triple = create_array(
-                field_nodes,
-                field,
-                buf,
-                buffers,
-                dictionaries_by_id,
-                node_index,
-                buffer_index,
-                &compression_codec,
-                metadata,
-            )?;
-            node_index = triple.1;
-            buffer_index = triple.2;
-            arrays.push(triple.0);
+            let child = create_array(&mut reader, field)?;
+            children.push(child);
         }
-        RecordBatch::try_new_with_options(schema, arrays, &options)
+        RecordBatch::try_new_with_options(schema, children, &options)
     }
 }
 
@@ -668,7 +462,7 @@ pub fn read_dictionary(
     metadata: &crate::MetadataVersion,
 ) -> Result<(), ArrowError> {
     if batch.isDelta() {
-        return Err(ArrowError::IoError(
+        return Err(ArrowError::InvalidArgumentError(
             "delta dictionary batches not supported".to_string(),
         ));
     }
@@ -685,10 +479,8 @@ pub fn read_dictionary(
     let dictionary_values: ArrayRef = match first_field.data_type() {
         DataType::Dictionary(_, ref value_type) => {
             // Make a fake schema for the dictionary batch.
-            let schema = Schema {
-                fields: vec![Field::new("", value_type.as_ref().clone(), true)],
-                metadata: HashMap::new(),
-            };
+            let value = value_type.as_ref().clone();
+            let schema = Schema::new(vec![Field::new("", value, true)]);
             // Read a single column
             let record_batch = read_record_batch(
                 buf,
@@ -741,6 +533,9 @@ pub struct FileReader<R: Read + Seek> {
     /// Metadata version
     metadata_version: crate::MetadataVersion,
 
+    /// User defined metadata
+    custom_metadata: HashMap<String, String>,
+
     /// Optional projection and projected_schema
     projection: Option<(Vec<usize>, Schema)>,
 }
@@ -774,14 +569,14 @@ impl<R: Read + Seek> FileReader<R> {
         let mut magic_buffer: [u8; 6] = [0; 6];
         reader.read_exact(&mut magic_buffer)?;
         if magic_buffer != super::ARROW_MAGIC {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::ParseError(
                 "Arrow file does not contain correct header".to_string(),
             ));
         }
         reader.seek(SeekFrom::End(-6))?;
         reader.read_exact(&mut magic_buffer)?;
         if magic_buffer != super::ARROW_MAGIC {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::ParseError(
                 "Arrow file does not contain correct footer".to_string(),
             ));
         }
@@ -797,11 +592,11 @@ impl<R: Read + Seek> FileReader<R> {
         reader.read_exact(&mut footer_data)?;
 
         let footer = crate::root_as_footer(&footer_data[..]).map_err(|err| {
-            ArrowError::IoError(format!("Unable to get root as footer: {:?}", err))
+            ArrowError::ParseError(format!("Unable to get root as footer: {err:?}"))
         })?;
 
         let blocks = footer.recordBatches().ok_or_else(|| {
-            ArrowError::IoError(
+            ArrowError::ParseError(
                 "Unable to get record batches from IPC Footer".to_string(),
             )
         })?;
@@ -810,6 +605,16 @@ impl<R: Read + Seek> FileReader<R> {
 
         let ipc_schema = footer.schema().unwrap();
         let schema = crate::convert::fb_to_schema(ipc_schema);
+
+        let mut custom_metadata = HashMap::new();
+        if let Some(fb_custom_metadata) = footer.custom_metadata() {
+            for kv in fb_custom_metadata.into_iter() {
+                custom_metadata.insert(
+                    kv.key().unwrap().to_string(),
+                    kv.value().unwrap().to_string(),
+                );
+            }
+        }
 
         // Create an array of optional dictionary value arrays, one per field.
         let mut dictionaries_by_id = HashMap::new();
@@ -828,9 +633,8 @@ impl<R: Read + Seek> FileReader<R> {
                 reader.read_exact(&mut block_data)?;
 
                 let message = crate::root_as_message(&block_data[..]).map_err(|err| {
-                    ArrowError::IoError(format!(
-                        "Unable to get root as message: {:?}",
-                        err
+                    ArrowError::ParseError(format!(
+                        "Unable to get root as message: {err:?}"
                     ))
                 })?;
 
@@ -855,9 +659,8 @@ impl<R: Read + Seek> FileReader<R> {
                         )?;
                     }
                     t => {
-                        return Err(ArrowError::IoError(format!(
-                            "Expecting DictionaryBatch in dictionary blocks, found {:?}.",
-                            t
+                        return Err(ArrowError::ParseError(format!(
+                            "Expecting DictionaryBatch in dictionary blocks, found {t:?}."
                         )));
                     }
                 }
@@ -879,8 +682,14 @@ impl<R: Read + Seek> FileReader<R> {
             total_blocks,
             dictionaries_by_id,
             metadata_version: footer.version(),
+            custom_metadata,
             projection,
         })
+    }
+
+    /// Return user defined customized metadata
+    pub fn custom_metadata(&self) -> &HashMap<String, String> {
+        &self.custom_metadata
     }
 
     /// Return the number of batches in the file
@@ -898,7 +707,7 @@ impl<R: Read + Seek> FileReader<R> {
     /// Sets the current block to the index, allowing random reads
     pub fn set_index(&mut self, index: usize) -> Result<(), ArrowError> {
         if index >= self.total_blocks {
-            Err(ArrowError::IoError(format!(
+            Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot set batch to index {} from {} total batches",
                 index, self.total_blocks
             )))
@@ -925,25 +734,25 @@ impl<R: Read + Seek> FileReader<R> {
         let mut block_data = vec![0; meta_len as usize];
         self.reader.read_exact(&mut block_data)?;
         let message = crate::root_as_message(&block_data[..]).map_err(|err| {
-            ArrowError::IoError(format!("Unable to get root as footer: {:?}", err))
+            ArrowError::ParseError(format!("Unable to get root as footer: {err:?}"))
         })?;
 
         // some old test data's footer metadata is not set, so we account for that
         if self.metadata_version != crate::MetadataVersion::V1
             && message.version() != self.metadata_version
         {
-            return Err(ArrowError::IoError(
+            return Err(ArrowError::IpcError(
                 "Could not read IPC message as metadata versions mismatch".to_string(),
             ));
         }
 
         match message.header_type() {
-            crate::MessageHeader::Schema => Err(ArrowError::IoError(
+            crate::MessageHeader::Schema => Err(ArrowError::IpcError(
                 "Not expecting a schema when messages are read".to_string(),
             )),
             crate::MessageHeader::RecordBatch => {
                 let batch = message.header_as_record_batch().ok_or_else(|| {
-                    ArrowError::IoError(
+                    ArrowError::IpcError(
                         "Unable to read IPC message as record batch".to_string(),
                     )
                 })?;
@@ -967,10 +776,24 @@ impl<R: Read + Seek> FileReader<R> {
             crate::MessageHeader::NONE => {
                 Ok(None)
             }
-            t => Err(ArrowError::IoError(format!(
-                "Reading types other than record batches not yet supported, unable to read {:?}", t
+            t => Err(ArrowError::InvalidArgumentError(format!(
+                "Reading types other than record batches not yet supported, unable to read {t:?}"
             ))),
         }
+    }
+
+    /// Gets a reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        self.reader.get_ref()
+    }
+
+    /// Gets a mutable reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_mut(&mut self) -> &mut R {
+        self.reader.get_mut()
     }
 }
 
@@ -995,8 +818,8 @@ impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
 
 /// Arrow Stream reader
 pub struct StreamReader<R: Read> {
-    /// Buffered stream reader
-    reader: BufReader<R>,
+    /// Stream reader
+    reader: R,
 
     /// The schema that is read from the stream's first message
     schema: SchemaRef,
@@ -1027,8 +850,8 @@ impl<R: Read> fmt::Debug for StreamReader<R> {
     }
 }
 
-impl<R: Read> StreamReader<R> {
-    /// Try to create a new stream reader
+impl<R: Read> StreamReader<BufReader<R>> {
+    /// Try to create a new stream reader with the reader wrapped in a BufReader
     ///
     /// The first message in the stream is the schema, the reader will fail if it does not
     /// encounter a schema.
@@ -1037,7 +860,18 @@ impl<R: Read> StreamReader<R> {
         reader: R,
         projection: Option<Vec<usize>>,
     ) -> Result<Self, ArrowError> {
-        let mut reader = BufReader::new(reader);
+        Self::try_new_unbuffered(BufReader::new(reader), projection)
+    }
+}
+
+impl<R: Read> StreamReader<R> {
+    /// Try to create a new stream reader but do not wrap the reader in a BufReader.
+    ///
+    /// Unless you need the StreamReader to be unbuffered you likely want to use `StreamReader::try_new` instead.
+    pub fn try_new_unbuffered(
+        mut reader: R,
+        projection: Option<Vec<usize>>,
+    ) -> Result<StreamReader<R>, ArrowError> {
         // determine metadata length
         let mut meta_size: [u8; 4] = [0; 4];
         reader.read_exact(&mut meta_size)?;
@@ -1054,11 +888,11 @@ impl<R: Read> StreamReader<R> {
         reader.read_exact(&mut meta_buffer)?;
 
         let message = crate::root_as_message(meta_buffer.as_slice()).map_err(|err| {
-            ArrowError::IoError(format!("Unable to get root as message: {:?}", err))
+            ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
         // message header is a Schema, so read it
         let ipc_schema: crate::Schema = message.header_as_schema().ok_or_else(|| {
-            ArrowError::IoError("Unable to read IPC message as schema".to_string())
+            ArrowError::ParseError("Unable to read IPC message as schema".to_string())
         })?;
         let schema = crate::convert::fb_to_schema(ipc_schema);
 
@@ -1133,16 +967,16 @@ impl<R: Read> StreamReader<R> {
 
         let vecs = &meta_buffer.to_vec();
         let message = crate::root_as_message(vecs).map_err(|err| {
-            ArrowError::IoError(format!("Unable to get root as message: {:?}", err))
+            ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
 
         match message.header_type() {
-            crate::MessageHeader::Schema => Err(ArrowError::IoError(
+            crate::MessageHeader::Schema => Err(ArrowError::IpcError(
                 "Not expecting a schema when messages are read".to_string(),
             )),
             crate::MessageHeader::RecordBatch => {
                 let batch = message.header_as_record_batch().ok_or_else(|| {
-                    ArrowError::IoError(
+                    ArrowError::IpcError(
                         "Unable to read IPC message as record batch".to_string(),
                     )
                 })?;
@@ -1154,7 +988,7 @@ impl<R: Read> StreamReader<R> {
             }
             crate::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().ok_or_else(|| {
-                    ArrowError::IoError(
+                    ArrowError::IpcError(
                         "Unable to read IPC message as dictionary batch".to_string(),
                     )
                 })?;
@@ -1172,10 +1006,24 @@ impl<R: Read> StreamReader<R> {
             crate::MessageHeader::NONE => {
                 Ok(None)
             }
-            t => Err(ArrowError::IoError(
-                format!("Reading types other than record batches not yet supported, unable to read {:?} ", t)
+            t => Err(ArrowError::InvalidArgumentError(
+                format!("Reading types other than record batches not yet supported, unable to read {t:?} ")
             )),
         }
+    }
+
+    /// Gets a reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        &self.reader
+    }
+
+    /// Gets a mutable reference to the underlying reader.
+    ///
+    /// It is inadvisable to directly read from the underlying reader.
+    pub fn get_mut(&mut self) -> &mut R {
+        &mut self.reader
     }
 }
 
@@ -1195,9 +1043,12 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use crate::writer::{unslice_run_array, DictionaryTracker, IpcDataGenerator};
+
     use super::*;
 
-    use arrow_array::builder::UnionBuilder;
+    use crate::root_as_message;
+    use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
     use arrow_buffer::ArrowNativeType;
     use arrow_data::ArrayDataBuilder;
@@ -1205,33 +1056,33 @@ mod tests {
     fn create_test_projection_schema() -> Schema {
         // define field types
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
 
         let fixed_size_list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, false)),
             3,
         );
 
-        let key_type = DataType::Int8;
-        let value_type = DataType::Utf8;
-        let dict_data_type =
-            DataType::Dictionary(Box::new(key_type), Box::new(value_type));
+        let union_fields = UnionFields::new(
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Float64, false),
+            ],
+        );
 
-        let union_fileds = vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Float64, false),
-        ];
-        let union_data_type = DataType::Union(union_fileds, vec![0, 1], UnionMode::Dense);
+        let union_data_type = DataType::Union(union_fields, UnionMode::Dense);
 
-        let struct_fields = vec![
+        let struct_fields = Fields::from(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new(
-                "list",
-                DataType::List(Box::new(Field::new("item", DataType::Int8, true))),
-                false,
-            ),
-        ];
+            Field::new_list("list", Field::new("item", DataType::Int8, true), false),
+        ]);
         let struct_data_type = DataType::Struct(struct_fields);
+
+        let run_encoded_data_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
 
         // define schema
         Schema::new(vec![
@@ -1245,9 +1096,10 @@ mod tests {
             Field::new("f7", DataType::FixedSizeBinary(3), true),
             Field::new("f8", fixed_size_list_data_type, false),
             Field::new("f9", struct_data_type, false),
-            Field::new("f10", DataType::Boolean, false),
-            Field::new("f11", dict_data_type, false),
-            Field::new("f12", DataType::Utf8, false),
+            Field::new("f10", run_encoded_data_type, false),
+            Field::new("f11", DataType::Boolean, false),
+            Field::new_dictionary("f12", DataType::Int8, DataType::Utf8, false),
+            Field::new("f13", DataType::Utf8, false),
         ])
     }
 
@@ -1302,14 +1154,18 @@ mod tests {
             .unwrap();
         let array9: ArrayRef = Arc::new(StructArray::from(array9));
 
-        let array10 = BooleanArray::from(vec![false, false, true]);
+        let array10_input = vec![Some(1_i32), None, None];
+        let mut array10_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
+        array10_builder.extend(array10_input);
+        let array10 = array10_builder.finish();
 
-        let array11_values = StringArray::from(vec!["x", "yy", "zzz"]);
-        let array11_keys = Int8Array::from_iter_values([1, 1, 2]);
-        let array11 =
-            DictionaryArray::<Int8Type>::try_new(&array11_keys, &array11_values).unwrap();
+        let array11 = BooleanArray::from(vec![false, false, true]);
 
-        let array12 = StringArray::from(vec!["a", "bb", "ccc"]);
+        let array12_values = StringArray::from(vec!["x", "yy", "zzz"]);
+        let array12_keys = Int8Array::from_iter_values([1, 1, 2]);
+        let array12 = DictionaryArray::new(array12_keys, Arc::new(array12_values));
+
+        let array13 = StringArray::from(vec!["a", "bb", "ccc"]);
 
         // create record batch
         RecordBatch::try_new(
@@ -1328,6 +1184,7 @@ mod tests {
                 Arc::new(array10),
                 Arc::new(array11),
                 Arc::new(array12),
+                Arc::new(array13),
             ],
         )
         .unwrap()
@@ -1361,6 +1218,17 @@ mod tests {
 
             // check the projected column equals the expected column
             assert_eq!(projected_column.as_ref(), expected_column.as_ref());
+        }
+
+        {
+            // read record batch with reversed projection
+            let reader = FileReader::try_new(
+                std::io::Cursor::new(buf.clone()),
+                Some(vec![3, 2, 1]),
+            );
+            let read_batch = reader.unwrap().next().unwrap().unwrap();
+            let expected_batch = batch.project(&[3, 2, 1]).unwrap();
+            assert_eq!(read_batch, expected_batch);
         }
     }
 
@@ -1436,8 +1304,7 @@ mod tests {
         writer.finish().unwrap();
         drop(writer);
 
-        let mut reader =
-            crate::reader::FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
+        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
         reader.next().unwrap().unwrap()
     }
 
@@ -1456,12 +1323,31 @@ mod tests {
     }
 
     #[test]
+    fn test_roundtrip_with_custom_metadata() {
+        let schema = Schema::new(vec![Field::new("dummy", DataType::Float64, false)]);
+        let mut buf = Vec::new();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+        let mut test_metadata = HashMap::new();
+        test_metadata.insert("abc".to_string(), "abc".to_string());
+        test_metadata.insert("def".to_string(), "def".to_string());
+        for (k, v) in &test_metadata {
+            writer.write_metadata(k, v);
+        }
+        writer.finish().unwrap();
+        drop(writer);
+
+        let reader =
+            crate::reader::FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
+        assert_eq!(reader.custom_metadata(), &test_metadata);
+    }
+
+    #[test]
     fn test_roundtrip_nested_dict() {
         let inner: DictionaryArray<Int32Type> = vec!["a", "b", "a"].into_iter().collect();
 
         let array = Arc::new(inner) as ArrayRef;
 
-        let dctfield = Field::new("dict", array.data_type().clone(), false);
+        let dctfield = Arc::new(Field::new("dict", array.data_type().clone(), false));
 
         let s = StructArray::from(vec![(dctfield, array)]);
         let struct_array = Arc::new(s) as ArrayRef;
@@ -1503,7 +1389,7 @@ mod tests {
         let union1 = rb.column(0);
         let union2 = rb2.column(0);
 
-        assert_eq!(union1.data().buffers(), union2.data().buffers());
+        assert_eq!(union1, union2);
     }
 
     #[test]
@@ -1517,6 +1403,43 @@ mod tests {
     }
 
     #[test]
+    fn test_roundtrip_stream_run_array_sliced() {
+        let run_array_1: Int32RunArray = vec!["a", "a", "a", "b", "b", "c", "c", "c"]
+            .into_iter()
+            .collect();
+        let run_array_1_sliced = run_array_1.slice(2, 5);
+
+        let run_array_2_inupt = vec![Some(1_i32), None, None, Some(2), Some(2)];
+        let mut run_array_2_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
+        run_array_2_builder.extend(run_array_2_inupt);
+        let run_array_2 = run_array_2_builder.finish();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "run_array_1_sliced",
+                run_array_1_sliced.data_type().clone(),
+                false,
+            ),
+            Field::new("run_array_2", run_array_2.data_type().clone(), false),
+        ]));
+        let input_batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(run_array_1_sliced.clone()), Arc::new(run_array_2)],
+        )
+        .unwrap();
+        let output_batch = roundtrip_ipc_stream(&input_batch);
+
+        // As partial comparison not yet supported for run arrays, the sliced run array
+        // has to be unsliced before comparing with the output. the second run array
+        // can be compared as such.
+        assert_eq!(input_batch.column(1), output_batch.column(1));
+
+        let run_array_1_unsliced =
+            unslice_run_array(run_array_1_sliced.into_data()).unwrap();
+        assert_eq!(run_array_1_unsliced, output_batch.column(0).into_data());
+    }
+
+    #[test]
     fn test_roundtrip_stream_nested_dict() {
         let xs = vec!["AA", "BB", "AA", "CC", "BB"];
         let dict = Arc::new(
@@ -1526,9 +1449,12 @@ mod tests {
         );
         let string_array: ArrayRef = Arc::new(StringArray::from(xs.clone()));
         let struct_array = StructArray::from(vec![
-            (Field::new("f2.1", DataType::Utf8, false), string_array),
             (
-                Field::new("f2.2_struct", dict.data_type().clone(), false),
+                Arc::new(Field::new("f2.1", DataType::Utf8, false)),
+                string_array,
+            ),
+            (
+                Arc::new(Field::new("f2.2_struct", dict.data_type().clone(), false)),
                 dict.clone() as ArrayRef,
             ),
         ]);
@@ -1551,34 +1477,33 @@ mod tests {
     #[test]
     fn test_roundtrip_stream_nested_dict_of_map_of_dict() {
         let values = StringArray::from(vec![Some("a"), None, Some("b"), Some("c")]);
+        let values = Arc::new(values) as ArrayRef;
         let value_dict_keys = Int8Array::from_iter_values([0, 1, 1, 2, 3, 1]);
-        let value_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&value_dict_keys, &values).unwrap();
+        let value_dict_array = DictionaryArray::new(value_dict_keys, values.clone());
 
         let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 1, 1, 3]);
-        let key_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&key_dict_keys, &values).unwrap();
+        let key_dict_array = DictionaryArray::new(key_dict_keys, values);
 
-        let keys_field = Field::new_dict(
+        let keys_field = Arc::new(Field::new_dict(
             "keys",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
             1,
             false,
-        );
-        let values_field = Field::new_dict(
+        ));
+        let values_field = Arc::new(Field::new_dict(
             "values",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
             1,
             false,
-        );
+        ));
         let entry_struct = StructArray::from(vec![
             (keys_field, make_array(key_dict_array.into_data())),
             (values_field, make_array(value_dict_array.into_data())),
         ]);
         let map_data_type = DataType::Map(
-            Box::new(Field::new(
+            Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
                 true,
@@ -1596,8 +1521,7 @@ mod tests {
         let map_array = MapArray::from(map_data);
 
         let dict_keys = Int8Array::from_iter_values([0, 1, 1, 2, 2, 1]);
-        let dict_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&dict_keys, &map_array).unwrap();
+        let dict_dict_array = DictionaryArray::new(dict_keys, Arc::new(map_array));
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f1",
@@ -1619,22 +1543,21 @@ mod tests {
     ) {
         let values = StringArray::from(vec![Some("a"), None, Some("c"), None]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3]);
-        let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
-        let dict_data = dict_array.data();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+        let dict_data = dict_array.to_data();
 
         let value_offsets = Buffer::from_slice_ref(offsets);
 
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .add_buffer(value_offsets)
-            .add_child_data(dict_data.clone())
+            .add_child_data(dict_data)
             .build()
             .unwrap();
         let list_array = GenericListArray::<OffsetSize>::from(list_data);
 
         let keys_for_dict = Int8Array::from_iter_values([0, 3, 0, 1, 1, 2, 0, 1, 3]);
-        let dict_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&keys_for_dict, &list_array).unwrap();
+        let dict_dict_array = DictionaryArray::new(keys_for_dict, Arc::new(list_array));
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f1",
@@ -1650,7 +1573,7 @@ mod tests {
     #[test]
     fn test_roundtrip_stream_dict_of_list_of_dict() {
         // list
-        let list_data_type = DataType::List(Box::new(Field::new_dict(
+        let list_data_type = DataType::List(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
@@ -1664,7 +1587,7 @@ mod tests {
         );
 
         // large list
-        let list_data_type = DataType::LargeList(Box::new(Field::new_dict(
+        let list_data_type = DataType::LargeList(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
@@ -1682,11 +1605,11 @@ mod tests {
     fn test_roundtrip_stream_dict_of_fixed_size_list_of_dict() {
         let values = StringArray::from(vec![Some("a"), None, Some("c"), None]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3, 1, 2]);
-        let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
-        let dict_data = dict_array.data();
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+        let dict_data = dict_array.into_data();
 
         let list_data_type = DataType::FixedSizeList(
-            Box::new(Field::new_dict(
+            Arc::new(Field::new_dict(
                 "item",
                 DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
                 true,
@@ -1697,14 +1620,13 @@ mod tests {
         );
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
-            .add_child_data(dict_data.clone())
+            .add_child_data(dict_data)
             .build()
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
 
         let keys_for_dict = Int8Array::from_iter_values([0, 1, 0, 1, 1, 2, 0, 1, 2]);
-        let dict_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&keys_for_dict, &list_array).unwrap();
+        let dict_dict_array = DictionaryArray::new(keys_for_dict, Arc::new(list_array));
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f1",
@@ -1719,7 +1641,7 @@ mod tests {
 
     #[test]
     fn test_no_columns_batch() {
-        let schema = Arc::new(Schema::new(vec![]));
+        let schema = Arc::new(Schema::empty());
         let options = RecordBatchOptions::new()
             .with_match_field_names(true)
             .with_row_count(Some(10));
@@ -1727,5 +1649,41 @@ mod tests {
             RecordBatch::try_new_with_options(schema, vec![], &options).unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
         assert_eq!(input_batch, output_batch);
+    }
+
+    #[test]
+    fn test_unaligned() {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "i32",
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _,
+        )])
+        .unwrap();
+
+        let gen = IpcDataGenerator {};
+        let mut dict_tracker = DictionaryTracker::new(false);
+        let (_, encoded) = gen
+            .encoded_batch(&batch, &mut dict_tracker, &Default::default())
+            .unwrap();
+
+        let message = root_as_message(&encoded.ipc_message).unwrap();
+
+        // Construct an unaligned buffer
+        let mut buffer = MutableBuffer::with_capacity(encoded.arrow_data.len() + 1);
+        buffer.push(0_u8);
+        buffer.extend_from_slice(&encoded.arrow_data);
+        let b = Buffer::from(buffer).slice(1);
+        assert_ne!(b.as_ptr().align_offset(8), 0);
+
+        let ipc_batch = message.header_as_record_batch().unwrap();
+        let roundtrip = read_record_batch(
+            &b,
+            ipc_batch,
+            batch.schema(),
+            &Default::default(),
+            None,
+            &message.version(),
+        )
+        .unwrap();
+        assert_eq!(batch, roundtrip);
     }
 }

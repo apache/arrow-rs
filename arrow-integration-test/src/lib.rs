@@ -81,6 +81,12 @@ pub struct ArrowJsonField {
     pub metadata: Option<Value>,
 }
 
+impl From<&FieldRef> for ArrowJsonField {
+    fn from(value: &FieldRef) -> Self {
+        Self::from(value.as_ref())
+    }
+}
+
 impl From<&Field> for ArrowJsonField {
     fn from(field: &Field) -> Self {
         let metadata_value = match field.metadata().is_empty() {
@@ -172,8 +178,8 @@ impl ArrowJson {
             match batch {
                 Some(Ok(batch)) => {
                     if json_batch != batch {
-                        println!("json: {:?}", json_batch);
-                        println!("batch: {:?}", batch);
+                        println!("json: {json_batch:?}");
+                        println!("batch: {batch:?}");
                         return Ok(false);
                     }
                 }
@@ -255,8 +261,7 @@ impl ArrowJsonField {
             }
             Err(e) => {
                 eprintln!(
-                    "Encountered error while converting JSON field to Arrow field: {:?}",
-                    e
+                    "Encountered error while converting JSON field to Arrow field: {e:?}"
                 );
                 false
             }
@@ -323,10 +328,7 @@ pub fn array_from_json(
             {
                 match is_valid {
                     1 => b.append_value(value.as_i64().ok_or_else(|| {
-                        ArrowError::JsonError(format!(
-                            "Unable to get {:?} as int64",
-                            value
-                        ))
+                        ArrowError::JsonError(format!("Unable to get {value:?} as int64"))
                     })? as i8),
                     _ => b.append_null(),
                 };
@@ -411,18 +413,16 @@ pub fn array_from_json(
                                             i64::from_le_bytes(bytes)
                                         }
                                         _ => panic!(
-                                            "Unable to parse {:?} as interval daytime",
-                                            value
+                                            "Unable to parse {value:?} as interval daytime"
                                         ),
                                     }
                                 }
                                 _ => panic!(
-                                    "Unable to parse {:?} as interval daytime",
-                                    value
+                                    "Unable to parse {value:?} as interval daytime"
                                 ),
                             }
                         }
-                        _ => panic!("Unable to parse {:?} as number", value),
+                        _ => panic!("Unable to parse {value:?} as number"),
                     }),
                     _ => b.append_null(),
                 };
@@ -502,7 +502,7 @@ pub fn array_from_json(
                                 value.as_u64().expect("Unable to read number as u64"),
                             )
                         } else {
-                            panic!("Unable to parse value {:?} as u64", value)
+                            panic!("Unable to parse value {value:?} as u64")
                         }
                     }
                     _ => b.append_null(),
@@ -542,11 +542,11 @@ pub fn array_from_json(
                                     months_days_ns
                                 }
                                 (_, _, _) => {
-                                    panic!("Unable to parse {:?} as MonthDayNano", v)
+                                    panic!("Unable to parse {v:?} as MonthDayNano")
                                 }
                             }
                         }
-                        _ => panic!("Unable to parse {:?} as MonthDayNano", value),
+                        _ => panic!("Unable to parse {value:?} as MonthDayNano"),
                     }),
                     _ => b.append_null(),
                 };
@@ -760,16 +760,14 @@ pub fn array_from_json(
         DataType::Dictionary(key_type, value_type) => {
             let dict_id = field.dict_id().ok_or_else(|| {
                 ArrowError::JsonError(format!(
-                    "Unable to find dict_id for field {:?}",
-                    field
+                    "Unable to find dict_id for field {field:?}"
                 ))
             })?;
             // find dictionary
             let dictionary = dictionaries
                 .ok_or_else(|| {
                     ArrowError::JsonError(format!(
-                        "Unable to find any dictionaries for field {:?}",
-                        field
+                        "Unable to find any dictionaries for field {field:?}"
                     ))
                 })?
                 .get(&dict_id);
@@ -783,8 +781,7 @@ pub fn array_from_json(
                     dictionaries,
                 ),
                 None => Err(ArrowError::JsonError(format!(
-                    "Unable to find dictionary for field {:?}",
-                    field
+                    "Unable to find dictionary for field {field:?}"
                 ))),
             }
         }
@@ -861,7 +858,7 @@ pub fn array_from_json(
             let array = MapArray::from(array_data);
             Ok(Arc::new(array))
         }
-        DataType::Union(fields, field_type_ids, _) => {
+        DataType::Union(fields, _) => {
             let type_ids = if let Some(type_id) = json_col.type_id {
                 type_id
             } else {
@@ -877,13 +874,14 @@ pub fn array_from_json(
             });
 
             let mut children: Vec<(Field, Arc<dyn Array>)> = vec![];
-            for (field, col) in fields.iter().zip(json_col.children.unwrap()) {
+            for ((_, field), col) in fields.iter().zip(json_col.children.unwrap()) {
                 let array = array_from_json(field, col, dictionaries)?;
-                children.push((field.clone(), array));
+                children.push((field.as_ref().clone(), array));
             }
 
+            let field_type_ids = fields.iter().map(|(id, _)| id).collect::<Vec<_>>();
             let array = UnionArray::try_new(
-                field_type_ids,
+                &field_type_ids,
                 Buffer::from(&type_ids.to_byte_slice()),
                 offset,
                 children,
@@ -892,8 +890,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         t => Err(ArrowError::JsonError(format!(
-            "data type {:?} not supported",
-            t
+            "data type {t:?} not supported"
         ))),
     }
 }
@@ -941,7 +938,7 @@ pub fn dictionary_array_from_json(
             // convert key and value to dictionary data
             let dict_data = ArrayData::builder(field.data_type().clone())
                 .len(keys.len())
-                .add_buffer(keys.data().buffers()[0].clone())
+                .add_buffer(keys.to_data().buffers()[0].clone())
                 .null_bit_buffer(Some(null_buf))
                 .add_child_data(values.into_data())
                 .build()
@@ -963,8 +960,7 @@ pub fn dictionary_array_from_json(
             Ok(array)
         }
         _ => Err(ArrowError::JsonError(format!(
-            "Dictionary key type {:?} not supported",
-            dict_key
+            "Dictionary key type {dict_key:?} not supported"
         ))),
     }
 }
@@ -1102,7 +1098,7 @@ mod tests {
             Field::new("c3", DataType::Utf8, true),
             Field::new(
                 "c4",
-                DataType::List(Box::new(Field::new(
+                DataType::List(Arc::new(Field::new(
                     "custom_item",
                     DataType::Int32,
                     false,
@@ -1115,10 +1111,10 @@ mod tests {
 
     #[test]
     fn test_arrow_data_equality() {
-        let secs_tz = Some("Europe/Budapest".to_string());
-        let millis_tz = Some("America/New_York".to_string());
-        let micros_tz = Some("UTC".to_string());
-        let nanos_tz = Some("Africa/Johannesburg".to_string());
+        let secs_tz = Some("Europe/Budapest".into());
+        let millis_tz = Some("America/New_York".into());
+        let micros_tz = Some("UTC".into());
+        let nanos_tz = Some("Africa/Johannesburg".into());
 
         let schema = Schema::new(vec![
             Field::new("bools-with-metadata-map", DataType::Boolean, true).with_metadata(
@@ -1189,15 +1185,15 @@ mod tests {
             Field::new("utf8s", DataType::Utf8, true),
             Field::new(
                 "lists",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
                 true,
             ),
             Field::new(
                 "structs",
-                DataType::Struct(vec![
+                DataType::Struct(Fields::from(vec![
                     Field::new("int32s", DataType::Int32, true),
                     Field::new("utf8s", DataType::Utf8, true),
-                ]),
+                ])),
                 true,
             ),
         ]);
@@ -1264,7 +1260,7 @@ mod tests {
         let value_data = Int32Array::from(vec![None, Some(2), None, None]);
         let value_offsets = Buffer::from_slice_ref([0, 3, 4, 4]);
         let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -1276,14 +1272,14 @@ mod tests {
 
         let structs_int32s = Int32Array::from(vec![None, Some(-2), None]);
         let structs_utf8s = StringArray::from(vec![None, None, Some("aaaaaa")]);
-        let struct_data_type = DataType::Struct(vec![
+        let struct_data_type = DataType::Struct(Fields::from(vec![
             Field::new("int32s", DataType::Int32, true),
             Field::new("utf8s", DataType::Utf8, true),
-        ]);
+        ]));
         let struct_data = ArrayData::builder(struct_data_type)
             .len(3)
-            .add_child_data(structs_int32s.data().clone())
-            .add_child_data(structs_utf8s.data().clone())
+            .add_child_data(structs_int32s.into_data())
+            .add_child_data(structs_utf8s.into_data())
             .null_bit_buffer(Some(Buffer::from([0b00000011])))
             .build()
             .unwrap();

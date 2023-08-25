@@ -17,12 +17,15 @@
 
 //! Contains the `NullArray` type.
 
-use crate::Array;
-use arrow_data::ArrayData;
+use crate::builder::NullBuilder;
+use crate::{Array, ArrayRef};
+use arrow_buffer::buffer::NullBuffer;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
+use std::sync::Arc;
 
-/// An Array where all elements are nulls
+/// An array of [null values](https://arrow.apache.org/docs/format/Columnar.html#null-layout)
 ///
 /// A `NullArray` is a simplified array where all values are null.
 ///
@@ -33,12 +36,14 @@ use std::any::Any;
 ///
 /// let array = NullArray::new(10);
 ///
+/// assert!(array.is_nullable());
 /// assert_eq!(array.len(), 10);
-/// assert_eq!(array.null_count(), 10);
+/// assert_eq!(array.null_count(), 0);
+/// assert_eq!(array.logical_nulls().unwrap().null_count(), 10);
 /// ```
 #[derive(Clone)]
 pub struct NullArray {
-    data: ArrayData,
+    len: usize,
 }
 
 impl NullArray {
@@ -48,9 +53,22 @@ impl NullArray {
     /// other [`DataType`].
     ///
     pub fn new(length: usize) -> Self {
-        let array_data = ArrayData::builder(DataType::Null).len(length);
-        let array_data = unsafe { array_data.build_unchecked() };
-        NullArray::from(array_data)
+        Self { len: length }
+    }
+
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        assert!(
+            offset.saturating_add(len) <= self.len,
+            "the length + offset of the sliced BooleanBuffer cannot exceed the existing length"
+        );
+
+        Self { len }
+    }
+
+    /// Returns a new null array builder
+    pub fn builder(capacity: usize) -> NullBuilder {
+        NullBuilder::with_capacity(capacity)
     }
 }
 
@@ -59,30 +77,52 @@ impl Array for NullArray {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
+    fn to_data(&self) -> ArrayData {
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
     }
 
-    /// Returns whether the element at `index` is null.
-    /// All elements of a `NullArray` are always null.
-    fn is_null(&self, _index: usize) -> bool {
-        true
+    fn data_type(&self) -> &DataType {
+        &DataType::Null
     }
 
-    /// Returns whether the element at `index` is valid.
-    /// All elements of a `NullArray` are always invalid.
-    fn is_valid(&self, _index: usize) -> bool {
-        false
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        Arc::new(self.slice(offset, length))
     }
 
-    /// Returns the total number of null values in this array.
-    /// The null count of a `NullArray` always equals its length.
-    fn null_count(&self) -> usize {
-        self.data_ref().len()
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn offset(&self) -> usize {
+        0
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        None
+    }
+
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        (self.len != 0).then(|| NullBuffer::new_null(self.len))
+    }
+
+    fn is_nullable(&self) -> bool {
+        !self.is_empty()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        0
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        std::mem::size_of::<Self>()
     }
 }
 
@@ -99,16 +139,17 @@ impl From<ArrayData> for NullArray {
             "NullArray data should contain 0 buffers"
         );
         assert!(
-            data.null_buffer().is_none(),
+            data.nulls().is_none(),
             "NullArray data should not contain a null buffer, as no buffers are required"
         );
-        Self { data }
+        Self { len: data.len() }
     }
 }
 
 impl From<NullArray> for ArrayData {
     fn from(array: NullArray) -> Self {
-        array.data
+        let builder = ArrayDataBuilder::new(DataType::Null).len(array.len);
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -127,8 +168,10 @@ mod tests {
         let null_arr = NullArray::new(32);
 
         assert_eq!(null_arr.len(), 32);
-        assert_eq!(null_arr.null_count(), 32);
-        assert!(!null_arr.is_valid(0));
+        assert_eq!(null_arr.null_count(), 0);
+        assert_eq!(null_arr.logical_nulls().unwrap().null_count(), 32);
+        assert!(null_arr.is_valid(0));
+        assert!(null_arr.is_nullable());
     }
 
     #[test]
@@ -137,13 +180,15 @@ mod tests {
 
         let array2 = array1.slice(8, 16);
         assert_eq!(array2.len(), 16);
-        assert_eq!(array2.null_count(), 16);
-        assert_eq!(array2.offset(), 8);
+        assert_eq!(array2.null_count(), 0);
+        assert_eq!(array2.logical_nulls().unwrap().null_count(), 16);
+        assert!(array2.is_valid(0));
+        assert!(array2.is_nullable());
     }
 
     #[test]
     fn test_debug_null_array() {
         let array = NullArray::new(1024 * 1024);
-        assert_eq!(format!("{:?}", array), "NullArray(1048576)");
+        assert_eq!(format!("{array:?}"), "NullArray(1048576)");
     }
 }

@@ -138,6 +138,12 @@ def test_field_roundtrip(pyarrow_type):
         field = rust.round_trip_field(pyarrow_field)
         assert field == pyarrow_field
 
+def test_field_metadata_roundtrip():
+    metadata = {"hello": "World! 😊", "x": "2"}
+    pyarrow_field = pa.field("test", pa.int32(), metadata=metadata)
+    field = rust.round_trip_field(pyarrow_field)
+    assert field == pyarrow_field
+    assert field.metadata == pyarrow_field.metadata
 
 def test_schema_roundtrip():
     pyarrow_fields = zip(string.ascii_lowercase, _supported_pyarrow_types)
@@ -402,3 +408,37 @@ def test_record_batch_reader():
     assert b.schema == schema
     got_batches = list(b)
     assert got_batches == batches
+
+def test_record_batch_reader_error():
+    schema = pa.schema([('ints', pa.list_(pa.int32()))])
+
+    def iter_batches():
+        yield pa.record_batch([[[1], [2, 42]]], schema)
+        raise ValueError("test error")
+
+    reader = pa.RecordBatchReader.from_batches(schema, iter_batches())
+
+    with pytest.raises(ValueError, match="test error"):
+        rust.reader_return_errors(reader)
+
+def test_reject_other_classes():
+    # Arbitrary type that is not a PyArrow type
+    not_pyarrow = ["hello"]
+
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Array, got builtins.list"):
+        rust.round_trip_array(not_pyarrow)
+    
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Schema, got builtins.list"):
+        rust.round_trip_schema(not_pyarrow)
+    
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Field, got builtins.list"):
+        rust.round_trip_field(not_pyarrow)
+    
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.DataType, got builtins.list"):
+        rust.round_trip_type(not_pyarrow)
+
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.RecordBatch, got builtins.list"):
+        rust.round_trip_record_batch(not_pyarrow)
+    
+    with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.RecordBatchReader, got builtins.list"):
+        rust.round_trip_record_batch_reader(not_pyarrow)

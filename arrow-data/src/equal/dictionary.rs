@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::data::{contains_nulls, ArrayData};
-use arrow_buffer::{bit_util::get_bit, ArrowNativeType};
+use arrow_buffer::ArrowNativeType;
 
 use super::equal_range;
 
@@ -35,7 +35,7 @@ pub(super) fn dictionary_equal<T: ArrowNativeType>(
 
     // Only checking one null mask here because by the time the control flow reaches
     // this point, the equality of the two masks would have already been verified.
-    if !contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len) {
+    if !contains_nulls(lhs.nulls(), lhs_start, len) {
         (0..len).all(|i| {
             let lhs_pos = lhs_start + i;
             let rhs_pos = rhs_start + i;
@@ -50,14 +50,14 @@ pub(super) fn dictionary_equal<T: ArrowNativeType>(
         })
     } else {
         // get a ref of the null buffer bytes, to use in testing for nullness
-        let lhs_null_bytes = lhs.null_buffer().as_ref().unwrap().as_slice();
-        let rhs_null_bytes = rhs.null_buffer().as_ref().unwrap().as_slice();
+        let lhs_nulls = lhs.nulls().unwrap();
+        let rhs_nulls = rhs.nulls().unwrap();
         (0..len).all(|i| {
             let lhs_pos = lhs_start + i;
             let rhs_pos = rhs_start + i;
 
-            let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos + lhs.offset());
-            let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos + rhs.offset());
+            let lhs_is_null = lhs_nulls.is_null(lhs_pos);
+            let rhs_is_null = rhs_nulls.is_null(rhs_pos);
 
             lhs_is_null
                 || (lhs_is_null == rhs_is_null)

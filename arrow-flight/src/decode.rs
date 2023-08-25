@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{utils::flight_data_to_arrow_batch, FlightData};
+use crate::{trailers::LazyTrailers, utils::flight_data_to_arrow_batch, FlightData};
 use arrow_array::{ArrayRef, RecordBatch};
-use arrow_schema::Schema;
+use arrow_buffer::Buffer;
+use arrow_schema::{Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{ready, stream::BoxStream, Stream, StreamExt};
 use std::{
     collections::HashMap, convert::TryFrom, fmt::Debug, pin::Pin, sync::Arc, task::Poll,
 };
+use tonic::metadata::MetadataMap;
 
 use crate::error::{FlightError, Result};
 
@@ -81,8 +83,13 @@ use crate::error::{FlightError, Result};
 /// ```
 #[derive(Debug)]
 pub struct FlightRecordBatchStream {
+    /// Optional grpc header metadata.
+    headers: MetadataMap,
+
+    /// Optional grpc trailer metadata.
+    trailers: Option<LazyTrailers>,
+
     inner: FlightDataDecoder,
-    got_schema: bool,
 }
 
 impl FlightRecordBatchStream {
@@ -90,7 +97,8 @@ impl FlightRecordBatchStream {
     pub fn new(inner: FlightDataDecoder) -> Self {
         Self {
             inner,
-            got_schema: false,
+            headers: MetadataMap::default(),
+            trailers: None,
         }
     }
 
@@ -101,13 +109,46 @@ impl FlightRecordBatchStream {
     {
         Self {
             inner: FlightDataDecoder::new(inner),
-            got_schema: false,
+            headers: MetadataMap::default(),
+            trailers: None,
         }
     }
 
+    /// Record response headers.
+    pub fn with_headers(self, headers: MetadataMap) -> Self {
+        Self { headers, ..self }
+    }
+
+    /// Record response trailers.
+    pub fn with_trailers(self, trailers: LazyTrailers) -> Self {
+        Self {
+            trailers: Some(trailers),
+            ..self
+        }
+    }
+
+    /// Headers attached to this stream.
+    pub fn headers(&self) -> &MetadataMap {
+        &self.headers
+    }
+
+    /// Trailers attached to this stream.
+    ///
+    /// Note that this will return `None` until the entire stream is consumed.
+    /// Only after calling `next()` returns `None`, might any available trailers be returned.
+    pub fn trailers(&self) -> Option<MetadataMap> {
+        self.trailers.as_ref().and_then(|trailers| trailers.get())
+    }
+
     /// Has a message defining the schema been received yet?
+    #[deprecated = "use schema().is_some() instead"]
     pub fn got_schema(&self) -> bool {
-        self.got_schema
+        self.schema().is_some()
+    }
+
+    /// Return schema for the stream, if it has been received
+    pub fn schema(&self) -> Option<&SchemaRef> {
+        self.inner.schema()
     }
 
     /// Consume self and return the wrapped [`FlightDataDecoder`]
@@ -115,6 +156,7 @@ impl FlightRecordBatchStream {
         self.inner
     }
 }
+
 impl futures::Stream for FlightRecordBatchStream {
     type Item = Result<RecordBatch>;
 
@@ -125,6 +167,7 @@ impl futures::Stream for FlightRecordBatchStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
+            let had_schema = self.schema().is_some();
             let res = ready!(self.inner.poll_next_unpin(cx));
             match res {
                 // Inner exhausted
@@ -136,13 +179,12 @@ impl futures::Stream for FlightRecordBatchStream {
                 }
                 // translate data
                 Some(Ok(data)) => match data.payload {
-                    DecodedPayload::Schema(_) if self.got_schema => {
+                    DecodedPayload::Schema(_) if had_schema => {
                         return Poll::Ready(Some(Err(FlightError::protocol(
                             "Unexpectedly saw multiple Schema messages in FlightData stream",
                         ))));
                     }
                     DecodedPayload::Schema(_) => {
-                        self.got_schema = true;
                         // Need next message, poll inner again
                     }
                     DecodedPayload::RecordBatch(batch) => {
@@ -219,6 +261,11 @@ impl FlightDataDecoder {
         }
     }
 
+    /// Returns the current schema for this stream
+    pub fn schema(&self) -> Option<&SchemaRef> {
+        self.state.as_ref().map(|state| &state.schema)
+    }
+
     /// Extracts flight data from the next message, updating decoding
     /// state as necessary.
     fn extract_message(&mut self, data: FlightData) -> Result<Option<DecodedFlightData>> {
@@ -252,7 +299,7 @@ impl FlightDataDecoder {
                     ));
                 };
 
-                let buffer: arrow_buffer::Buffer = data.data_body.into();
+                let buffer = Buffer::from_bytes(data.data_body.into());
                 let dictionary_batch =
                     message.header_as_dictionary_batch().ok_or_else(|| {
                         FlightError::protocol(
@@ -343,7 +390,7 @@ impl futures::Stream for FlightDataDecoder {
 /// streaming flight response.
 #[derive(Debug)]
 struct FlightStreamState {
-    schema: Arc<Schema>,
+    schema: SchemaRef,
     dictionaries_by_field: HashMap<i64, ArrayRef>,
 }
 
@@ -362,7 +409,7 @@ impl DecodedFlightData {
         }
     }
 
-    pub fn new_schema(inner: FlightData, schema: Arc<Schema>) -> Self {
+    pub fn new_schema(inner: FlightData, schema: SchemaRef) -> Self {
         Self {
             inner,
             payload: DecodedPayload::Schema(schema),
@@ -389,7 +436,7 @@ pub enum DecodedPayload {
     None,
 
     /// A decoded Schema message
-    Schema(Arc<Schema>),
+    Schema(SchemaRef),
 
     /// A decoded Record batch.
     RecordBatch(RecordBatch),

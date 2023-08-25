@@ -20,8 +20,8 @@
 
 use arrow_array::builder::{BooleanBufferBuilder, GenericStringBuilder, ListBuilder};
 use arrow_array::*;
-use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_buffer::NullBuffer;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use regex::Regex;
 use std::collections::HashMap;
@@ -45,8 +45,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
                 .to_string(),
         ));
     }
-    let null_bit_buffer =
-        combine_option_bitmap(&[array.data_ref(), regex_array.data_ref()], array.len());
+    let nulls = NullBuffer::union(array.nulls(), regex_array.nulls());
 
     let mut patterns: HashMap<String, Regex> = HashMap::new();
     let mut result = BooleanBufferBuilder::new(array.len());
@@ -55,7 +54,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
         Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
             |(pattern, flags)| {
                 pattern.map(|pattern| match flags {
-                    Some(flag) => format!("(?{}){}", flag, pattern),
+                    Some(flag) => format!("(?{flag}){pattern}"),
                     None => pattern.to_string(),
                 })
             },
@@ -84,8 +83,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
                         None => {
                             let re = Regex::new(pattern.as_str()).map_err(|e| {
                                 ArrowError::ComputeError(format!(
-                                    "Regular expression did not compile: {:?}",
-                                    e
+                                    "Regular expression did not compile: {e:?}"
                                 ))
                             })?;
                             patterns.insert(pattern, re.clone());
@@ -101,15 +99,11 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
         .collect::<Result<Vec<()>, ArrowError>>()?;
 
     let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            array.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.finish()],
-            vec![],
-        )
+        ArrayDataBuilder::new(DataType::Boolean)
+            .len(array.len())
+            .buffers(vec![result.into()])
+            .nulls(nulls)
+            .build_unchecked()
     };
     Ok(BooleanArray::from(data))
 }
@@ -123,21 +117,18 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     regex: &str,
     flag: Option<&str>,
 ) -> Result<BooleanArray, ArrowError> {
-    let null_bit_buffer = array.data().null_buffer().cloned();
+    let null_bit_buffer = array.nulls().map(|x| x.inner().sliced());
     let mut result = BooleanBufferBuilder::new(array.len());
 
     let pattern = match flag {
-        Some(flag) => format!("(?{}){}", flag, regex),
+        Some(flag) => format!("(?{flag}){regex}"),
         None => regex.to_string(),
     };
     if pattern.is_empty() {
         result.append_n(array.len(), true);
     } else {
         let re = Regex::new(pattern.as_str()).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Regular expression did not compile: {:?}",
-                e
-            ))
+            ArrowError::ComputeError(format!("Regular expression did not compile: {e:?}"))
         })?;
         for i in 0..array.len() {
             let value = array.value(i);
@@ -145,7 +136,7 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         }
     }
 
-    let buffer = result.finish();
+    let buffer = result.into();
     let data = unsafe {
         ArrayData::new_unchecked(
             DataType::Boolean,
@@ -161,6 +152,26 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 }
 
 /// Extract all groups matched by a regular expression for a given String array.
+///
+/// Modelled after the Postgres [regexp_match].
+///
+/// Returns a ListArray of [`GenericStringArray`] with each element containing the leftmost-first
+/// match of the corresponding index in `regex_array` to string in `array`
+///
+/// If there is no match, the list element is NULL.
+///
+/// If a match is found, and the pattern contains no capturing parenthesized subexpressions,
+/// then the list element is a single-element [`GenericStringArray`] containing the substring
+/// matching the whole pattern.
+///
+/// If a match is found, and the pattern contains capturing parenthesized subexpressions, then the
+/// list element is a [`GenericStringArray`] whose n'th element is the substring matching
+/// the n'th capturing parenthesized subexpression of the pattern.
+///
+/// The flags parameter is an optional text string containing zero or more single-letter flags
+/// that change the function's behavior.
+///
+/// [regexp_match]: https://www.postgresql.org/docs/current/functions-matching.html#FUNCTIONS-POSIX-REGEXP
 pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex_array: &GenericStringArray<OffsetSize>,
@@ -175,7 +186,7 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
         Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
             |(pattern, flags)| {
                 pattern.map(|pattern| match flags {
-                    Some(value) => format!("(?{}){}", value, pattern),
+                    Some(value) => format!("(?{value}){pattern}"),
                     None => pattern.to_string(),
                 })
             },
@@ -186,6 +197,7 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
                 .map(|pattern| pattern.map(|pattern| pattern.to_string())),
         ),
     };
+
     array
         .iter()
         .zip(complete_pattern)
@@ -204,8 +216,7 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
                         None => {
                             let re = Regex::new(pattern.as_str()).map_err(|e| {
                                 ArrowError::ComputeError(format!(
-                                    "Regular expression did not compile: {:?}",
-                                    e
+                                    "Regular expression did not compile: {e:?}"
                                 ))
                             })?;
                             patterns.insert(pattern, re.clone());
@@ -214,9 +225,14 @@ pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
                     };
                     match re.captures(value) {
                         Some(caps) => {
-                            for m in caps.iter().skip(1).flatten() {
+                            let mut iter = caps.iter();
+                            if caps.len() > 1 {
+                                iter.next();
+                            }
+                            for m in iter.flatten() {
                                 list_builder.values().append_value(m.as_str());
                             }
+
                             list_builder.append(true);
                         }
                         None => list_builder.append(false),
@@ -284,6 +300,20 @@ mod tests {
         expected_builder.append(false);
         let expected = expected_builder.finish();
         let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_single_group_not_skip_match() {
+        let array = StringArray::from(vec![Some("foo"), Some("bar")]);
+        let pattern = GenericStringArray::<i32>::from(vec![r"foo"]);
+        let actual = regexp_match(&array, &pattern, None).unwrap();
+        let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
+        let mut expected_builder = ListBuilder::new(elem_builder);
+        expected_builder.values().append_value("foo");
+        expected_builder.append(true);
+        let expected = expected_builder.finish();
         assert_eq!(&expected, result);
     }
 
@@ -368,7 +398,7 @@ mod tests {
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
         vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
         regexp_is_match_utf8,
-        vec![true, false, true, false, false, true]
+        [true, false, true, false, false, true]
     );
     test_flag_utf8!(
         test_utf8_array_regexp_is_match_insensitive,
@@ -376,7 +406,7 @@ mod tests {
         vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
         vec!["i"; 6],
         regexp_is_match_utf8,
-        vec![true, true, true, true, false, true]
+        [true, true, true, true, false, true]
     );
 
     test_flag_utf8_scalar!(
@@ -384,14 +414,14 @@ mod tests {
         vec!["arrow", "ARROW", "parquet", "PARQUET"],
         "^ar",
         regexp_is_match_utf8_scalar,
-        vec![true, false, false, false]
+        [true, false, false, false]
     );
     test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_empty_scalar,
         vec!["arrow", "ARROW", "parquet", "PARQUET"],
         "",
         regexp_is_match_utf8_scalar,
-        vec![true, true, true, true]
+        [true, true, true, true]
     );
     test_flag_utf8_scalar!(
         test_utf8_array_regexp_is_match_insensitive_scalar,
@@ -399,6 +429,6 @@ mod tests {
         "^ar",
         "i",
         regexp_is_match_utf8_scalar,
-        vec![true, true, false, false]
+        [true, true, false, false]
     );
 }

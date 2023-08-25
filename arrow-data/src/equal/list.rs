@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::data::{count_nulls, ArrayData};
-use arrow_buffer::bit_util::get_bit;
 use arrow_buffer::ArrowNativeType;
 use num::Integer;
 
@@ -90,8 +89,8 @@ pub(super) fn list_equal<T: ArrowNativeType + Integer>(
     let lhs_values = &lhs.child_data()[0];
     let rhs_values = &rhs.child_data()[0];
 
-    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
+    let lhs_null_count = count_nulls(lhs.nulls(), lhs_start, len);
+    let rhs_null_count = count_nulls(rhs.nulls(), rhs_start, len);
 
     if lhs_null_count != rhs_null_count {
         return false;
@@ -112,8 +111,8 @@ pub(super) fn list_equal<T: ArrowNativeType + Integer>(
             )
     } else {
         // get a ref of the parent null buffer bytes, to use in testing for nullness
-        let lhs_null_bytes = lhs.null_buffer().unwrap().as_slice();
-        let rhs_null_bytes = rhs.null_buffer().unwrap().as_slice();
+        let lhs_nulls = lhs.nulls().unwrap();
+        let rhs_nulls = rhs.nulls().unwrap();
 
         // with nulls, we need to compare item by item whenever it is not null
         // TODO: Could potentially compare runs of not NULL values
@@ -121,8 +120,8 @@ pub(super) fn list_equal<T: ArrowNativeType + Integer>(
             let lhs_pos = lhs_start + i;
             let rhs_pos = rhs_start + i;
 
-            let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos + lhs.offset());
-            let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos + rhs.offset());
+            let lhs_is_null = lhs_nulls.is_null(lhs_pos);
+            let rhs_is_null = rhs_nulls.is_null(rhs_pos);
 
             if lhs_is_null != rhs_is_null {
                 return false;

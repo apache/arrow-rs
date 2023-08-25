@@ -79,11 +79,11 @@ impl From<CompressionArgs> for Compression {
         match value {
             CompressionArgs::None => Self::UNCOMPRESSED,
             CompressionArgs::Snappy => Self::SNAPPY,
-            CompressionArgs::Gzip => Self::GZIP,
+            CompressionArgs::Gzip => Self::GZIP(Default::default()),
             CompressionArgs::Lzo => Self::LZO,
-            CompressionArgs::Brotli => Self::BROTLI,
+            CompressionArgs::Brotli => Self::BROTLI(Default::default()),
             CompressionArgs::Lz4 => Self::LZ4,
-            CompressionArgs::Zstd => Self::ZSTD,
+            CompressionArgs::Zstd => Self::ZSTD(Default::default()),
             CompressionArgs::Lz4Raw => Self::LZ4_RAW,
         }
     }
@@ -164,7 +164,7 @@ struct Args {
 
     /// Sets best effort maximum size of a data page in bytes.
     #[clap(long)]
-    data_pagesize_limit: Option<usize>,
+    data_page_size_limit: Option<usize>,
 
     /// Sets max statistics size for any column.
     ///
@@ -174,7 +174,7 @@ struct Args {
 
     /// Sets best effort maximum dictionary page size, in bytes.
     #[clap(long)]
-    dictionary_pagesize_limit: Option<usize>,
+    dictionary_page_size_limit: Option<usize>,
 
     /// Sets whether bloom filter is enabled for any column.
     #[clap(long)]
@@ -237,13 +237,13 @@ fn main() {
         writer_properties_builder =
             writer_properties_builder.set_data_page_row_count_limit(value);
     }
-    if let Some(value) = args.data_pagesize_limit {
+    if let Some(value) = args.data_page_size_limit {
         writer_properties_builder =
-            writer_properties_builder.set_data_pagesize_limit(value);
+            writer_properties_builder.set_data_page_size_limit(value);
     }
-    if let Some(value) = args.dictionary_pagesize_limit {
+    if let Some(value) = args.dictionary_page_size_limit {
         writer_properties_builder =
-            writer_properties_builder.set_dictionary_pagesize_limit(value);
+            writer_properties_builder.set_dictionary_page_size_limit(value);
     }
     if let Some(value) = args.max_statistics_size {
         writer_properties_builder =

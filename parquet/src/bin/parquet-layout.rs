@@ -70,6 +70,7 @@ struct Page {
     compression: Option<&'static str>,
     encoding: &'static str,
     page_type: &'static str,
+    offset: u64,
     compressed_bytes: i32,
     uncompressed_bytes: i32,
     header_bytes: i32,
@@ -104,6 +105,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                                 compression,
                                 encoding: encoding(dictionary.encoding),
                                 page_type: "dictionary",
+                                offset: start,
                                 compressed_bytes: header.compressed_page_size,
                                 uncompressed_bytes: header.uncompressed_page_size,
                                 header_bytes: header_len as _,
@@ -114,6 +116,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                                 compression,
                                 encoding: encoding(data_page.encoding),
                                 page_type: "data_page_v1",
+                                offset: start,
                                 compressed_bytes: header.compressed_page_size,
                                 uncompressed_bytes: header.uncompressed_page_size,
                                 header_bytes: header_len as _,
@@ -126,6 +129,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                                 compression: compression.filter(|_| is_compressed),
                                 encoding: encoding(data_page.encoding),
                                 page_type: "data_page_v2",
+                                offset: start,
                                 compressed_bytes: header.compressed_page_size,
                                 uncompressed_bytes: header.uncompressed_page_size,
                                 header_bytes: header_len as _,
@@ -171,8 +175,7 @@ fn read_page_header<C: ChunkReader>(
         }
     }
 
-    let len = reader.len().checked_sub(offset).unwrap() as usize;
-    let input = reader.get_read(offset, len)?;
+    let input = reader.get_read(offset)?;
     let mut tracked = TrackedRead(input, 0);
     let mut prot = TCompactInputProtocol::new(&mut tracked);
     let header = PageHeader::read_from_in_protocol(&mut prot)?;
@@ -184,11 +187,11 @@ fn compression(compression: Compression) -> Option<&'static str> {
     match compression {
         Compression::UNCOMPRESSED => None,
         Compression::SNAPPY => Some("snappy"),
-        Compression::GZIP => Some("gzip"),
+        Compression::GZIP(_) => Some("gzip"),
         Compression::LZO => Some("lzo"),
-        Compression::BROTLI => Some("brotli"),
+        Compression::BROTLI(_) => Some("brotli"),
         Compression::LZ4 => Some("lz4"),
-        Compression::ZSTD => Some("zstd"),
+        Compression::ZSTD(_) => Some("zstd"),
         Compression::LZ4_RAW => Some("lz4_raw"),
     }
 }

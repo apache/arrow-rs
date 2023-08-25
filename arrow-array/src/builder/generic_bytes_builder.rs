@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
+use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
+use std::fmt::Write;
 use std::sync::Arc;
 
-///  Array builder for [`GenericByteArray`]
+/// Builder for [`GenericByteArray`]
 pub struct GenericByteBuilder<T: ByteArrayType> {
     value_builder: UInt8BufferBuilder,
     offsets_builder: BufferBuilder<T::Offset>,
@@ -81,13 +82,22 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         }
     }
 
+    #[inline]
+    fn next_offset(&self) -> T::Offset {
+        T::Offset::from_usize(self.value_builder.len())
+            .expect("byte array offset overflow")
+    }
+
     /// Appends a value into the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of [`Self::values_slice`] would exceed `T::Offset::MAX`
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
         self.value_builder.append_slice(value.as_ref().as_ref());
         self.null_buffer_builder.append(true);
-        self.offsets_builder
-            .append(T::Offset::from_usize(self.value_builder.len()).unwrap());
+        self.offsets_builder.append(self.next_offset());
     }
 
     /// Append an `Option` value into the builder.
@@ -103,8 +113,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     #[inline]
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append(false);
-        self.offsets_builder
-            .append(T::Offset::from_usize(self.value_builder.len()).unwrap());
+        self.offsets_builder.append(self.next_offset());
     }
 
     /// Builds the [`GenericByteArray`] and reset this builder.
@@ -114,10 +123,9 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .len(self.len())
             .add_buffer(self.offsets_builder.finish())
             .add_buffer(self.value_builder.finish())
-            .null_bit_buffer(self.null_buffer_builder.finish());
+            .nulls(self.null_buffer_builder.finish());
 
-        self.offsets_builder
-            .append(T::Offset::from_usize(0).unwrap());
+        self.offsets_builder.append(self.next_offset());
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
     }
@@ -131,11 +139,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .len(self.len())
             .add_buffer(offset_buffer)
             .add_buffer(value_buffer)
-            .null_bit_buffer(
-                self.null_buffer_builder
-                    .as_slice()
-                    .map(Buffer::from_slice_ref),
-            );
+            .nulls(self.null_buffer_builder.finish_cloned());
 
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
@@ -185,11 +189,6 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
         self.null_buffer_builder.len()
     }
 
-    /// Returns whether the number of binary slots is zero
-    fn is_empty(&self) -> bool {
-        self.null_buffer_builder.is_empty()
-    }
-
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
@@ -216,8 +215,51 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
     }
 }
 
-///  Array builder for [`GenericStringArray`][crate::GenericStringArray]
+impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBuilder<T> {
+    #[inline]
+    fn extend<I: IntoIterator<Item = Option<V>>>(&mut self, iter: I) {
+        for v in iter {
+            self.append_option(v)
+        }
+    }
+}
+
+/// Array builder for [`GenericStringArray`][crate::GenericStringArray]
+///
+/// Values can be appended using [`GenericByteBuilder::append_value`], and nulls with
+/// [`GenericByteBuilder::append_null`] as normal.
+///
+/// Additionally implements [`std::fmt::Write`] with any written data included in the next
+/// appended value. This allows use with [`std::fmt::Display`] without intermediate allocations
+///
+/// ```
+/// # use std::fmt::Write;
+/// # use arrow_array::builder::GenericStringBuilder;
+/// let mut builder = GenericStringBuilder::<i32>::new();
+///
+/// // Write data
+/// write!(builder, "foo").unwrap();
+/// write!(builder, "bar").unwrap();
+///
+/// // Finish value
+/// builder.append_value("baz");
+///
+/// // Write second value
+/// write!(builder, "v2").unwrap();
+/// builder.append_value("");
+///
+/// let array = builder.finish();
+/// assert_eq!(array.value(0), "foobarbaz");
+/// assert_eq!(array.value(1), "v2");
+/// ```
 pub type GenericStringBuilder<O> = GenericByteBuilder<GenericStringType<O>>;
+
+impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.value_builder.append_slice(s.as_bytes());
+        Ok(())
+    }
+}
 
 ///  Array builder for [`GenericBinaryArray`][crate::GenericBinaryArray]
 pub type GenericBinaryBuilder<O> = GenericByteBuilder<GenericBinaryType<O>>;
@@ -374,7 +416,7 @@ mod tests {
         builder.append_value("parquet");
         let arr = builder.finish();
         // array should not have null buffer because there is not `null` value.
-        assert_eq!(None, arr.data().null_buffer());
+        assert!(arr.nulls().is_none());
         assert_eq!(GenericStringArray::<O>::from(vec!["arrow", "parquet"]), arr,)
     }
 
@@ -403,7 +445,7 @@ mod tests {
         builder.append_value("parquet");
         arr = builder.finish();
 
-        assert!(arr.data().null_buffer().is_some());
+        assert!(arr.nulls().is_some());
         assert_eq!(&[O::zero()], builder.offsets_slice());
         assert_eq!(5, arr.len());
     }
@@ -416,5 +458,30 @@ mod tests {
     #[test]
     fn test_large_string_array_builder_finish_cloned() {
         _test_generic_string_array_builder_finish_cloned::<i64>()
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.extend(["a", "b", "c", "", "a", "b", "c"].into_iter().map(Some));
+        builder.extend(["d", "cupcakes", "hello"].into_iter().map(Some));
+        let array = builder.finish();
+        assert_eq!(array.value_offsets(), &[0, 1, 2, 3, 3, 4, 5, 6, 7, 15, 20]);
+        assert_eq!(array.value_data(), b"abcabcdcupcakeshello");
+    }
+
+    #[test]
+    fn test_write() {
+        let mut builder = GenericStringBuilder::<i32>::new();
+        write!(builder, "foo").unwrap();
+        builder.append_value("");
+        writeln!(builder, "bar").unwrap();
+        builder.append_value("");
+        write!(builder, "fiz").unwrap();
+        write!(builder, "buz").unwrap();
+        builder.append_value("");
+        let a = builder.finish();
+        let r: Vec<_> = a.iter().map(|x| x.unwrap()).collect();
+        assert_eq!(r, &["foo", "bar\n", "fizbuz"])
     }
 }

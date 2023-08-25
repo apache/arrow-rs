@@ -33,7 +33,7 @@ pub(super) fn boolean_equal(
     let lhs_values = lhs.buffers()[0].as_slice();
     let rhs_values = rhs.buffers()[0].as_slice();
 
-    let contains_nulls = contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
+    let contains_nulls = contains_nulls(lhs.nulls(), lhs_start, len);
 
     if !contains_nulls {
         // Optimize performance for starting offset at u8 boundary.
@@ -76,15 +76,13 @@ pub(super) fn boolean_equal(
         )
     } else {
         // get a ref of the null buffer bytes, to use in testing for nullness
-        let lhs_null_bytes = lhs.null_buffer().as_ref().unwrap().as_slice();
+        let lhs_nulls = lhs.nulls().unwrap();
 
-        let lhs_start = lhs.offset() + lhs_start;
-        let rhs_start = rhs.offset() + rhs_start;
-
-        BitIndexIterator::new(lhs_null_bytes, lhs_start, len).all(|i| {
-            let lhs_pos = lhs_start + i;
-            let rhs_pos = rhs_start + i;
-            get_bit(lhs_values, lhs_pos) == get_bit(rhs_values, rhs_pos)
-        })
+        BitIndexIterator::new(lhs_nulls.validity(), lhs_start + lhs_nulls.offset(), len)
+            .all(|i| {
+                let lhs_pos = lhs_start + lhs.offset() + i;
+                let rhs_pos = rhs_start + rhs.offset() + i;
+                get_bit(lhs_values, lhs_pos) == get_bit(rhs_values, rhs_pos)
+            })
     }
 }

@@ -15,16 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Array data abstractions for [Apache Arrow](https://docs.rs/arrow)
+//! Low-level array data abstractions for [Apache Arrow Rust](https://docs.rs/arrow)
+//!
+//! For a higher-level, strongly-typed interface see [arrow_array](https://docs.rs/arrow_array)
 
-mod bitmap;
-pub use bitmap::Bitmap;
 mod data;
 pub use data::*;
 
 mod equal;
 pub mod transform;
 
-pub mod bit_iterator;
-pub mod bit_mask;
+pub use arrow_buffer::{bit_iterator, bit_mask};
 pub mod decimal;
+
+#[cfg(feature = "ffi")]
+pub mod ffi;

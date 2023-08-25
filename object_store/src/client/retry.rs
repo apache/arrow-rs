@@ -22,6 +22,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use reqwest::header::LOCATION;
 use reqwest::{Response, StatusCode};
+use snafu::Error as SnafuError;
 use std::time::{Duration, Instant};
 use tracing::info;
 
@@ -31,6 +32,7 @@ pub struct Error {
     retries: usize,
     message: String,
     source: Option<reqwest::Error>,
+    status: Option<StatusCode>,
 }
 
 impl std::fmt::Display for Error {
@@ -41,7 +43,7 @@ impl std::fmt::Display for Error {
             self.message, self.retries
         )?;
         if let Some(source) = &self.source {
-            write!(f, ": {}", source)?;
+            write!(f, ": {source}")?;
         }
         Ok(())
     }
@@ -56,7 +58,28 @@ impl std::error::Error for Error {
 impl Error {
     /// Returns the status code associated with this error if any
     pub fn status(&self) -> Option<StatusCode> {
-        self.source.as_ref().and_then(|e| e.status())
+        self.status
+    }
+
+    pub fn error(self, store: &'static str, path: String) -> crate::Error {
+        match self.status {
+            Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
+                path,
+                source: Box::new(self),
+            },
+            Some(StatusCode::NOT_MODIFIED) => crate::Error::NotModified {
+                path,
+                source: Box::new(self),
+            },
+            Some(StatusCode::PRECONDITION_FAILED) => crate::Error::Precondition {
+                path,
+                source: Box::new(self),
+            },
+            _ => crate::Error::Generic {
+                store,
+                source: Box::new(self),
+            },
+        }
     }
 }
 
@@ -145,6 +168,14 @@ impl RetryExt for reqwest::RequestBuilder {
                 match s.send().await {
                     Ok(r) => match r.error_for_status_ref() {
                         Ok(_) if r.status().is_success() => return Ok(r),
+                        Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
+                            return Err(Error{
+                                message: "not modified".to_string(),
+                                retries,
+                                status: Some(r.status()),
+                                source: None,
+                            })
+                        }
                         Ok(r) => {
                             let is_bare_redirect = r.status().is_redirection() && !r.headers().contains_key(LOCATION);
                             let message = match is_bare_redirect {
@@ -156,6 +187,7 @@ impl RetryExt for reqwest::RequestBuilder {
                             return Err(Error{
                                 message,
                                 retries,
+                                status: Some(r.status()),
                                 source: None,
                             })
                         }
@@ -171,7 +203,7 @@ impl RetryExt for reqwest::RequestBuilder {
                                     true => match r.text().await {
                                         Ok(message) if !message.is_empty() => message,
                                         Ok(_) => "No Body".to_string(),
-                                        Err(e) => format!("error getting response body: {}", e)
+                                        Err(e) => format!("error getting response body: {e}")
                                     }
                                     false => status.to_string(),
                                 };
@@ -179,6 +211,7 @@ impl RetryExt for reqwest::RequestBuilder {
                                 return Err(Error{
                                     message,
                                     retries,
+                                    status: Some(status),
                                     source: Some(e),
                                 })
 
@@ -192,11 +225,30 @@ impl RetryExt for reqwest::RequestBuilder {
                     },
                     Err(e) =>
                     {
-                        return Err(Error{
-                            retries,
-                            message: "request error".to_string(),
-                            source: Some(e)
-                        })
+                        let mut do_retry = false;
+                        if let Some(source) = e.source() {
+                            if let Some(e) = source.downcast_ref::<hyper::Error>() {
+                                if e.is_connect() || e.is_closed() || e.is_incomplete_message() {
+                                    do_retry = true;
+                                }
+                            }
+                        }
+
+                        if retries == max_retries
+                            || now.elapsed() > retry_timeout
+                            || !do_retry {
+
+                            return Err(Error{
+                                retries,
+                                message: "request error".to_string(),
+                                status: e.status(),
+                                source: Some(e),
+                            })
+                        }
+                        let sleep = backoff.next();
+                        retries += 1;
+                        info!("Encountered request error ({}) backing off for {} seconds, retry {} of {}", e, sleep.as_secs_f32(), retries, max_retries);
+                        tokio::time::sleep(sleep).await;
                     }
                 }
             }
@@ -344,6 +396,19 @@ mod tests {
         let e = do_request().await.unwrap_err();
         assert_eq!(e.retries, retry.max_retries);
         assert_eq!(e.message, "502 Bad Gateway");
+
+        // Panic results in an incomplete message error in the client
+        mock.push_fn(|_| panic!());
+        let r = do_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+
+        // Gives up after retrying mulitiple panics
+        for _ in 0..=retry.max_retries {
+            mock.push_fn(|_| panic!());
+        }
+        let e = do_request().await.unwrap_err();
+        assert_eq!(e.retries, retry.max_retries);
+        assert_eq!(e.message, "request error");
 
         // Shutdown
         mock.shutdown().await

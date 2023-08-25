@@ -15,20 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, UInt8BufferBuilder};
 use crate::{ArrayRef, FixedSizeBinaryArray};
 use arrow_buffer::Buffer;
+use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-/// A fixed size binary array builder
+/// Builder for [`FixedSizeBinaryArray`]
 /// ```
-/// use arrow_array::builder::FixedSizeBinaryBuilder;
-/// use arrow_array::Array;
-///
+/// # use arrow_array::builder::FixedSizeBinaryBuilder;
+/// # use arrow_array::Array;
+/// #
 /// let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
 /// // [b"hello", null, b"arrow"]
 /// builder.append_value(b"hello").unwrap();
@@ -58,8 +58,7 @@ impl FixedSizeBinaryBuilder {
     pub fn with_capacity(capacity: usize, byte_width: i32) -> Self {
         assert!(
             byte_width >= 0,
-            "value length ({}) of the array must >= 0",
-            byte_width
+            "value length ({byte_width}) of the array must >= 0"
         );
         Self {
             values_builder: UInt8BufferBuilder::new(capacity * byte_width as usize),
@@ -99,7 +98,7 @@ impl FixedSizeBinaryBuilder {
         let array_data_builder =
             ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
                 .add_buffer(self.values_builder.finish())
-                .null_bit_buffer(self.null_buffer_builder.finish())
+                .nulls(self.null_buffer_builder.finish())
                 .len(array_length);
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
@@ -112,11 +111,7 @@ impl FixedSizeBinaryBuilder {
         let array_data_builder =
             ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
                 .add_buffer(values_buffer)
-                .null_bit_buffer(
-                    self.null_buffer_builder
-                        .as_slice()
-                        .map(Buffer::from_slice_ref),
-                )
+                .nulls(self.null_buffer_builder.finish_cloned())
                 .len(array_length);
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
@@ -142,11 +137,6 @@ impl ArrayBuilder for FixedSizeBinaryBuilder {
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.

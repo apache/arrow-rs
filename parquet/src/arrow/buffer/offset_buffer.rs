@@ -151,25 +151,8 @@ impl<I: OffsetSizeTrait + ScalarValue> BufferQueue for OffsetBuffer<I> {
     type Output = Self;
     type Slice = Self;
 
-    fn split_off(&mut self, len: usize) -> Self::Output {
-        assert!(self.offsets.len() > len, "{} > {}", self.offsets.len(), len);
-        let remaining_offsets = self.offsets.len() - len - 1;
-        let offsets = self.offsets.as_slice();
-
-        let end_offset = offsets[len];
-
-        let mut new_offsets = ScalarBuffer::new();
-        new_offsets.reserve(remaining_offsets + 1);
-        for v in &offsets[len..] {
-            new_offsets.push(*v - end_offset)
-        }
-
-        self.offsets.resize(len + 1);
-
-        Self {
-            offsets: std::mem::replace(&mut self.offsets, new_offsets),
-            values: self.values.take(end_offset.as_usize()),
-        }
+    fn consume(&mut self) -> Self::Output {
+        std::mem::take(self)
     }
 
     fn spare_capacity_mut(&mut self, _batch_size: usize) -> &mut Self::Slice {
@@ -267,18 +250,18 @@ mod tests {
     }
 
     #[test]
-    fn test_offset_buffer_split() {
+    fn test_offset_buffer() {
         let mut buffer = OffsetBuffer::<i32>::default();
         for v in ["hello", "world", "cupcakes", "a", "b", "c"] {
             buffer.try_push(v.as_bytes(), false).unwrap()
         }
-        let split = buffer.split_off(3);
+        let split = buffer.consume();
 
         let array = split.into_array(None, ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(
             strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
-            vec!["hello", "world", "cupcakes"]
+            vec!["hello", "world", "cupcakes", "a", "b", "c"]
         );
 
         buffer.try_push("test".as_bytes(), false).unwrap();
@@ -286,7 +269,7 @@ mod tests {
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(
             strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
-            vec!["a", "b", "c", "test"]
+            vec!["test"]
         );
     }
 
@@ -298,10 +281,10 @@ mod tests {
             buffer.try_push(v.as_bytes(), false).unwrap()
         }
 
-        let valid = vec![
+        let valid = [
             true, false, false, true, false, true, false, true, true, false, false,
         ];
-        let valid_mask = Buffer::from_iter(valid.iter().cloned());
+        let valid_mask = Buffer::from_iter(valid.iter().copied());
 
         // Both trailing and leading nulls
         buffer.pad_nulls(1, values.len() - 1, valid.len() - 1, valid_mask.as_slice());

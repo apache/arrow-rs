@@ -44,7 +44,8 @@ use crate::format::Statistics as TStatistics;
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
-use crate::util::bit_util::from_ne_slice;
+use crate::errors::{ParquetError, Result};
+use crate::util::bit_util::from_le_slice;
 
 pub(crate) mod private {
     use super::*;
@@ -119,16 +120,18 @@ macro_rules! statistics_enum_func {
 pub fn from_thrift(
     physical_type: Type,
     thrift_stats: Option<TStatistics>,
-) -> Option<Statistics> {
-    match thrift_stats {
+) -> Result<Option<Statistics>> {
+    Ok(match thrift_stats {
         Some(stats) => {
             // Number of nulls recorded, when it is not available, we just mark it as 0.
             let null_count = stats.null_count.unwrap_or(0);
-            assert!(
-                null_count >= 0,
-                "Statistics null count is negative ({})",
-                null_count
-            );
+
+            if null_count < 0 {
+                return Err(ParquetError::General(format!(
+                    "Statistics null count is negative {}",
+                    null_count
+                )));
+            }
 
             // Generic null count.
             let null_count = null_count as u64;
@@ -181,11 +184,11 @@ pub fn from_thrift(
                     // min/max statistics for INT96 columns.
                     let min = min.map(|data| {
                         assert_eq!(data.len(), 12);
-                        from_ne_slice::<Int96>(&data)
+                        from_le_slice::<Int96>(&data)
                     });
                     let max = max.map(|data| {
                         assert_eq!(data.len(), 12);
-                        from_ne_slice::<Int96>(&data)
+                        from_le_slice::<Int96>(&data)
                     });
                     Statistics::int96(min, max, distinct_count, null_count, old_format)
                 }
@@ -222,7 +225,7 @@ pub fn from_thrift(
             Some(res)
         }
         None => None,
-    }
+    })
 }
 
 // Convert Statistics into Thrift definition.
@@ -399,14 +402,14 @@ impl Statistics {
 impl fmt::Display for Statistics {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Statistics::Boolean(typed) => write!(f, "{}", typed),
-            Statistics::Int32(typed) => write!(f, "{}", typed),
-            Statistics::Int64(typed) => write!(f, "{}", typed),
-            Statistics::Int96(typed) => write!(f, "{}", typed),
-            Statistics::Float(typed) => write!(f, "{}", typed),
-            Statistics::Double(typed) => write!(f, "{}", typed),
-            Statistics::ByteArray(typed) => write!(f, "{}", typed),
-            Statistics::FixedLenByteArray(typed) => write!(f, "{}", typed),
+            Statistics::Boolean(typed) => write!(f, "{typed}"),
+            Statistics::Int32(typed) => write!(f, "{typed}"),
+            Statistics::Int64(typed) => write!(f, "{typed}"),
+            Statistics::Int96(typed) => write!(f, "{typed}"),
+            Statistics::Float(typed) => write!(f, "{typed}"),
+            Statistics::Double(typed) => write!(f, "{typed}"),
+            Statistics::ByteArray(typed) => write!(f, "{typed}"),
+            Statistics::FixedLenByteArray(typed) => write!(f, "{typed}"),
         }
     }
 }
@@ -536,17 +539,17 @@ impl<T: ParquetValueType> fmt::Display for ValueStatistics<T> {
         write!(f, "{{")?;
         write!(f, "min: ")?;
         match self.min {
-            Some(ref value) => write!(f, "{}", value)?,
+            Some(ref value) => write!(f, "{value}")?,
             None => write!(f, "N/A")?,
         }
         write!(f, ", max: ")?;
         match self.max {
-            Some(ref value) => write!(f, "{}", value)?,
+            Some(ref value) => write!(f, "{value}")?,
             None => write!(f, "N/A")?,
         }
         write!(f, ", distinct_count: ")?;
         match self.distinct_count {
-            Some(value) => write!(f, "{}", value)?,
+            Some(value) => write!(f, "{value}")?,
             None => write!(f, "N/A")?,
         }
         write!(f, ", null_count: {}", self.null_count)?;
@@ -595,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Statistics null count is negative (-10)")]
+    #[should_panic(expected = "General(\"Statistics null count is negative -10\")")]
     fn test_statistics_negative_null_count() {
         let thrift_stats = TStatistics {
             max: None,
@@ -606,27 +609,27 @@ mod tests {
             min_value: None,
         };
 
-        from_thrift(Type::INT32, Some(thrift_stats));
+        from_thrift(Type::INT32, Some(thrift_stats)).unwrap();
     }
 
     #[test]
     fn test_statistics_thrift_none() {
-        assert_eq!(from_thrift(Type::INT32, None), None);
-        assert_eq!(from_thrift(Type::BYTE_ARRAY, None), None);
+        assert_eq!(from_thrift(Type::INT32, None).unwrap(), None);
+        assert_eq!(from_thrift(Type::BYTE_ARRAY, None).unwrap(), None);
     }
 
     #[test]
     fn test_statistics_debug() {
         let stats = Statistics::int32(Some(1), Some(12), None, 12, true);
         assert_eq!(
-            format!("{:?}", stats),
+            format!("{stats:?}"),
             "Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: 12, \
              min_max_deprecated: true, min_max_backwards_compatible: true})"
         );
 
         let stats = Statistics::int32(None, None, None, 7, false);
         assert_eq!(
-            format!("{:?}", stats),
+            format!("{stats:?}"),
             "Int32({min: None, max: None, distinct_count: None, null_count: 7, \
              min_max_deprecated: false, min_max_backwards_compatible: false})"
         )
@@ -636,13 +639,13 @@ mod tests {
     fn test_statistics_display() {
         let stats = Statistics::int32(Some(1), Some(12), None, 12, true);
         assert_eq!(
-            format!("{}", stats),
+            format!("{stats}"),
             "{min: 1, max: 12, distinct_count: N/A, null_count: 12, min_max_deprecated: true}"
         );
 
         let stats = Statistics::int64(None, None, None, 7, false);
         assert_eq!(
-            format!("{}", stats),
+            format!("{stats}"),
             "{min: N/A, max: N/A, distinct_count: N/A, null_count: 7, min_max_deprecated: \
              false}"
         );
@@ -655,7 +658,7 @@ mod tests {
             true,
         );
         assert_eq!(
-            format!("{}", stats),
+            format!("{stats}"),
             "{min: [1, 0, 0], max: [2, 3, 4], distinct_count: N/A, null_count: 3, \
              min_max_deprecated: true}"
         );
@@ -668,7 +671,7 @@ mod tests {
             false,
         );
         assert_eq!(
-            format!("{}", stats),
+            format!("{stats}"),
             "{min: [1], max: [2], distinct_count: 5, null_count: 7, min_max_deprecated: false}"
         );
     }
@@ -716,7 +719,7 @@ mod tests {
         fn check_stats(stats: Statistics) {
             let tpe = stats.physical_type();
             let thrift_stats = to_thrift(Some(&stats));
-            assert_eq!(from_thrift(tpe, thrift_stats), Some(stats));
+            assert_eq!(from_thrift(tpe, thrift_stats).unwrap(), Some(stats));
         }
 
         check_stats(Statistics::boolean(Some(false), Some(true), None, 7, true));

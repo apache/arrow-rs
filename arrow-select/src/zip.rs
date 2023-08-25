@@ -42,10 +42,10 @@ pub fn zip(
             "all arrays should have the same length".into(),
         ));
     }
-    let falsy = falsy.data();
-    let truthy = truthy.data();
+    let falsy = falsy.to_data();
+    let truthy = truthy.to_data();
 
-    let mut mutable = MutableArrayData::new(vec![truthy, falsy], false, truthy.len());
+    let mut mutable = MutableArrayData::new(vec![&truthy, &falsy], false, truthy.len());
 
     // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
     // fill with falsy values

@@ -17,8 +17,9 @@
 
 //! Defines temporal kernels for time and date related functions.
 
-use chrono::{DateTime, Datelike, NaiveDateTime, NaiveTime, Offset, Timelike};
 use std::sync::Arc;
+
+use chrono::{DateTime, Datelike, NaiveDateTime, NaiveTime, Offset, Timelike};
 
 use arrow_array::builder::*;
 use arrow_array::iterator::ArrayIter;
@@ -180,26 +181,7 @@ pub fn using_chrono_tz_and_utc_naive_date_time(
 /// the range of [0, 23]. If the given array isn't temporal primitive or dictionary array,
 /// an `Err` will be returned.
 pub fn hour_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    match array.data_type().clone() {
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => {
-                    let hour_values = hour_dyn(array.values())?;
-                    Ok(Arc::new(array.with_values(&hour_values)))
-                }
-                dt => return_compute_error_with!("hour does not support", dt),
-            )
-        }
-        _ => {
-            downcast_temporal_array!(
-                array => {
-                   hour(array)
-                    .map(|a| Arc::new(a) as ArrayRef)
-                }
-                dt => return_compute_error_with!("hour does not support", dt),
-            )
-        }
-    }
+    time_fraction_dyn(array, "hour", |t| t.hour() as i32)
 }
 
 /// Extracts the hours of a given temporal primitive array as an array of integers within
@@ -431,6 +413,41 @@ pub fn nanosecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     time_fraction_dyn(array, "nanosecond", |t| t.nanosecond() as i32)
 }
 
+/// Extracts the microseconds of a given temporal primitive array as an array of integers
+pub fn microsecond<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    time_fraction_internal(array, "microsecond", |t| (t.nanosecond() / 1_000) as i32)
+}
+
+/// Extracts the microseconds of a given temporal primitive array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn microsecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    time_fraction_dyn(array, "microsecond", |t| (t.nanosecond() / 1_000) as i32)
+}
+
+/// Extracts the milliseconds of a given temporal primitive array as an array of integers
+pub fn millisecond<T>(array: &PrimitiveArray<T>) -> Result<Int32Array, ArrowError>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    time_fraction_internal(array, "millisecond", |t| {
+        (t.nanosecond() / 1_000_000) as i32
+    })
+}
+/// Extracts the milliseconds of a given temporal primitive array as an array of integers.
+/// If the given array isn't temporal primitive or dictionary array,
+/// an `Err` will be returned.
+pub fn millisecond_dyn(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    time_fraction_dyn(array, "millisecond", |t| {
+        (t.nanosecond() / 1_000_000) as i32
+    })
+}
+
 /// Extracts the time fraction of a given temporal array as an array of integers
 fn time_fraction_dyn<F>(
     array: &dyn Array,
@@ -445,9 +462,9 @@ where
             downcast_dictionary_array!(
                 array => {
                     let values = time_fraction_dyn(array.values(), name, op)?;
-                    Ok(Arc::new(array.with_values(&values)))
+                    Ok(Arc::new(array.with_values(values)))
                 }
-                dt => return_compute_error_with!(format!("{} does not support", name), dt),
+                dt => return_compute_error_with!(format!("{name} does not support"), dt),
             )
         }
         _ => {
@@ -456,7 +473,7 @@ where
                    time_fraction_internal(array, name, op)
                     .map(|a| Arc::new(a) as ArrayRef)
                 }
-                dt => return_compute_error_with!(format!("{} does not support", name), dt),
+                dt => return_compute_error_with!(format!("{name} does not support"), dt),
             )
         }
     }
@@ -486,7 +503,7 @@ where
             })
         }
         _ => return_compute_error_with!(
-            format!("{} does not support", name),
+            format!("{name} does not support"),
             array.data_type()
         ),
     }
@@ -904,37 +921,6 @@ mod tests {
         assert!(err.contains("Invalid timezone"), "{}", err);
     }
 
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
-        let a = TimestampSecondArray::from(vec![60 * 60 * 10])
-            .with_timezone("Asia/Kolkata".to_string());
-        let b = hour(&a).unwrap();
-        assert_eq!(15, b.value(0));
-    }
-
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_temporal_array_timestamp_hour_with_dst_timezone_using_chrono_tz() {
-        //
-        // 1635577147 converts to 2021-10-30 17:59:07 in time zone Australia/Sydney (AEDT)
-        // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
-        // When daylight savings is not in effect, Australia/Sydney has an offset difference of +10:00.
-
-        let a = TimestampMillisecondArray::from(vec![Some(1635577147000)])
-            .with_timezone("Australia/Sydney".to_string());
-        let b = hour(&a).unwrap();
-        assert_eq!(17, b.value(0));
-    }
-
-    #[cfg(not(feature = "chrono-tz"))]
-    #[test]
-    fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
-        let a = TimestampSecondArray::from(vec![60 * 60 * 10])
-            .with_timezone("Asia/Kolkatta".to_string());
-        assert!(matches!(hour(&a), Err(ArrowError::ParseError(_))))
-    }
-
     #[test]
     fn test_temporal_array_timestamp_week_without_timezone() {
         // 1970-01-01T00:00:00                     -> 1970-01-01T00:00:00 Thursday (week 1)
@@ -970,12 +956,14 @@ mod tests {
         .with_timezone("+01:00".to_string());
 
         let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 1]);
-        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let dict = DictionaryArray::try_new(keys.clone(), Arc::new(a)).unwrap();
 
         let b = hour_dyn(&dict).unwrap();
 
-        let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![11, 21, 7])).unwrap();
+        let expected_dict = DictionaryArray::new(
+            keys.clone(),
+            Arc::new(Int32Array::from(vec![11, 21, 7])),
+        );
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
 
@@ -984,7 +972,7 @@ mod tests {
         let b_old = minute_dyn(&dict).unwrap();
 
         let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 2, 3])).unwrap();
+            DictionaryArray::new(keys.clone(), Arc::new(Int32Array::from(vec![1, 2, 3])));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
         assert_eq!(&expected, &b_old);
@@ -994,7 +982,7 @@ mod tests {
         let b_old = second_dyn(&dict).unwrap();
 
         let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 2, 3])).unwrap();
+            DictionaryArray::new(keys.clone(), Arc::new(Int32Array::from(vec![1, 2, 3])));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
         assert_eq!(&expected, &b_old);
@@ -1003,8 +991,7 @@ mod tests {
             time_fraction_dyn(&dict, "nanosecond", |t| t.nanosecond() as i32).unwrap();
 
         let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![0, 0, 0, 0, 0]))
-                .unwrap();
+            DictionaryArray::new(keys, Arc::new(Int32Array::from(vec![0, 0, 0, 0, 0])));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
     }
@@ -1015,15 +1002,14 @@ mod tests {
             vec![Some(1514764800000), Some(1550636625000)].into();
 
         let keys = Int8Array::from_iter_values([0_i8, 1, 1, 0]);
-        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
 
         let b = year_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![2018, 2019, 2019, 2018]),
-        )
-        .unwrap();
+        let expected_dict = DictionaryArray::new(
+            keys,
+            Arc::new(Int32Array::from(vec![2018, 2019, 2019, 2018])),
+        );
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
     }
@@ -1036,21 +1022,21 @@ mod tests {
             vec![Some(1514764800000), Some(1566275025000)].into();
 
         let keys = Int8Array::from_iter_values([0_i8, 1, 1, 0]);
-        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
 
         let b = quarter_dyn(&dict).unwrap();
 
-        let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 3, 3, 1])).unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let expected = DictionaryArray::new(
+            keys.clone(),
+            Arc::new(Int32Array::from(vec![1, 3, 3, 1])),
+        );
+        assert_eq!(b.as_ref(), &expected);
 
         let b = month_dyn(&dict).unwrap();
 
-        let expected_dict =
-            DictionaryArray::try_new(&keys, &Int32Array::from(vec![1, 8, 8, 1])).unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let expected =
+            DictionaryArray::new(keys, Arc::new(Int32Array::from(vec![1, 8, 8, 1])));
+        assert_eq!(b.as_ref(), &expected);
     }
 
     #[test]
@@ -1061,57 +1047,37 @@ mod tests {
             vec![Some(1514764800000), Some(1550636625000)].into();
 
         let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1), Some(0), None]);
-        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
 
         let b = num_days_from_monday_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![Some(0), Some(2), Some(2), Some(0), None]),
-        )
-        .unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let a = Int32Array::from(vec![Some(0), Some(2), Some(2), Some(0), None]);
+        let expected = DictionaryArray::new(keys.clone(), Arc::new(a));
+        assert_eq!(b.as_ref(), &expected);
 
         let b = num_days_from_sunday_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![Some(1), Some(3), Some(3), Some(1), None]),
-        )
-        .unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let a = Int32Array::from(vec![Some(1), Some(3), Some(3), Some(1), None]);
+        let expected = DictionaryArray::new(keys.clone(), Arc::new(a));
+        assert_eq!(b.as_ref(), &expected);
 
         let b = day_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![Some(1), Some(20), Some(20), Some(1), None]),
-        )
-        .unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let a = Int32Array::from(vec![Some(1), Some(20), Some(20), Some(1), None]);
+        let expected = DictionaryArray::new(keys.clone(), Arc::new(a));
+        assert_eq!(b.as_ref(), &expected);
 
         let b = doy_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![Some(1), Some(51), Some(51), Some(1), None]),
-        )
-        .unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let a = Int32Array::from(vec![Some(1), Some(51), Some(51), Some(1), None]);
+        let expected = DictionaryArray::new(keys.clone(), Arc::new(a));
+        assert_eq!(b.as_ref(), &expected);
 
         let b = week_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![Some(1), Some(8), Some(8), Some(1), None]),
-        )
-        .unwrap();
-        let expected = Arc::new(expected_dict) as ArrayRef;
-        assert_eq!(&expected, &b);
+        let a = Int32Array::from(vec![Some(1), Some(8), Some(8), Some(1), None]);
+        let expected = DictionaryArray::new(keys, Arc::new(a));
+        assert_eq!(b.as_ref(), &expected);
     }
 
     #[test]
@@ -1129,14 +1095,47 @@ mod tests {
         assert_eq!(453_000_000, b.value(1));
 
         let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1)]);
-        let dict = DictionaryArray::try_new(&keys, &a).unwrap();
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
         let b = nanosecond_dyn(&dict).unwrap();
 
-        let expected_dict = DictionaryArray::try_new(
-            &keys,
-            &Int32Array::from(vec![None, Some(453_000_000)]),
-        )
-        .unwrap();
+        let a = Int32Array::from(vec![None, Some(453_000_000)]);
+        let expected_dict = DictionaryArray::new(keys, Arc::new(a));
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
+    }
+
+    #[test]
+    fn test_temporal_array_date64_microsecond() {
+        let a: PrimitiveArray<Date64Type> = vec![None, Some(1667328721453)].into();
+
+        let b = microsecond(&a).unwrap();
+        assert!(!b.is_valid(0));
+        assert_eq!(453_000, b.value(1));
+
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1)]);
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
+        let b = microsecond_dyn(&dict).unwrap();
+
+        let a = Int32Array::from(vec![None, Some(453_000)]);
+        let expected_dict = DictionaryArray::new(keys, Arc::new(a));
+        let expected = Arc::new(expected_dict) as ArrayRef;
+        assert_eq!(&expected, &b);
+    }
+
+    #[test]
+    fn test_temporal_array_date64_millisecond() {
+        let a: PrimitiveArray<Date64Type> = vec![None, Some(1667328721453)].into();
+
+        let b = millisecond(&a).unwrap();
+        assert!(!b.is_valid(0));
+        assert_eq!(453, b.value(1));
+
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1)]);
+        let dict = DictionaryArray::new(keys.clone(), Arc::new(a));
+        let b = millisecond_dyn(&dict).unwrap();
+
+        let a = Int32Array::from(vec![None, Some(453)]);
+        let expected_dict = DictionaryArray::new(keys, Arc::new(a));
         let expected = Arc::new(expected_dict) as ArrayRef;
         assert_eq!(&expected, &b);
     }

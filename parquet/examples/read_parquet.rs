@@ -23,7 +23,7 @@ use std::fs::File;
 fn main() -> Result<()> {
     // Create parquet file that will be read.
     let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{}/alltypes_plain.parquet", testdata);
+    let path = format!("{testdata}/alltypes_plain.parquet");
     let file = File::open(path).unwrap();
 
     // Create a sync parquet reader with batch_size.

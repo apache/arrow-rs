@@ -18,8 +18,8 @@
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::*;
-use arrow_data::bit_mask::combine_option_bitmap;
-use arrow_data::ArrayData;
+use arrow_buffer::NullBuffer;
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::*;
 use arrow_select::take::take;
 use regex::Regex;
@@ -71,13 +71,13 @@ macro_rules! dyn_function {
 pub fn $fn_name(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray, ArrowError> {
     match (left.data_type(), right.data_type()) {
         (DataType::Utf8, DataType::Utf8)  => {
-            let left = as_string_array(left);
-            let right = as_string_array(right);
+            let left = left.as_string::<i32>();
+            let right = right.as_string::<i32>();
             $fn_utf8(left, right)
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
-            let left = as_largestring_array(left);
-            let right = as_largestring_array(right);
+            let left = left.as_string::<i64>();
+            let right = right.as_string::<i64>();
             $fn_utf8(left, right)
         }
         #[cfg(feature = "dyn_cmp_dict")]
@@ -139,11 +139,11 @@ pub fn $fn_name(
 ) -> Result<BooleanArray, ArrowError> {
     match left.data_type() {
         DataType::Utf8 => {
-            let left = as_string_array(left);
+            let left = left.as_string::<i32>();
             $fn_scalar(left, right)
         }
         DataType::LargeUtf8 => {
-            let left = as_largestring_array(left);
+            let left = left.as_string::<i64>();
             $fn_scalar(left, right)
         }
         DataType::Dictionary(_, _) => {
@@ -152,7 +152,7 @@ pub fn $fn_name(
                     let dict_comparison = $fn_name(left.values().as_ref(), right)?;
                     // TODO: Use take_boolean (#2967)
                     let array = take(&dict_comparison, left.keys(), None)?;
-                    Ok(BooleanArray::from(array.data().clone()))
+                    Ok(BooleanArray::from(array.to_data()))
                 }
                 t => Err(ArrowError::ComputeError(format!(
                     "Should be DictionaryArray but got: {}", t
@@ -201,7 +201,7 @@ macro_rules! dict_function {
 ///
 /// See the documentation on [`like_utf8`] for more details.
 #[cfg(feature = "dyn_cmp_dict")]
-fn $fn_name<K: ArrowPrimitiveType>(
+fn $fn_name<K: arrow_array::types::ArrowDictionaryKeyType>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
 ) -> Result<BooleanArray, ArrowError> {
@@ -266,10 +266,9 @@ fn like<'a, S: ArrayAccessor<Item = &'a str>>(
     right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, false, |re_pattern| {
-        Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+        Regex::new(&format!("(?s)^{re_pattern}$")).map_err(|e| {
             ArrowError::ComputeError(format!(
-                "Unable to build regex from LIKE pattern: {}",
-                e
+                "Unable to build regex from LIKE pattern: {e}"
             ))
         })
     })
@@ -313,10 +312,9 @@ fn like_scalar_op<'a, F: Fn(bool) -> bool, L: ArrayAccessor<Item = &'a str>>(
         }))
     } else {
         let re_pattern = replace_like_wildcards(right)?;
-        let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+        let re = Regex::new(&format!("(?s)^{re_pattern}$")).map_err(|e| {
             ArrowError::ComputeError(format!(
-                "Unable to build regex from LIKE pattern: {}",
-                e
+                "Unable to build regex from LIKE pattern: {e}"
             ))
         })?;
 
@@ -397,10 +395,9 @@ fn nlike<'a, S: ArrayAccessor<Item = &'a str>>(
     right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, true, |re_pattern| {
-        Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+        Regex::new(&format!("(?s)^{re_pattern}$")).map_err(|e| {
             ArrowError::ComputeError(format!(
-                "Unable to build regex from LIKE pattern: {}",
-                e
+                "Unable to build regex from LIKE pattern: {e}"
             ))
         })
     })
@@ -445,10 +442,9 @@ fn ilike<'a, S: ArrayAccessor<Item = &'a str>>(
     right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, false, |re_pattern| {
-        Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+        Regex::new(&format!("(?is)^{re_pattern}$")).map_err(|e| {
             ArrowError::ComputeError(format!(
-                "Unable to build regex from ILIKE pattern: {}",
-                e
+                "Unable to build regex from ILIKE pattern: {e}"
             ))
         })
     })
@@ -491,11 +487,8 @@ fn ilike_scalar_op<O: OffsetSizeTrait, F: Fn(bool) -> bool>(
     }
 
     let re_pattern = replace_like_wildcards(right)?;
-    let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-        ArrowError::ComputeError(format!(
-            "Unable to build regex from ILIKE pattern: {}",
-            e
-        ))
+    let re = Regex::new(&format!("(?is)^{re_pattern}$")).map_err(|e| {
+        ArrowError::ComputeError(format!("Unable to build regex from ILIKE pattern: {e}"))
     })?;
 
     Ok(BooleanArray::from_unary(left, |item| op(re.is_match(item))))
@@ -537,10 +530,9 @@ fn nilike<'a, S: ArrayAccessor<Item = &'a str>>(
     right: S,
 ) -> Result<BooleanArray, ArrowError> {
     regex_like(left, right, true, |re_pattern| {
-        Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+        Regex::new(&format!("(?is)^{re_pattern}$")).map_err(|e| {
             ArrowError::ComputeError(format!(
-                "Unable to build regex from ILIKE pattern: {}",
-                e
+                "Unable to build regex from ILIKE pattern: {e}"
             ))
         })
     })
@@ -589,8 +581,10 @@ where
         ));
     }
 
-    let null_bit_buffer =
-        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len());
+    let nulls = NullBuffer::union(
+        left.logical_nulls().as_ref(),
+        right.logical_nulls().as_ref(),
+    );
 
     let mut result = BooleanBufferBuilder::new(left.len());
     for i in 0..left.len() {
@@ -613,15 +607,11 @@ where
     }
 
     let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.finish()],
-            vec![],
-        )
+        ArrayDataBuilder::new(DataType::Boolean)
+            .len(left.len())
+            .nulls(nulls)
+            .buffers(vec![result.into()])
+            .build_unchecked()
     };
     Ok(BooleanArray::from(data))
 }
@@ -746,15 +736,11 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
+                let expected = BooleanArray::from($expected);
                 let left = StringArray::from($left);
                 let right = StringArray::from($right);
                 let res = $op(&left, &right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
+                assert_eq!(res, expected);
             }
         };
     }
@@ -764,15 +750,11 @@ mod tests {
             #[test]
             #[cfg(feature = "dyn_cmp_dict")]
             fn $test_name() {
+                let expected = BooleanArray::from($expected);
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
                 let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
                 let res = $op(&left, &right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
+                assert_eq!(res, expected);
             }
         };
     }
@@ -781,37 +763,15 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
+                let expected = BooleanArray::from($expected);
+
                 let left = StringArray::from($left);
                 let res = $op(&left, $right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(
-                        v,
-                        expected[i],
-                        "unexpected result when comparing {} at position {} to {} ",
-                        left.value(i),
-                        i,
-                        $right
-                    );
-                }
+                assert_eq!(res, expected);
 
                 let left = LargeStringArray::from($left);
                 let res = $op(&left, $right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(
-                        v,
-                        expected[i],
-                        "unexpected result when comparing {} at position {} to {} ",
-                        left.value(i),
-                        i,
-                        $right
-                    );
-                }
+                assert_eq!(res, expected);
             }
         };
         ($test_name:ident, $test_name_dyn:ident, $left:expr, $right:expr, $op:expr, $op_dyn:expr, $expected:expr) => {
@@ -963,7 +923,7 @@ mod tests {
     test_utf8!(
         test_utf8_scalar_ilike_regex,
         vec!["%%%"],
-        vec![r#"\%_\%"#],
+        vec![r"\%_\%"],
         ilike_utf8,
         vec![true]
     );
@@ -971,7 +931,7 @@ mod tests {
     test_dict_utf8!(
         test_utf8_scalar_ilike_regex_dict,
         vec!["%%%"],
-        vec![r#"\%_\%"#],
+        vec![r"\%_\%"],
         ilike_dyn,
         vec![true]
     );
@@ -1257,7 +1217,7 @@ mod tests {
             "ﬀkoß",
             "😃sadlksFFkoSSsh😃klF", // Original was case insensitive "😃sadlksffkosSsh😃klF"
             "😱slgFFkoSSsh😃klF",    // Original was case insensitive "😱slgffkosSsh😃klF"
-            "FFkoSS",                    // "FFKoSS"
+            "FFkoSS",                // "FFKoSS"
         ],
         "FFkoSS",
         contains_utf8_scalar,
@@ -1381,6 +1341,7 @@ mod tests {
             Some("Air"),
             None,
             Some("Air"),
+            Some("bbbbb\nAir"),
         ];
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
@@ -1393,7 +1354,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(false),
             ]),
         );
 
@@ -1405,7 +1367,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(false),
             ]),
         );
 
@@ -1417,7 +1380,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1429,7 +1393,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1441,7 +1406,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1453,7 +1419,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1465,7 +1432,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1477,7 +1445,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1489,7 +1458,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1501,7 +1471,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
     }
@@ -1515,6 +1486,7 @@ mod tests {
             Some("Air"),
             None,
             Some("Air"),
+            Some("bbbbb\nAir"),
         ];
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
@@ -1527,7 +1499,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(true),
             ]),
         );
 
@@ -1539,7 +1512,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(true),
             ]),
         );
 
@@ -1551,7 +1525,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1563,7 +1538,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1575,7 +1551,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1587,7 +1564,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1599,7 +1577,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1611,7 +1590,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1623,7 +1603,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1635,7 +1616,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
     }
@@ -1649,6 +1631,7 @@ mod tests {
             Some("Air"),
             None,
             Some("Air"),
+            Some("bbbbb\nAir"),
         ];
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
@@ -1661,7 +1644,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(false),
             ]),
         );
 
@@ -1673,7 +1657,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(false),
             ]),
         );
 
@@ -1685,7 +1670,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1697,7 +1683,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1709,7 +1696,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1721,7 +1709,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1733,7 +1722,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1745,7 +1735,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1757,7 +1748,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1769,7 +1761,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
     }
@@ -1783,6 +1776,7 @@ mod tests {
             Some("Air"),
             None,
             Some("Air"),
+            Some("bbbbb\nAir"),
         ];
 
         let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
@@ -1795,7 +1789,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(true),
             ]),
         );
 
@@ -1807,7 +1802,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(true),
             ]),
         );
 
@@ -1819,7 +1815,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1831,7 +1828,8 @@ mod tests {
                 Some(false),
                 Some(true),
                 None,
-                Some(true)
+                Some(true),
+                Some(true),
             ]),
         );
 
@@ -1843,7 +1841,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1855,7 +1854,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1867,7 +1867,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1879,7 +1880,8 @@ mod tests {
                 Some(true),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1891,7 +1893,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
 
@@ -1903,7 +1906,8 @@ mod tests {
                 Some(false),
                 Some(false),
                 None,
-                Some(false)
+                Some(false),
+                Some(false),
             ]),
         );
     }

@@ -33,14 +33,11 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, Snafu};
-use std::collections::BTreeSet;
-use std::ops::Range;
+use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
@@ -49,18 +46,28 @@ use url::Url;
 
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
-    AwsCredential, CredentialProvider, InstanceCredentialProvider,
-    StaticCredentialProvider, WebIdentityProvider,
+    InstanceCredentialProvider, TaskCredentialProvider, WebIdentityProvider,
 };
-use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
-use crate::util::str_is_truthy;
+use crate::client::get::GetClientExt;
+use crate::client::list::ListClientExt;
+use crate::client::{
+    ClientConfigKey, CredentialProvider, StaticCredentialProvider,
+    TokenCredentialProvider,
+};
+use crate::config::ConfigValue;
+use crate::multipart::{PartId, PutPart, WriteMultiPart};
 use crate::{
-    ClientOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path,
-    Result, RetryConfig, StreamExt,
+    ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Path, Result, RetryConfig,
 };
 
+mod checksum;
 mod client;
+mod copy;
 mod credential;
+
+pub use checksum::Checksum;
+pub use copy::S3CopyIfNotExists;
 
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 //
@@ -76,31 +83,19 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
 /// This struct is used to maintain the URI path encoding
 const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 
+const STORE: &str = "S3";
+
+/// [`CredentialProvider`] for [`AmazonS3`]
+pub type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
+pub use credential::{AwsAuthorizer, AwsCredential};
+
 /// Default metadata endpoint
-static METADATA_ENDPOINT: &str = "http://169.254.169.254";
+static DEFAULT_METADATA_ENDPOINT: &str = "http://169.254.169.254";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
 enum Error {
-    #[snafu(display("Last-Modified Header missing from response"))]
-    MissingLastModified,
-
-    #[snafu(display("Content-Length Header missing from response"))]
-    MissingContentLength,
-
-    #[snafu(display("Invalid last modified '{}': {}", last_modified, source))]
-    InvalidLastModified {
-        last_modified: String,
-        source: chrono::ParseError,
-    },
-
-    #[snafu(display("Invalid content length '{}': {}", content_length, source))]
-    InvalidContentLength {
-        content_length: String,
-        source: std::num::ParseIntError,
-    },
-
     #[snafu(display("Missing region"))]
     MissingRegion,
 
@@ -112,9 +107,6 @@ enum Error {
 
     #[snafu(display("Missing SecretAccessKey"))]
     MissingSecretAccessKey,
-
-    #[snafu(display("Profile support requires aws_profile feature"))]
-    MissingProfileFeature,
 
     #[snafu(display("ETag Header missing from response"))]
     MissingEtag,
@@ -139,20 +131,65 @@ enum Error {
 
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
+
+    #[snafu(display("Bucket '{}' not found", bucket))]
+    BucketNotFound { bucket: String },
+
+    #[snafu(display("Failed to resolve region for bucket '{}'", bucket))]
+    ResolveRegion {
+        bucket: String,
+        source: reqwest::Error,
+    },
+
+    #[snafu(display("Failed to parse the region for bucket '{}'", bucket))]
+    RegionParse { bucket: String },
 }
 
 impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
         match source {
             Error::UnknownConfigurationKey { key } => {
-                Self::UnknownConfigurationKey { store: "S3", key }
+                Self::UnknownConfigurationKey { store: STORE, key }
             }
             _ => Self::Generic {
-                store: "S3",
+                store: STORE,
                 source: Box::new(source),
             },
         }
     }
+}
+
+/// Get the bucket region using the [HeadBucket API]. This will fail if the bucket does not exist.
+///
+/// [HeadBucket API]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
+pub async fn resolve_bucket_region(
+    bucket: &str,
+    client_options: &ClientOptions,
+) -> Result<String> {
+    use reqwest::StatusCode;
+
+    let endpoint = format!("https://{}.s3.amazonaws.com", bucket);
+
+    let client = client_options.client()?;
+
+    let response = client
+        .head(&endpoint)
+        .send()
+        .await
+        .context(ResolveRegionSnafu { bucket })?;
+
+    ensure!(
+        response.status() != StatusCode::NOT_FOUND,
+        BucketNotFoundSnafu { bucket }
+    );
+
+    let region = response
+        .headers()
+        .get("x-amz-bucket-region")
+        .and_then(|x| x.to_str().ok())
+        .context(RegionParseSnafu { bucket })?;
+
+    Ok(region.to_string())
 }
 
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
@@ -167,10 +204,17 @@ impl std::fmt::Display for AmazonS3 {
     }
 }
 
+impl AmazonS3 {
+    /// Returns the [`AwsCredentialProvider`] used by [`AmazonS3`]
+    pub fn credentials(&self) -> &AwsCredentialProvider {
+        &self.client.config().credentials
+    }
+}
+
 #[async_trait]
 impl ObjectStore for AmazonS3 {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.client.put_request(location, Some(bytes), &()).await?;
+        self.client.put_request(location, bytes, &()).await?;
         Ok(())
     }
 
@@ -186,7 +230,7 @@ impl ObjectStore for AmazonS3 {
             client: Arc::clone(&self.client),
         };
 
-        Ok((id, Box::new(CloudMultiPartUpload::new(upload, 8))))
+        Ok((id, Box::new(WriteMultiPart::new(upload, 8))))
     }
 
     async fn abort_multipart(
@@ -199,108 +243,63 @@ impl ObjectStore for AmazonS3 {
             .await
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let response = self.client.get_request(location, None, false).await?;
-        let stream = response
-            .bytes_stream()
-            .map_err(|source| crate::Error::Generic {
-                store: "S3",
-                source: Box::new(source),
-            })
-            .boxed();
-
-        Ok(GetResult::Stream(stream))
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let bytes = self
-            .client
-            .get_request(location, Some(range), false)
-            .await?
-            .bytes()
-            .await
-            .map_err(|source| client::Error::GetResponseBody {
-                source,
-                path: location.to_string(),
-            })?;
-        Ok(bytes)
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        self.client.get_opts(location, options).await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        use reqwest::header::{CONTENT_LENGTH, LAST_MODIFIED};
-
-        // Extract meta from headers
-        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html#API_HeadObject_ResponseSyntax
-        let response = self.client.get_request(location, None, true).await?;
-        let headers = response.headers();
-
-        let last_modified = headers
-            .get(LAST_MODIFIED)
-            .context(MissingLastModifiedSnafu)?;
-
-        let content_length = headers
-            .get(CONTENT_LENGTH)
-            .context(MissingContentLengthSnafu)?;
-
-        let last_modified = last_modified.to_str().context(BadHeaderSnafu)?;
-        let last_modified = DateTime::parse_from_rfc2822(last_modified)
-            .context(InvalidLastModifiedSnafu { last_modified })?
-            .with_timezone(&Utc);
-
-        let content_length = content_length.to_str().context(BadHeaderSnafu)?;
-        let content_length = content_length
-            .parse()
-            .context(InvalidContentLengthSnafu { content_length })?;
-        Ok(ObjectMeta {
-            location: location.clone(),
-            last_modified,
-            size: content_length,
-        })
+        self.client.head(location).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.delete_request(location, &()).await
     }
 
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        locations
+            .try_chunks(1_000)
+            .map(move |locations| async {
+                // Early return the error. We ignore the paths that have already been
+                // collected into the chunk.
+                let locations = locations.map_err(|e| e.1)?;
+                self.client
+                    .bulk_delete_request(locations)
+                    .await
+                    .map(futures::stream::iter)
+            })
+            .buffered(20)
+            .try_flatten()
+            .boxed()
+    }
+
     async fn list(
         &self,
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        let stream = self
-            .client
-            .list_paginated(prefix, false)
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed();
+        self.client.list(prefix).await
+    }
 
-        Ok(stream)
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        self.client.list_with_offset(prefix, offset).await
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.client.list_paginated(prefix, true);
-
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let response = result?;
-            common_prefixes.extend(response.common_prefixes.into_iter());
-            objects.extend(response.objects.into_iter());
-        }
-
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
-        })
+        self.client.list_with_delimiter(prefix).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client.copy_request(from, to).await
+        self.client.copy_request(from, to, true).await
     }
 
-    async fn copy_if_not_exists(&self, _source: &Path, _dest: &Path) -> Result<()> {
-        // Will need dynamodb_lock
-        Err(crate::Error::NotImplemented)
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        self.client.copy_request(from, to, false).await
     }
 }
 
@@ -311,12 +310,8 @@ struct S3MultiPartUpload {
 }
 
 #[async_trait]
-impl CloudMultiPartUploadImpl for S3MultiPartUpload {
-    async fn put_multipart_part(
-        &self,
-        buf: Vec<u8>,
-        part_idx: usize,
-    ) -> Result<UploadPart, std::io::Error> {
+impl PutPart for S3MultiPartUpload {
+    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
         use reqwest::header::ETAG;
         let part = (part_idx + 1).to_string();
 
@@ -324,31 +319,21 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
             .client
             .put_request(
                 &self.location,
-                Some(buf.into()),
+                buf.into(),
                 &[("partNumber", &part), ("uploadId", &self.upload_id)],
             )
             .await?;
 
-        let etag = response
-            .headers()
-            .get(ETAG)
-            .context(MissingEtagSnafu)
-            .map_err(crate::Error::from)?;
+        let etag = response.headers().get(ETAG).context(MissingEtagSnafu)?;
 
-        let etag = etag
-            .to_str()
-            .context(BadHeaderSnafu)
-            .map_err(crate::Error::from)?;
+        let etag = etag.to_str().context(BadHeaderSnafu)?;
 
-        Ok(UploadPart {
+        Ok(PartId {
             content_id: etag.to_string(),
         })
     }
 
-    async fn complete(
-        &self,
-        completed_parts: Vec<UploadPart>,
-    ) -> Result<(), std::io::Error> {
+    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
         self.client
             .complete_multipart(&self.location, &self.upload_id, completed_parts)
             .await?;
@@ -375,47 +360,55 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
 /// ```
 #[derive(Debug, Default, Clone)]
 pub struct AmazonS3Builder {
+    /// Access key id
     access_key_id: Option<String>,
+    /// Secret access_key
     secret_access_key: Option<String>,
+    /// Region
     region: Option<String>,
+    /// Bucket name
     bucket_name: Option<String>,
+    /// Endpoint for communicating with AWS S3
     endpoint: Option<String>,
+    /// Token to use for requests
     token: Option<String>,
+    /// Url
     url: Option<String>,
+    /// Retry config
     retry_config: RetryConfig,
-    imdsv1_fallback: bool,
-    virtual_hosted_style_request: bool,
+    /// When set to true, fallback to IMDSv1
+    imdsv1_fallback: ConfigValue<bool>,
+    /// When set to true, virtual hosted style request has to be used
+    virtual_hosted_style_request: ConfigValue<bool>,
+    /// When set to true, unsigned payload option has to be used
+    unsigned_payload: ConfigValue<bool>,
+    /// Checksum algorithm which has to be used for object integrity check during upload
+    checksum_algorithm: Option<ConfigValue<Checksum>>,
+    /// Metadata endpoint, see <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html>
     metadata_endpoint: Option<String>,
-    profile: Option<String>,
+    /// Container credentials URL, see <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+    container_credentials_relative_uri: Option<String>,
+    /// Client options
     client_options: ClientOptions,
+    /// Credentials
+    credentials: Option<AwsCredentialProvider>,
+    /// Copy if not exists
+    copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
 ///
-/// Configuration via keys can be dome via the [`try_with_option`](AmazonS3Builder::try_with_option)
-/// or [`with_options`](AmazonS3Builder::try_with_options) methods on the builder.
+/// Configuration via keys can be done via [`AmazonS3Builder::with_config`]
 ///
 /// # Example
 /// ```
-/// use std::collections::HashMap;
-/// use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
-///
-/// let options = HashMap::from([
-///     ("aws_access_key_id", "my-access-key-id"),
-///     ("aws_secret_access_key", "my-secret-access-key"),
-/// ]);
-/// let typed_options = vec![
-///     (AmazonS3ConfigKey::DefaultRegion, "my-default-region"),
-/// ];
-/// let azure = AmazonS3Builder::new()
-///     .try_with_options(options)
-///     .unwrap()
-///     .try_with_options(typed_options)
-///     .unwrap()
-///     .try_with_option(AmazonS3ConfigKey::Region, "my-region")
-///     .unwrap();
+/// # use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+/// let builder = AmazonS3Builder::new()
+///     .with_config("aws_access_key_id".parse().unwrap(), "my-access-key-id")
+///     .with_config(AmazonS3ConfigKey::DefaultRegion, "my-default-region");
 /// ```
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AmazonS3ConfigKey {
     /// AWS Access Key
     ///
@@ -504,6 +497,20 @@ pub enum AmazonS3ConfigKey {
     /// - `virtual_hosted_style_request`
     VirtualHostedStyleRequest,
 
+    /// Avoid computing payload checksum when calculating signature.
+    ///
+    /// See [`AmazonS3Builder::with_unsigned_payload`] for details.
+    ///
+    /// Supported keys:
+    /// - `aws_unsigned_payload`
+    /// - `unsigned_payload`
+    UnsignedPayload,
+
+    /// Set the checksum algorithm for this client
+    ///
+    /// See [`AmazonS3Builder::with_checksum_algorithm`]
+    Checksum,
+
     /// Set the instance metadata endpoint
     ///
     /// See [`AmazonS3Builder::with_metadata_endpoint`] for details.
@@ -513,12 +520,18 @@ pub enum AmazonS3ConfigKey {
     /// - `metadata_endpoint`
     MetadataEndpoint,
 
-    /// AWS profile name
+    /// Set the container credentials relative URI
     ///
-    /// Supported keys:
-    /// - `aws_profile`
-    /// - `profile`
-    Profile,
+    /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+    ContainerCredentialsRelativeUri,
+
+    /// Configure how to provide [`ObjectStore::copy_if_not_exists`]
+    ///
+    /// See [`S3CopyIfNotExists`]
+    CopyIfNotExists,
+
+    /// Client options
+    Client(ClientConfigKey),
 }
 
 impl AsRef<str> for AmazonS3ConfigKey {
@@ -534,7 +547,13 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::VirtualHostedStyleRequest => "aws_virtual_hosted_style_request",
             Self::DefaultRegion => "aws_default_region",
             Self::MetadataEndpoint => "aws_metadata_endpoint",
-            Self::Profile => "aws_profile",
+            Self::UnsignedPayload => "aws_unsigned_payload",
+            Self::Checksum => "aws_checksum_algorithm",
+            Self::ContainerCredentialsRelativeUri => {
+                "aws_container_credentials_relative_uri"
+            }
+            Self::CopyIfNotExists => "copy_if_not_exists",
+            Self::Client(opt) => opt.as_ref(),
         }
     }
 }
@@ -560,10 +579,20 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_virtual_hosted_style_request" | "virtual_hosted_style_request" => {
                 Ok(Self::VirtualHostedStyleRequest)
             }
-            "aws_profile" | "profile" => Ok(Self::Profile),
             "aws_imdsv1_fallback" | "imdsv1_fallback" => Ok(Self::ImdsV1Fallback),
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
-            _ => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
+            "aws_checksum_algorithm" | "checksum_algorithm" => Ok(Self::Checksum),
+            "aws_container_credentials_relative_uri" => {
+                Ok(Self::ContainerCredentialsRelativeUri)
+            }
+            "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
+            // Backwards compatibility
+            "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
+            _ => match s.parse() {
+                Ok(key) => Ok(Self::Client(key)),
+                Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
+            },
         }
     }
 }
@@ -584,7 +613,6 @@ impl AmazonS3Builder {
     /// * `AWS_SESSION_TOKEN` -> token
     /// * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
-    /// * `AWS_PROFILE` -> set profile name, requires `aws_profile` feature enabled
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -599,27 +627,11 @@ impl AmazonS3Builder {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("AWS_") {
-                    if let Ok(config_key) =
-                        AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
-                        builder = builder.try_with_option(config_key, value).unwrap();
+                    if let Ok(config_key) = key.to_ascii_lowercase().parse() {
+                        builder = builder.with_config(config_key, value);
                     }
                 }
             }
-        }
-
-        // This env var is set in ECS
-        // https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html
-        if let Ok(metadata_relative_uri) =
-            std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
-        {
-            builder.metadata_endpoint =
-                Some(format!("{}{}", METADATA_ENDPOINT, metadata_relative_uri));
-        }
-
-        if let Ok(text) = std::env::var("AWS_ALLOW_HTTP") {
-            builder.client_options =
-                builder.client_options.with_allow_http(str_is_truthy(&text));
         }
 
         builder
@@ -631,8 +643,9 @@ impl AmazonS3Builder {
     ///
     /// - `s3://<bucket>/<path>`
     /// - `s3a://<bucket>/<path>`
-    /// - `https://s3.<bucket>.amazonaws.com`
+    /// - `https://s3.<region>.amazonaws.com/<bucket>`
     /// - `https://<bucket>.s3.<region>.amazonaws.com`
+    /// - `https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket`
     ///
     /// Note: Settings derived from the URL will override any others set on this builder
     ///
@@ -650,14 +663,12 @@ impl AmazonS3Builder {
     }
 
     /// Set an option on the builder via a key - value pair.
-    ///
-    /// This method will return an `UnknownConfigKey` error if key cannot be parsed into [`AmazonS3ConfigKey`].
-    pub fn try_with_option(
+    pub fn with_config(
         mut self,
-        key: impl AsRef<str>,
+        key: AmazonS3ConfigKey,
         value: impl Into<String>,
-    ) -> Result<Self> {
-        match AmazonS3ConfigKey::from_str(key.as_ref())? {
+    ) -> Self {
+        match key {
             AmazonS3ConfigKey::AccessKeyId => self.access_key_id = Some(value.into()),
             AmazonS3ConfigKey::SecretAccessKey => {
                 self.secret_access_key = Some(value.into())
@@ -666,11 +677,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Bucket => self.bucket_name = Some(value.into()),
             AmazonS3ConfigKey::Endpoint => self.endpoint = Some(value.into()),
             AmazonS3ConfigKey::Token => self.token = Some(value.into()),
-            AmazonS3ConfigKey::ImdsV1Fallback => {
-                self.imdsv1_fallback = str_is_truthy(&value.into())
-            }
+            AmazonS3ConfigKey::ImdsV1Fallback => self.imdsv1_fallback.parse(value),
             AmazonS3ConfigKey::VirtualHostedStyleRequest => {
-                self.virtual_hosted_style_request = str_is_truthy(&value.into())
+                self.virtual_hosted_style_request.parse(value)
             }
             AmazonS3ConfigKey::DefaultRegion => {
                 self.region = self.region.or_else(|| Some(value.into()))
@@ -678,14 +687,40 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::MetadataEndpoint => {
                 self.metadata_endpoint = Some(value.into())
             }
-            AmazonS3ConfigKey::Profile => self.profile = Some(value.into()),
+            AmazonS3ConfigKey::UnsignedPayload => self.unsigned_payload.parse(value),
+            AmazonS3ConfigKey::Checksum => {
+                self.checksum_algorithm = Some(ConfigValue::Deferred(value.into()))
+            }
+            AmazonS3ConfigKey::ContainerCredentialsRelativeUri => {
+                self.container_credentials_relative_uri = Some(value.into())
+            }
+            AmazonS3ConfigKey::Client(key) => {
+                self.client_options = self.client_options.with_config(key, value)
+            }
+            AmazonS3ConfigKey::CopyIfNotExists => {
+                self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
+            }
         };
-        Ok(self)
+        self
+    }
+
+    /// Set an option on the builder via a key - value pair.
+    ///
+    /// This method will return an `UnknownConfigKey` error if key cannot be parsed into [`AmazonS3ConfigKey`].
+    #[deprecated(note = "Use with_config")]
+    pub fn try_with_option(
+        self,
+        key: impl AsRef<str>,
+        value: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(self.with_config(key.as_ref().parse()?, value))
     }
 
     /// Hydrate builder from key value pairs
     ///
     /// This method will return an `UnknownConfigKey` error if any key cannot be parsed into [`AmazonS3ConfigKey`].
+    #[deprecated(note = "Use with_config")]
+    #[allow(deprecated)]
     pub fn try_with_options<
         I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
     >(
@@ -698,6 +733,46 @@ impl AmazonS3Builder {
         Ok(self)
     }
 
+    /// Get config value via a [`AmazonS3ConfigKey`].
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+    ///
+    /// let builder = AmazonS3Builder::from_env()
+    ///     .with_bucket_name("foo");
+    /// let bucket_name = builder.get_config_value(&AmazonS3ConfigKey::Bucket).unwrap_or_default();
+    /// assert_eq!("foo", &bucket_name);
+    /// ```
+    pub fn get_config_value(&self, key: &AmazonS3ConfigKey) -> Option<String> {
+        match key {
+            AmazonS3ConfigKey::AccessKeyId => self.access_key_id.clone(),
+            AmazonS3ConfigKey::SecretAccessKey => self.secret_access_key.clone(),
+            AmazonS3ConfigKey::Region | AmazonS3ConfigKey::DefaultRegion => {
+                self.region.clone()
+            }
+            AmazonS3ConfigKey::Bucket => self.bucket_name.clone(),
+            AmazonS3ConfigKey::Endpoint => self.endpoint.clone(),
+            AmazonS3ConfigKey::Token => self.token.clone(),
+            AmazonS3ConfigKey::ImdsV1Fallback => Some(self.imdsv1_fallback.to_string()),
+            AmazonS3ConfigKey::VirtualHostedStyleRequest => {
+                Some(self.virtual_hosted_style_request.to_string())
+            }
+            AmazonS3ConfigKey::MetadataEndpoint => self.metadata_endpoint.clone(),
+            AmazonS3ConfigKey::UnsignedPayload => Some(self.unsigned_payload.to_string()),
+            AmazonS3ConfigKey::Checksum => {
+                self.checksum_algorithm.as_ref().map(ToString::to_string)
+            }
+            AmazonS3ConfigKey::Client(key) => self.client_options.get_config_value(key),
+            AmazonS3ConfigKey::ContainerCredentialsRelativeUri => {
+                self.container_credentials_relative_uri.clone()
+            }
+            AmazonS3ConfigKey::CopyIfNotExists => {
+                self.copy_if_not_exists.as_ref().map(ToString::to_string)
+            }
+        }
+    }
+
     /// Sets properties on this builder based on a URL
     ///
     /// This is a separate member function to allow fallible computation to
@@ -705,21 +780,30 @@ impl AmazonS3Builder {
     fn parse_url(&mut self, url: &str) -> Result<()> {
         let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
         let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
-        let validate = |s: &str| match s.contains('.') {
-            true => Err(UrlNotRecognisedSnafu { url }.build()),
-            false => Ok(s.to_string()),
-        };
-
         match parsed.scheme() {
-            "s3" | "s3a" => self.bucket_name = Some(validate(host)?),
+            "s3" | "s3a" => self.bucket_name = Some(host.to_string()),
             "https" => match host.splitn(4, '.').collect_tuple() {
-                Some(("s3", bucket, "amazonaws", "com")) => {
-                    self.bucket_name = Some(bucket.to_string());
+                Some(("s3", region, "amazonaws", "com")) => {
+                    self.region = Some(region.to_string());
+                    let bucket = parsed.path_segments().into_iter().flatten().next();
+                    if let Some(bucket) = bucket {
+                        self.bucket_name = Some(bucket.into());
+                    }
                 }
                 Some((bucket, "s3", region, "amazonaws.com")) => {
                     self.bucket_name = Some(bucket.to_string());
                     self.region = Some(region.to_string());
-                    self.virtual_hosted_style_request = true;
+                    self.virtual_hosted_style_request = true.into();
+                }
+                Some((account, "r2", "cloudflarestorage", "com")) => {
+                    self.region = Some("auto".to_string());
+                    let endpoint = format!("https://{account}.r2.cloudflarestorage.com");
+                    self.endpoint = Some(endpoint);
+
+                    let bucket = parsed.path_segments().into_iter().flatten().next();
+                    if let Some(bucket) = bucket {
+                        self.bucket_name = Some(bucket.into());
+                    }
                 }
                 _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
             },
@@ -774,6 +858,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Set the credential provider overriding any other options
+    pub fn with_credentials(mut self, credentials: AwsCredentialProvider) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
     /// Sets what protocol is allowed. If `allow_http` is :
     /// * false (default):  Only HTTPS are allowed
     /// * true:  HTTP and HTTPS are allowed
@@ -795,7 +885,7 @@ impl AmazonS3Builder {
         mut self,
         virtual_hosted_style_request: bool,
     ) -> Self {
-        self.virtual_hosted_style_request = virtual_hosted_style_request;
+        self.virtual_hosted_style_request = virtual_hosted_style_request.into();
         self
     }
 
@@ -818,7 +908,25 @@ impl AmazonS3Builder {
     /// [SSRF attack]: https://aws.amazon.com/blogs/security/defense-in-depth-open-firewalls-reverse-proxies-ssrf-vulnerabilities-ec2-instance-metadata-service/
     ///
     pub fn with_imdsv1_fallback(mut self) -> Self {
-        self.imdsv1_fallback = true;
+        self.imdsv1_fallback = true.into();
+        self
+    }
+
+    /// Sets if unsigned payload option has to be used.
+    /// See [unsigned payload option](https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html)
+    /// * false (default): Signed payload option is used, where the checksum for the request body is computed and included when constructing a canonical request.
+    /// * true: Unsigned payload option is used. `UNSIGNED-PAYLOAD` literal is included when constructing a canonical request,
+    pub fn with_unsigned_payload(mut self, unsigned_payload: bool) -> Self {
+        self.unsigned_payload = unsigned_payload.into();
+        self
+    }
+
+    /// Sets the [checksum algorithm] which has to be used for object integrity check during upload.
+    ///
+    /// [checksum algorithm]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
+    pub fn with_checksum_algorithm(mut self, checksum_algorithm: Checksum) -> Self {
+        // Convert to String to enable deferred parsing of config
+        self.checksum_algorithm = Some(checksum_algorithm.into());
         self
     }
 
@@ -838,27 +946,32 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Set a trusted proxy CA certificate
+    pub fn with_proxy_ca_certificate(
+        mut self,
+        proxy_ca_certificate: impl Into<String>,
+    ) -> Self {
+        self.client_options = self
+            .client_options
+            .with_proxy_ca_certificate(proxy_ca_certificate);
+        self
+    }
+
+    /// Set a list of hosts to exclude from proxy connections
+    pub fn with_proxy_excludes(mut self, proxy_excludes: impl Into<String>) -> Self {
+        self.client_options = self.client_options.with_proxy_excludes(proxy_excludes);
+        self
+    }
+
     /// Sets the client options, overriding any already set
     pub fn with_client_options(mut self, options: ClientOptions) -> Self {
         self.client_options = options;
         self
     }
 
-    /// Set the AWS profile name, see <https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html>
-    ///
-    /// This makes use of [aws-config] to provide credentials and therefore requires
-    /// the `aws-profile` feature to be enabled
-    ///
-    /// It is strongly encouraged that users instead make use of a credential manager
-    /// such as [aws-vault] not only to avoid the significant additional dependencies,
-    /// but also to avoid storing credentials in [plain text on disk]
-    ///
-    /// [aws-config]: https://docs.rs/aws-config
-    /// [aws-vault]: https://github.com/99designs/aws-vault
-    /// [plain text on disk]: https://99designs.com.au/blog/engineering/aws-vault/
-    #[cfg(feature = "aws_profile")]
-    pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
-        self.profile = Some(profile.into());
+    /// Configure how to provide [`ObjectStore::copy_if_not_exists`]
+    pub fn with_copy_if_not_exists(mut self, config: S3CopyIfNotExists) -> Self {
+        self.copy_if_not_exists = Some(config.into());
         self
     }
 
@@ -871,74 +984,83 @@ impl AmazonS3Builder {
 
         let bucket = self.bucket_name.context(MissingBucketNameSnafu)?;
         let region = self.region.context(MissingRegionSnafu)?;
+        let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
+        let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
 
-        let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
-            (Some(key_id), Some(secret_key), token) => {
-                info!("Using Static credential provider");
-                Box::new(StaticCredentialProvider {
-                    credential: Arc::new(AwsCredential {
+        let credentials = if let Some(credentials) = self.credentials {
+            credentials
+        } else if self.access_key_id.is_some() || self.secret_access_key.is_some() {
+            match (self.access_key_id, self.secret_access_key, self.token) {
+                (Some(key_id), Some(secret_key), token) => {
+                    info!("Using Static credential provider");
+                    let credential = AwsCredential {
                         key_id,
                         secret_key,
                         token,
-                    }),
-                }) as _
-            }
-            (None, Some(_), _) => return Err(Error::MissingAccessKeyId.into()),
-            (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
-            // TODO: Replace with `AmazonS3Builder::credentials_from_env`
-            _ => match (
-                std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE"),
-                std::env::var("AWS_ROLE_ARN"),
-            ) {
-                (Ok(token_path), Ok(role_arn)) => {
-                    info!("Using WebIdentity credential provider");
-
-                    let session_name = std::env::var("AWS_ROLE_SESSION_NAME")
-                        .unwrap_or_else(|_| "WebIdentitySession".to_string());
-
-                    let endpoint = format!("https://sts.{}.amazonaws.com", region);
-
-                    // Disallow non-HTTPs requests
-                    let client = self
-                        .client_options
-                        .clone()
-                        .with_allow_http(false)
-                        .client()?;
-
-                    Box::new(WebIdentityProvider {
-                        cache: Default::default(),
-                        token_path,
-                        session_name,
-                        role_arn,
-                        endpoint,
-                        client,
-                        retry_config: self.retry_config.clone(),
-                    }) as _
+                    };
+                    Arc::new(StaticCredentialProvider::new(credential)) as _
                 }
-                _ => match self.profile {
-                    Some(profile) => {
-                        info!("Using profile \"{}\" credential provider", profile);
-                        profile_credentials(profile, region.clone())?
-                    }
-                    None => {
-                        info!("Using Instance credential provider");
+                (None, Some(_), _) => return Err(Error::MissingAccessKeyId.into()),
+                (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
+                (None, None, _) => unreachable!(),
+            }
+        } else if let (Ok(token_path), Ok(role_arn)) = (
+            std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE"),
+            std::env::var("AWS_ROLE_ARN"),
+        ) {
+            // TODO: Replace with `AmazonS3Builder::credentials_from_env`
+            info!("Using WebIdentity credential provider");
 
-                        // The instance metadata endpoint is access over HTTP
-                        let client_options =
-                            self.client_options.clone().with_allow_http(true);
+            let session_name = std::env::var("AWS_ROLE_SESSION_NAME")
+                .unwrap_or_else(|_| "WebIdentitySession".to_string());
 
-                        Box::new(InstanceCredentialProvider {
-                            cache: Default::default(),
-                            client: client_options.client()?,
-                            retry_config: self.retry_config.clone(),
-                            imdsv1_fallback: self.imdsv1_fallback,
-                            metadata_endpoint: self
-                                .metadata_endpoint
-                                .unwrap_or_else(|| METADATA_ENDPOINT.into()),
-                        }) as _
-                    }
-                },
-            },
+            let endpoint = format!("https://sts.{region}.amazonaws.com");
+
+            // Disallow non-HTTPs requests
+            let client = self
+                .client_options
+                .clone()
+                .with_allow_http(false)
+                .client()?;
+
+            let token = WebIdentityProvider {
+                token_path,
+                session_name,
+                role_arn,
+                endpoint,
+            };
+
+            Arc::new(TokenCredentialProvider::new(
+                token,
+                client,
+                self.retry_config.clone(),
+            )) as _
+        } else if let Some(uri) = self.container_credentials_relative_uri {
+            info!("Using Task credential provider");
+            Arc::new(TaskCredentialProvider {
+                url: format!("http://169.254.170.2{uri}"),
+                retry: self.retry_config.clone(),
+                // The instance metadata endpoint is access over HTTP
+                client: self.client_options.clone().with_allow_http(true).client()?,
+                cache: Default::default(),
+            }) as _
+        } else {
+            info!("Using Instance credential provider");
+
+            let token = InstanceCredentialProvider {
+                cache: Default::default(),
+                imdsv1_fallback: self.imdsv1_fallback.get()?,
+                metadata_endpoint: self
+                    .metadata_endpoint
+                    .unwrap_or_else(|| DEFAULT_METADATA_ENDPOINT.into()),
+            };
+
+            Arc::new(TokenCredentialProvider::new(
+                token,
+                // The instance metadata endpoint is access over HTTP
+                self.client_options.clone().with_allow_http(true).client()?,
+                self.retry_config.clone(),
+            )) as _
         };
 
         let endpoint: String;
@@ -947,16 +1069,16 @@ impl AmazonS3Builder {
         // If `endpoint` is provided then its assumed to be consistent with
         // `virtual_hosted_style_request`. i.e. if `virtual_hosted_style_request` is true then
         // `endpoint` should have bucket name included.
-        if self.virtual_hosted_style_request {
-            endpoint = self.endpoint.unwrap_or_else(|| {
-                format!("https://{}.s3.{}.amazonaws.com", bucket, region)
-            });
+        if self.virtual_hosted_style_request.get()? {
+            endpoint = self
+                .endpoint
+                .unwrap_or_else(|| format!("https://{bucket}.s3.{region}.amazonaws.com"));
             bucket_endpoint = endpoint.clone();
         } else {
             endpoint = self
                 .endpoint
-                .unwrap_or_else(|| format!("https://s3.{}.amazonaws.com", region));
-            bucket_endpoint = format!("{}/{}", endpoint, bucket);
+                .unwrap_or_else(|| format!("https://s3.{region}.amazonaws.com"));
+            bucket_endpoint = format!("{endpoint}/{bucket}");
         }
 
         let config = S3Config {
@@ -967,6 +1089,9 @@ impl AmazonS3Builder {
             credentials,
             retry_config: self.retry_config,
             client_options: self.client_options,
+            sign_payload: !self.unsigned_payload.get()?,
+            checksum,
+            copy_if_not_exists,
         };
 
         let client = Arc::new(S3Client::new(config)?);
@@ -975,172 +1100,18 @@ impl AmazonS3Builder {
     }
 }
 
-#[cfg(feature = "aws_profile")]
-fn profile_credentials(
-    profile: String,
-    region: String,
-) -> Result<Box<dyn CredentialProvider>> {
-    Ok(Box::new(credential::ProfileProvider::new(profile, region)))
-}
-
-#[cfg(not(feature = "aws_profile"))]
-fn profile_credentials(
-    _profile: String,
-    _region: String,
-) -> Result<Box<dyn CredentialProvider>> {
-    Err(Error::MissingProfileFeature.into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::{
-        get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list_opts, rename_and_copy, stream_get,
+        copy_if_not_exists, get_nonexistent_object, get_opts,
+        list_uses_directories_correctly, list_with_delimiter, put_get_delete_list_opts,
+        rename_and_copy, stream_get,
     };
     use bytes::Bytes;
     use std::collections::HashMap;
-    use std::env;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
-
-    // Helper macro to skip tests if TEST_INTEGRATION and the AWS
-    // environment variables are not set. Returns a configured
-    // AmazonS3Builder
-    macro_rules! maybe_skip_integration {
-        () => {{
-            dotenv::dotenv().ok();
-
-            let required_vars = [
-                "OBJECT_STORE_AWS_DEFAULT_REGION",
-                "OBJECT_STORE_BUCKET",
-                "OBJECT_STORE_AWS_ACCESS_KEY_ID",
-                "OBJECT_STORE_AWS_SECRET_ACCESS_KEY",
-            ];
-            let unset_vars: Vec<_> = required_vars
-                .iter()
-                .filter_map(|&name| match env::var(name) {
-                    Ok(_) => None,
-                    Err(_) => Some(name),
-                })
-                .collect();
-            let unset_var_names = unset_vars.join(", ");
-
-            let force = env::var("TEST_INTEGRATION");
-
-            if force.is_ok() && !unset_var_names.is_empty() {
-                panic!(
-                    "TEST_INTEGRATION is set, \
-                            but variable(s) {} need to be set",
-                    unset_var_names
-                );
-            } else if force.is_err() {
-                eprintln!(
-                    "skipping AWS integration test - set {}TEST_INTEGRATION to run",
-                    if unset_var_names.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{} and ", unset_var_names)
-                    }
-                );
-                return;
-            } else {
-                let config = AmazonS3Builder::new()
-                    .with_access_key_id(
-                        env::var("OBJECT_STORE_AWS_ACCESS_KEY_ID")
-                            .expect("already checked OBJECT_STORE_AWS_ACCESS_KEY_ID"),
-                    )
-                    .with_secret_access_key(
-                        env::var("OBJECT_STORE_AWS_SECRET_ACCESS_KEY")
-                            .expect("already checked OBJECT_STORE_AWS_SECRET_ACCESS_KEY"),
-                    )
-                    .with_region(
-                        env::var("OBJECT_STORE_AWS_DEFAULT_REGION")
-                            .expect("already checked OBJECT_STORE_AWS_DEFAULT_REGION"),
-                    )
-                    .with_bucket_name(
-                        env::var("OBJECT_STORE_BUCKET")
-                            .expect("already checked OBJECT_STORE_BUCKET"),
-                    )
-                    .with_allow_http(true);
-
-                let config =
-                    if let Some(endpoint) = env::var("OBJECT_STORE_AWS_ENDPOINT").ok() {
-                        config.with_endpoint(endpoint)
-                    } else {
-                        config
-                    };
-
-                let config = if let Some(token) =
-                    env::var("OBJECT_STORE_AWS_SESSION_TOKEN").ok()
-                {
-                    config.with_token(token)
-                } else {
-                    config
-                };
-
-                let config = if let Some(virtual_hosted_style_request) =
-                    env::var("OBJECT_STORE_VIRTUAL_HOSTED_STYLE_REQUEST").ok()
-                {
-                    config.with_virtual_hosted_style_request(
-                        virtual_hosted_style_request.trim().parse().unwrap(),
-                    )
-                } else {
-                    config
-                };
-
-                config
-            }
-        }};
-    }
-
-    #[test]
-    fn s3_test_config_from_env() {
-        let aws_access_key_id = env::var("AWS_ACCESS_KEY_ID")
-            .unwrap_or_else(|_| "object_store:fake_access_key_id".into());
-        let aws_secret_access_key = env::var("AWS_SECRET_ACCESS_KEY")
-            .unwrap_or_else(|_| "object_store:fake_secret_key".into());
-
-        let aws_default_region = env::var("AWS_DEFAULT_REGION")
-            .unwrap_or_else(|_| "object_store:fake_default_region".into());
-
-        let aws_endpoint = env::var("AWS_ENDPOINT")
-            .unwrap_or_else(|_| "object_store:fake_endpoint".into());
-        let aws_session_token = env::var("AWS_SESSION_TOKEN")
-            .unwrap_or_else(|_| "object_store:fake_session_token".into());
-
-        let container_creds_relative_uri =
-            env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
-                .unwrap_or_else(|_| "/object_store/fake_credentials_uri".into());
-
-        // required
-        env::set_var("AWS_ACCESS_KEY_ID", &aws_access_key_id);
-        env::set_var("AWS_SECRET_ACCESS_KEY", &aws_secret_access_key);
-        env::set_var("AWS_DEFAULT_REGION", &aws_default_region);
-
-        // optional
-        env::set_var("AWS_ENDPOINT", &aws_endpoint);
-        env::set_var("AWS_SESSION_TOKEN", &aws_session_token);
-        env::set_var(
-            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-            &container_creds_relative_uri,
-        );
-
-        let builder = AmazonS3Builder::from_env();
-        assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
-        assert_eq!(
-            builder.secret_access_key.unwrap(),
-            aws_secret_access_key.as_str()
-        );
-        assert_eq!(builder.region.unwrap(), aws_default_region);
-
-        assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
-        assert_eq!(builder.token.unwrap(), aws_session_token);
-
-        let metadata_uri =
-            format!("{}{}", METADATA_ENDPOINT, container_creds_relative_uri);
-        assert_eq!(builder.metadata_endpoint.unwrap(), metadata_uri);
-    }
 
     #[test]
     fn s3_test_config_from_map() {
@@ -1155,78 +1126,119 @@ mod tests {
             ("aws_default_region", aws_default_region.clone()),
             ("aws_endpoint", aws_endpoint.clone()),
             ("aws_session_token", aws_session_token.clone()),
+            ("aws_unsigned_payload", "true".to_string()),
+            ("aws_checksum_algorithm", "sha256".to_string()),
         ]);
 
-        let builder = AmazonS3Builder::new()
-            .try_with_options(&options)
-            .unwrap()
-            .try_with_option("aws_secret_access_key", "new-secret-key")
-            .unwrap();
+        let builder = options
+            .into_iter()
+            .fold(AmazonS3Builder::new(), |builder, (key, value)| {
+                builder.with_config(key.parse().unwrap(), value)
+            })
+            .with_config(AmazonS3ConfigKey::SecretAccessKey, "new-secret-key");
+
         assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
         assert_eq!(builder.secret_access_key.unwrap(), "new-secret-key");
         assert_eq!(builder.region.unwrap(), aws_default_region);
         assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
         assert_eq!(builder.token.unwrap(), aws_session_token);
+        assert_eq!(
+            builder.checksum_algorithm.unwrap().get().unwrap(),
+            Checksum::SHA256
+        );
+        assert!(builder.unsigned_payload.get().unwrap());
     }
 
     #[test]
-    fn s3_test_config_from_typed_map() {
+    fn s3_test_config_get_value() {
         let aws_access_key_id = "object_store:fake_access_key_id".to_string();
         let aws_secret_access_key = "object_store:fake_secret_key".to_string();
         let aws_default_region = "object_store:fake_default_region".to_string();
         let aws_endpoint = "object_store:fake_endpoint".to_string();
         let aws_session_token = "object_store:fake_session_token".to_string();
-        let options = HashMap::from([
-            (AmazonS3ConfigKey::AccessKeyId, aws_access_key_id.clone()),
-            (AmazonS3ConfigKey::SecretAccessKey, aws_secret_access_key),
-            (AmazonS3ConfigKey::DefaultRegion, aws_default_region.clone()),
-            (AmazonS3ConfigKey::Endpoint, aws_endpoint.clone()),
-            (AmazonS3ConfigKey::Token, aws_session_token.clone()),
-        ]);
 
         let builder = AmazonS3Builder::new()
-            .try_with_options(&options)
-            .unwrap()
-            .try_with_option(AmazonS3ConfigKey::SecretAccessKey, "new-secret-key")
-            .unwrap();
-        assert_eq!(builder.access_key_id.unwrap(), aws_access_key_id.as_str());
-        assert_eq!(builder.secret_access_key.unwrap(), "new-secret-key");
-        assert_eq!(builder.region.unwrap(), aws_default_region);
-        assert_eq!(builder.endpoint.unwrap(), aws_endpoint);
-        assert_eq!(builder.token.unwrap(), aws_session_token);
-    }
+            .with_config(AmazonS3ConfigKey::AccessKeyId, &aws_access_key_id)
+            .with_config(AmazonS3ConfigKey::SecretAccessKey, &aws_secret_access_key)
+            .with_config(AmazonS3ConfigKey::DefaultRegion, &aws_default_region)
+            .with_config(AmazonS3ConfigKey::Endpoint, &aws_endpoint)
+            .with_config(AmazonS3ConfigKey::Token, &aws_session_token)
+            .with_config(AmazonS3ConfigKey::UnsignedPayload, "true");
 
-    #[test]
-    fn s3_test_config_fallible_options() {
-        let aws_access_key_id = "object_store:fake_access_key_id".to_string();
-        let aws_secret_access_key = "object_store:fake_secret_key".to_string();
-        let options = HashMap::from([
-            ("aws_access_key_id", aws_access_key_id),
-            ("invalid-key", aws_secret_access_key),
-        ]);
-
-        let builder = AmazonS3Builder::new().try_with_options(&options);
-        assert!(builder.is_err());
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::AccessKeyId)
+                .unwrap(),
+            aws_access_key_id
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::SecretAccessKey)
+                .unwrap(),
+            aws_secret_access_key
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::DefaultRegion)
+                .unwrap(),
+            aws_default_region
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::Endpoint)
+                .unwrap(),
+            aws_endpoint
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Token).unwrap(),
+            aws_session_token
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::UnsignedPayload)
+                .unwrap(),
+            "true"
+        );
     }
 
     #[tokio::test]
     async fn s3_test() {
-        let config = maybe_skip_integration!();
+        crate::test_util::maybe_skip_integration!();
+        let config = AmazonS3Builder::from_env();
+
         let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
+        let test_not_exists = config.copy_if_not_exists.is_some();
         let integration = config.build().unwrap();
 
         // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
         put_get_delete_list_opts(&integration, is_local).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
+        if test_not_exists {
+            copy_if_not_exists(&integration).await;
+        }
+
+        // run integration test with unsigned payload enabled
+        let config = AmazonS3Builder::from_env().with_unsigned_payload(true);
+        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
+        let integration = config.build().unwrap();
+        put_get_delete_list_opts(&integration, is_local).await;
+
+        // run integration test with checksum set to sha256
+        let config =
+            AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
+        let is_local = matches!(&config.endpoint, Some(e) if e.starts_with("http://"));
+        let integration = config.build().unwrap();
+        put_get_delete_list_opts(&integration, is_local).await;
     }
 
     #[tokio::test]
     async fn s3_test_get_nonexistent_location() {
-        let config = maybe_skip_integration!();
-        let integration = config.build().unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let integration = AmazonS3Builder::from_env().build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1238,7 +1250,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_get_nonexistent_bucket() {
-        let config = maybe_skip_integration!().with_bucket_name(NON_EXISTENT_NAME);
+        crate::test_util::maybe_skip_integration!();
+        let config = AmazonS3Builder::from_env().with_bucket_name(NON_EXISTENT_NAME);
         let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
@@ -1249,8 +1262,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_put_nonexistent_bucket() {
-        let config = maybe_skip_integration!().with_bucket_name(NON_EXISTENT_NAME);
-
+        crate::test_util::maybe_skip_integration!();
+        let config = AmazonS3Builder::from_env().with_bucket_name(NON_EXISTENT_NAME);
         let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
@@ -1262,8 +1275,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_delete_nonexistent_location() {
-        let config = maybe_skip_integration!();
-        let integration = config.build().unwrap();
+        crate::test_util::maybe_skip_integration!();
+        let integration = AmazonS3Builder::from_env().build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1272,7 +1285,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_delete_nonexistent_bucket() {
-        let config = maybe_skip_integration!().with_bucket_name(NON_EXISTENT_NAME);
+        crate::test_util::maybe_skip_integration!();
+        let config = AmazonS3Builder::from_env().with_bucket_name(NON_EXISTENT_NAME);
         let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
@@ -1319,9 +1333,32 @@ mod tests {
 
         let mut builder = AmazonS3Builder::new();
         builder
-            .parse_url("https://s3.bucket.amazonaws.com")
+            .parse_url("s3://buckets.can.have.dots/path")
             .unwrap();
+        assert_eq!(
+            builder.bucket_name,
+            Some("buckets.can.have.dots".to_string())
+        );
+
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://s3.region.amazonaws.com")
+            .unwrap();
+        assert_eq!(builder.region, Some("region".to_string()));
+
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://s3.region.amazonaws.com/bucket")
+            .unwrap();
+        assert_eq!(builder.region, Some("region".to_string()));
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://s3.region.amazonaws.com/bucket.with.dot/path")
+            .unwrap();
+        assert_eq!(builder.region, Some("region".to_string()));
+        assert_eq!(builder.bucket_name, Some("bucket.with.dot".to_string()));
 
         let mut builder = AmazonS3Builder::new();
         builder
@@ -1329,11 +1366,22 @@ mod tests {
             .unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
         assert_eq!(builder.region, Some("region".to_string()));
-        assert!(builder.virtual_hosted_style_request);
+        assert!(builder.virtual_hosted_style_request.get().unwrap());
+
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://account123.r2.cloudflarestorage.com/bucket-123")
+            .unwrap();
+
+        assert_eq!(builder.bucket_name, Some("bucket-123".to_string()));
+        assert_eq!(builder.region, Some("auto".to_string()));
+        assert_eq!(
+            builder.endpoint,
+            Some("https://account123.r2.cloudflarestorage.com".to_string())
+        );
 
         let err_cases = [
             "mailto://bucket/path",
-            "s3://bucket.mydomain/path",
             "https://s3.bucket.mydomain.com",
             "https://s3.bucket.foo.amazonaws.com",
             "https://bucket.mydomain.region.amazonaws.com",
@@ -1344,5 +1392,61 @@ mod tests {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+
+    #[test]
+    fn test_invalid_config() {
+        let err = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::ImdsV1Fallback, "enabled")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            err,
+            "Generic Config error: failed to parse \"enabled\" as boolean"
+        );
+
+        let err = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::Checksum, "md5")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            err,
+            "Generic Config error: \"md5\" is not a valid checksum algorithm"
+        );
+    }
+}
+
+#[cfg(test)]
+mod s3_resolve_bucket_region_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_private_bucket() {
+        let bucket = "bloxbender";
+
+        let region = resolve_bucket_region(bucket, &ClientOptions::new())
+            .await
+            .unwrap();
+
+        let expected = "us-west-2".to_string();
+
+        assert_eq!(region, expected);
+    }
+
+    #[tokio::test]
+    async fn test_bucket_does_not_exist() {
+        let bucket = "please-dont-exist";
+
+        let result = resolve_bucket_region(bucket, &ClientOptions::new()).await;
+
+        assert!(result.is_err());
     }
 }

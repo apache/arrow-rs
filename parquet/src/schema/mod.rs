@@ -45,7 +45,7 @@
 //!     .unwrap();
 //!
 //! let schema = Type::group_type_builder("schema")
-//!     .with_fields(&mut vec![Arc::new(field_a), Arc::new(field_b)])
+//!     .with_fields(vec![Arc::new(field_a), Arc::new(field_b)])
 //!     .build()
 //!     .unwrap();
 //!

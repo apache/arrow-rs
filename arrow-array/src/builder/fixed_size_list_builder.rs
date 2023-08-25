@@ -15,16 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeListArray};
-use arrow_buffer::Buffer;
+use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
 
-///  Array builder for [`FixedSizeListArray`]
+///  Builder for [`FixedSizeListArray`]
 /// ```
 /// use arrow_array::{builder::{Int32Builder, FixedSizeListBuilder}, Array, Int32Array};
 /// let values_builder = Int32Builder::new();
@@ -74,7 +73,11 @@ impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
     /// Creates a new [`FixedSizeListBuilder`] from a given values array builder
     /// `value_length` is the number of values within each array
     pub fn new(values_builder: T, value_length: i32) -> Self {
-        let capacity = values_builder.len();
+        let capacity = values_builder
+            .len()
+            .checked_div(value_length as _)
+            .unwrap_or_default();
+
         Self::with_capacity(values_builder, value_length, capacity)
     }
 
@@ -112,11 +115,6 @@ where
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -157,7 +155,7 @@ where
     pub fn finish(&mut self) -> FixedSizeListArray {
         let len = self.len();
         let values_arr = self.values_builder.finish();
-        let values_data = values_arr.data();
+        let values_data = values_arr.to_data();
 
         assert_eq!(
             values_data.len(), len * self.list_len as usize,
@@ -167,14 +165,14 @@ where
             len,
         );
 
-        let null_bit_buffer = self.null_buffer_builder.finish();
+        let nulls = self.null_buffer_builder.finish();
         let array_data = ArrayData::builder(DataType::FixedSizeList(
-            Box::new(Field::new("item", values_data.data_type().clone(), true)),
+            Arc::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
-        .add_child_data(values_data.clone())
-        .null_bit_buffer(null_bit_buffer);
+        .add_child_data(values_data)
+        .nulls(nulls);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -185,7 +183,7 @@ where
     pub fn finish_cloned(&self) -> FixedSizeListArray {
         let len = self.len();
         let values_arr = self.values_builder.finish_cloned();
-        let values_data = values_arr.data();
+        let values_data = values_arr.to_data();
 
         assert_eq!(
             values_data.len(), len * self.list_len as usize,
@@ -195,17 +193,14 @@ where
             len,
         );
 
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
+        let nulls = self.null_buffer_builder.finish_cloned();
         let array_data = ArrayData::builder(DataType::FixedSizeList(
-            Box::new(Field::new("item", values_data.data_type().clone(), true)),
+            Arc::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
-        .add_child_data(values_data.clone())
-        .null_bit_buffer(null_bit_buffer);
+        .add_child_data(values_data)
+        .nulls(nulls);
 
         let array_data = unsafe { array_data.build_unchecked() };
 

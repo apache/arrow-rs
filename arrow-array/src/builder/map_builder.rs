@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::null_buffer_builder::NullBufferBuilder;
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::{Array, ArrayRef, MapArray, StructArray};
 use arrow_buffer::Buffer;
+use arrow_buffer::{NullBuffer, NullBufferBuilder};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
 
-/// Creates a new `MapBuilder`
+/// Builder for [`MapArray`]
+///
 /// ```
 /// # use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
 /// # use arrow_array::{Int32Array, StringArray};
@@ -49,8 +50,8 @@ use std::sync::Arc;
 ///
 /// let array = builder.finish();
 /// assert_eq!(array.value_offsets(), &[0, 1, 3, 3, 3]);
-/// assert_eq!(*array.values(), Int32Array::from(vec![1, 2, 4]));
-/// assert_eq!(*array.keys(), StringArray::from(vec!["joe", "blogs", "foo"]));
+/// assert_eq!(array.values().as_ref(), &Int32Array::from(vec![1, 2, 4]));
+/// assert_eq!(array.keys().as_ref(), &StringArray::from(vec!["joe", "blogs", "foo"]));
 ///
 /// ```
 #[derive(Debug)]
@@ -62,7 +63,7 @@ pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     value_builder: V,
 }
 
-/// Contains details of the mapping
+/// The [`Field`] names for a [`MapArray`]
 #[derive(Debug, Clone)]
 pub struct MapFieldNames {
     /// [`Field`] name for map entries
@@ -159,12 +160,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         let keys_arr = self.key_builder.finish_cloned();
         let values_arr = self.value_builder.finish_cloned();
         let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
-        let null_bit_buffer = self
-            .null_buffer_builder
-            .as_slice()
-            .map(Buffer::from_slice_ref);
-
-        self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
+        let nulls = self.null_buffer_builder.finish_cloned();
+        self.finish_helper(keys_arr, values_arr, offset_buffer, nulls, len)
     }
 
     fn finish_helper(
@@ -172,7 +169,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         keys_arr: Arc<dyn Array>,
         values_arr: Arc<dyn Array>,
         offset_buffer: Buffer,
-        null_bit_buffer: Option<Buffer>,
+        nulls: Option<NullBuffer>,
         len: usize,
     ) -> MapArray {
         assert!(
@@ -181,21 +178,21 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             keys_arr.null_count()
         );
 
-        let keys_field = Field::new(
+        let keys_field = Arc::new(Field::new(
             self.field_names.key.as_str(),
             keys_arr.data_type().clone(),
             false, // always non-nullable
-        );
-        let values_field = Field::new(
+        ));
+        let values_field = Arc::new(Field::new(
             self.field_names.value.as_str(),
             values_arr.data_type().clone(),
             true,
-        );
+        ));
 
         let struct_array =
             StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);
 
-        let map_field = Box::new(Field::new(
+        let map_field = Arc::new(Field::new(
             self.field_names.entry.as_str(),
             struct_array.data_type().clone(),
             false, // always non-nullable
@@ -204,7 +201,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(struct_array.into_data())
-            .null_bit_buffer(null_bit_buffer);
+            .nulls(nulls);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -215,10 +212,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     fn finish(&mut self) -> ArrayRef {

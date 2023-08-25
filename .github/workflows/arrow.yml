@@ -80,10 +80,10 @@ jobs:
         run: cargo test -p arrow-json --all-features
       - name: Test arrow-string with all features
         run: cargo test -p arrow-string --all-features
-      - name: Test arrow-ord with all features except SIMD
-        run: cargo test -p arrow-ord --features dyn_cmp_dict
+      - name: Test arrow-ord with all features
+        run: cargo test -p arrow-ord --all-features
       - name: Test arrow-arith with all features except SIMD
-        run: cargo test -p arrow-arith --features dyn_arith_dict
+        run: cargo test -p arrow-arith
       - name: Test arrow-row with all features
         run: cargo test -p arrow-row --all-features
       - name: Test arrow-integration-test with all features
@@ -91,7 +91,7 @@ jobs:
       - name: Test arrow with default features
         run: cargo test -p arrow
       - name: Test arrow with all features apart from simd
-        run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,dyn_arith_dict,chrono-tz
+        run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,dyn_cmp_dict,chrono-tz
       - name: Run examples
         run: |
           # Test arrow examples
@@ -145,8 +145,6 @@ jobs:
           rust-version: nightly
       - name: Test arrow-array with SIMD
         run: cargo test -p arrow-array --features simd
-      - name: Test arrow-ord with SIMD
-        run: cargo test -p arrow-ord --features simd
       - name: Test arrow-arith with SIMD
         run: cargo test -p arrow-arith --features simd
       - name: Test arrow with SIMD
@@ -206,14 +204,14 @@ jobs:
         run: cargo clippy -p arrow-json --all-targets --all-features -- -D warnings
       - name: Clippy arrow-string with all features
         run: cargo clippy -p arrow-string --all-targets --all-features -- -D warnings
-      - name: Clippy arrow-ord with all features except SIMD
-        run: cargo clippy -p arrow-ord --all-targets --features dyn_cmp_dict -- -D warnings
+      - name: Clippy arrow-ord with all features
+        run: cargo clippy -p arrow-ord --all-targets --all-features -- -D warnings
       - name: Clippy arrow-arith with all features except SIMD
-        run: cargo clippy -p arrow-arith --all-targets --features dyn_arith_dict -- -D warnings
+        run: cargo clippy -p arrow-arith --all-targets -- -D warnings
       - name: Clippy arrow-row with all features
         run: cargo clippy -p arrow-row --all-targets --all-features -- -D warnings
       - name: Clippy arrow with all features except SIMD
-        run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,dyn_arith_dict,chrono-tz --all-targets -- -D warnings
+        run: cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi,ipc_compression,dyn_cmp_dict,chrono-tz --all-targets -- -D warnings
       - name: Clippy arrow-integration-test with all features
         run: cargo clippy -p arrow-integration-test --all-targets --all-features -- -D warnings
       - name: Clippy arrow-integration-testing with all features

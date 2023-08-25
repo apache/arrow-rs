@@ -1526,6 +1526,20 @@ impl<'a> SparseTensor<'a> {
 
     #[inline]
     #[allow(non_snake_case)]
+    pub fn type_as_run_end_encoded(&self) -> Option<RunEndEncoded<'a>> {
+        if self.type_type() == Type::RunEndEncoded {
+            let u = self.type_();
+            // Safety:
+            // Created from a valid Table for this object
+            // Which contains a valid union in this slot
+            Some(unsafe { RunEndEncoded::init_from_table(u) })
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    #[allow(non_snake_case)]
     pub fn sparseIndex_as_sparse_tensor_index_coo(
         &self,
     ) -> Option<SparseTensorIndexCOO<'a>> {
@@ -1604,6 +1618,7 @@ impl flatbuffers::Verifiable for SparseTensor<'_> {
           Type::LargeBinary => v.verify_union_variant::<flatbuffers::ForwardsUOffset<LargeBinary>>("Type::LargeBinary", pos),
           Type::LargeUtf8 => v.verify_union_variant::<flatbuffers::ForwardsUOffset<LargeUtf8>>("Type::LargeUtf8", pos),
           Type::LargeList => v.verify_union_variant::<flatbuffers::ForwardsUOffset<LargeList>>("Type::LargeList", pos),
+          Type::RunEndEncoded => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RunEndEncoded>>("Type::RunEndEncoded", pos),
           _ => Ok(()),
         }
      })?
@@ -1935,6 +1950,16 @@ impl core::fmt::Debug for SparseTensor<'_> {
             }
             Type::LargeList => {
                 if let Some(x) = self.type_as_large_list() {
+                    ds.field("type_", &x)
+                } else {
+                    ds.field(
+                        "type_",
+                        &"InvalidFlatbuffer: Union discriminant does not match value.",
+                    )
+                }
+            }
+            Type::RunEndEncoded => {
+                if let Some(x) = self.type_as_run_end_encoded() {
                     ds.field("type_", &x)
                 } else {
                     ds.field(

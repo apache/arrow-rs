@@ -19,16 +19,18 @@
 use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
+    GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
-use futures::FutureExt;
 use futures::{stream::BoxStream, StreamExt};
+use futures::{FutureExt, TryStreamExt};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
-use std::fs::{metadata, symlink_metadata, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs::{metadata, symlink_metadata, File, Metadata, OpenOptions};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -55,13 +57,18 @@ pub(crate) enum Error {
     },
 
     #[snafu(display("Unable to access metadata for {}: {}", path, source))]
-    UnableToAccessMetadata {
+    Metadata {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
         path: String,
     },
 
     #[snafu(display("Unable to copy data to file: {}", source))]
     UnableToCopyDataToFile {
+        source: io::Error,
+    },
+
+    #[snafu(display("Unable to rename file: {}", source))]
+    UnableToRenameFile {
         source: io::Error,
     },
 
@@ -264,12 +271,14 @@ impl Config {
 impl ObjectStore for LocalFileSystem {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         let path = self.config.path_to_filesystem(location)?;
-
         maybe_spawn_blocking(move || {
-            let mut file = open_writable_file(&path)?;
+            let (mut file, suffix) = new_staged_upload(&path)?;
+            let staging_path = staged_upload_path(&path, &suffix);
 
             file.write_all(&bytes)
                 .context(UnableToCopyDataToFileSnafu)?;
+
+            std::fs::rename(staging_path, path).context(UnableToRenameFileSnafu)?;
 
             Ok(())
         })
@@ -282,28 +291,10 @@ impl ObjectStore for LocalFileSystem {
     ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
         let dest = self.config.path_to_filesystem(location)?;
 
-        // Generate an id in case of concurrent writes
-        let mut multipart_id = 1;
-
-        // Will write to a temporary path
-        let staging_path = loop {
-            let staging_path = get_upload_stage_path(&dest, &multipart_id.to_string());
-
-            match std::fs::metadata(&staging_path) {
-                Err(err) if err.kind() == io::ErrorKind::NotFound => break staging_path,
-                Err(err) => {
-                    return Err(Error::UnableToCopyDataToFile { source: err }.into())
-                }
-                Ok(_) => multipart_id += 1,
-            }
-        };
-        let multipart_id = multipart_id.to_string();
-
-        let file = open_writable_file(&staging_path)?;
-
+        let (file, suffix) = new_staged_upload(&dest)?;
         Ok((
-            multipart_id.clone(),
-            Box::new(LocalUpload::new(dest, multipart_id, Arc::new(file))),
+            suffix.clone(),
+            Box::new(LocalUpload::new(dest, suffix, Arc::new(file))),
         ))
     }
 
@@ -313,7 +304,7 @@ impl ObjectStore for LocalFileSystem {
         multipart_id: &MultipartId,
     ) -> Result<()> {
         let dest = self.config.path_to_filesystem(location)?;
-        let staging_path: PathBuf = get_upload_stage_path(&dest, multipart_id);
+        let staging_path: PathBuf = staged_upload_path(&dest, multipart_id);
 
         maybe_spawn_blocking(move || {
             std::fs::remove_file(&staging_path)
@@ -323,11 +314,77 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
+    async fn append(
+        &self,
+        location: &Path,
+    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        // Get the path to the file from the configuration.
         let path = self.config.path_to_filesystem(location)?;
+        loop {
+            // Create new `OpenOptions`.
+            let mut options = tokio::fs::OpenOptions::new();
+
+            // Attempt to open the file with the given options.
+            match options
+                .truncate(false)
+                .append(true)
+                .create(true)
+                .open(&path)
+                .await
+            {
+                // If the file was successfully opened, return it wrapped in a boxed `AsyncWrite` trait object.
+                Ok(file) => return Ok(Box::new(file)),
+                // If the error is that the file was not found, attempt to create the file and any necessary parent directories.
+                Err(err) if err.kind() == ErrorKind::NotFound => {
+                    // Get the path to the parent directory of the file.
+                    let parent = path
+                        .parent()
+                        // If the parent directory does not exist, return a `UnableToCreateFileSnafu` error.
+                        .context(UnableToCreateFileSnafu { path: &path, err })?;
+
+                    // Create the parent directory and any necessary ancestors.
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        // If creating the directory fails, return a `UnableToCreateDirSnafu` error.
+                        .context(UnableToCreateDirSnafu { path: parent })?;
+                    // Try again to open the file.
+                    continue;
+                }
+                // If any other error occurs, return a `UnableToOpenFile` error.
+                Err(source) => {
+                    return Err(Error::UnableToOpenFile { source, path }.into())
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        Err(super::Error::NotImplemented)
+    }
+
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        if options.if_match.is_some() || options.if_none_match.is_some() {
+            return Err(super::Error::NotSupported {
+                source: "ETags not supported by LocalFileSystem".to_string().into(),
+            });
+        }
+
+        let location = location.clone();
+        let path = self.config.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
-            let file = open_file(&path)?;
-            Ok(GetResult::File(file, path))
+            let (file, metadata) = open_file(&path)?;
+            if options.if_unmodified_since.is_some()
+                || options.if_modified_since.is_some()
+            {
+                options.check_modified(&location, last_modified(&metadata))?;
+            }
+
+            let meta = convert_metadata(metadata, location)?;
+
+            Ok(GetResult {
+                payload: GetResultPayload::File(file, path),
+                range: options.range.unwrap_or(0..meta.size),
+                meta,
+            })
         })
         .await
     }
@@ -335,7 +392,7 @@ impl ObjectStore for LocalFileSystem {
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let path = self.config.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
-            let mut file = open_file(&path)?;
+            let (mut file, _) = open_file(&path)?;
             read_range(&mut file, &path, range)
         })
         .await
@@ -350,7 +407,7 @@ impl ObjectStore for LocalFileSystem {
         let ranges = ranges.to_vec();
         maybe_spawn_blocking(move || {
             // Vectored IO might be faster
-            let mut file = open_file(&path)?;
+            let (mut file, _) = open_file(&path)?;
             ranges
                 .into_iter()
                 .map(|r| read_range(&mut file, &path, r))
@@ -364,13 +421,25 @@ impl ObjectStore for LocalFileSystem {
         let location = location.clone();
 
         maybe_spawn_blocking(move || {
-            let file = open_file(&path)?;
-            let metadata =
-                file.metadata().map_err(|e| Error::UnableToAccessMetadata {
-                    source: e.into(),
-                    path: location.to_string(),
-                })?;
-
+            let metadata = match metadata(&path) {
+                Err(e) => Err(match e.kind() {
+                    ErrorKind::NotFound => Error::NotFound {
+                        path: path.clone(),
+                        source: e,
+                    },
+                    _ => Error::Metadata {
+                        source: e.into(),
+                        path: location.to_string(),
+                    },
+                }),
+                Ok(m) => match !m.is_dir() {
+                    true => Ok(m),
+                    false => Err(Error::NotFound {
+                        path,
+                        source: io::Error::new(ErrorKind::NotFound, "is directory"),
+                    }),
+                },
+            }?;
             convert_metadata(metadata, location)
         })
         .await
@@ -378,9 +447,12 @@ impl ObjectStore for LocalFileSystem {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         let path = self.config.path_to_filesystem(location)?;
-        maybe_spawn_blocking(move || {
-            std::fs::remove_file(&path).context(UnableToDeleteFileSnafu { path })?;
-            Ok(())
+        maybe_spawn_blocking(move || match std::fs::remove_file(&path) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(match e.kind() {
+                ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
+                _ => Error::UnableToDeleteFile { path, source: e }.into(),
+            }),
         })
         .await
     }
@@ -553,9 +625,40 @@ impl ObjectStore for LocalFileSystem {
     }
 }
 
-fn get_upload_stage_path(dest: &std::path::Path, multipart_id: &MultipartId) -> PathBuf {
+/// Generates a unique file path `{base}#{suffix}`, returning the opened `File` and `suffix`
+///
+/// Creates any directories if necessary
+fn new_staged_upload(base: &std::path::Path) -> Result<(File, String)> {
+    let mut multipart_id = 1;
+    loop {
+        let suffix = multipart_id.to_string();
+        let path = staged_upload_path(base, &suffix);
+        let mut options = OpenOptions::new();
+        match options.read(true).write(true).create_new(true).open(&path) {
+            Ok(f) => return Ok((f, suffix)),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                multipart_id += 1;
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                let parent = path
+                    .parent()
+                    .context(UnableToCreateFileSnafu { path: &path, err })?;
+
+                std::fs::create_dir_all(parent)
+                    .context(UnableToCreateDirSnafu { path: parent })?;
+
+                continue;
+            }
+            Err(source) => return Err(Error::UnableToOpenFile { source, path }.into()),
+        }
+    }
+}
+
+/// Returns the unique upload for the given path and suffix
+fn staged_upload_path(dest: &std::path::Path, suffix: &str) -> PathBuf {
     let mut staging_path = dest.as_os_str().to_owned();
-    staging_path.push(format!("#{}", multipart_id));
+    staging_path.push("#");
+    staging_path.push(suffix);
     staging_path.into()
 }
 
@@ -607,7 +710,7 @@ impl AsyncWrite for LocalUpload {
             |condition: &str| -> std::task::Poll<Result<usize, io::Error>> {
                 Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("Tried to write to file {}.", condition),
+                    format!("Tried to write to file {condition}."),
                 )))
             };
 
@@ -700,7 +803,7 @@ impl AsyncWrite for LocalUpload {
                         Poll::Ready(res) => {
                             res?;
                             let staging_path =
-                                get_upload_stage_path(&self.dest, &self.multipart_id);
+                                staged_upload_path(&self.dest, &self.multipart_id);
                             let dest = self.dest.clone();
                             self.inner_state = LocalUploadState::Committing(Box::pin(
                                 runtime
@@ -741,7 +844,7 @@ impl AsyncWrite for LocalUpload {
                 }
             }
         } else {
-            let staging_path = get_upload_stage_path(&self.dest, &self.multipart_id);
+            let staging_path = staged_upload_path(&self.dest, &self.multipart_id);
             match &mut self.inner_state {
                 LocalUploadState::Idle(file) => {
                     let file = Arc::clone(file);
@@ -763,7 +866,56 @@ impl AsyncWrite for LocalUpload {
     }
 }
 
-fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<Bytes> {
+pub(crate) fn chunked_stream(
+    mut file: File,
+    path: PathBuf,
+    range: Range<usize>,
+    chunk_size: usize,
+) -> BoxStream<'static, Result<Bytes, super::Error>> {
+    futures::stream::once(async move {
+        let (file, path) = maybe_spawn_blocking(move || {
+            file.seek(SeekFrom::Start(range.start as _))
+                .map_err(|source| Error::Seek {
+                    source,
+                    path: path.clone(),
+                })?;
+            Ok((file, path))
+        })
+        .await?;
+
+        let stream = futures::stream::try_unfold(
+            (file, path, range.end - range.start),
+            move |(mut file, path, remaining)| {
+                maybe_spawn_blocking(move || {
+                    if remaining == 0 {
+                        return Ok(None);
+                    }
+
+                    let to_read = remaining.min(chunk_size);
+                    let mut buffer = Vec::with_capacity(to_read);
+                    let read = (&mut file)
+                        .take(to_read as u64)
+                        .read_to_end(&mut buffer)
+                        .map_err(|e| Error::UnableToReadBytes {
+                            source: e,
+                            path: path.clone(),
+                        })?;
+
+                    Ok(Some((buffer.into(), (file, path, remaining - read))))
+                })
+            },
+        );
+        Ok::<_, super::Error>(stream)
+    })
+    .try_flatten()
+    .boxed()
+}
+
+pub(crate) fn read_range(
+    file: &mut File,
+    path: &PathBuf,
+    range: Range<usize>,
+) -> Result<Bytes> {
     let to_read = range.end - range.start;
     file.seek(SeekFrom::Start(range.start as u64))
         .context(SeekSnafu { path })?;
@@ -785,66 +937,46 @@ fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<By
     Ok(buf.into())
 }
 
-fn open_file(path: &PathBuf) -> Result<File> {
-    let file = File::open(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Error::NotFound {
+fn open_file(path: &PathBuf) -> Result<(File, Metadata)> {
+    let ret = match File::open(path).and_then(|f| Ok((f.metadata()?, f))) {
+        Err(e) => Err(match e.kind() {
+            ErrorKind::NotFound => Error::NotFound {
                 path: path.clone(),
                 source: e,
-            }
-        } else {
-            Error::UnableToOpenFile {
+            },
+            _ => Error::UnableToOpenFile {
                 path: path.clone(),
                 source: e,
-            }
-        }
-    })?;
-    Ok(file)
-}
-
-fn open_writable_file(path: &PathBuf) -> Result<File> {
-    match File::create(path) {
-        Ok(f) => Ok(f),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let parent = path
-                .parent()
-                .context(UnableToCreateFileSnafu { path: &path, err })?;
-            std::fs::create_dir_all(parent)
-                .context(UnableToCreateDirSnafu { path: parent })?;
-
-            match File::create(path) {
-                Ok(f) => Ok(f),
-                Err(err) => Err(Error::UnableToCreateFile {
-                    path: path.to_path_buf(),
-                    err,
-                }
-                .into()),
-            }
-        }
-        Err(err) => Err(Error::UnableToCreateFile {
-            path: path.to_path_buf(),
-            err,
-        }
-        .into()),
-    }
+            },
+        }),
+        Ok((metadata, file)) => match !metadata.is_dir() {
+            true => Ok((file, metadata)),
+            false => Err(Error::NotFound {
+                path: path.clone(),
+                source: io::Error::new(ErrorKind::NotFound, "is directory"),
+            }),
+        },
+    }?;
+    Ok(ret)
 }
 
 fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
-    let metadata = entry
-        .metadata()
-        .map_err(|e| Error::UnableToAccessMetadata {
-            source: e.into(),
-            path: location.to_string(),
-        })?;
+    let metadata = entry.metadata().map_err(|e| Error::Metadata {
+        source: e.into(),
+        path: location.to_string(),
+    })?;
     convert_metadata(metadata, location)
 }
 
-fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<ObjectMeta> {
-    let last_modified = metadata
+fn last_modified(metadata: &std::fs::Metadata) -> DateTime<Utc> {
+    metadata
         .modified()
         .expect("Modified file time should be supported on this platform")
-        .into();
+        .into()
+}
 
+fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
+    let last_modified = last_modified(&metadata);
     let size = usize::try_from(metadata.len()).context(FileSizeOverflowedUsizeSnafu {
         path: location.as_ref(),
     })?;
@@ -853,6 +985,7 @@ fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<Objec
         location,
         last_modified,
         size,
+        e_tag: None,
     })
 }
 
@@ -907,13 +1040,7 @@ fn convert_walkdir_result(
 mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
-    use crate::{
-        tests::{
-            copy_if_not_exists, get_nonexistent_object, list_uses_directories_correctly,
-            list_with_delimiter, put_get_delete_list, rename_and_copy, stream_get,
-        },
-        Error as ObjectStoreError, ObjectStore,
-    };
+    use crate::tests::*;
     use futures::TryStreamExt;
     use tempfile::{NamedTempFile, TempDir};
     use tokio::io::AsyncWriteExt;
@@ -924,6 +1051,7 @@ mod tests {
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
         put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
@@ -1036,16 +1164,15 @@ mod tests {
         let err = get_nonexistent_object(&integration, Some(location))
             .await
             .unwrap_err();
-        if let ObjectStoreError::NotFound { path, source } = err {
+        if let crate::Error::NotFound { path, source } = err {
             let source_variant = source.downcast_ref::<std::io::Error>();
             assert!(
                 matches!(source_variant, Some(std::io::Error { .. }),),
-                "got: {:?}",
-                source_variant
+                "got: {source_variant:?}"
             );
             assert!(path.ends_with(NON_EXISTENT_NAME), "{}", path);
         } else {
-            panic!("unexpected error type: {:?}", err);
+            panic!("unexpected error type: {err:?}");
         }
     }
 
@@ -1069,19 +1196,23 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(target_family = "windows")]
     async fn test_list_root() {
-        let integration = LocalFileSystem::new();
-        let result = integration.list_with_delimiter(None).await;
-        if cfg!(target_family = "windows") {
-            let r = result.unwrap_err().to_string();
-            assert!(
-                r.contains("Unable to convert URL \"file:///\" to filesystem path"),
-                "{}",
-                r
-            );
-        } else {
-            result.unwrap();
-        }
+        let fs = LocalFileSystem::new();
+        let r = fs.list_with_delimiter(None).await.unwrap_err().to_string();
+
+        assert!(
+            r.contains("Unable to convert URL \"file:///\" to filesystem path"),
+            "{}",
+            r
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn test_list_root() {
+        let fs = LocalFileSystem::new();
+        fs.list_with_delimiter(None).await.unwrap();
     }
 
     async fn check_list(
@@ -1310,5 +1441,128 @@ mod tests {
         let integration = LocalFileSystem::new();
         let path = Path::from_filesystem_path(".").unwrap();
         integration.list_with_delimiter(Some(&path)).await.unwrap();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+mod not_wasm_tests {
+    use crate::local::LocalFileSystem;
+    use crate::{ObjectStore, Path};
+    use bytes::Bytes;
+    use tempfile::TempDir;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn creates_dir_if_not_present_append() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("nested/file/test_file");
+
+        let data = Bytes::from("arbitrary data");
+        let expected_data = data.clone();
+
+        let mut writer = integration.append(&location).await.unwrap();
+
+        writer.write_all(data.as_ref()).await.unwrap();
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&*read_data, expected_data);
+    }
+
+    #[tokio::test]
+    async fn unknown_length_append() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("some_file");
+
+        let data = Bytes::from("arbitrary data");
+        let expected_data = data.clone();
+        let mut writer = integration.append(&location).await.unwrap();
+
+        writer.write_all(data.as_ref()).await.unwrap();
+        writer.flush().await.unwrap();
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&*read_data, expected_data);
+    }
+
+    #[tokio::test]
+    async fn multiple_append() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("some_file");
+
+        let data = vec![
+            Bytes::from("arbitrary"),
+            Bytes::from("data"),
+            Bytes::from("gnz"),
+        ];
+
+        let mut writer = integration.append(&location).await.unwrap();
+        for d in &data {
+            writer.write_all(d).await.unwrap();
+        }
+
+        let mut writer = integration.append(&location).await.unwrap();
+        for d in &data {
+            writer.write_all(d).await.unwrap();
+        }
+
+        let read_data = integration
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let expected_data = Bytes::from("arbitrarydatagnzarbitrarydatagnz");
+        assert_eq!(&*read_data, expected_data);
+    }
+}
+
+#[cfg(target_family = "unix")]
+#[cfg(test)]
+mod unix_test {
+    use crate::local::LocalFileSystem;
+    use crate::{ObjectStore, Path};
+    use nix::sys::stat;
+    use nix::unistd;
+    use std::fs::OpenOptions;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_fifo() {
+        let filename = "some_file";
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let path = root.path().join(filename);
+        unistd::mkfifo(&path, stat::Mode::S_IRWXU).unwrap();
+
+        let location = Path::from(filename);
+        integration.head(&location).await.unwrap();
+
+        // Need to open read and write side in parallel
+        let spawned = tokio::task::spawn_blocking(|| {
+            OpenOptions::new().write(true).open(path).unwrap();
+        });
+
+        integration.get(&location).await.unwrap();
+        spawned.await.unwrap();
     }
 }

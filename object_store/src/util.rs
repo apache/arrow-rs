@@ -36,21 +36,6 @@ where
         .map_err(serde::de::Error::custom)
 }
 
-/// Returns the prefix to be passed to an object store
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub fn format_prefix(prefix: Option<&crate::path::Path>) -> Option<String> {
-    prefix
-        .filter(|x| !x.as_ref().is_empty())
-        .map(|p| format!("{}{}", p.as_ref(), crate::path::DELIMITER))
-}
-
-/// Returns a formatted HTTP range header as per
-/// <https://httpwg.org/specs/rfc7233.html#header.range>
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure", feature = "http"))]
-pub fn format_http_range(range: std::ops::Range<usize>) -> String {
-    format!("bytes={}-{}", range.start, range.end.saturating_sub(1))
-}
-
 #[cfg(any(feature = "aws", feature = "azure"))]
 pub(crate) fn hmac_sha256(
     secret: impl AsRef<[u8]>,
@@ -185,15 +170,6 @@ fn merge_ranges(
     ret
 }
 
-#[allow(dead_code)]
-pub(crate) fn str_is_truthy(val: &str) -> bool {
-    val.eq_ignore_ascii_case("1")
-        | val.eq_ignore_ascii_case("true")
-        | val.eq_ignore_ascii_case("on")
-        | val.eq_ignore_ascii_case("yes")
-        | val.eq_ignore_ascii_case("y")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,9 +205,9 @@ mod tests {
     #[tokio::test]
     async fn test_coalesce_ranges() {
         let fetches = do_fetch(vec![], 0).await;
-        assert_eq!(fetches, vec![]);
+        assert!(fetches.is_empty());
 
-        let fetches = do_fetch(vec![0..3], 0).await;
+        let fetches = do_fetch(vec![0..3; 1], 0).await;
         assert_eq!(fetches, vec![0..3]);
 
         let fetches = do_fetch(vec![0..2, 3..5], 0).await;

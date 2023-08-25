@@ -20,19 +20,18 @@ use std::ops::Range;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::Buffer;
-use arrow_data::Bitmap;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
-use crate::arrow::record_reader::buffer::BufferQueue;
 use crate::basic::Encoding;
 use crate::column::reader::decoder::{
-    ColumnLevelDecoder, ColumnLevelDecoderImpl, DefinitionLevelDecoder, LevelsBufferSlice,
+    ColumnLevelDecoder, DefinitionLevelDecoder, DefinitionLevelDecoderImpl,
+    LevelsBufferSlice,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::memory::ByteBufferPtr;
 
-use super::{buffer::ScalarBuffer, MIN_BATCH_SIZE};
+use super::buffer::ScalarBuffer;
 
 enum BufferInner {
     /// Compute levels and null mask
@@ -88,13 +87,10 @@ impl DefinitionLevelBuffer {
         Self { inner, len: 0 }
     }
 
-    pub fn split_levels(&mut self, len: usize) -> Option<Buffer> {
+    /// Returns the built level data
+    pub fn consume_levels(&mut self) -> Option<Buffer> {
         match &mut self.inner {
-            BufferInner::Full { levels, .. } => {
-                let out = levels.split_off(len);
-                self.len = levels.len();
-                Some(out)
-            }
+            BufferInner::Full { levels, .. } => Some(std::mem::take(levels).into()),
             BufferInner::Mask { .. } => None,
         }
     }
@@ -104,27 +100,13 @@ impl DefinitionLevelBuffer {
         self.len = len;
     }
 
-    /// Split `len` levels out of `self`
-    pub fn split_bitmask(&mut self, len: usize) -> Bitmap {
-        let old_builder = match &mut self.inner {
-            BufferInner::Full { nulls, .. } => nulls,
-            BufferInner::Mask { nulls } => nulls,
-        };
-
-        // Compute the number of values left behind
-        let num_left_values = old_builder.len() - len;
-        let mut new_builder =
-            BooleanBufferBuilder::new(MIN_BATCH_SIZE.max(num_left_values));
-
-        // Copy across remaining values
-        new_builder.append_packed_range(len..old_builder.len(), old_builder.as_slice());
-
-        // Truncate buffer
-        old_builder.resize(len);
-
-        // Swap into self
-        self.len = new_builder.len();
-        Bitmap::from(std::mem::replace(old_builder, new_builder).finish())
+    /// Returns the built null bitmask
+    pub fn consume_bitmask(&mut self) -> Buffer {
+        self.len = 0;
+        match &mut self.inner {
+            BufferInner::Full { nulls, .. } => nulls.finish().into_inner(),
+            BufferInner::Mask { nulls } => nulls.finish().into_inner(),
+        }
     }
 
     pub fn nulls(&self) -> &BooleanBufferBuilder {
@@ -149,7 +131,7 @@ impl LevelsBufferSlice for DefinitionLevelBuffer {
 
 enum MaybePacked {
     Packed(PackedDecoder),
-    Fallback(ColumnLevelDecoderImpl),
+    Fallback(DefinitionLevelDecoderImpl),
 }
 
 pub struct DefinitionLevelBufferDecoder {
@@ -161,7 +143,7 @@ impl DefinitionLevelBufferDecoder {
     pub fn new(max_level: i16, packed: bool) -> Self {
         let decoder = match packed {
             true => MaybePacked::Packed(PackedDecoder::new()),
-            false => MaybePacked::Fallback(ColumnLevelDecoderImpl::new(max_level)),
+            false => MaybePacked::Fallback(DefinitionLevelDecoderImpl::new(max_level)),
         };
 
         Self { max_level, decoder }
@@ -177,8 +159,14 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
             MaybePacked::Fallback(d) => d.set_data(encoding, data),
         }
     }
+}
 
-    fn read(&mut self, writer: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
+impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
+    fn read_def_levels(
+        &mut self,
+        writer: &mut Self::Slice,
+        range: Range<usize>,
+    ) -> Result<usize> {
         match (&mut writer.inner, &mut self.decoder) {
             (
                 BufferInner::Full {
@@ -194,7 +182,7 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
                 levels.resize(range.end + writer.len);
 
                 let slice = &mut levels.as_slice_mut()[writer.len..];
-                let levels_read = decoder.read(slice, range.clone())?;
+                let levels_read = decoder.read_def_levels(slice, range.clone())?;
 
                 nulls.reserve(levels_read);
                 for i in &slice[range.start..range.start + levels_read] {
@@ -212,9 +200,7 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
             _ => unreachable!("inconsistent null mask"),
         }
     }
-}
 
-impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
     fn skip_def_levels(
         &mut self,
         num_levels: usize,
@@ -392,11 +378,8 @@ impl PackedDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
-    use crate::basic::Type as PhysicalType;
     use crate::encodings::rle::RleEncoder;
-    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
     use rand::{thread_rng, Rng};
 
     #[test]
@@ -492,31 +475,5 @@ mod tests {
         }
         assert_eq!(read_level + skip_level, len);
         assert_eq!(read_value + skip_value, total_value);
-    }
-
-    #[test]
-    fn test_split_off() {
-        let t = Type::primitive_type_builder("col", PhysicalType::INT32)
-            .build()
-            .unwrap();
-
-        let descriptor = Arc::new(ColumnDescriptor::new(
-            Arc::new(t),
-            1,
-            0,
-            ColumnPath::new(vec![]),
-        ));
-
-        let mut buffer = DefinitionLevelBuffer::new(&descriptor, true);
-        match &mut buffer.inner {
-            BufferInner::Mask { nulls } => nulls.append_n(100, false),
-            _ => unreachable!(),
-        };
-
-        let bitmap = buffer.split_bitmask(19);
-
-        // Should have split off 19 records leaving, 81 behind
-        assert_eq!(bitmap.bit_len(), 3 * 8); // Note: bitmask only tracks bytes not bits
-        assert_eq!(buffer.nulls().len(), 81);
     }
 }

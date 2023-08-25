@@ -44,7 +44,7 @@ fn do_bench(
     let values: Vec<_> = arrays.iter().map(|x| x.as_ref()).collect();
     bench_values(
         c,
-        &format!("interleave {} {} {:?}", prefix, len, slices),
+        &format!("interleave {prefix} {len} {slices:?}"),
         len,
         &values,
     );
@@ -61,7 +61,7 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
         .collect();
 
     c.bench_function(name, |b| {
-        b.iter(|| criterion::black_box(interleave(values, &indices).unwrap()))
+        b.iter(|| criterion::black_box(interleave(&values, &indices).unwrap()))
     });
 }
 

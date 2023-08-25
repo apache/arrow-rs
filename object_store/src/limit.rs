@@ -18,8 +18,8 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, Result,
-    StreamExt,
+    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
+    ObjectMeta, ObjectStore, Path, Result, StreamExt,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -95,14 +95,25 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.abort_multipart(location, multipart_id).await
     }
 
+    async fn append(
+        &self,
+        location: &Path,
+    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
+        let write = self.inner.append(location).await?;
+        Ok(Box::new(PermitWrapper::new(write, permit)))
+    }
+
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
-        match self.inner.get(location).await? {
-            r @ GetResult::File(_, _) => Ok(r),
-            GetResult::Stream(s) => {
-                Ok(GetResult::Stream(PermitWrapper::new(s, permit).boxed()))
-            }
-        }
+        let r = self.inner.get(location).await?;
+        Ok(permit_get_result(r, permit))
+    }
+
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
+        let r = self.inner.get_opts(location, options).await?;
+        Ok(permit_get_result(r, permit))
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
@@ -129,12 +140,29 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.delete(location).await
     }
 
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
     async fn list(
         &self,
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
         let s = self.inner.list(prefix).await?;
+        Ok(PermitWrapper::new(s, permit).boxed())
+    }
+
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
+        let s = self.inner.list_with_offset(prefix, offset).await?;
         Ok(PermitWrapper::new(s, permit).boxed())
     }
 
@@ -162,6 +190,16 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.rename_if_not_exists(from, to).await
     }
+}
+
+fn permit_get_result(r: GetResult, permit: OwnedSemaphorePermit) -> GetResult {
+    let payload = match r.payload {
+        v @ GetResultPayload::File(_, _) => v,
+        GetResultPayload::Stream(s) => {
+            GetResultPayload::Stream(PermitWrapper::new(s, permit).boxed())
+        }
+    };
+    GetResult { payload, ..r }
 }
 
 /// Combines an [`OwnedSemaphorePermit`] with some other type
@@ -232,10 +270,7 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for PermitWrapper<T> {
 mod tests {
     use crate::limit::LimitStore;
     use crate::memory::InMemory;
-    use crate::tests::{
-        list_uses_directories_correctly, list_with_delimiter, put_get_delete_list,
-        rename_and_copy, stream_get,
-    };
+    use crate::tests::*;
     use crate::ObjectStore;
     use std::time::Duration;
     use tokio::time::timeout;
@@ -247,6 +282,7 @@ mod tests {
         let integration = LimitStore::new(memory, max_requests);
 
         put_get_delete_list(&integration).await;
+        get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

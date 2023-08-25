@@ -16,14 +16,16 @@
 // under the License.
 
 use crate::{make_array, Array, ArrayRef};
-use arrow_buffer::Buffer;
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, Field, UnionMode};
+use arrow_buffer::buffer::NullBuffer;
+use arrow_buffer::{Buffer, ScalarBuffer};
+use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_schema::{ArrowError, DataType, Field, UnionFields, UnionMode};
 /// Contains the `UnionArray` type.
 ///
 use std::any::Any;
+use std::sync::Arc;
 
-/// An Array that can represent slots of varying types.
+/// An array of [values of varying types](https://arrow.apache.org/docs/format/Columnar.html#union-layout)
 ///
 /// Each slot in a [UnionArray] can have a value chosen from a number
 /// of types.  Each of the possible types are named like the fields of
@@ -106,8 +108,10 @@ use std::any::Any;
 /// ```
 #[derive(Clone)]
 pub struct UnionArray {
-    data: ArrayData,
-    boxed_fields: Vec<ArrayRef>,
+    data_type: DataType,
+    type_ids: ScalarBuffer<i8>,
+    offsets: Option<ScalarBuffer<i32>>,
+    fields: Vec<Option<ArrayRef>>,
 }
 
 impl UnionArray {
@@ -141,8 +145,7 @@ impl UnionArray {
         value_offsets: Option<Buffer>,
         child_arrays: Vec<(Field, ArrayRef)>,
     ) -> Self {
-        let (field_types, field_values): (Vec<_>, Vec<_>) =
-            child_arrays.into_iter().unzip();
+        let (fields, field_values): (Vec<_>, Vec<_>) = child_arrays.into_iter().unzip();
         let len = type_ids.len();
 
         let mode = if value_offsets.is_some() {
@@ -152,8 +155,7 @@ impl UnionArray {
         };
 
         let builder = ArrayData::builder(DataType::Union(
-            field_types,
-            Vec::from(field_type_ids),
+            UnionFields::new(field_type_ids.iter().copied(), fields),
             mode,
         ))
         .add_buffer(type_ids)
@@ -192,8 +194,7 @@ impl UnionArray {
         if !invalid_type_ids.is_empty() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Type Ids must be positive and cannot be greater than the number of \
-                child arrays, found:\n{:?}",
-                invalid_type_ids
+                child arrays, found:\n{invalid_type_ids:?}"
             )));
         }
 
@@ -208,8 +209,7 @@ impl UnionArray {
             if !invalid_offsets.is_empty() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Offsets must be positive and within the length of the Array, \
-                    found:\n{:?}",
-                    invalid_offsets
+                    found:\n{invalid_offsets:?}"
                 )));
             }
         }
@@ -219,7 +219,7 @@ impl UnionArray {
         let new_self = unsafe {
             Self::new_unchecked(field_type_ids, type_ids, value_offsets, child_arrays)
         };
-        new_self.data().validate()?;
+        new_self.to_data().validate()?;
 
         Ok(new_self)
     }
@@ -231,9 +231,8 @@ impl UnionArray {
     /// Panics if the `type_id` provided is less than zero or greater than the number of types
     /// in the `Union`.
     pub fn child(&self, type_id: i8) -> &ArrayRef {
-        assert!(0 <= type_id);
-        assert!((type_id as usize) < self.boxed_fields.len());
-        &self.boxed_fields[type_id as usize]
+        let boxed = &self.fields[type_id as usize];
+        boxed.as_ref().expect("invalid type id")
     }
 
     /// Returns the `type_id` for the array slot at `index`.
@@ -242,8 +241,17 @@ impl UnionArray {
     ///
     /// Panics if `index` is greater than the length of the array.
     pub fn type_id(&self, index: usize) -> i8 {
-        assert!(index < self.len());
-        self.data().buffers()[0].as_slice()[self.offset() + index] as i8
+        self.type_ids[index]
+    }
+
+    /// Returns the `type_ids` buffer for this array
+    pub fn type_ids(&self) -> &ScalarBuffer<i8> {
+        &self.type_ids
+    }
+
+    /// Returns the `offsets` buffer if this is a dense array
+    pub fn offsets(&self) -> Option<&ScalarBuffer<i32>> {
+        self.offsets.as_ref()
     }
 
     /// Returns the offset into the underlying values array for the array slot at `index`.
@@ -251,12 +259,11 @@ impl UnionArray {
     /// # Panics
     ///
     /// Panics if `index` is greater than the length of the array.
-    pub fn value_offset(&self, index: usize) -> i32 {
+    pub fn value_offset(&self, index: usize) -> usize {
         assert!(index < self.len());
-        if self.is_dense() {
-            self.data().buffers()[1].typed_data::<i32>()[self.offset() + index]
-        } else {
-            (self.offset() + index) as i32
+        match &self.offsets {
+            Some(offsets) => offsets[index] as usize,
+            None => self.offset() + index,
         }
     }
 
@@ -265,17 +272,17 @@ impl UnionArray {
     /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> ArrayRef {
         let type_id = self.type_id(i);
-        let value_offset = self.value_offset(i) as usize;
-        let child_data = self.boxed_fields[type_id as usize].clone();
-        child_data.slice(value_offset, 1)
+        let value_offset = self.value_offset(i);
+        let child = self.child(type_id);
+        child.slice(value_offset, 1)
     }
 
     /// Returns the names of the types in the union.
     pub fn type_names(&self) -> Vec<&str> {
-        match self.data.data_type() {
-            DataType::Union(fields, _, _) => fields
+        match self.data_type() {
+            DataType::Union(fields, _) => fields
                 .iter()
-                .map(|f| f.name().as_str())
+                .map(|(_, f)| f.name().as_str())
                 .collect::<Vec<&str>>(),
             _ => unreachable!("Union array's data type is not a union!"),
         }
@@ -283,26 +290,94 @@ impl UnionArray {
 
     /// Returns whether the `UnionArray` is dense (or sparse if `false`).
     fn is_dense(&self) -> bool {
-        match self.data.data_type() {
-            DataType::Union(_, _, mode) => mode == &UnionMode::Dense,
+        match self.data_type() {
+            DataType::Union(_, mode) => mode == &UnionMode::Dense,
             _ => unreachable!("Union array's data type is not a union!"),
+        }
+    }
+
+    /// Returns a zero-copy slice of this array with the indicated offset and length.
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        let (offsets, fields) = match self.offsets.as_ref() {
+            // If dense union, slice offsets
+            Some(offsets) => (Some(offsets.slice(offset, length)), self.fields.clone()),
+            // Otherwise need to slice sparse children
+            None => {
+                let fields = self
+                    .fields
+                    .iter()
+                    .map(|x| x.as_ref().map(|x| x.slice(offset, length)))
+                    .collect();
+                (None, fields)
+            }
+        };
+
+        Self {
+            data_type: self.data_type.clone(),
+            type_ids: self.type_ids.slice(offset, length),
+            offsets,
+            fields,
         }
     }
 }
 
 impl From<ArrayData> for UnionArray {
     fn from(data: ArrayData) -> Self {
-        let mut boxed_fields = vec![];
-        for cd in data.child_data() {
-            boxed_fields.push(make_array(cd.clone()));
+        let (fields, mode) = match data.data_type() {
+            DataType::Union(fields, mode) => (fields, *mode),
+            d => panic!("UnionArray expected ArrayData with type Union got {d}"),
+        };
+        let (type_ids, offsets) = match mode {
+            UnionMode::Sparse => (
+                ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len()),
+                None,
+            ),
+            UnionMode::Dense => (
+                ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len()),
+                Some(ScalarBuffer::new(
+                    data.buffers()[1].clone(),
+                    data.offset(),
+                    data.len(),
+                )),
+            ),
+        };
+
+        let max_id = fields.iter().map(|(i, _)| i).max().unwrap_or_default() as usize;
+        let mut boxed_fields = vec![None; max_id + 1];
+        for (cd, (field_id, _)) in data.child_data().iter().zip(fields.iter()) {
+            boxed_fields[field_id as usize] = Some(make_array(cd.clone()));
         }
-        Self { data, boxed_fields }
+        Self {
+            data_type: data.data_type().clone(),
+            type_ids,
+            offsets,
+            fields: boxed_fields,
+        }
     }
 }
 
 impl From<UnionArray> for ArrayData {
     fn from(array: UnionArray) -> Self {
-        array.data
+        let len = array.len();
+        let f = match &array.data_type {
+            DataType::Union(f, _) => f,
+            _ => unreachable!(),
+        };
+        let buffers = match array.offsets {
+            Some(o) => vec![array.type_ids.into_inner(), o.into_inner()],
+            None => vec![array.type_ids.into_inner()],
+        };
+
+        let child = f
+            .iter()
+            .map(|(i, _)| array.fields[i as usize].as_ref().unwrap().to_data())
+            .collect();
+
+        let builder = ArrayDataBuilder::new(array.data_type)
+            .len(len)
+            .buffers(buffers)
+            .child_data(child);
+        unsafe { builder.build_unchecked() }
     }
 }
 
@@ -311,12 +386,36 @@ impl Array for UnionArray {
         self
     }
 
-    fn data(&self) -> &ArrayData {
-        &self.data
+    fn to_data(&self) -> ArrayData {
+        self.clone().into()
     }
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+
+    fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        Arc::new(self.slice(offset, length))
+    }
+
+    fn len(&self) -> usize {
+        self.type_ids.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.type_ids.is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        0
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        None
     }
 
     /// Union types always return non null as there is no validity buffer.
@@ -336,6 +435,32 @@ impl Array for UnionArray {
     fn null_count(&self) -> usize {
         0
     }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        let mut sum = self.type_ids.inner().capacity();
+        if let Some(o) = self.offsets.as_ref() {
+            sum += o.inner().capacity()
+        }
+        self.fields
+            .iter()
+            .flat_map(|x| x.as_ref().map(|x| x.get_buffer_memory_size()))
+            .sum::<usize>()
+            + sum
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        let mut sum = self.type_ids.inner().capacity();
+        if let Some(o) = self.offsets.as_ref() {
+            sum += o.inner().capacity()
+        }
+        std::mem::size_of::<Self>()
+            + self
+                .fields
+                .iter()
+                .flat_map(|x| x.as_ref().map(|x| x.get_array_memory_size()))
+                .sum::<usize>()
+            + sum
+    }
 }
 
 impl std::fmt::Debug for UnionArray {
@@ -345,26 +470,31 @@ impl std::fmt::Debug for UnionArray {
         } else {
             "UnionArray(Sparse)\n["
         };
-        writeln!(f, "{}", header)?;
+        writeln!(f, "{header}")?;
 
         writeln!(f, "-- type id buffer:")?;
-        writeln!(f, "{:?}", self.data().buffers()[0])?;
+        writeln!(f, "{:?}", self.type_ids)?;
 
-        if self.is_dense() {
+        if let Some(offsets) = &self.offsets {
             writeln!(f, "-- offsets buffer:")?;
-            writeln!(f, "{:?}", self.data().buffers()[1])?;
+            writeln!(f, "{:?}", offsets)?;
         }
 
-        for (child_index, name) in self.type_names().iter().enumerate() {
-            let column = &self.boxed_fields[child_index];
+        let fields = match self.data_type() {
+            DataType::Union(fields, _) => fields,
+            _ => unreachable!(),
+        };
+
+        for (type_id, field) in fields.iter() {
+            let child = self.child(type_id);
             writeln!(
                 f,
                 "-- child {}: \"{}\" ({:?})",
-                child_index,
-                *name,
-                column.data_type()
+                type_id,
+                field.name(),
+                field.data_type()
             )?;
-            std::fmt::Debug::fmt(column, f)?;
+            std::fmt::Debug::fmt(child, f)?;
             writeln!(f)?;
         }
         writeln!(f, "]")
@@ -376,6 +506,7 @@ mod tests {
     use super::*;
 
     use crate::builder::UnionBuilder;
+    use crate::cast::AsArray;
     use crate::types::{Float32Type, Float64Type, Int32Type, Int64Type};
     use crate::RecordBatch;
     use crate::{Float64Array, Int32Array, Int64Array, StringArray};
@@ -395,39 +526,33 @@ mod tests {
         let union = builder.build().unwrap();
 
         let expected_type_ids = vec![0_i8, 1, 2, 0, 2, 0, 1];
-        let expected_value_offsets = vec![0_i32, 0, 0, 1, 1, 2, 1];
+        let expected_offsets = vec![0_i32, 0, 0, 1, 1, 2, 1];
         let expected_array_values = [1_i32, 2, 3, 4, 5, 6, 7];
 
         // Check type ids
-        assert_eq!(
-            union.data().buffers()[0],
-            Buffer::from_slice_ref(&expected_type_ids)
-        );
+        assert_eq!(*union.type_ids(), expected_type_ids);
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &union.type_id(i));
         }
 
         // Check offsets
-        assert_eq!(
-            union.data().buffers()[1],
-            Buffer::from_slice_ref(&expected_value_offsets)
-        );
-        for (i, id) in expected_value_offsets.iter().enumerate() {
-            assert_eq!(&union.value_offset(i), id);
+        assert_eq!(*union.offsets().unwrap(), expected_offsets);
+        for (i, id) in expected_offsets.iter().enumerate() {
+            assert_eq!(union.value_offset(i), *id as usize);
         }
 
         // Check data
         assert_eq!(
-            union.data().child_data()[0].buffers()[0],
-            Buffer::from_slice_ref([1_i32, 4, 6])
+            *union.child(0).as_primitive::<Int32Type>().values(),
+            [1_i32, 4, 6]
         );
         assert_eq!(
-            union.data().child_data()[1].buffers()[0],
-            Buffer::from_slice_ref([2_i32, 7])
+            *union.child(1).as_primitive::<Int32Type>().values(),
+            [2_i32, 7]
         );
         assert_eq!(
-            union.data().child_data()[2].buffers()[0],
-            Buffer::from_slice_ref([3_i32, 5]),
+            *union.child(2).as_primitive::<Int32Type>().values(),
+            [3_i32, 5]
         );
 
         assert_eq!(expected_array_values.len(), union.len());
@@ -447,7 +572,7 @@ mod tests {
         let mut builder = UnionBuilder::new_dense();
 
         let expected_type_ids = vec![0_i8; 1024];
-        let expected_value_offsets: Vec<_> = (0..1024).collect();
+        let expected_offsets: Vec<_> = (0..1024).collect();
         let expected_array_values: Vec<_> = (1..=1024).collect();
 
         expected_array_values
@@ -457,27 +582,21 @@ mod tests {
         let union = builder.build().unwrap();
 
         // Check type ids
-        assert_eq!(
-            union.data().buffers()[0],
-            Buffer::from_slice_ref(&expected_type_ids)
-        );
+        assert_eq!(*union.type_ids(), expected_type_ids);
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &union.type_id(i));
         }
 
         // Check offsets
-        assert_eq!(
-            union.data().buffers()[1],
-            Buffer::from_slice_ref(&expected_value_offsets)
-        );
-        for (i, id) in expected_value_offsets.iter().enumerate() {
-            assert_eq!(&union.value_offset(i), id);
+        assert_eq!(*union.offsets().unwrap(), expected_offsets);
+        for (i, id) in expected_offsets.iter().enumerate() {
+            assert_eq!(union.value_offset(i), *id as usize);
         }
 
         for (i, expected_value) in expected_array_values.iter().enumerate() {
             assert!(!union.is_null(i));
             let slot = union.value(i);
-            let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+            let slot = slot.as_primitive::<Int32Type>();
             assert_eq!(slot.len(), 1);
             let value = slot.value(0);
             assert_eq!(expected_value, &value);
@@ -626,10 +745,10 @@ mod tests {
         let float_array = Float64Array::from(vec![10.0]);
 
         let type_ids = [1_i8, 0, 0, 2, 0, 1];
-        let value_offsets = [0_i32, 0, 1, 0, 2, 1];
+        let offsets = [0_i32, 0, 1, 0, 2, 1];
 
         let type_id_buffer = Buffer::from_slice_ref(type_ids);
-        let value_offsets_buffer = Buffer::from_slice_ref(value_offsets);
+        let value_offsets_buffer = Buffer::from_slice_ref(offsets);
 
         let children: Vec<(Field, Arc<dyn Array>)> = vec![
             (
@@ -651,18 +770,15 @@ mod tests {
         .unwrap();
 
         // Check type ids
-        assert_eq!(Buffer::from_slice_ref(type_ids), array.data().buffers()[0]);
+        assert_eq!(*array.type_ids(), type_ids);
         for (i, id) in type_ids.iter().enumerate() {
             assert_eq!(id, &array.type_id(i));
         }
 
         // Check offsets
-        assert_eq!(
-            Buffer::from_slice_ref(value_offsets),
-            array.data().buffers()[1]
-        );
-        for (i, id) in value_offsets.iter().enumerate() {
-            assert_eq!(id, &array.value_offset(i));
+        assert_eq!(*array.offsets().unwrap(), offsets);
+        for (i, id) in offsets.iter().enumerate() {
+            assert_eq!(*id as usize, array.value_offset(i));
         }
 
         // Check values
@@ -725,29 +841,26 @@ mod tests {
         let expected_array_values = [1_i32, 2, 3, 4, 5, 6, 7];
 
         // Check type ids
-        assert_eq!(
-            Buffer::from_slice_ref(&expected_type_ids),
-            union.data().buffers()[0]
-        );
+        assert_eq!(*union.type_ids(), expected_type_ids);
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &union.type_id(i));
         }
 
         // Check offsets, sparse union should only have a single buffer
-        assert_eq!(union.data().buffers().len(), 1);
+        assert!(union.offsets().is_none());
 
         // Check data
         assert_eq!(
-            union.data().child_data()[0].buffers()[0],
-            Buffer::from_slice_ref([1_i32, 0, 0, 4, 0, 6, 0]),
+            *union.child(0).as_primitive::<Int32Type>().values(),
+            [1_i32, 0, 0, 4, 0, 6, 0],
         );
         assert_eq!(
-            Buffer::from_slice_ref([0_i32, 2_i32, 0, 0, 0, 0, 7]),
-            union.data().child_data()[1].buffers()[0]
+            *union.child(1).as_primitive::<Int32Type>().values(),
+            [0_i32, 2_i32, 0, 0, 0, 0, 7]
         );
         assert_eq!(
-            Buffer::from_slice_ref([0_i32, 0, 3_i32, 0, 5, 0, 0]),
-            union.data().child_data()[2].buffers()[0]
+            *union.child(2).as_primitive::<Int32Type>().values(),
+            [0_i32, 0, 3_i32, 0, 5, 0, 0]
         );
 
         assert_eq!(expected_array_values.len(), union.len());
@@ -774,16 +887,13 @@ mod tests {
         let expected_type_ids = vec![0_i8, 1, 0, 1, 0];
 
         // Check type ids
-        assert_eq!(
-            Buffer::from_slice_ref(&expected_type_ids),
-            union.data().buffers()[0]
-        );
+        assert_eq!(*union.type_ids(), expected_type_ids);
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &union.type_id(i));
         }
 
         // Check offsets, sparse union should only have a single buffer, i.e. no offsets
-        assert_eq!(union.data().buffers().len(), 1);
+        assert!(union.offsets().is_none());
 
         for i in 0..union.len() {
             let slot = union.value(i);
@@ -836,16 +946,13 @@ mod tests {
         let expected_type_ids = vec![0_i8, 0, 1, 0];
 
         // Check type ids
-        assert_eq!(
-            Buffer::from_slice_ref(&expected_type_ids),
-            union.data().buffers()[0]
-        );
+        assert_eq!(*union.type_ids(), expected_type_ids);
         for (i, id) in expected_type_ids.iter().enumerate() {
             assert_eq!(id, &union.type_id(i));
         }
 
         // Check offsets, sparse union should only have a single buffer, i.e. no offsets
-        assert_eq!(union.data().buffers().len(), 1);
+        assert!(union.offsets().is_none());
 
         for i in 0..union.len() {
             let slot = union.value(i);
@@ -896,7 +1003,7 @@ mod tests {
             match i {
                 0 => assert!(slot.is_null(0)),
                 1 => {
-                    let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
+                    let slot = slot.as_primitive::<Float64Type>();
                     assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
@@ -904,7 +1011,7 @@ mod tests {
                 }
                 2 => assert!(slot.is_null(0)),
                 3 => {
-                    let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+                    let slot = slot.as_primitive::<Int32Type>();
                     assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
@@ -925,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn test_union_array_validaty() {
+    fn test_union_array_validity() {
         let mut builder = UnionBuilder::new_sparse();
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append_null::<Int32Type>("a").unwrap();
@@ -989,18 +1096,18 @@ mod tests {
             assert_eq!(union_slice.type_id(2), 1);
 
             let slot = union_slice.value(0);
-            let array = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+            let array = slot.as_primitive::<Int32Type>();
             assert_eq!(array.len(), 1);
             assert!(array.is_null(0));
 
             let slot = union_slice.value(1);
-            let array = slot.as_any().downcast_ref::<Float64Array>().unwrap();
+            let array = slot.as_primitive::<Float64Type>();
             assert_eq!(array.len(), 1);
             assert!(array.is_valid(0));
             assert_eq!(array.value(0), 3.0);
 
             let slot = union_slice.value(2);
-            let array = slot.as_any().downcast_ref::<Float64Array>().unwrap();
+            let array = slot.as_primitive::<Float64Type>();
             assert_eq!(array.len(), 1);
             assert!(array.is_null(0));
         }
@@ -1018,5 +1125,75 @@ mod tests {
         // [null, 3.0, null]
         let record_batch_slice = record_batch.slice(1, 3);
         test_slice_union(record_batch_slice);
+    }
+
+    #[test]
+    fn test_custom_type_ids() {
+        let data_type = DataType::Union(
+            UnionFields::new(
+                vec![8, 4, 9],
+                vec![
+                    Field::new("strings", DataType::Utf8, false),
+                    Field::new("integers", DataType::Int32, false),
+                    Field::new("floats", DataType::Float64, false),
+                ],
+            ),
+            UnionMode::Dense,
+        );
+
+        let string_array = StringArray::from(vec!["foo", "bar", "baz"]);
+        let int_array = Int32Array::from(vec![5, 6, 4]);
+        let float_array = Float64Array::from(vec![10.0]);
+
+        let type_ids = Buffer::from_vec(vec![4_i8, 8, 4, 8, 9, 4, 8]);
+        let value_offsets = Buffer::from_vec(vec![0_i32, 0, 1, 1, 0, 2, 2]);
+
+        let data = ArrayData::builder(data_type)
+            .len(7)
+            .buffers(vec![type_ids, value_offsets])
+            .child_data(vec![
+                string_array.into_data(),
+                int_array.into_data(),
+                float_array.into_data(),
+            ])
+            .build()
+            .unwrap();
+
+        let array = UnionArray::from(data);
+
+        let v = array.value(0);
+        assert_eq!(v.data_type(), &DataType::Int32);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v.as_primitive::<Int32Type>().value(0), 5);
+
+        let v = array.value(1);
+        assert_eq!(v.data_type(), &DataType::Utf8);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v.as_string::<i32>().value(0), "foo");
+
+        let v = array.value(2);
+        assert_eq!(v.data_type(), &DataType::Int32);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v.as_primitive::<Int32Type>().value(0), 6);
+
+        let v = array.value(3);
+        assert_eq!(v.data_type(), &DataType::Utf8);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v.as_string::<i32>().value(0), "bar");
+
+        let v = array.value(4);
+        assert_eq!(v.data_type(), &DataType::Float64);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v.as_primitive::<Float64Type>().value(0), 10.0);
+
+        let v = array.value(5);
+        assert_eq!(v.data_type(), &DataType::Int32);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v.as_primitive::<Int32Type>().value(0), 4);
+
+        let v = array.value(6);
+        assert_eq!(v.data_type(), &DataType::Utf8);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v.as_string::<i32>().value(0), "baz");
     }
 }

@@ -17,20 +17,16 @@
 
 [package]
 name = "arrow-string"
-version = "31.0.0"
+version = { workspace = true }
 description = "String kernels for arrow arrays"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = ["arrow"]
-include = [
-    "benches/*.rs",
-    "src/**/*.rs",
-    "Cargo.toml",
-]
-edition = "2021"
-rust-version = "1.62"
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+include = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "arrow_string"
@@ -38,13 +34,14 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
-arrow-buffer = { version = "31.0.0", path = "../arrow-buffer" }
-arrow-data = { version = "31.0.0", path = "../arrow-data" }
-arrow-schema = { version = "31.0.0", path = "../arrow-schema" }
-arrow-array = { version = "31.0.0", path = "../arrow-array" }
-arrow-select = { version = "31.0.0", path = "../arrow-select" }
+arrow-buffer = { workspace = true }
+arrow-data = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-array = { workspace = true }
+arrow-select = { workspace = true }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
-regex-syntax = { version = "0.6.27", default-features = false, features = ["unicode"] }
+regex-syntax = { version = "0.7.1", default-features = false, features = ["unicode"] }
+num = { version = "0.4", default-features = false, features = ["std"] }
 
 [package.metadata.docs.rs]
 all-features = true
