@@ -20,9 +20,10 @@ use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder
 use arrow_array::cast::as_dictionary_array;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{
+    ArrowNativeType, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer,
+};
 use arrow_data::transform::MutableArrayData;
-use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 use std::sync::Arc;
 
@@ -109,10 +110,8 @@ pub fn interleave(
 struct Interleave<'a, T> {
     /// The input arrays downcast to T
     arrays: Vec<&'a T>,
-    /// The number of nulls in the interleaved output
-    null_count: usize,
     /// The null buffer of the interleaved output
-    nulls: Option<Buffer>,
+    nulls: Option<NullBuffer>,
 }
 
 impl<'a, T: Array + 'static> Interleave<'a, T> {
@@ -126,22 +125,19 @@ impl<'a, T: Array + 'static> Interleave<'a, T> {
             })
             .collect();
 
-        let mut null_count = 0;
-        let nulls = has_nulls.then(|| {
-            let mut builder = BooleanBufferBuilder::new(indices.len());
-            for (a, b) in indices {
-                let v = arrays[*a].is_valid(*b);
-                null_count += !v as usize;
-                builder.append(v)
+        let nulls = match has_nulls {
+            true => {
+                let mut builder = NullBufferBuilder::new(indices.len());
+                for (a, b) in indices {
+                    let v = arrays[*a].is_valid(*b);
+                    builder.append(v)
+                }
+                builder.finish()
             }
-            builder.into()
-        });
+            false => None,
+        };
 
-        Self {
-            arrays,
-            null_count,
-            nulls,
-        }
+        Self { arrays, nulls }
     }
 }
 
@@ -152,20 +148,14 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, PrimitiveArray<T>>::new(values, indices);
 
-    let mut values = BufferBuilder::<T::Native>::new(indices.len());
+    let mut values = Vec::with_capacity(indices.len());
     for (a, b) in indices {
         let v = interleaved.arrays[*a].value(*b);
-        values.append(v)
+        values.push(v)
     }
 
-    let builder = ArrayDataBuilder::new(data_type.clone())
-        .len(indices.len())
-        .add_buffer(values.finish())
-        .null_bit_buffer(interleaved.nulls)
-        .null_count(interleaved.null_count);
-
-    let data = unsafe { builder.build_unchecked() };
-    Ok(Arc::new(PrimitiveArray::<T>::from(data)))
+    let array = PrimitiveArray::<T>::new(values.into(), interleaved.nulls);
+    Ok(Arc::new(array.with_data_type(data_type.clone())))
 }
 
 fn interleave_bytes<T: ByteArrayType>(
@@ -189,15 +179,12 @@ fn interleave_bytes<T: ByteArrayType>(
         values.extend_from_slice(interleaved.arrays[*a].value(*b).as_ref());
     }
 
-    let builder = ArrayDataBuilder::new(T::DATA_TYPE)
-        .len(indices.len())
-        .add_buffer(offsets.finish())
-        .add_buffer(values.into())
-        .null_bit_buffer(interleaved.nulls)
-        .null_count(interleaved.null_count);
-
-    let data = unsafe { builder.build_unchecked() };
-    Ok(Arc::new(GenericByteArray::<T>::from(data)))
+    // Safety: safe by construction
+    let array = unsafe {
+        let offsets = OffsetBuffer::new_unchecked(offsets.finish().into());
+        GenericByteArray::<T>::new_unchecked(offsets, values.into(), interleaved.nulls)
+    };
+    Ok(Arc::new(array))
 }
 
 fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
@@ -239,18 +226,8 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
             false => keys.append_null(),
         }
     }
-    let keys = keys.finish().into_data();
-
-    let builder = keys
-        .into_builder()
-        .data_type(DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(merged.values.data_type().clone()),
-        ))
-        .child_data(vec![merged.values.to_data()]);
-
-    let data = unsafe { builder.build_unchecked() };
-    Ok(Arc::new(DictionaryArray::<K>::from(data)))
+    let array = unsafe { DictionaryArray::new_unchecked(keys.finish(), merged.values) };
+    Ok(Arc::new(array))
 }
 
 /// Fallback implementation of interleave using [`MutableArrayData`]

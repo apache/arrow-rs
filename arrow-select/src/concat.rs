@@ -82,21 +82,13 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
             keys.append_option(key.map(|x| mapping[x]));
         }
     }
-    let keys = keys.finish().into_data();
+    let keys = keys.finish();
 
     // Sanity check
     assert_eq!(keys.len(), output_len);
 
-    let builder = keys
-        .into_builder()
-        .data_type(DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(merged.values.data_type().clone()),
-        ))
-        .child_data(vec![merged.values.to_data()]);
-
-    let data = unsafe { builder.build_unchecked() };
-    Ok(Arc::new(DictionaryArray::<K>::from(data)))
+    let array = unsafe { DictionaryArray::new_unchecked(keys, merged.values) };
+    Ok(Arc::new(array))
 }
 
 macro_rules! dict_helper {
