@@ -46,21 +46,47 @@ impl std::fmt::Display for Op {
 }
 
 /// Perform SQL `left LIKE right`
+///
+/// There are two wildcards supported with the LIKE operator:
+///
+/// 1. `%` - The percent sign represents zero, one, or multiple characters
+/// 2. `_` - The underscore represents a single character
+///
+/// For example:
+/// ```
+/// # use arrow_array::{StringArray, BooleanArray};
+/// # use arrow_string::like::like;
+/// #
+/// let strings = StringArray::from(vec!["Arrow", "Arrow", "Arrow", "Ar"]);
+/// let patterns = StringArray::from(vec!["A%", "B%", "A.", "A_"]);
+///
+/// let result = like(&strings, &patterns).unwrap();
+/// assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
+/// ```
 pub fn like(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::Like(false), left, right)
 }
 
 /// Perform SQL `left ILIKE right`
+///
+/// This is a case-insensitive version of [`like`]
+///
+/// Note: this only implements loose matching as defined by the Unicode standard. For example,
+/// the `ﬀ` ligature is not equivalent to `FF` and `ß` is not equivalent to `SS`
 pub fn ilike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::ILike(false), left, right)
 }
 
 /// Perform SQL `left NOT LIKE right`
+///
+/// See the documentation on [`like`] for more details
 pub fn nlike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::Like(true), left, right)
 }
 
 /// Perform SQL `left NOT ILIKE right`
+///
+/// See the documentation on [`ilike`] for more details
 pub fn nilike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::ILike(true), left, right)
 }

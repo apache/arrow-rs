@@ -22,12 +22,17 @@ use regex::{Regex, RegexBuilder};
 /// A string based predicate
 pub enum Predicate<'a> {
     Eq(&'a str),
-    IEqAscii(&'a str),
     Contains(&'a str),
     StartsWith(&'a str),
-    IStartsWithAscii(&'a str),
     EndsWith(&'a str),
+
+    /// Equality ignoring ASCII case
+    IEqAscii(&'a str),
+    /// Starts with ignoring ASCII case
+    IStartsWithAscii(&'a str),
+    /// Ends with ignoring ASCII case
     IEndsWithAscii(&'a str),
+
     Regex(Regex),
 }
 
@@ -184,4 +189,41 @@ fn regex_like(pattern: &str, case_insensitive: bool) -> Result<Regex, ArrowError
 
 fn is_like_pattern(c: char) -> bool {
     c == '%' || c == '_'
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_replace_like_wildcards() {
+        let a_eq = "_%";
+        let expected = "^..*$";
+        let r = regex_like(a_eq, false).unwrap();
+        assert_eq!(r.to_string(), expected);
+    }
+
+    #[test]
+    fn test_replace_like_wildcards_leave_like_meta_chars() {
+        let a_eq = "\\%\\_";
+        let expected = "^%_$";
+        let r = regex_like(a_eq, false).unwrap();
+        assert_eq!(r.to_string(), expected);
+    }
+
+    #[test]
+    fn test_replace_like_wildcards_with_multiple_escape_chars() {
+        let a_eq = "\\\\%";
+        let expected = "^\\\\%$";
+        let r = regex_like(a_eq, false).unwrap();
+        assert_eq!(r.to_string(), expected);
+    }
+
+    #[test]
+    fn test_replace_like_wildcards_escape_regex_meta_char() {
+        let a_eq = ".";
+        let expected = "^\\.$";
+        let r = regex_like(a_eq, false).unwrap();
+        assert_eq!(r.to_string(), expected);
+    }
 }
