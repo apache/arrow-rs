@@ -1467,7 +1467,6 @@ where
 // disable wrapping inside literal vectors used for test data and assertions
 #[rustfmt::skip::macros(vec)]
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use std::sync::Arc;
 
@@ -1550,6 +1549,16 @@ mod tests {
 
     #[test]
     fn test_primitive_array_eq() {
+
+        let r0: Vec<_> = crate::cmp::eq(
+            &Int64Array::from(vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8]),
+            &Int64Array::from(vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10])
+        ).unwrap().values().iter().collect();
+        assert_eq!(
+            &vec![false, false, true, false, false, false, false, true, false, false],
+            &r0
+        );
+
         cmp_i64!(
             eq,
             eq_dyn,
