@@ -111,6 +111,9 @@ pub use gen::Result;
 pub use gen::SchemaResult;
 pub use gen::Ticket;
 
+/// Helper to extract HTTP/gRPC trailers from a tonic stream.
+mod trailers;
+
 pub mod utils;
 
 #[cfg(feature = "flight-sql-experimental")]
