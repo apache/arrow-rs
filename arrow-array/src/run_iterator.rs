@@ -237,7 +237,7 @@ mod tests {
             Some(72),
         ];
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend(input_vec.clone().into_iter());
+        builder.extend(input_vec.iter().copied());
         let ree_array = builder.finish();
         let ree_array = ree_array.downcast::<Int32Array>().unwrap();
 
@@ -261,7 +261,7 @@ mod tests {
             Some(72),
         ];
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend(input_vec.into_iter());
+        builder.extend(input_vec);
         let ree_array = builder.finish();
         let ree_array = ree_array.downcast::<Int32Array>().unwrap();
 

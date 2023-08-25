@@ -2108,10 +2108,10 @@ mod tests {
 
     #[test]
     fn test_byte_array_statistics() {
-        let input = vec!["aawaa", "zz", "aaw", "m", "qrs"]
+        let input = ["aawaa", "zz", "aaw", "m", "qrs"]
             .iter()
             .map(|&s| s.into())
-            .collect::<Vec<ByteArray>>();
+            .collect::<Vec<_>>();
 
         let stats = statistics_roundtrip::<ByteArrayType>(&input);
         assert!(!stats.is_min_max_backwards_compatible());
@@ -2126,13 +2126,10 @@ mod tests {
 
     #[test]
     fn test_fixed_len_byte_array_statistics() {
-        let input = vec!["aawaa", "zz   ", "aaw  ", "m    ", "qrs  "]
+        let input = ["aawaa", "zz   ", "aaw  ", "m    ", "qrs  "]
             .iter()
-            .map(|&s| {
-                let b: ByteArray = s.into();
-                b.into()
-            })
-            .collect::<Vec<FixedLenByteArray>>();
+            .map(|&s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
 
         let stats = statistics_roundtrip::<FixedLenByteArrayType>(&input);
         assert!(stats.has_min_max_set());

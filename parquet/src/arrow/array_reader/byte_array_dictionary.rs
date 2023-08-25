@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(decoder.read(&mut output, 4..5).unwrap(), 1);
         assert_eq!(decoder.skip_values(4).unwrap(), 0);
 
-        let valid = vec![true, true, true, true, true];
+        let valid = [true, true, true, true, true];
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
         output.pad_nulls(0, 5, 5, valid_buffer.as_slice());
 

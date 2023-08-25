@@ -320,11 +320,9 @@ fn set_column_for_json_rows(
         }
         DataType::Struct(_) => {
             let inner_objs = struct_array_to_jsonmap_array(array.as_struct())?;
-            rows.iter_mut()
-                .zip(inner_objs.into_iter())
-                .for_each(|(row, obj)| {
-                    row.insert(col_name.to_string(), Value::Object(obj));
-                });
+            rows.iter_mut().zip(inner_objs).for_each(|(row, obj)| {
+                row.insert(col_name.to_string(), Value::Object(obj));
+            });
         }
         DataType::List(_) => {
             let listarr = as_list_array(array);
@@ -374,7 +372,7 @@ fn set_column_for_json_rows(
             let keys = keys.as_string::<i32>();
             let values = array_to_json_array(values)?;
 
-            let mut kv = keys.iter().zip(values.into_iter());
+            let mut kv = keys.iter().zip(values);
 
             for (i, row) in rows.iter_mut().enumerate() {
                 if maparr.is_null(i) {

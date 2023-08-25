@@ -1580,7 +1580,7 @@ mod tests {
         assert_eq!(3, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
-        let formatted = vec!["00:00:00.001", "10:30:00.005", "23:59:59.210"];
+        let formatted = ["00:00:00.001", "10:30:00.005", "23:59:59.210"];
         for (i, formatted) in formatted.iter().enumerate().take(3) {
             // check that we can't create dates or datetimes from time instances
             assert_eq!(None, arr.value_as_datetime(i));
@@ -1604,7 +1604,7 @@ mod tests {
         assert_eq!(3, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
-        let formatted = vec!["00:00:00.001", "10:30:00.005", "23:59:59.210"];
+        let formatted = ["00:00:00.001", "10:30:00.005", "23:59:59.210"];
         for (i, item) in formatted.iter().enumerate().take(3) {
             // check that we can't create dates or datetimes from time instances
             assert_eq!(None, arr.value_as_datetime(i));
@@ -2219,7 +2219,7 @@ mod tests {
 
     #[test]
     fn test_decimal_from_iter_values() {
-        let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
+        let array = Decimal128Array::from_iter_values(vec![-100, 0, 101]);
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
         assert_eq!(-100_i128, array.value(0));
@@ -2419,8 +2419,7 @@ mod tests {
         expected = "Trying to access an element at index 4 from a PrimitiveArray of length 3"
     )]
     fn test_fixed_size_binary_array_get_value_index_out_of_bound() {
-        let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
-
+        let array = Decimal128Array::from(vec![-100, 0, 101]);
         array.value(4);
     }
 

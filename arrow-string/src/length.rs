@@ -16,6 +16,7 @@
 // under the License.
 
 //! Defines kernel for length of string arrays and binary arrays
+#![allow(clippy::redundant_closure_call)]
 
 use arrow_array::*;
 use arrow_array::{cast::AsArray, types::*};

@@ -736,15 +736,11 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
+                let expected = BooleanArray::from($expected);
                 let left = StringArray::from($left);
                 let right = StringArray::from($right);
                 let res = $op(&left, &right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
+                assert_eq!(res, expected);
             }
         };
     }
@@ -754,15 +750,11 @@ mod tests {
             #[test]
             #[cfg(feature = "dyn_cmp_dict")]
             fn $test_name() {
+                let expected = BooleanArray::from($expected);
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
                 let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
                 let res = $op(&left, &right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(v, expected[i]);
-                }
+                assert_eq!(res, expected);
             }
         };
     }
@@ -771,37 +763,15 @@ mod tests {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
             fn $test_name() {
+                let expected = BooleanArray::from($expected);
+
                 let left = StringArray::from($left);
                 let res = $op(&left, $right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(
-                        v,
-                        expected[i],
-                        "unexpected result when comparing {} at position {} to {} ",
-                        left.value(i),
-                        i,
-                        $right
-                    );
-                }
+                assert_eq!(res, expected);
 
                 let left = LargeStringArray::from($left);
                 let res = $op(&left, $right).unwrap();
-                let expected = $expected;
-                assert_eq!(expected.len(), res.len());
-                for i in 0..res.len() {
-                    let v = res.value(i);
-                    assert_eq!(
-                        v,
-                        expected[i],
-                        "unexpected result when comparing {} at position {} to {} ",
-                        left.value(i),
-                        i,
-                        $right
-                    );
-                }
+                assert_eq!(res, expected);
             }
         };
         ($test_name:ident, $test_name_dyn:ident, $left:expr, $right:expr, $op:expr, $op_dyn:expr, $expected:expr) => {
@@ -953,7 +923,7 @@ mod tests {
     test_utf8!(
         test_utf8_scalar_ilike_regex,
         vec!["%%%"],
-        vec![r#"\%_\%"#],
+        vec![r"\%_\%"],
         ilike_utf8,
         vec![true]
     );
@@ -961,7 +931,7 @@ mod tests {
     test_dict_utf8!(
         test_utf8_scalar_ilike_regex_dict,
         vec!["%%%"],
-        vec![r#"\%_\%"#],
+        vec![r"\%_\%"],
         ilike_dyn,
         vec![true]
     );

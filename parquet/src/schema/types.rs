@@ -1652,8 +1652,8 @@ mod tests {
         //     required int64 item1    2    1
         //     optional boolean item2  3    1
         //     repeated int32 item3    3    2
-        let ex_max_def_levels = vec![0, 1, 1, 2, 3, 3];
-        let ex_max_rep_levels = vec![0, 0, 1, 1, 1, 2];
+        let ex_max_def_levels = [0, 1, 1, 2, 3, 3];
+        let ex_max_rep_levels = [0, 0, 1, 1, 1, 2];
 
         for i in 0..nleaves {
             let col = descr.column(i);
