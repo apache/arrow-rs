@@ -174,6 +174,9 @@ async fn test_do_get() {
             "some_val",
         );
 
+        // trailers are not available before stream exhaustion
+        assert!(response_stream.trailers().is_none());
+
         let expected_response = vec![batch];
         let response: Vec<_> = (&mut response_stream)
             .try_collect()

@@ -19,7 +19,7 @@ use std::task::Poll;
 
 use crate::{
     decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient,
-    trailers::extract_trailers, Action, ActionType, Criteria, Empty, FlightData,
+    trailers::extract_lazy_trailers, Action, ActionType, Criteria, Empty, FlightData,
     FlightDescriptor, FlightInfo, HandshakeRequest, PutResult, Ticket,
 };
 use arrow_schema::Schema;
@@ -205,7 +205,7 @@ impl FlightClient {
         let request = self.make_request(ticket);
 
         let (md, response_stream, _ext) = self.inner.do_get(request).await?.into_parts();
-        let (response_stream, trailers) = extract_trailers(response_stream);
+        let (response_stream, trailers) = extract_lazy_trailers(response_stream);
 
         Ok(FlightRecordBatchStream::new_from_flight_data(
             response_stream.map_err(FlightError::Tonic),

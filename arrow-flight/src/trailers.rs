@@ -24,8 +24,13 @@ use std::{
 use futures::{ready, FutureExt, Stream, StreamExt};
 use tonic::{metadata::MetadataMap, Status, Streaming};
 
-/// Extract trailers from [`Streaming`] [tonic] response.
-pub fn extract_trailers<T>(s: Streaming<T>) -> (ExtractTrailersStream<T>, LazyTrailers) {
+/// Extract [`LazyTrailers`] from [`Streaming`] [tonic] response.
+///
+/// Note that [`LazyTrailers`] has inner mutability and will only hold actual data after [`ExtractTrailersStream`] is
+/// fully consumed (dropping it is not required though).
+pub fn extract_lazy_trailers<T>(
+    s: Streaming<T>,
+) -> (ExtractTrailersStream<T>, LazyTrailers) {
     let trailers: SharedTrailers = Default::default();
     let stream = ExtractTrailersStream {
         inner: s,
@@ -39,7 +44,7 @@ type SharedTrailers = Arc<Mutex<Option<MetadataMap>>>;
 
 /// [Stream] that stores the gRPC trailers into [`LazyTrailers`].
 ///
-/// See [`extract_trailers`] for construction.
+/// See [`extract_lazy_trailers`] for construction.
 #[derive(Debug)]
 pub struct ExtractTrailersStream<T> {
     inner: Streaming<T>,
@@ -78,7 +83,7 @@ impl<T> Stream for ExtractTrailersStream<T> {
 
 /// gRPC trailers that are extracted by [`ExtractTrailersStream`].
 ///
-/// See [`extract_trailers`] for construction.
+/// See [`extract_lazy_trailers`] for construction.
 #[derive(Debug)]
 pub struct LazyTrailers {
     trailers: SharedTrailers,
