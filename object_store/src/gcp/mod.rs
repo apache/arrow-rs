@@ -992,6 +992,23 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Set a trusted proxy CA certificate
+    pub fn with_proxy_ca_certificate(
+        mut self,
+        proxy_ca_certificate: impl Into<String>,
+    ) -> Self {
+        self.client_options = self
+            .client_options
+            .with_proxy_ca_certificate(proxy_ca_certificate);
+        self
+    }
+
+    /// Set a list of hosts to exclude from proxy connections
+    pub fn with_proxy_excludes(mut self, proxy_excludes: impl Into<String>) -> Self {
+        self.client_options = self.client_options.with_proxy_excludes(proxy_excludes);
+        self
+    }
+
     /// Sets the client options, overriding any already set
     pub fn with_client_options(mut self, options: ClientOptions) -> Self {
         self.client_options = options;

@@ -48,7 +48,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, Proxy, RequestBuilder};
+use reqwest::{Client, ClientBuilder, NoProxy, Proxy, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{fmt_duration, ConfigValue};
@@ -103,6 +103,10 @@ pub enum ClientConfigKey {
     PoolMaxIdlePerHost,
     /// HTTP proxy to use for requests
     ProxyUrl,
+    /// PEM-formatted CA certificate for proxy connections
+    ProxyCaCertificate,
+    /// List of hosts that bypass proxy
+    ProxyExcludes,
     /// Request timeout
     ///
     /// The timeout is applied from when the request starts connecting until the
@@ -127,6 +131,8 @@ impl AsRef<str> for ClientConfigKey {
             Self::PoolIdleTimeout => "pool_idle_timeout",
             Self::PoolMaxIdlePerHost => "pool_max_idle_per_host",
             Self::ProxyUrl => "proxy_url",
+            Self::ProxyCaCertificate => "proxy_ca_certificate",
+            Self::ProxyExcludes => "proxy_excludes",
             Self::Timeout => "timeout",
             Self::UserAgent => "user_agent",
         }
@@ -168,6 +174,8 @@ pub struct ClientOptions {
     default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
+    proxy_ca_certificate: Option<String>,
+    proxy_excludes: Option<String>,
     allow_http: ConfigValue<bool>,
     allow_insecure: ConfigValue<bool>,
     timeout: Option<ConfigValue<Duration>>,
@@ -216,6 +224,10 @@ impl ClientOptions {
                 self.pool_max_idle_per_host = Some(ConfigValue::Deferred(value.into()))
             }
             ClientConfigKey::ProxyUrl => self.proxy_url = Some(value.into()),
+            ClientConfigKey::ProxyCaCertificate => {
+                self.proxy_ca_certificate = Some(value.into())
+            }
+            ClientConfigKey::ProxyExcludes => self.proxy_excludes = Some(value.into()),
             ClientConfigKey::Timeout => {
                 self.timeout = Some(ConfigValue::Deferred(value.into()))
             }
@@ -255,6 +267,8 @@ impl ClientOptions {
                 self.pool_max_idle_per_host.as_ref().map(|v| v.to_string())
             }
             ClientConfigKey::ProxyUrl => self.proxy_url.clone(),
+            ClientConfigKey::ProxyCaCertificate => self.proxy_ca_certificate.clone(),
+            ClientConfigKey::ProxyExcludes => self.proxy_excludes.clone(),
             ClientConfigKey::Timeout => self.timeout.as_ref().map(fmt_duration),
             ClientConfigKey::UserAgent => self
                 .user_agent
@@ -329,9 +343,24 @@ impl ClientOptions {
         self
     }
 
-    /// Set an HTTP proxy to use for requests
+    /// Set a proxy URL to use for requests
     pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
         self.proxy_url = Some(proxy_url.into());
+        self
+    }
+
+    /// Set a trusted proxy CA certificate
+    pub fn with_proxy_ca_certificate(
+        mut self,
+        proxy_ca_certificate: impl Into<String>,
+    ) -> Self {
+        self.proxy_ca_certificate = Some(proxy_ca_certificate.into());
+        self
+    }
+
+    /// Set a list of hosts to exclude from proxy connections
+    pub fn with_proxy_excludes(mut self, proxy_excludes: impl Into<String>) -> Self {
+        self.proxy_excludes = Some(proxy_excludes.into());
         self
     }
 
@@ -429,7 +458,22 @@ impl ClientOptions {
         }
 
         if let Some(proxy) = &self.proxy_url {
-            let proxy = Proxy::all(proxy).map_err(map_client_error)?;
+            let mut proxy = Proxy::all(proxy).map_err(map_client_error)?;
+
+            if let Some(certificate) = &self.proxy_ca_certificate {
+                let certificate =
+                    reqwest::tls::Certificate::from_pem(certificate.as_bytes())
+                        .map_err(map_client_error)?;
+
+                builder = builder.add_root_certificate(certificate);
+            }
+
+            if let Some(proxy_excludes) = &self.proxy_excludes {
+                let no_proxy = NoProxy::from_string(proxy_excludes);
+
+                proxy = proxy.no_proxy(no_proxy);
+            }
+
             builder = builder.proxy(proxy);
         }
 
