@@ -981,9 +981,7 @@ impl Rows {
     /// Sets the length of this [`Rows`] to 0
     pub fn clear(&mut self) {
         self.offsets.truncate(1);
-        unsafe {
-            std::ptr::write_bytes(self.buffer.as_mut_ptr(), 0, self.buffer.len());
-        }
+        self.buffer.clear();
     }
 
     /// Returns the number of [`Row`] in this [`Rows`]
