@@ -1547,80 +1547,148 @@ mod tests {
         };
     }
 
+    macro_rules! test_array_scalar_op {
+        ($op:expr, $op_name:expr, $array_type:ty) => {
+            let r: Vec<_> = $op(
+                &<$array_type>::new_scalar(8),
+                &<$array_type>::from(vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10])
+            )
+            .unwrap()
+            .values()
+            .iter()
+            .collect();
+
+            let expected = if $op_name == "neq" {
+                vec![true, true, false, true, true, true, true, false, true, true]
+            } else if $op_name == "lt" {
+                vec![false, false, false, true, true, false, false, false, true, true]
+            } else if $op_name == "lt_eq" {
+                vec![false, false, true, true, true, false, false, true, true, true]
+            } else if $op_name == "gt" {
+                vec![true, true, false, false, false, true, true, false, false, false]
+            } else if $op_name == "gt_eq" {
+                vec![true, true, true, false, false, true, true, true, false, false]
+            } else {
+                vec![false, false, true, false, false, false, false, true, false, false]
+            };
+
+            assert_eq!(&expected,&r);
+        };
+    }
+
+    macro_rules! test_array_array_op {
+        ($op:expr, $op_name:expr, $array_type:ty) => {
+            let r: Vec<_> = $op(
+                &<$array_type>::from(vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8]),
+                &<$array_type>::from(vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10])
+            )
+            .unwrap()
+            .values()
+            .iter()
+            .collect();
+
+            let expected = if $op_name == "neq" {
+                vec![true, true, false, true, true, true, true, false, true, true]
+            } else if $op_name == "lt" {
+                vec![false, false, false, true, true, false, false, false, true, true]
+            } else if $op_name == "lt_eq" {
+                vec![false, false, true, true, true, false, false, true, true, true]
+            } else if $op_name == "gt" {
+                vec![true, true, false, false, false, true, true, false, false, false]
+            } else if $op_name == "gt_eq" {
+                vec![true, true, true, false, false, true, true, true, false, false]
+            } else {
+                vec![false, false, true, false, false, false, false, true, false, false]
+            };
+
+            assert_eq!(&expected,&r);
+        };
+    }
+
+    macro_rules! test_boolean_array_array_op {
+        ($op:expr, $op_name:expr) => {{
+            let a: BooleanArray = BooleanArray::from(
+                vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]);
+            let b: BooleanArray = BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]);
+
+
+            let r = $op(&a, &b).unwrap();
+
+            let expected = if $op_name == "neq" {
+                BooleanArray::from(vec![Some(false), Some(true), Some(false), Some(true), None, None])
+            } else if $op_name == "lt_eq" {
+                BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false), None, None])
+            } else if $op_name == "gt" {
+                BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true), None, None])
+            } else if $op_name == "gt_eq" {
+                BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(true), None, None])
+            } else if $op_name == "lt" {
+                BooleanArray::from(vec![Some(false), Some(true), Some(false), Some(false), None, None])
+            } else {
+                BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(false), None, None])
+            };
+
+            assert_eq!(&expected,&r);
+        }};
+    }
+
+    macro_rules! test_boolean_array_scalar_op {
+        ($op:expr, $op_name:expr) => {{
+            let a: BooleanArray = BooleanArray::from(vec![Some(true), Some(false), None]);
+            let res1 = $op(&a, &BooleanArray::new_scalar(false)).unwrap();
+
+            let expected1 = if $op_name == "neq" {
+                BooleanArray::from(vec![Some(true), Some(false), None])
+            } else if $op_name == "lt_eq" {
+                BooleanArray::from(vec![Some(false), Some(true), None])
+            } else if $op_name == "gt" {
+                BooleanArray::from(vec![Some(true), Some(false), None])
+            } else if $op_name == "gt_eq" {
+                BooleanArray::from(vec![Some(true), Some(true), None])
+            } else if $op_name == "lt" {
+                BooleanArray::from(vec![Some(false), Some(false), None])
+            } else {
+                BooleanArray::from(vec![Some(false), Some(true), None])
+            };
+
+            assert_eq!(&res1, &expected1);
+
+            let res2 = $op(&a, &BooleanArray::new_scalar(true)).unwrap();
+
+            let expected2 = if $op_name == "neq" {
+                BooleanArray::from(vec![Some(false), Some(true), None])
+            } else if $op_name == "lt_eq" {
+                BooleanArray::from(vec![Some(true), Some(true), None])
+            } else if $op_name == "gt" {
+                BooleanArray::from(vec![Some(false), Some(false), None])
+            } else if $op_name == "gt_eq" {
+                BooleanArray::from(vec![Some(true), Some(false), None])
+            } else if $op_name == "lt" {
+                BooleanArray::from(vec![Some(false), Some(true), None])
+            } else {
+                BooleanArray::from(vec![Some(true), Some(false), None])
+            };
+
+            assert_eq!(&res2, &expected2);
+
+
+        }};
+    }
+
     #[test]
     fn test_primitive_array_eq() {
-
-        let r0: Vec<_> = crate::cmp::eq(
-            &Int64Array::from(vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8]),
-            &Int64Array::from(vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10])
-        ).unwrap().values().iter().collect();
-        assert_eq!(
-            &vec![false, false, true, false, false, false, false, true, false, false],
-            &r0
-        );
-
-        cmp_i64!(
-            eq,
-            eq_dyn,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![false, false, true, false, false, false, false, true, false, false]
-        );
-
-        cmp_vec!(
-            eq,
-            eq_dyn,
-            TimestampSecondArray,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![false, false, true, false, false, false, false, true, false, false]
-        );
-
-        cmp_vec!(
-            eq,
-            eq_dyn,
-            Time32SecondArray,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![false, false, true, false, false, false, false, true, false, false]
-        );
-
-        cmp_vec!(
-            eq,
-            eq_dyn,
-            Time32MillisecondArray,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![false, false, true, false, false, false, false, true, false, false]
-        );
-
-        cmp_vec!(
-            eq,
-            eq_dyn,
-            Time64MicrosecondArray,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![false, false, true, false, false, false, false, true, false, false]
-        );
-
-        cmp_vec!(
-            eq,
-            eq_dyn,
-            Time64NanosecondArray,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![false, false, true, false, false, false, false, true, false, false]
-        );
+        test_array_array_op!(crate::cmp::eq, "eq", Int64Array);
+        test_array_array_op!(crate::cmp::eq, "eq", TimestampSecondArray);
+        test_array_array_op!(crate::cmp::eq, "eq", Time32SecondArray);
+        test_array_array_op!(crate::cmp::eq, "eq", Time32MillisecondArray);
+        test_array_array_op!(crate::cmp::eq, "eq", Time64MicrosecondArray);
+        test_array_array_op!(crate::cmp::eq, "eq", Time64NanosecondArray);
     }
 
     #[test]
     fn test_primitive_array_eq_scalar() {
-        cmp_i64_scalar!(
-            eq_scalar,
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            8,
-            vec![false, false, true, false, false, false, false, true, false, false]
-        );
+        test_array_scalar_op!(crate::cmp::eq, "eq", Int64Array);
     }
 
     #[test]
@@ -1628,8 +1696,8 @@ mod tests {
         let a = Int32Array::from(vec![6, 7, 8, 8, 10]);
         let b = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let b_slice = b.slice(5, 5);
-        let c = b_slice.as_any().downcast_ref().unwrap();
-        let d = eq(c, &a).unwrap();
+        let c = &b_slice;
+        let d = crate::cmp::eq(c, &a).unwrap();
         assert!(d.value(0));
         assert!(d.value(1));
         assert!(d.value(2));
@@ -1641,7 +1709,8 @@ mod tests {
     fn test_primitive_array_eq_scalar_with_slice() {
         let a = Int32Array::from(vec![Some(1), None, Some(2), Some(3)]);
         let a = a.slice(1, 3);
-        let a_eq = eq_scalar(&a, 2).unwrap();
+        // let a_eq = eq_scalar(&a, 2).unwrap();
+        let a_eq = crate::cmp::eq(&a, &Int32Array::new_scalar(2)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![None, Some(true), Some(false)])
@@ -1650,403 +1719,224 @@ mod tests {
 
     #[test]
     fn test_primitive_array_neq() {
-        cmp_i64!(
-            neq,
-            neq_dyn,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![true, true, false, true, true, true, true, false, true, true]
-        );
-
-        cmp_vec!(
-            neq,
-            neq_dyn,
-            TimestampMillisecondArray,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![true, true, false, true, true, true, true, false, true, true]
-        );
+        test_array_array_op!(crate::cmp::neq, "neq", Int64Array);
+        test_array_array_op!(crate::cmp::neq, "neq", TimestampMillisecondArray);
     }
 
     #[test]
     fn test_primitive_array_neq_scalar() {
-        cmp_i64_scalar!(
-            neq_scalar,
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            8,
-            vec![true, true, false, true, true, true, true, false, true, true]
-        );
+        test_array_scalar_op!(crate::cmp::neq, "neq", Int64Array);
     }
 
     #[test]
     fn test_boolean_array_eq() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
-
-        let res: Vec<Option<bool>> = eq_bool(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(true), Some(false), Some(true), Some(false), None, None]
-        )
+        test_boolean_array_array_op!(crate::cmp::eq, "eq")
     }
 
     #[test]
     fn test_boolean_array_neq() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
-
-        let res: Vec<Option<bool>> = neq_bool(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(false), Some(true), Some(false), Some(true), None, None]
-        )
+        test_boolean_array_array_op!(crate::cmp::neq, "neq")
     }
 
     #[test]
     fn test_boolean_array_lt() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
-
-        let res: Vec<Option<bool>> = lt_bool(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(false), Some(true), Some(false), Some(false), None, None]
-        )
+        test_boolean_array_array_op!(crate::cmp::lt, "lt")
     }
 
     #[test]
     fn test_boolean_array_lt_eq() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
-
-        let res: Vec<Option<bool>> = lt_eq_bool(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(true), Some(true), Some(true), Some(false), None, None]
-        )
+        test_boolean_array_array_op!(crate::cmp::lt_eq, "lt_eq");
     }
 
     #[test]
     fn test_boolean_array_gt() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
-
-        let res: Vec<Option<bool>> = gt_bool(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(false), Some(false), Some(false), Some(true), None, None]
-        )
+        test_boolean_array_array_op!(crate::cmp::gt, "gt");
     }
 
     #[test]
     fn test_boolean_array_gt_eq() {
-        let a: BooleanArray =
-            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
-                .into();
-        let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
-                .into();
-
-        let res: Vec<Option<bool>> = gt_eq_bool(&a, &b).unwrap().iter().collect();
-
-        assert_eq!(
-            res,
-            vec![Some(true), Some(false), Some(true), Some(true), None, None]
-        )
+        test_boolean_array_array_op!(crate::cmp::gt_eq, "gt_eq");
     }
 
     #[test]
     fn test_boolean_array_eq_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-
-        let res1: Vec<Option<bool>> = eq_bool_scalar(&a, false).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(false), Some(true), None]);
-
-        let res2: Vec<Option<bool>> = eq_bool_scalar(&a, true).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(true), Some(false), None]);
+        test_boolean_array_scalar_op!(crate::cmp::eq, "eq");
     }
 
     #[test]
     fn test_boolean_array_neq_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-
-        let res1: Vec<Option<bool>> =
-            neq_bool_scalar(&a, false).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(true), Some(false), None]);
-
-        let res2: Vec<Option<bool>> = neq_bool_scalar(&a, true).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(false), Some(true), None]);
+        test_boolean_array_scalar_op!(crate::cmp::neq, "neq");
     }
 
     #[test]
     fn test_boolean_array_lt_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-
-        let res1: Vec<Option<bool>> = lt_bool_scalar(&a, false).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(false), Some(false), None]);
-
-        let res2: Vec<Option<bool>> = lt_bool_scalar(&a, true).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(false), Some(true), None]);
+        test_boolean_array_scalar_op!(crate::cmp::lt, "lt");
     }
 
     #[test]
     fn test_boolean_array_lt_eq_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-
-        let res1: Vec<Option<bool>> =
-            lt_eq_bool_scalar(&a, false).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(false), Some(true), None]);
-
-        let res2: Vec<Option<bool>> =
-            lt_eq_bool_scalar(&a, true).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(true), Some(true), None]);
+        test_boolean_array_scalar_op!(crate::cmp::lt_eq, "lt_eq");
     }
 
     #[test]
     fn test_boolean_array_gt_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-
-        let res1: Vec<Option<bool>> = gt_bool_scalar(&a, false).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(true), Some(false), None]);
-
-        let res2: Vec<Option<bool>> = gt_bool_scalar(&a, true).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(false), Some(false), None]);
+        test_boolean_array_scalar_op!(crate::cmp::gt, "gt");
     }
 
     #[test]
     fn test_boolean_array_gt_eq_scalar() {
-        let a: BooleanArray = vec![Some(true), Some(false), None].into();
-
-        let res1: Vec<Option<bool>> =
-            gt_eq_bool_scalar(&a, false).unwrap().iter().collect();
-
-        assert_eq!(res1, vec![Some(true), Some(true), None]);
-
-        let res2: Vec<Option<bool>> =
-            gt_eq_bool_scalar(&a, true).unwrap().iter().collect();
-
-        assert_eq!(res2, vec![Some(true), Some(false), None]);
+        test_boolean_array_scalar_op!(crate::cmp::gt_eq, "gt_eq");
     }
 
     #[test]
     fn test_primitive_array_lt() {
-        cmp_i64!(
-            lt,
-            lt_dyn,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![false, false, false, true, true, false, false, false, true, true]
-        );
-
-        cmp_vec!(
-            lt,
-            lt_dyn,
-            TimestampMillisecondArray,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![false, false, false, true, true, false, false, false, true, true]
-        );
+        test_array_array_op!(crate::cmp::lt, "lt", Int64Array);
+        test_array_array_op!(crate::cmp::lt, "lt", TimestampMillisecondArray);
     }
 
     #[test]
     fn test_primitive_array_lt_scalar() {
-        cmp_i64_scalar!(
-            lt_scalar,
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            8,
-            vec![true, true, false, false, false, true, true, false, false, false]
-        );
+        test_array_scalar_op!(crate::cmp::lt, "lt", Int64Array);
     }
 
     #[test]
     fn test_primitive_array_lt_nulls() {
-        cmp_i64!(
-            lt,
-            lt_dyn,
-            vec![None, None, Some(1), Some(1), None, None, Some(2), Some(2),],
-            vec![None, Some(1), None, Some(1), None, Some(3), None, Some(3),],
-            vec![None, None, None, Some(false), None, None, None, Some(true)]
-        );
+        let a0 = Int64Array::from(
+            vec![None, None, Some(1), Some(1), None, None, Some(2), Some(2),]);
+        let b0 = Int64Array::from(
+            vec![None, Some(1), None, Some(1), None, Some(3), None, Some(3),]);
 
-        cmp_vec!(
-            lt,
-            lt_dyn,
-            TimestampMillisecondArray,
-            vec![None, None, Some(1), Some(1), None, None, Some(2), Some(2),],
-            vec![None, Some(1), None, Some(1), None, Some(3), None, Some(3),],
-            vec![None, None, None, Some(false), None, None, None, Some(true)]
-        );
+        let r0 = crate::cmp::lt(&a0, &b0).unwrap();
+        let expected0 = BooleanArray::from(
+            vec![None, None, None, Some(false), None, None, None, Some(true)]);
+        assert_eq!(&expected0, &r0);
+
+        let a1 = TimestampMillisecondArray::from(
+            vec![None, None, Some(1), Some(1), None, None, Some(2), Some(2),]);
+        let b1 = TimestampMillisecondArray::from(
+            vec![None, Some(1), None, Some(1), None, Some(3), None, Some(3),]);
+
+        let r1 = crate::cmp::lt(&a1, &b1).unwrap();
+        let expected1 = BooleanArray::from(
+            vec![None, None, None, Some(false), None, None, None, Some(true)]);
+        assert_eq!(&expected1, &r1);
     }
 
     #[test]
     fn test_primitive_array_lt_scalar_nulls() {
-        cmp_i64_scalar!(
-            lt_scalar,
-            vec![None, Some(1), Some(2), Some(3), None, Some(1), Some(2), Some(3), Some(2), None],
-            2,
-            vec![None, Some(true), Some(false), Some(false), None, Some(true), Some(false), Some(false), Some(false), None]
-        );
+        let a0 = Int64Array::from(
+            vec![None, Some(1), Some(2), Some(3), None, Some(1), Some(2), Some(3), Some(2), None]);
+        let b0 = Int64Array::new_scalar(2);
+
+        let r0 = crate::cmp::lt(&a0, &b0).unwrap();
+        let expected0 = BooleanArray::from(
+            vec![None, Some(true), Some(false), Some(false), None, Some(true), Some(false), Some(false), Some(false), None]);
+        assert_eq!(&expected0, &r0);
     }
 
     #[test]
     fn test_primitive_array_lt_eq() {
-        cmp_i64!(
-            lt_eq,
-            lt_eq_dyn,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![false, false, true, true, true, false, false, true, true, true]
-        );
+        test_array_array_op!(crate::cmp::lt_eq, "lt_eq", Int64Array);
     }
 
     #[test]
     fn test_primitive_array_lt_eq_scalar() {
-        cmp_i64_scalar!(
-            lt_eq_scalar,
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            8,
-            vec![true, true, true, false, false, true, true, true, false, false]
-        );
+        test_array_scalar_op!(crate::cmp::lt_eq, "lt_eq", Int64Array);
     }
 
     #[test]
     fn test_primitive_array_lt_eq_nulls() {
-        cmp_i64!(
-            lt_eq,
-            lt_eq_dyn,
-            vec![None, None, Some(1), None, None, Some(1), None, None, Some(1)],
-            vec![None, Some(1), Some(0), None, Some(1), Some(2), None, None, Some(3)],
-            vec![None, None, Some(false), None, None, Some(true), None, None, Some(true)]
-        );
+        let a0 = Int64Array::from(
+            vec![None, None, Some(1), None, None, Some(1), None, None, Some(1)]);
+        let b0 = Int64Array::from(
+            vec![None, Some(1), Some(0), None, Some(1), Some(2), None, None, Some(3)]);
+
+        let r0 = crate::cmp::lt(&a0, &b0).unwrap();
+        let expected0 = BooleanArray::from(
+            vec![None, None, Some(false), None, None, Some(true), None, None, Some(true)]);
+        assert_eq!(&expected0, &r0);
     }
 
     #[test]
     fn test_primitive_array_lt_eq_scalar_nulls() {
-        cmp_i64_scalar!(
-            lt_eq_scalar,
-            vec![None, Some(1), Some(2), None, Some(1), Some(2), None, Some(1), Some(2)],
-            1,
-            vec![None, Some(true), Some(false), None, Some(true), Some(false), None, Some(true), Some(false)]
-        );
+        let a0 = Int64Array::from(
+            vec![None, Some(1), Some(2), None, Some(1), Some(2), None, Some(1), Some(2)]);
+        let b0 = Int64Array::new_scalar(1);
+
+        let r0 = crate::cmp::lt_eq(&a0, &b0).unwrap();
+        let expected0 = BooleanArray::from(
+            vec![None, Some(true), Some(false), None, Some(true), Some(false), None, Some(true), Some(false)]);
+        assert_eq!(&expected0, &r0);
     }
 
     #[test]
     fn test_primitive_array_gt() {
-        cmp_i64!(
-            gt,
-            gt_dyn,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![true, true, false, false, false, true, true, false, false, false]
-        );
+        test_array_array_op!(crate::cmp::gt, "gt", Int64Array);
     }
 
     #[test]
     fn test_primitive_array_gt_scalar() {
-        cmp_i64_scalar!(
-            gt_scalar,
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            8,
-            vec![false, false, false, true, true, false, false, false, true, true]
-        );
+        test_array_scalar_op!(crate::cmp::gt, "gt", Int64Array);
     }
 
     #[test]
     fn test_primitive_array_gt_nulls() {
-        cmp_i64!(
-            gt,
-            gt_dyn,
-            vec![None, None, Some(1), None, None, Some(2), None, None, Some(3)],
-            vec![None, Some(1), Some(1), None, Some(1), Some(1), None, Some(1), Some(1)],
-            vec![None, None, Some(false), None, None, Some(true), None, None, Some(true)]
-        );
+        let a0 = Int64Array::from(
+            vec![None, None, Some(1), None, None, Some(2), None, None, Some(3)]);
+        let b0 = Int64Array::from(
+            vec![None, Some(1), Some(1), None, Some(1), Some(1), None, Some(1), Some(1)]);
+
+        let r0 = crate::cmp::gt(&a0, &b0).unwrap();
+        let expected0 = BooleanArray::from(
+            vec![None, None, Some(false), None, None, Some(true), None, None, Some(true)]);
+        assert_eq!(&expected0, &r0);
     }
 
     #[test]
     fn test_primitive_array_gt_scalar_nulls() {
-        cmp_i64_scalar!(
-            gt_scalar,
-            vec![None, Some(1), Some(2), None, Some(1), Some(2), None, Some(1), Some(2)],
-            1,
-            vec![None, Some(false), Some(true), None, Some(false), Some(true), None, Some(false), Some(true)]
-        );
+        let a0 = Int64Array::from(
+            vec![None, Some(1), Some(2), None, Some(1), Some(2), None, Some(1), Some(2)]);
+        let b0 = Int64Array::new_scalar(1);
+
+        let r0 = crate::cmp::gt(&a0, &b0).unwrap();
+        let expected0 = BooleanArray::from(
+            vec![None, Some(false), Some(true), None, Some(false), Some(true), None, Some(false), Some(true)]);
+        assert_eq!(&expected0, &r0);
     }
 
     #[test]
     fn test_primitive_array_gt_eq() {
-        cmp_i64!(
-            gt_eq,
-            gt_eq_dyn,
-            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            vec![true, true, true, false, false, true, true, true, false, false]
-        );
+        test_array_array_op!(crate::cmp::gt_eq, "gt_eq", Int64Array);
     }
 
     #[test]
     fn test_primitive_array_gt_eq_scalar() {
-        cmp_i64_scalar!(
-            gt_eq_scalar,
-            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-            8,
-            vec![false, false, true, true, true, false, false, true, true, true]
-        );
+        test_array_scalar_op!(crate::cmp::gt_eq, "gt_eq", Int64Array);
     }
 
     #[test]
     fn test_primitive_array_gt_eq_nulls() {
-        cmp_i64!(
-            gt_eq,
-            gt_eq_dyn,
-            vec![None, None, Some(1), None, Some(1), Some(2), None, None, Some(1)],
-            vec![None, Some(1), None, None, Some(1), Some(1), None, Some(2), Some(2)],
-            vec![None, None, None, None, Some(true), Some(true), None, None, Some(false)]
-        );
+        let a0 = Int64Array::from(
+            vec![None, None, Some(1), None, Some(1), Some(2), None, None, Some(1)]);
+        let b0 = Int64Array::from(
+            vec![None, Some(1), None, None, Some(1), Some(1), None, Some(2), Some(2)]);
+
+        let r0 = crate::cmp::gt_eq(&a0, &b0).unwrap();
+        let expected0 = BooleanArray::from(
+            vec![None, None, None, None, Some(true), Some(true), None, None, Some(false)]);
+        assert_eq!(&expected0, &r0);
     }
 
     #[test]
     fn test_primitive_array_gt_eq_scalar_nulls() {
-        cmp_i64_scalar!(
-            gt_eq_scalar,
-            vec![None, Some(1), Some(2), None, Some(2), Some(3), None, Some(3), Some(4)],
-            2,
-            vec![None, Some(false), Some(true), None, Some(true), Some(true), None, Some(true), Some(true)]
-        );
+        let a0 = Int64Array::from(
+            vec![None, Some(1), Some(2), None, Some(2), Some(3), None, Some(3), Some(4)]);
+        let b0 = Int64Array::new_scalar(2);
+
+        let r0 = crate::cmp::gt_eq(&a0, &b0).unwrap();
+        let expected0 = BooleanArray::from(
+            vec![None, Some(false), Some(true), None, Some(true), Some(true), None, Some(true), Some(true)]);
+        assert_eq!(&expected0, &r0);
     }
 
     #[test]
@@ -2057,7 +1947,7 @@ mod tests {
         let b: Int32Array = (100..200).map(Some).collect();
         let b = b.slice(50, 50);
         let b = b.as_any().downcast_ref::<Int32Array>().unwrap();
-        let actual = lt(a, b).unwrap();
+        let actual = crate::cmp::lt(a, b).unwrap();
         let expected: BooleanArray = (0..50).map(|_| Some(true)).collect();
         assert_eq!(expected, actual);
     }
@@ -2067,7 +1957,7 @@ mod tests {
         let a: Int32Array = (0..100).map(Some).collect();
         let a = a.slice(50, 50);
         let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
-        let actual = lt_scalar(a, 200).unwrap();
+        let actual = crate::cmp::lt(a, &Int32Array::new_scalar(200)).unwrap();
         let expected: BooleanArray = (0..50).map(|_| Some(true)).collect();
         assert_eq!(expected, actual);
     }
@@ -2082,7 +1972,7 @@ mod tests {
 
         let array_a: PrimitiveArray<Int8Type> = vec![1; item_count].into();
         let array_b: PrimitiveArray<Int8Type> = vec![2; item_count].into();
-        let result_mask = gt_eq(&array_a, &array_b).unwrap();
+        let result_mask = crate::cmp::gt_eq(&array_a, &array_b).unwrap();
 
         assert_eq!(result_mask.values().len(), select_mask.values().len());
     }
@@ -2149,8 +2039,8 @@ mod tests {
         let b = IntervalDayTimeArray::from(
             vec![Some(70), Some(6), Some(833), Some(6), Some(3), None],
         );
-        let res = eq(&a, &b).unwrap();
-        let res_dyn = eq_dyn(&a, &b).unwrap();
+        let res = crate::cmp::eq(&a, &b).unwrap();
+        let res_dyn = crate::cmp::eq(&a, &b).unwrap();
         assert_eq!(res, res_dyn);
         assert_eq!(
             &res_dyn,
@@ -2165,8 +2055,8 @@ mod tests {
         let b = IntervalMonthDayNanoArray::from(
             vec![Some(86), Some(5), Some(8), Some(6), Some(3), None],
         );
-        let res = lt(&a, &b).unwrap();
-        let res_dyn = lt_dyn(&a, &b).unwrap();
+        let res = crate::cmp::lt(&a, &b).unwrap();
+        let res_dyn = crate::cmp::lt(&a, &b).unwrap();
         assert_eq!(res, res_dyn);
         assert_eq!(
             &res_dyn,
@@ -2181,8 +2071,8 @@ mod tests {
         let b = IntervalYearMonthArray::from(
             vec![Some(86), Some(5), Some(834), Some(6), Some(86), None],
         );
-        let res = gt_eq(&a, &b).unwrap();
-        let res_dyn = gt_eq_dyn(&a, &b).unwrap();
+        let res = crate::cmp::gt_eq(&a, &b).unwrap();
+        let res_dyn = crate::cmp::gt_eq(&a, &b).unwrap();
         assert_eq!(res, res_dyn);
         assert_eq!(
             &res_dyn,
