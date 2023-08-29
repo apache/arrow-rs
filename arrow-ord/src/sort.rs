@@ -30,6 +30,7 @@ use arrow_select::take::take;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use crate::rank::rank;
 pub use arrow_schema::SortOptions;
 
 /// Sort the `ArrayRef` using `SortOptions`.
@@ -400,14 +401,7 @@ fn child_rank(values: &dyn Array, options: SortOptions) -> Result<Vec<u32>, Arro
         descending: false,
         nulls_first: options.nulls_first != options.descending,
     });
-
-    let sorted_value_indices = sort_to_indices(values, value_options, None)?;
-    let sorted_indices = sorted_value_indices.values();
-    let mut out: Vec<_> = vec![0_u32; sorted_indices.len()];
-    for (ix, val) in sorted_indices.iter().enumerate() {
-        out[*val as usize] = ix as u32;
-    }
-    Ok(out)
+    rank(values, value_options)
 }
 
 // Sort run array and return sorted run array.
@@ -800,7 +794,9 @@ impl LexicographicalComparator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::PrimitiveRunBuilder;
+    use arrow_array::builder::{
+        FixedSizeListBuilder, Int64Builder, ListBuilder, PrimitiveRunBuilder,
+    };
     use arrow_buffer::i256;
     use half::f16;
     use rand::rngs::StdRng;
@@ -4041,5 +4037,32 @@ mod tests {
         assert_eq!(comparator.compare(2, 1), Ordering::Equal);
         // NULL.cmp(4)
         assert_eq!(comparator.compare(2, 3), Ordering::Less);
+    }
+
+    #[test]
+    fn sort_list_equal() {
+        let a = {
+            let mut builder = FixedSizeListBuilder::new(Int64Builder::new(), 2);
+            for value in [[1, 5], [0, 3], [1, 3]] {
+                builder.values().append_slice(&value);
+                builder.append(true);
+            }
+            builder.finish()
+        };
+
+        let sort_indices = sort_to_indices(&a, None, None).unwrap();
+        assert_eq!(sort_indices.values(), &[1, 2, 0]);
+
+        let a = {
+            let mut builder = ListBuilder::new(Int64Builder::new());
+            for value in [[1, 5], [0, 3], [1, 3]] {
+                builder.values().append_slice(&value);
+                builder.append(true);
+            }
+            builder.finish()
+        };
+
+        let sort_indices = sort_to_indices(&a, None, None).unwrap();
+        assert_eq!(sort_indices.values(), &[1, 2, 0]);
     }
 }
