@@ -18,9 +18,9 @@
 use std::task::Poll;
 
 use crate::{
-    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient, Action,
-    ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, PutResult, Ticket,
+    decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient,
+    trailers::extract_lazy_trailers, Action, ActionType, Criteria, Empty, FlightData,
+    FlightDescriptor, FlightInfo, HandshakeRequest, PutResult, Ticket,
 };
 use arrow_schema::Schema;
 use bytes::Bytes;
@@ -204,16 +204,14 @@ impl FlightClient {
     pub async fn do_get(&mut self, ticket: Ticket) -> Result<FlightRecordBatchStream> {
         let request = self.make_request(ticket);
 
-        let response_stream = self
-            .inner
-            .do_get(request)
-            .await?
-            .into_inner()
-            .map_err(FlightError::Tonic);
+        let (md, response_stream, _ext) = self.inner.do_get(request).await?.into_parts();
+        let (response_stream, trailers) = extract_lazy_trailers(response_stream);
 
         Ok(FlightRecordBatchStream::new_from_flight_data(
-            response_stream,
-        ))
+            response_stream.map_err(FlightError::Tonic),
+        )
+        .with_headers(md)
+        .with_trailers(trailers))
     }
 
     /// Make a `GetFlightInfo` call to the server with the provided

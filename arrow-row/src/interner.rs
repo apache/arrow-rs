@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn test_intern_duplicates() {
         // Unsorted with duplicates
-        let values = vec![0_u8, 1, 8, 4, 1, 0];
+        let values = [0_u8, 1, 8, 4, 1, 0];
         let mut interner = OrderPreservingInterner::default();
 
         let interned = interner.intern(values.iter().map(std::slice::from_ref).map(Some));

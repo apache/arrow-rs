@@ -338,10 +338,7 @@ mod tests {
 
         let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
 
-        let expected = list1
-            .into_iter()
-            .chain(list2.into_iter())
-            .chain(list3.into_iter());
+        let expected = list1.into_iter().chain(list2).chain(list3);
         let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);

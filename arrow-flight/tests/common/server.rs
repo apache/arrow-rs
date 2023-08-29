@@ -359,7 +359,11 @@ impl FlightService for TestFlightServer {
             .build(batch_stream)
             .map_err(Into::into);
 
-        Ok(Response::new(stream.boxed()))
+        let mut resp = Response::new(stream.boxed());
+        resp.metadata_mut()
+            .insert("test-resp-header", "some_val".parse().unwrap());
+
+        Ok(resp)
     }
 
     async fn do_put(

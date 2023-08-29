@@ -436,7 +436,7 @@ pub enum AzureConfigKey {
 
     /// Use object store with url scheme account.dfs.fabric.microsoft.com
     ///
-    /// Supported keys:        
+    /// Supported keys:
     /// - `azure_use_fabric_endpoint`
     /// - `use_fabric_endpoint`
     UseFabricEndpoint,
@@ -906,6 +906,23 @@ impl MicrosoftAzureBuilder {
     /// Set the proxy_url to be used by the underlying client
     pub fn with_proxy_url(mut self, proxy_url: impl Into<String>) -> Self {
         self.client_options = self.client_options.with_proxy_url(proxy_url);
+        self
+    }
+
+    /// Set a trusted proxy CA certificate
+    pub fn with_proxy_ca_certificate(
+        mut self,
+        proxy_ca_certificate: impl Into<String>,
+    ) -> Self {
+        self.client_options = self
+            .client_options
+            .with_proxy_ca_certificate(proxy_ca_certificate);
+        self
+    }
+
+    /// Set a list of hosts to exclude from proxy connections
+    pub fn with_proxy_excludes(mut self, proxy_excludes: impl Into<String>) -> Self {
+        self.client_options = self.client_options.with_proxy_excludes(proxy_excludes);
         self
     }
 

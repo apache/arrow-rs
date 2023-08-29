@@ -35,7 +35,7 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
         .prefix()
         .into_iter()
         .chain(unaligned.chunks().iter().cloned())
-        .chain(unaligned.suffix().into_iter());
+        .chain(unaligned.suffix());
 
     iter.rev().flat_map(move |mut chunk| {
         let chunk_idx = chunk_end_idx - 64;

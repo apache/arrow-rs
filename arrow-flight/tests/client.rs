@@ -19,6 +19,7 @@
 
 mod common {
     pub mod server;
+    pub mod trailers_layer;
 }
 use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{
@@ -28,7 +29,7 @@ use arrow_flight::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
-use common::server::TestFlightServer;
+use common::{server::TestFlightServer, trailers_layer::TrailersLayer};
 use futures::{Future, StreamExt, TryStreamExt};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tonic::{
@@ -158,18 +159,42 @@ async fn test_do_get() {
 
         let response = vec![Ok(batch.clone())];
         test_server.set_do_get_response(response);
-        let response_stream = client
+        let mut response_stream = client
             .do_get(ticket.clone())
             .await
             .expect("error making request");
 
+        assert_eq!(
+            response_stream
+                .headers()
+                .get("test-resp-header")
+                .expect("header exists")
+                .to_str()
+                .unwrap(),
+            "some_val",
+        );
+
+        // trailers are not available before stream exhaustion
+        assert!(response_stream.trailers().is_none());
+
         let expected_response = vec![batch];
-        let response: Vec<_> = response_stream
+        let response: Vec<_> = (&mut response_stream)
             .try_collect()
             .await
             .expect("Error streaming data");
-
         assert_eq!(response, expected_response);
+
+        assert_eq!(
+            response_stream
+                .trailers()
+                .expect("stream exhausted")
+                .get("test-trailer")
+                .expect("trailer exists")
+                .to_str()
+                .unwrap(),
+            "trailer_val",
+        );
+
         assert_eq!(test_server.take_do_get_request(), Some(ticket));
         ensure_metadata(&client, &test_server);
     })
@@ -932,6 +957,7 @@ impl TestFixture {
 
         let serve_future = tonic::transport::Server::builder()
             .timeout(server_timeout)
+            .layer(TrailersLayer)
             .add_service(test_server.service())
             .serve_with_incoming_shutdown(
                 tokio_stream::wrappers::TcpListenerStream::new(listener),
