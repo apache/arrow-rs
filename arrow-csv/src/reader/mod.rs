@@ -1515,6 +1515,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_parse_invalid_csv2() {
+        let mut file = File::open("test/data/aggregate_test_100.csv").unwrap();
+        let format = Format::default().with_header(true).with_delimiter(b',');
+
+        let (schema, _) = format.infer_schema(&mut file, None).unwrap();
+        file.rewind().unwrap();
+
+        let builder = ReaderBuilder::new(Arc::new(schema))
+            .with_format(format)
+            .with_batch_size(512)
+            .with_projection(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+
+        let mut csv = builder.build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+
+        assert_eq!(100, batch.num_rows());
+        assert_eq!(13, batch.num_columns());
+
+        let schema = batch.schema();
+
+        assert_eq!(&DataType::Utf8, schema.field(0).data_type());
+        assert_eq!(&DataType::Int64, schema.field(1).data_type());
+        assert_eq!(&DataType::Int64, schema.field(2).data_type());
+        assert_eq!(&DataType::Int64, schema.field(3).data_type());
+        assert_eq!(&DataType::Int64, schema.field(4).data_type());
+        assert_eq!(&DataType::Int64, schema.field(5).data_type());
+        assert_eq!(&DataType::Int64, schema.field(6).data_type());
+        assert_eq!(&DataType::Int64, schema.field(7).data_type());
+        assert_eq!(&DataType::Int64, schema.field(8).data_type());
+        assert_eq!(&DataType::Utf8, schema.field(9).data_type());
+        assert_eq!(&DataType::Float64, schema.field(10).data_type());
+        assert_eq!(&DataType::Float64, schema.field(11).data_type());
+        assert_eq!(&DataType::Utf8, schema.field(12).data_type());
+
+    }
+
     /// Infer the data type of a record
     fn infer_field_schema(string: &str) -> DataType {
         let mut v = InferredDataType::default();
