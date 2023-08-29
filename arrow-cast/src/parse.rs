@@ -189,13 +189,11 @@ pub fn string_to_datetime<T: TimeZone>(
     let parser = TimestampParser::new(bytes);
     let date = parser.date().ok_or_else(|| err("error parsing date"))?;
     if bytes.len() == 10 {
-        let offset = timezone.offset_from_local_date(&date);
-        let offset = offset
+        let datetime = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+        return timezone
+            .from_local_datetime(&datetime)
             .single()
-            .ok_or_else(|| err("error computing timezone offset"))?;
-
-        let time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-        return Ok(DateTime::from_local(date.and_time(time), offset));
+            .ok_or_else(|| err("error computing timezone offset"));
     }
 
     if !parser.test(10, b'T') && !parser.test(10, b't') && !parser.test(10, b' ') {
@@ -213,28 +211,24 @@ pub fn string_to_datetime<T: TimeZone>(
     }
 
     if bytes.len() <= tz_offset {
-        let offset = timezone.offset_from_local_datetime(&datetime);
-        let offset = offset
+        return timezone
+            .from_local_datetime(&datetime)
             .single()
-            .ok_or_else(|| err("error computing timezone offset"))?;
-        return Ok(DateTime::from_local(datetime, offset));
+            .ok_or_else(|| err("error computing timezone offset"));
     }
 
     if bytes[tz_offset] == b'z' || bytes[tz_offset] == b'Z' {
-        let offset = timezone.offset_from_local_datetime(&datetime);
-        let offset = offset
-            .single()
-            .ok_or_else(|| err("error computing timezone offset"))?;
-        return Ok(DateTime::from_utc(datetime, offset));
+        return Ok(timezone.from_utc_datetime(&datetime));
     }
 
     // Parse remainder of string as timezone
     let parsed_tz: Tz = s[tz_offset..].trim_start().parse()?;
-    let offset = parsed_tz.offset_from_local_datetime(&datetime);
-    let offset = offset
+    let parsed = parsed_tz
+        .from_local_datetime(&datetime)
         .single()
         .ok_or_else(|| err("error computing timezone offset"))?;
-    Ok(DateTime::<Tz>::from_local(datetime, offset).with_timezone(timezone))
+
+    Ok(parsed.with_timezone(timezone))
 }
 
 /// Accepts a string in RFC3339 / ISO8601 standard format and some
