@@ -1709,7 +1709,6 @@ mod tests {
     fn test_primitive_array_eq_scalar_with_slice() {
         let a = Int32Array::from(vec![Some(1), None, Some(2), Some(3)]);
         let a = a.slice(1, 3);
-        // let a_eq = eq_scalar(&a, 2).unwrap();
         let a_eq = crate::cmp::eq(&a, &Int32Array::new_scalar(2)).unwrap();
         assert_eq!(
             a_eq,
@@ -2108,7 +2107,7 @@ mod tests {
         );
         let a = a.slice(1, 3);
         let a = as_generic_binary_array::<i32>(&a);
-        let a_eq = eq_binary_scalar(a, b"hello").unwrap();
+        let a_eq = crate::cmp::eq(a, &BinaryArray::new_scalar(b"hello")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![None, Some(true), Some(false)])
@@ -2122,11 +2121,13 @@ mod tests {
                 let expected = BooleanArray::from($expected);
 
                 let left = BinaryArray::from_vec($left);
-                let res = $op(&left, $right).unwrap();
+                let rs = BinaryArray::new_scalar($right);
+                let res = $op(&left, &rs).unwrap();
                 assert_eq!(res, expected);
 
                 let left = LargeBinaryArray::from_vec($left);
-                let res = $op(&left, $right).unwrap();
+                let lrs = LargeBinaryArray::new_scalar($right);
+                let res = $op(&left, &lrs).unwrap();
                 assert_eq!(res, expected);
             }
         };
@@ -2136,7 +2137,7 @@ mod tests {
         test_binary_array_eq,
         vec![b"arrow", b"arrow", b"arrow", b"arrow", &[0xff, 0xf8]],
         vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
-        eq_binary,
+        crate::cmp::eq,
         vec![true, false, false, false, true]
     );
 
@@ -2144,7 +2145,7 @@ mod tests {
         test_binary_array_eq_scalar,
         vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
         "arrow".as_bytes(),
-        eq_binary_scalar,
+        crate::cmp::eq,
         vec![true, false, false, false, false]
     );
 
@@ -2152,14 +2153,14 @@ mod tests {
         test_binary_array_neq,
         vec![b"arrow", b"arrow", b"arrow", b"arrow", &[0xff, 0xf8]],
         vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf9]],
-        neq_binary,
+        crate::cmp::neq,
         vec![false, true, true, true, true]
     );
     test_binary_scalar!(
         test_binary_array_neq_scalar,
         vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
         "arrow".as_bytes(),
-        neq_binary_scalar,
+        crate::cmp::neq,
         vec![false, true, true, true, true]
     );
 
@@ -2167,14 +2168,14 @@ mod tests {
         test_binary_array_lt,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf9]],
-        lt_binary,
+        crate::cmp::lt,
         vec![true, true, false, false, true]
     );
     test_binary_scalar!(
         test_binary_array_lt_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
-        lt_binary_scalar,
+        crate::cmp::lt,
         vec![true, true, false, false, false]
     );
 
@@ -2182,14 +2183,14 @@ mod tests {
         test_binary_array_lt_eq,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf8, 0xf9]],
-        lt_eq_binary,
+        crate::cmp::lt_eq,
         vec![true, true, true, false, true]
     );
     test_binary_scalar!(
         test_binary_array_lt_eq_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
-        lt_eq_binary_scalar,
+        crate::cmp::lt_eq,
         vec![true, true, true, false, false]
     );
 
@@ -2197,14 +2198,14 @@ mod tests {
         test_binary_array_gt,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf9]],
         vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf8]],
-        gt_binary,
+        crate::cmp::gt,
         vec![false, false, false, true, true]
     );
     test_binary_scalar!(
         test_binary_array_gt_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
-        gt_binary_scalar,
+        crate::cmp::gt,
         vec![false, false, false, true, true]
     );
 
@@ -2212,14 +2213,14 @@ mod tests {
         test_binary_array_gt_eq,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf8]],
-        gt_eq_binary,
+        crate::cmp::gt_eq,
         vec![false, false, true, true, true]
     );
     test_binary_scalar!(
         test_binary_array_gt_eq_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
-        gt_eq_binary_scalar,
+        crate::cmp::gt_eq,
         vec![false, false, true, true, true]
     );
 
@@ -2299,13 +2300,14 @@ mod tests {
             vec![Some("hi"), None, Some("hello"), Some("world"), Some("")],
         );
         let a = a.slice(1, 4);
-        let a_eq = eq_utf8_scalar(&a, "hello").unwrap();
+        let a_eq = crate::cmp::eq(&a, &StringArray::new_scalar("hello")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![None, Some(true), Some(false), Some(false)])
         );
 
-        let a_eq2 = eq_utf8_scalar(&a, "").unwrap();
+        let a_eq2 = crate::cmp::eq(&a, &StringArray::new_scalar("")).unwrap();
+
 
         assert_eq!(
             a_eq2,
@@ -2318,7 +2320,8 @@ mod tests {
             #[test]
             fn $test_name() {
                 let left = StringArray::from($left);
-                let res = $op(&left, $right).unwrap();
+                let rs = StringArray::new_scalar($right);
+                let res = $op(&left, &rs).unwrap();
                 let expected = $expected;
                 assert_eq!(expected.len(), res.len());
                 for i in 0..res.len() {
@@ -2334,7 +2337,8 @@ mod tests {
                 }
 
                 let left = LargeStringArray::from($left);
-                let res = $op(&left, $right).unwrap();
+                let lrs = LargeStringArray::new_scalar($right);
+                let res = $op(&left, &lrs).unwrap();
                 let expected = $expected;
                 assert_eq!(expected.len(), res.len());
                 for i in 0..res.len() {
@@ -2360,14 +2364,14 @@ mod tests {
         test_utf8_array_eq,
         vec!["arrow", "arrow", "arrow", "arrow"],
         vec!["arrow", "parquet", "datafusion", "flight"],
-        eq_utf8,
+        crate::cmp::eq,
         [true, false, false, false]
     );
     test_utf8_scalar!(
         test_utf8_array_eq_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "arrow",
-        eq_utf8_scalar,
+        crate::cmp::eq,
         [true, false, false, false]
     );
 
@@ -2375,14 +2379,14 @@ mod tests {
         test_utf8_array_neq,
         vec!["arrow", "arrow", "arrow", "arrow"],
         vec!["arrow", "parquet", "datafusion", "flight"],
-        neq_utf8,
+        crate::cmp::neq,
         [false, true, true, true]
     );
     test_utf8_scalar!(
         test_utf8_array_neq_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "arrow",
-        neq_utf8_scalar,
+        crate::cmp::neq,
         [false, true, true, true]
     );
 
@@ -2390,14 +2394,14 @@ mod tests {
         test_utf8_array_lt,
         vec!["arrow", "datafusion", "flight", "parquet"],
         vec!["flight", "flight", "flight", "flight"],
-        lt_utf8,
+        crate::cmp::lt,
         [true, true, false, false]
     );
     test_utf8_scalar!(
         test_utf8_array_lt_scalar,
         vec!["arrow", "datafusion", "flight", "parquet"],
         "flight",
-        lt_utf8_scalar,
+        crate::cmp::lt,
         [true, true, false, false]
     );
 
@@ -2405,14 +2409,14 @@ mod tests {
         test_utf8_array_lt_eq,
         vec!["arrow", "datafusion", "flight", "parquet"],
         vec!["flight", "flight", "flight", "flight"],
-        lt_eq_utf8,
+        crate::cmp::lt_eq,
         [true, true, true, false]
     );
     test_utf8_scalar!(
         test_utf8_array_lt_eq_scalar,
         vec!["arrow", "datafusion", "flight", "parquet"],
         "flight",
-        lt_eq_utf8_scalar,
+        crate::cmp::lt_eq,
         [true, true, true, false]
     );
 
@@ -2420,14 +2424,14 @@ mod tests {
         test_utf8_array_gt,
         vec!["arrow", "datafusion", "flight", "parquet"],
         vec!["flight", "flight", "flight", "flight"],
-        gt_utf8,
+        crate::cmp::gt,
         [false, false, false, true]
     );
     test_utf8_scalar!(
         test_utf8_array_gt_scalar,
         vec!["arrow", "datafusion", "flight", "parquet"],
         "flight",
-        gt_utf8_scalar,
+        crate::cmp::gt,
         [false, false, false, true]
     );
 
@@ -2435,21 +2439,21 @@ mod tests {
         test_utf8_array_gt_eq,
         vec!["arrow", "datafusion", "flight", "parquet"],
         vec!["flight", "flight", "flight", "flight"],
-        gt_eq_utf8,
+        crate::cmp::gt_eq,
         [false, false, true, true]
     );
     test_utf8_scalar!(
         test_utf8_array_gt_eq_scalar,
         vec!["arrow", "datafusion", "flight", "parquet"],
         "flight",
-        gt_eq_utf8_scalar,
+        crate::cmp::gt_eq,
         [false, false, true, true]
     );
 
     #[test]
     fn test_eq_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let a_eq = eq_dyn_scalar(&array, 8).unwrap();
+        let a_eq = crate::cmp::eq(&array, &Int32Array::new_scalar(8)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -2466,7 +2470,7 @@ mod tests {
         builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
-        let a_eq = eq_dyn_scalar(&array, 123).unwrap();
+        let a_eq = crate::cmp::eq(&array, &Int32Array::new_scalar(123)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), None, Some(false)])
@@ -2482,16 +2486,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(true), Some(false)],
         );
-        assert_eq!(eq_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array, &Float32Array::new_scalar(8.0)).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
-        assert_eq!(eq_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array, &Float64Array::new_scalar(8.0)).unwrap(), expected);
     }
 
     #[test]
     fn test_lt_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let a_eq = lt_dyn_scalar(&array, 8).unwrap();
+        let a_eq = crate::cmp::lt(&array, &Int32Array::new_scalar(8)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -2508,7 +2512,7 @@ mod tests {
         builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
-        let a_eq = lt_dyn_scalar(&array, 123).unwrap();
+        let a_eq = crate::cmp::lt(&array, &Int32Array::new_scalar(123)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), None, Some(true)])
@@ -2524,16 +2528,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(lt_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array, &Float32Array::new_scalar(8.0)).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
-        assert_eq!(lt_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array, &Float64Array::new_scalar(8.0)).unwrap(), expected);
     }
 
     #[test]
     fn test_lt_eq_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let a_eq = lt_eq_dyn_scalar(&array, 8).unwrap();
+        let a_eq = crate::cmp::lt_eq(&array, &Int32Array::new_scalar(8)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -2542,122 +2546,85 @@ mod tests {
         );
     }
 
-    fn test_primitive_dyn_scalar<T: ArrowPrimitiveType>(array: PrimitiveArray<T>) {
-        let a_eq = eq_dyn_scalar(&array, 8).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), None, Some(true), None, Some(false)])
-        );
+    macro_rules! test_primitive_dyn_scalar {
+        ($array_type:ty) => {
+            let array = <$array_type>::from(vec![Some(1), None, Some(8), None, Some(10)]);
+            let s1 = <$array_type>::new_scalar(8);
+            let a_eq = crate::cmp::eq(&array, &s1).unwrap();
+            assert_eq!(
+                a_eq,
+                BooleanArray::from(vec![Some(false), None, Some(true), None, Some(false)])
+            );
 
-        let a_eq = gt_eq_dyn_scalar(&array, 8).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), None, Some(true), None, Some(true)])
-        );
+            let a_eq = crate::cmp::gt_eq(&array, &s1).unwrap();
+            assert_eq!(
+                a_eq,
+                BooleanArray::from(vec![Some(false), None, Some(true), None, Some(true)])
+            );
 
-        let a_eq = gt_dyn_scalar(&array, 8).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(false), None, Some(false), None, Some(true)])
-        );
+            let a_eq = crate::cmp::gt(&array, &s1).unwrap();
+            assert_eq!(
+                a_eq,
+                BooleanArray::from(vec![Some(false), None, Some(false), None, Some(true)])
+            );
 
-        let a_eq = lt_eq_dyn_scalar(&array, 8).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), None, Some(true), None, Some(false)])
-        );
+            let a_eq = crate::cmp::lt_eq(&array, &s1).unwrap();
+            assert_eq!(
+                a_eq,
+                BooleanArray::from(vec![Some(true), None, Some(true), None, Some(false)])
+            );
 
-        let a_eq = lt_dyn_scalar(&array, 8).unwrap();
-        assert_eq!(
-            a_eq,
-            BooleanArray::from(vec![Some(true), None, Some(false), None, Some(false)])
-        );
+            let a_eq = crate::cmp::lt(&array, &s1).unwrap();
+            assert_eq!(
+                a_eq,
+                BooleanArray::from(vec![Some(true), None, Some(false), None, Some(false)])
+            );
+        }
     }
 
     #[test]
     fn test_timestamp_dyn_scalar() {
-        let array =
-            TimestampSecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
-
-        let array =
-            TimestampMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
-
-        let array =
-            TimestampMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
-
-        let array =
-            TimestampNanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
+        test_primitive_dyn_scalar!(TimestampSecondArray);
+        test_primitive_dyn_scalar!(TimestampMicrosecondArray);
+        test_primitive_dyn_scalar!(TimestampMicrosecondArray);
+        test_primitive_dyn_scalar!(TimestampNanosecondArray);
     }
 
     #[test]
     fn test_date32_dyn_scalar() {
-        let array = Date32Array::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
+        test_primitive_dyn_scalar!(Date32Array);
     }
 
     #[test]
     fn test_date64_dyn_scalar() {
-        let array = Date64Array::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
+        test_primitive_dyn_scalar!(Date64Array);
     }
 
     #[test]
     fn test_time32_dyn_scalar() {
-        let array = Time32SecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
-
-        let array =
-            Time32MillisecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
+        test_primitive_dyn_scalar!(Time32SecondArray);
+        test_primitive_dyn_scalar!(Time32MillisecondArray);
     }
 
     #[test]
     fn test_time64_dyn_scalar() {
-        let array =
-            Time64MicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
-
-        let array =
-            Time64NanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
+        test_primitive_dyn_scalar!(Time64MicrosecondArray);
+        test_primitive_dyn_scalar!(Time64NanosecondArray);
     }
 
     #[test]
     fn test_interval_dyn_scalar() {
-        let array =
-            IntervalDayTimeArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
-
-        let array =
-            IntervalMonthDayNanoArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
-
-        let array =
-            IntervalYearMonthArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
+        test_primitive_dyn_scalar!(IntervalDayTimeArray);
+        test_primitive_dyn_scalar!(IntervalMonthDayNanoArray);
+        test_primitive_dyn_scalar!(IntervalYearMonthArray);
     }
 
     #[test]
     fn test_duration_dyn_scalar() {
-        let array =
-            DurationSecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
-
-        let array =
-            DurationMicrosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
-
-        let array =
-            DurationMillisecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
-
-        let array =
-            DurationNanosecondArray::from(vec![Some(1), None, Some(8), None, Some(10)]);
-        test_primitive_dyn_scalar(array);
+        test_primitive_dyn_scalar!(DurationSecondArray);
+        test_primitive_dyn_scalar!(DurationMicrosecondArray);
+        test_primitive_dyn_scalar!(DurationMillisecondArray);
+        test_primitive_dyn_scalar!(DurationNanosecondArray);
     }
 
     #[test]
@@ -2668,7 +2635,7 @@ mod tests {
         builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
-        let a_eq = lt_eq_dyn_scalar(&array, 23).unwrap();
+        let a_eq = crate::cmp::lt_eq(&array, &Int32Array::new_scalar(23)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), None, Some(true)])
@@ -2684,16 +2651,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(false)],
         );
-        assert_eq!(lt_eq_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array, &Float32Array::new_scalar(8.0)).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
-        assert_eq!(lt_eq_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array, &Float64Array::new_scalar(8.0)).unwrap(), expected);
     }
 
     #[test]
     fn test_gt_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let a_eq = gt_dyn_scalar(&array, 8).unwrap();
+        let a_eq = crate::cmp::gt(&array, &Int32Array::new_scalar(8)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -2710,7 +2677,7 @@ mod tests {
         builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
-        let a_eq = gt_dyn_scalar(&array, 23).unwrap();
+        let a_eq = crate::cmp::gt(&array, &Int32Array::new_scalar(32)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), None, Some(false)])
@@ -2726,16 +2693,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true)],
         );
-        assert_eq!(gt_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array, &Float32Array::new_scalar(8.0)).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
-        assert_eq!(gt_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array, &Float64Array::new_scalar(8.0)).unwrap(), expected);
     }
 
     #[test]
     fn test_gt_eq_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let a_eq = gt_eq_dyn_scalar(&array, 8).unwrap();
+        let a_eq = crate::cmp::gt_eq(&array, &Int32Array::new_scalar(8)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -2752,7 +2719,7 @@ mod tests {
         builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
-        let a_eq = gt_eq_dyn_scalar(&array, 23).unwrap();
+        let a_eq = crate::cmp::gt_eq(&array, &Int32Array::new_scalar(23)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), None, Some(true)])
@@ -2768,16 +2735,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(gt_eq_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array, &Float32Array::new_scalar(8.0)).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
-        assert_eq!(gt_eq_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array, &Float64Array::new_scalar(8.0)).unwrap(), expected);
     }
 
     #[test]
     fn test_neq_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let a_eq = neq_dyn_scalar(&array, 8).unwrap();
+        let a_eq = crate::cmp::neq(&array, &Int32Array::new_scalar(8)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -2794,7 +2761,7 @@ mod tests {
         builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
-        let a_eq = neq_dyn_scalar(&array, 23).unwrap();
+        let a_eq = crate::cmp::neq(&array, &Int32Array::new_scalar(23)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), None, Some(false)])
@@ -2810,10 +2777,10 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(false), Some(true)],
         );
-        assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array, &Float32Array::new_scalar(8.0)).unwrap(), expected);
 
         let array = array.unary::<_, Float64Type>(|x| x as f64);
-        assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array, &Float64Array::new_scalar(8.0)).unwrap(), expected);
     }
 
     #[test]
@@ -2821,14 +2788,13 @@ mod tests {
         let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
         let array = BinaryArray::from(data.clone());
         let large_array = LargeBinaryArray::from(data);
-        let scalar = "flight".as_bytes();
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(false), Some(false), None],
         );
 
-        assert_eq!(eq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array, &BinaryArray::new_scalar("flight".as_bytes())).unwrap(), expected);
         assert_eq!(
-            eq_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            crate::cmp::eq(&large_array, &LargeBinaryArray::new_scalar("flight".as_bytes())).unwrap(),
             expected
         );
 
@@ -2836,10 +2802,13 @@ mod tests {
             vec![vec![0u8], vec![0u8], vec![0u8], vec![1u8]].into_iter(),
         )
         .unwrap();
-        let scalar = &[1u8];
+
+        let scalar = &Scalar::new(
+            FixedSizeBinaryArray::try_from_iter([&[1u8]].into_iter()).unwrap()
+        );
         let expected =
             BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]);
-        assert_eq!(eq_dyn_binary_scalar(&fsb_array, scalar).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&fsb_array, scalar).unwrap(), expected);
     }
 
     #[test]
@@ -2852,9 +2821,9 @@ mod tests {
             vec![Some(true), Some(true), Some(false), Some(true), Some(true), None],
         );
 
-        assert_eq!(neq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array, &BinaryArray::new_scalar(scalar)).unwrap(), expected);
         assert_eq!(
-            neq_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            crate::cmp::neq(&large_array, &LargeBinaryArray::new_scalar(scalar)).unwrap(),
             expected
         );
 
@@ -2862,10 +2831,12 @@ mod tests {
             vec![vec![0u8], vec![0u8], vec![0u8], vec![1u8]].into_iter(),
         )
         .unwrap();
-        let scalar = &[1u8];
+        let scalar = &Scalar::new(
+            FixedSizeBinaryArray::try_from_iter([&[1u8]].into_iter()).unwrap()
+        );
         let expected =
             BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]);
-        assert_eq!(neq_dyn_binary_scalar(&fsb_array, scalar).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&fsb_array, scalar).unwrap(), expected);
     }
 
     #[test]
@@ -2873,14 +2844,13 @@ mod tests {
         let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
         let array = BinaryArray::from(data.clone());
         let large_array = LargeBinaryArray::from(data);
-        let scalar = "flight".as_bytes();
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(false), Some(false), None],
         );
 
-        assert_eq!(lt_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array, &BinaryArray::new_scalar("flight".as_bytes())).unwrap(), expected);
         assert_eq!(
-            lt_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            crate::cmp::lt(&large_array, &LargeBinaryArray::new_scalar("flight".as_bytes())).unwrap(),
             expected
         );
     }
@@ -2890,14 +2860,13 @@ mod tests {
         let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
         let array = BinaryArray::from(data.clone());
         let large_array = LargeBinaryArray::from(data);
-        let scalar = "flight".as_bytes();
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(false), Some(false), None],
         );
 
-        assert_eq!(lt_eq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array, &BinaryArray::new_scalar("flight".as_bytes())).unwrap(), expected);
         assert_eq!(
-            lt_eq_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            crate::cmp::lt_eq(&large_array, &LargeBinaryArray::new_scalar("flight".as_bytes())).unwrap(),
             expected
         );
     }
@@ -2907,14 +2876,13 @@ mod tests {
         let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
         let array = BinaryArray::from(data.clone());
         let large_array = LargeBinaryArray::from(data);
-        let scalar = "flight".as_bytes();
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(true), Some(true), None],
         );
 
-        assert_eq!(gt_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array, &BinaryArray::new_scalar("flight".as_bytes())).unwrap(), expected);
         assert_eq!(
-            gt_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            crate::cmp::gt(&large_array, &LargeBinaryArray::new_scalar("flight".as_bytes())).unwrap(),
             expected
         );
     }
@@ -2929,9 +2897,9 @@ mod tests {
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), None],
         );
 
-        assert_eq!(gt_eq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array, &BinaryArray::new_scalar(scalar)).unwrap(), expected);
         assert_eq!(
-            gt_eq_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            crate::cmp::gt_eq(&large_array, &LargeBinaryArray::new_scalar(scalar)).unwrap(),
             expected
         );
     }
@@ -2939,7 +2907,7 @@ mod tests {
     #[test]
     fn test_eq_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let a_eq = eq_dyn_utf8_scalar(&array, "xyz").unwrap();
+        let a_eq = crate::cmp::eq(&array, &StringArray::new_scalar("xyz")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(false), Some(true)])
@@ -2955,7 +2923,7 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
         let array = builder.finish();
-        let a_eq = eq_dyn_utf8_scalar(&array, "def").unwrap();
+        let a_eq = crate::cmp::eq(&array, &StringArray::new_scalar("def")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -2967,7 +2935,7 @@ mod tests {
     #[test]
     fn test_lt_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let a_eq = lt_dyn_utf8_scalar(&array, "xyz").unwrap();
+        let a_eq = crate::cmp::lt(&array, &StringArray::new_scalar("xyz")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
@@ -2983,7 +2951,7 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
         let array = builder.finish();
-        let a_eq = lt_dyn_utf8_scalar(&array, "def").unwrap();
+        let a_eq = crate::cmp::lt(&array, &StringArray::new_scalar("def")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -2995,7 +2963,7 @@ mod tests {
     #[test]
     fn test_lt_eq_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let a_eq = lt_eq_dyn_utf8_scalar(&array, "def").unwrap();
+        let a_eq = crate::cmp::lt_eq(&array, &StringArray::new_scalar("def")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
@@ -3011,7 +2979,7 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("xyz").unwrap();
         let array = builder.finish();
-        let a_eq = lt_eq_dyn_utf8_scalar(&array, "def").unwrap();
+        let a_eq = crate::cmp::lt_eq(&array, &StringArray::new_scalar("def")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3023,7 +2991,7 @@ mod tests {
     #[test]
     fn test_gt_eq_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let a_eq = gt_eq_dyn_utf8_scalar(&array, "def").unwrap();
+        let a_eq = crate::cmp::gt_eq(&array, &StringArray::new_scalar("def")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(true), Some(true)])
@@ -3039,7 +3007,7 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("xyz").unwrap();
         let array = builder.finish();
-        let a_eq = gt_eq_dyn_utf8_scalar(&array, "def").unwrap();
+        let a_eq = crate::cmp::gt_eq(&array, &StringArray::new_scalar("def")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3051,7 +3019,7 @@ mod tests {
     #[test]
     fn test_gt_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let a_eq = gt_dyn_utf8_scalar(&array, "def").unwrap();
+        let a_eq = crate::cmp::gt(&array, &StringArray::new_scalar("def")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(false), Some(true)])
@@ -3067,7 +3035,7 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("xyz").unwrap();
         let array = builder.finish();
-        let a_eq = gt_dyn_utf8_scalar(&array, "def").unwrap();
+        let a_eq = crate::cmp::gt(&array, &StringArray::new_scalar("def")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3079,7 +3047,7 @@ mod tests {
     #[test]
     fn test_neq_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let a_eq = neq_dyn_utf8_scalar(&array, "xyz").unwrap();
+        let a_eq = crate::cmp::neq(&array, &StringArray::new_scalar("xyz")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
@@ -3095,7 +3063,7 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
         let array = builder.finish();
-        let a_eq = neq_dyn_utf8_scalar(&array, "def").unwrap();
+        let a_eq = crate::cmp::neq(&array, &StringArray::new_scalar("def")).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3107,7 +3075,7 @@ mod tests {
     #[test]
     fn test_eq_dyn_bool_scalar() {
         let array = BooleanArray::from(vec![true, false, true]);
-        let a_eq = eq_dyn_bool_scalar(&array, false).unwrap();
+        let a_eq = crate::cmp::eq(&array, &BooleanArray::new_scalar(false)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(true), Some(false)])
@@ -3117,7 +3085,7 @@ mod tests {
     #[test]
     fn test_lt_dyn_bool_scalar() {
         let array = BooleanArray::from(vec![Some(true), Some(false), Some(true), None]);
-        let a_eq = lt_dyn_bool_scalar(&array, false).unwrap();
+        let a_eq = crate::cmp::lt(&array, &BooleanArray::new_scalar(false)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(false), Some(false), None])
@@ -3127,7 +3095,7 @@ mod tests {
     #[test]
     fn test_gt_dyn_bool_scalar() {
         let array = BooleanArray::from(vec![true, false, true]);
-        let a_eq = gt_dyn_bool_scalar(&array, false).unwrap();
+        let a_eq = crate::cmp::gt(&array, &BooleanArray::new_scalar(false)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(false), Some(true)])
@@ -3137,7 +3105,7 @@ mod tests {
     #[test]
     fn test_lt_eq_dyn_bool_scalar() {
         let array = BooleanArray::from(vec![true, false, true]);
-        let a_eq = lt_eq_dyn_bool_scalar(&array, false).unwrap();
+        let a_eq = crate::cmp::lt_eq(&array, &BooleanArray::new_scalar(false)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(true), Some(false)])
@@ -3147,7 +3115,7 @@ mod tests {
     #[test]
     fn test_gt_eq_dyn_bool_scalar() {
         let array = BooleanArray::from(vec![true, false, true]);
-        let a_eq = gt_eq_dyn_bool_scalar(&array, false).unwrap();
+        let a_eq = crate::cmp::gt_eq(&array, &BooleanArray::new_scalar(false)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(true), Some(true)])
@@ -3157,7 +3125,7 @@ mod tests {
     #[test]
     fn test_neq_dyn_bool_scalar() {
         let array = BooleanArray::from(vec![true, false, true]);
-        let a_eq = neq_dyn_bool_scalar(&array, false).unwrap();
+        let a_eq = crate::cmp::neq(&array, &BooleanArray::new_scalar(false)).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(false), Some(true)])
@@ -3178,13 +3146,13 @@ mod tests {
             FixedSizeBinaryArray::try_from_sparse_iter_with_size(values2.into_iter(), 2)
                 .unwrap();
 
-        let result = eq_dyn(&array1, &array2).unwrap();
+        let result = crate::cmp::eq(&array1, &array2).unwrap();
         assert_eq!(
             BooleanArray::from(vec![Some(true), None, Some(false)]),
             result
         );
 
-        let result = neq_dyn(&array1, &array2).unwrap();
+        let result =  crate::cmp::neq(&array1, &array2).unwrap();
         assert_eq!(
             BooleanArray::from(vec![Some(false), None, Some(true)]),
             result
@@ -3202,10 +3170,10 @@ mod tests {
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
-        let result = eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::eq(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
 
-        let result = neq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::neq(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, true, false])
@@ -3222,13 +3190,13 @@ mod tests {
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
-        let result = eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::eq(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, true, false])
         );
 
-        let result = neq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::neq(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
     }
 
@@ -3246,13 +3214,13 @@ mod tests {
             .map(|&x| if x == "b" { None } else { Some(x) })
             .collect();
 
-        let result = eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::eq(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
         );
 
-        let result = neq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::neq(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(false)])
@@ -3272,13 +3240,13 @@ mod tests {
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
-        let result = eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::eq(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
         );
 
-        let result = neq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::neq(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
     }
 
@@ -3292,10 +3260,10 @@ mod tests {
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
-        let result = eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::eq(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
 
-        let result = neq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::neq(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
@@ -3312,10 +3280,10 @@ mod tests {
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
-        let result = eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::eq(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
 
-        let result = neq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::neq(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
@@ -3332,13 +3300,13 @@ mod tests {
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
-        let result = eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::eq(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, true, false])
         );
 
-        let result = neq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::neq(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
     }
 
@@ -3353,22 +3321,22 @@ mod tests {
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
-        let result = lt_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::lt(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
         );
 
-        let result = lt_eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::lt_eq(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
 
-        let result = gt_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::gt(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, true, false])
         );
 
-        let result = gt_eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::gt_eq(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
     }
 
@@ -3382,22 +3350,22 @@ mod tests {
         let dict_array1 = DictionaryArray::new(keys1, values.clone());
         let dict_array2 = DictionaryArray::new(keys2, values.clone());
 
-        let result = lt_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::lt(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
         );
 
-        let result = lt_eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::lt_eq(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, true, false]));
 
-        let result = gt_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::gt(&dict_array1, &dict_array2);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, false, true])
         );
 
-        let result = gt_eq_dyn(&dict_array1, &dict_array2);
+        let result = crate::cmp::gt_eq(&dict_array1, &dict_array2);
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
     }
 
@@ -3422,25 +3390,25 @@ mod tests {
 
         let array = Int8Array::from_iter([Some(12_i8), None, Some(14)]);
 
-        let result = eq_dyn(&dict_array, &array);
+        let result = crate::cmp::eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true)])
         );
 
-        let result = eq_dyn(&array, &dict_array);
+        let result = crate::cmp::eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true)])
         );
 
-        let result = neq_dyn(&dict_array, &array);
+        let result = crate::cmp::neq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false)])
         );
 
-        let result = neq_dyn(&array, &dict_array);
+        let result = crate::cmp::neq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false)])
@@ -3456,49 +3424,49 @@ mod tests {
 
         let array = Int8Array::from_iter([Some(12_i8), None, Some(11)]);
 
-        let result = lt_dyn(&dict_array, &array);
+        let result = crate::cmp::lt(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false)])
         );
 
-        let result = lt_dyn(&array, &dict_array);
+        let result = crate::cmp::lt(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(true)])
         );
 
-        let result = lt_eq_dyn(&dict_array, &array);
+        let result = crate::cmp::lt_eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(false)])
         );
 
-        let result = lt_eq_dyn(&array, &dict_array);
+        let result = crate::cmp::lt_eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true)])
         );
 
-        let result = gt_dyn(&dict_array, &array);
+        let result = crate::cmp::gt(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(true)])
         );
 
-        let result = gt_dyn(&array, &dict_array);
+        let result = crate::cmp::gt(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false)])
         );
 
-        let result = gt_eq_dyn(&dict_array, &array);
+        let result = crate::cmp::gt_eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true)])
         );
 
-        let result = gt_eq_dyn(&array, &dict_array);
+        let result = crate::cmp::gt_eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(false)])
@@ -3512,32 +3480,32 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(eq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(neq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
 
         let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
         let array2 = Float32Array::from(vec![f32::NAN, f32::NAN, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(eq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(neq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
 
         let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
         let array2 = Float64Array::from(vec![f64::NAN, f64::NAN, 8.0, 8.0, 10.0]);
@@ -3545,16 +3513,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(eq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(neq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -3565,16 +3533,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(lt(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(lt_eq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
         let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]);
         let array2 = Float32Array::from(vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0]);
@@ -3582,16 +3550,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(lt(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(lt_eq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
             .into_iter()
@@ -3605,16 +3573,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(lt(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(lt_eq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -3625,16 +3593,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(gt(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
 
         let array1 = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]);
         let array2 = Float32Array::from(vec![f32::NAN, f32::NAN, 8.0, 9.0, 10.0, 1.0]);
@@ -3642,16 +3610,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(gt(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
 
         let array1 = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]);
         let array2 = Float64Array::from(vec![f64::NAN, f64::NAN, 8.0, 9.0, 10.0, 1.0]);
@@ -3659,16 +3627,16 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(gt(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
 
-        assert_eq!(gt_eq(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -3678,34 +3646,37 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+
+        let f16s = Scalar::new(PrimitiveArray::<Float16Type>::from(vec![f16::NAN]));
+        let f64s = Scalar::new(PrimitiveArray::<Float64Type>::from(vec![f64::NAN]));
+        assert_eq!(crate::cmp::eq(&array, &f16s).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array, &f16s).unwrap(), expected);
 
         let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array, &Float32Array::new_scalar(f32::NAN)).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(neq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array, &Float32Array::new_scalar(f32::NAN)).unwrap(), expected);
 
         let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array, &f64s).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(neq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::neq(&array, &f64s).unwrap(), expected);
     }
 
     #[test]
@@ -3715,35 +3686,38 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(lt_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+
+        let f16s = Scalar::new(PrimitiveArray::<Float16Type>::from(vec![f16::NAN]));
+        let f64s = Scalar::new(PrimitiveArray::<Float64Type>::from(vec![f64::NAN]));
+        assert_eq!(crate::cmp::lt(&array, &f16s).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(lt_eq_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array, &f16s).unwrap(), expected);
 
         let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(lt_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array, &Float32Array::new_scalar(f32::NAN)).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(lt_eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array, &Float32Array::new_scalar(f32::NAN)).unwrap(), expected);
 
         let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(lt_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::lt(&array, &f64s).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(lt_eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::lt_eq(&array, &f64s).unwrap(), expected);
     }
 
     #[test]
@@ -3758,34 +3732,36 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(gt_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+        let f16s = Scalar::new(PrimitiveArray::<Float16Type>::from(vec![f16::NAN]));
+        let f64s = Scalar::new(PrimitiveArray::<Float64Type>::from(vec![f64::NAN]));
+        assert_eq!(crate::cmp::gt(&array, &f16s).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(gt_eq_dyn_scalar(&array, f16::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array, &f16s).unwrap(), expected);
 
         let array = Float32Array::from(vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(gt_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array, &Float32Array::new_scalar(f32::NAN)).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(gt_eq_dyn_scalar(&array, f32::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array, &Float32Array::new_scalar(f32::NAN)).unwrap(), expected);
 
         let array = Float64Array::from(vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]);
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(gt_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array, &f64s).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(gt_eq_dyn_scalar(&array, f64::NAN).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array, &f64s).unwrap(), expected);
     }
 
     #[test]
@@ -3803,25 +3779,25 @@ mod tests {
             .map(|&x| if x == "b" { None } else { Some(x) })
             .collect();
 
-        let result = eq_dyn(&dict_array, &array);
+        let result = crate::cmp::eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(false)])
         );
 
-        let result = eq_dyn(&array, &dict_array);
+        let result = crate::cmp::eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(false)])
         );
 
-        let result = neq_dyn(&dict_array, &array);
+        let result =  crate::cmp::neq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(true)])
         );
 
-        let result = neq_dyn(&array, &dict_array);
+        let result =  crate::cmp::neq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(true)])
@@ -3843,49 +3819,49 @@ mod tests {
             .map(|&x| if x == "b" { None } else { Some(x) })
             .collect();
 
-        let result = lt_dyn(&dict_array, &array);
+        let result =  crate::cmp::lt(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(true)])
         );
 
-        let result = lt_dyn(&array, &dict_array);
+        let result =  crate::cmp::lt(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(false)])
         );
 
-        let result = lt_eq_dyn(&dict_array, &array);
+        let result =  crate::cmp::lt_eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
         );
 
-        let result = lt_eq_dyn(&array, &dict_array);
+        let result =  crate::cmp::lt_eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(false)])
         );
 
-        let result = gt_dyn(&dict_array, &array);
+        let result = crate::cmp::gt(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(false)])
         );
 
-        let result = gt_dyn(&array, &dict_array);
+        let result = crate::cmp::gt(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(true)])
         );
 
-        let result = gt_eq_dyn(&dict_array, &array);
+        let result =  crate::cmp::gt_eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(false)])
         );
 
-        let result = gt_eq_dyn(&array, &dict_array);
+        let result =  crate::cmp::gt_eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
@@ -3907,25 +3883,25 @@ mod tests {
             .map(|b| Some(b.as_bytes()))
             .collect();
 
-        let result = eq_dyn(&dict_array, &array);
+        let result = crate::cmp::eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
         );
 
-        let result = eq_dyn(&array, &dict_array);
+        let result = crate::cmp::eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
         );
 
-        let result = neq_dyn(&dict_array, &array);
+        let result =  crate::cmp::neq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
         );
 
-        let result = neq_dyn(&array, &dict_array);
+        let result =  crate::cmp::neq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
@@ -3947,49 +3923,49 @@ mod tests {
             .map(|b| Some(b.as_bytes()))
             .collect();
 
-        let result = lt_dyn(&dict_array, &array);
+        let result =  crate::cmp::lt(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
         );
 
-        let result = lt_dyn(&array, &dict_array);
+        let result =  crate::cmp::lt(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false), Some(false)])
         );
 
-        let result = lt_eq_dyn(&dict_array, &array);
+        let result =  crate::cmp::lt_eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true), Some(true)])
         );
 
-        let result = lt_eq_dyn(&array, &dict_array);
+        let result =  crate::cmp::lt_eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
         );
 
-        let result = gt_dyn(&dict_array, &array);
+        let result = crate::cmp::gt(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false), Some(false)])
         );
 
-        let result = gt_dyn(&array, &dict_array);
+        let result = crate::cmp::gt(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, Some(false), Some(true)])
         );
 
-        let result = gt_eq_dyn(&dict_array, &array);
+        let result =  crate::cmp::gt_eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true), Some(false)])
         );
 
-        let result = gt_eq_dyn(&array, &dict_array);
+        let result =  crate::cmp::gt_eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, Some(true), Some(true)])
@@ -4010,12 +3986,12 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::neq(&array1, &array2).unwrap(), expected);
 
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
@@ -4028,12 +4004,12 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::neq(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 10.0]
             .into_iter()
@@ -4046,12 +4022,12 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(neq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::neq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -4067,12 +4043,12 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
             .into_iter()
@@ -4085,12 +4061,12 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
             .into_iter()
@@ -4103,12 +4079,12 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(true), Some(false), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(false), Some(false)],
         );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -4124,12 +4100,12 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
 
         let array1: Float32Array = vec![f32::NAN, 7.0, 8.0, 8.0, 11.0, f32::NAN]
             .into_iter()
@@ -4142,12 +4118,12 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
 
         let array1: Float64Array = vec![f64::NAN, 7.0, 8.0, 8.0, 11.0, f64::NAN]
             .into_iter()
@@ -4160,12 +4136,12 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(false), Some(true), Some(false), Some(true), Some(true)],
         );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -4179,25 +4155,25 @@ mod tests {
 
         let array = BooleanArray::from(test2);
 
-        let result = eq_dyn(&dict_array, &array);
+        let result = crate::cmp::eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(false)])
         );
 
-        let result = eq_dyn(&array, &dict_array);
+        let result = crate::cmp::eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(false)])
         );
 
-        let result = neq_dyn(&dict_array, &array);
+        let result =  crate::cmp::neq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(true)])
         );
 
-        let result = neq_dyn(&array, &dict_array);
+        let result =  crate::cmp::neq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(true)])
@@ -4215,49 +4191,49 @@ mod tests {
 
         let array = BooleanArray::from(test2);
 
-        let result = lt_dyn(&dict_array, &array);
+        let result =  crate::cmp::lt(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(true)])
         );
 
-        let result = lt_dyn(&array, &dict_array);
+        let result =  crate::cmp::lt(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(false)])
         );
 
-        let result = lt_eq_dyn(&dict_array, &array);
+        let result =  crate::cmp::lt_eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
         );
 
-        let result = lt_eq_dyn(&array, &dict_array);
+        let result =  crate::cmp::lt_eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(false)])
         );
 
-        let result = gt_dyn(&dict_array, &array);
+        let result = crate::cmp::gt(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(false)])
         );
 
-        let result = gt_dyn(&array, &dict_array);
+        let result = crate::cmp::gt(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(true)])
         );
 
-        let result = gt_eq_dyn(&dict_array, &array);
+        let result =  crate::cmp::gt_eq(&dict_array, &array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(false)])
         );
 
-        let result = gt_eq_dyn(&array, &dict_array);
+        let result =  crate::cmp::gt_eq(&array, &dict_array);
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
@@ -4277,27 +4253,27 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
         );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(false), Some(false), Some(true)],
         );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(true), Some(true), Some(false)],
         );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -4312,27 +4288,27 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
         );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(false), Some(false), Some(true)],
         );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(true), Some(true), Some(false)],
         );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -4352,27 +4328,27 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
         );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(false), Some(false), Some(true)],
         );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(true), Some(true), Some(false)],
         );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -4390,27 +4366,27 @@ mod tests {
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(true), Some(true), Some(false)],
         );
-        assert_eq!(eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(false), Some(false), Some(true)],
         );
-        assert_eq!(lt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(true), Some(true), Some(true)],
         );
-        assert_eq!(lt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!( crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(false), Some(false), Some(false)],
         );
-        assert_eq!(gt_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
 
         let expected = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(true), Some(true), Some(false)],
         );
-        assert_eq!(gt_eq_dyn(&array1, &array2).unwrap(), expected);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
     }
 
     #[test]
@@ -4418,38 +4394,38 @@ mod tests {
         let a = Decimal128Array::from_iter_values([1, 2, 4, 5]);
         let b = Decimal128Array::from_iter_values([7, -3, 4, 3]);
         let e = BooleanArray::from(vec![false, false, true, false]);
-        let r = eq(&a, &b).unwrap();
+        let r = crate::cmp::eq(&a, &b).unwrap();
         assert_eq!(e, r);
 
-        let r = eq_dyn(&a, &b).unwrap();
+        let r = crate::cmp::eq(&a, &b).unwrap();
         assert_eq!(e, r);
 
         let e = BooleanArray::from(vec![true, false, false, false]);
-        let r = lt(&a, &b).unwrap();
+        let r = crate::cmp::lt(&a, &b).unwrap();
         assert_eq!(e, r);
 
-        let r = lt_dyn(&a, &b).unwrap();
+        let r =  crate::cmp::lt(&a, &b).unwrap();
         assert_eq!(e, r);
 
         let e = BooleanArray::from(vec![true, false, true, false]);
-        let r = lt_eq(&a, &b).unwrap();
+        let r = crate::cmp::lt_eq(&a, &b).unwrap();
         assert_eq!(e, r);
 
-        let r = lt_eq_dyn(&a, &b).unwrap();
+        let r =  crate::cmp::lt_eq(&a, &b).unwrap();
         assert_eq!(e, r);
 
         let e = BooleanArray::from(vec![false, true, false, true]);
-        let r = gt(&a, &b).unwrap();
+        let r = crate::cmp::gt(&a, &b).unwrap();
         assert_eq!(e, r);
 
-        let r = gt_dyn(&a, &b).unwrap();
+        let r = crate::cmp::gt(&a, &b).unwrap();
         assert_eq!(e, r);
 
         let e = BooleanArray::from(vec![false, true, true, true]);
-        let r = gt_eq(&a, &b).unwrap();
+        let r = crate::cmp::gt_eq(&a, &b).unwrap();
         assert_eq!(e, r);
 
-        let r = gt_eq_dyn(&a, &b).unwrap();
+        let r =  crate::cmp::gt_eq(&a, &b).unwrap();
         assert_eq!(e, r);
     }
 
@@ -4458,59 +4434,59 @@ mod tests {
         let a = Decimal128Array::from(
             vec![Some(1), Some(2), Some(3), None, Some(4), Some(5)],
         );
-        let b = 3_i128;
+        let b = &Decimal128Array::new_scalar(3_i128);
         // array eq scalar
         let e = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), None, Some(false), Some(false)],
         );
-        let r = eq_scalar(&a, b).unwrap();
+        let r = crate::cmp::eq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = eq_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::eq(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array neq scalar
         let e = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), None, Some(true), Some(true)],
         );
-        let r = neq_scalar(&a, b).unwrap();
+        let r = crate::cmp::neq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = neq_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::neq(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array lt scalar
         let e = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), None, Some(false), Some(false)],
         );
-        let r = lt_scalar(&a, b).unwrap();
+        let r = crate::cmp::lt(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = lt_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::lt(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array lt_eq scalar
         let e = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), None, Some(false), Some(false)],
         );
-        let r = lt_eq_scalar(&a, b).unwrap();
+        let r = crate::cmp::lt_eq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = lt_eq_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::lt_eq(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array gt scalar
         let e = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), None, Some(true), Some(true)],
         );
-        let r = gt_scalar(&a, b).unwrap();
+        let r = crate::cmp::gt(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = gt_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::gt(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array gt_eq scalar
         let e = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), None, Some(true), Some(true)],
         );
-        let r = gt_eq_scalar(&a, b).unwrap();
+        let r = crate::cmp::gt_eq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = gt_eq_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::gt_eq(&a, b).unwrap();
         assert_eq!(e, r);
     }
 
@@ -4523,38 +4499,38 @@ mod tests {
             [7, -3, 4, 3].into_iter().map(i256::from_i128),
         );
         let e = BooleanArray::from(vec![false, false, true, false]);
-        let r = eq(&a, &b).unwrap();
+        let r = crate::cmp::eq(&a, &b).unwrap();
         assert_eq!(e, r);
 
-        let r = eq_dyn(&a, &b).unwrap();
+        let r = crate::cmp::eq(&a, &b).unwrap();
         assert_eq!(e, r);
 
         let e = BooleanArray::from(vec![true, false, false, false]);
-        let r = lt(&a, &b).unwrap();
+        let r = crate::cmp::lt(&a, &b).unwrap();
         assert_eq!(e, r);
 
-        let r = lt_dyn(&a, &b).unwrap();
+        let r =  crate::cmp::lt(&a, &b).unwrap();
         assert_eq!(e, r);
 
         let e = BooleanArray::from(vec![true, false, true, false]);
-        let r = lt_eq(&a, &b).unwrap();
+        let r = crate::cmp::lt_eq(&a, &b).unwrap();
         assert_eq!(e, r);
 
-        let r = lt_eq_dyn(&a, &b).unwrap();
+        let r =  crate::cmp::lt_eq(&a, &b).unwrap();
         assert_eq!(e, r);
 
         let e = BooleanArray::from(vec![false, true, false, true]);
-        let r = gt(&a, &b).unwrap();
+        let r = crate::cmp::gt(&a, &b).unwrap();
         assert_eq!(e, r);
 
-        let r = gt_dyn(&a, &b).unwrap();
+        let r = crate::cmp::gt(&a, &b).unwrap();
         assert_eq!(e, r);
 
         let e = BooleanArray::from(vec![false, true, true, true]);
-        let r = gt_eq(&a, &b).unwrap();
+        let r = crate::cmp::gt_eq(&a, &b).unwrap();
         assert_eq!(e, r);
 
-        let r = gt_eq_dyn(&a, &b).unwrap();
+        let r =  crate::cmp::gt_eq(&a, &b).unwrap();
         assert_eq!(e, r);
     }
 
@@ -4563,59 +4539,59 @@ mod tests {
         let a = Decimal256Array::from_iter_values(
             [1, 2, 3, 4, 5].into_iter().map(i256::from_i128),
         );
-        let b = i256::from_i128(3);
+        let b = &Decimal256Array::new_scalar(i256::from_i128(3));
         // array eq scalar
         let e = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(false), Some(false)],
         );
-        let r = eq_scalar(&a, b).unwrap();
+        let r = crate::cmp::eq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = eq_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::eq(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array neq scalar
         let e = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(true), Some(true)],
         );
-        let r = neq_scalar(&a, b).unwrap();
+        let r = crate::cmp::neq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = neq_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::neq(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array lt scalar
         let e = BooleanArray::from(
             vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
         );
-        let r = lt_scalar(&a, b).unwrap();
+        let r = crate::cmp::lt(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = lt_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::lt(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array lt_eq scalar
         let e = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(false), Some(false)],
         );
-        let r = lt_eq_scalar(&a, b).unwrap();
+        let r = crate::cmp::lt_eq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = lt_eq_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::lt_eq(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array gt scalar
         let e = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(true), Some(true)],
         );
-        let r = gt_scalar(&a, b).unwrap();
+        let r = crate::cmp::gt(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = gt_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::gt(&a, b).unwrap();
         assert_eq!(e, r);
 
         // array gt_eq scalar
         let e = BooleanArray::from(
             vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
         );
-        let r = gt_eq_scalar(&a, b).unwrap();
+        let r = crate::cmp::gt_eq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = gt_eq_dyn_scalar(&a, b).unwrap();
+        let r = crate::cmp::gt_eq(&a, b).unwrap();
         assert_eq!(e, r);
     }
 
@@ -4624,60 +4600,48 @@ mod tests {
         let a = Decimal256Array::from_iter_values(
             [1, 2, 3, 4, 5].into_iter().map(i256::from_i128),
         );
-        let b = i256::MAX;
+        let b = &Decimal256Array::new_scalar(i256::MAX);
         // array eq scalar
         let e = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
-        let r = eq_scalar(&a, b).unwrap();
+        let r = crate::cmp::eq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = eq_dyn_scalar(&a, b).is_err();
-        assert!(r);
 
         // array neq scalar
         let e = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
         );
-        let r = neq_scalar(&a, b).unwrap();
+        let r = crate::cmp::neq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = neq_dyn_scalar(&a, b).is_err();
-        assert!(r);
 
         // array lt scalar
         let e = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
         );
-        let r = lt_scalar(&a, b).unwrap();
+        let r = crate::cmp::lt(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = lt_dyn_scalar(&a, b).is_err();
-        assert!(r);
 
         // array lt_eq scalar
         let e = BooleanArray::from(
             vec![Some(true), Some(true), Some(true), Some(true), Some(true)],
         );
-        let r = lt_eq_scalar(&a, b).unwrap();
+        let r = crate::cmp::lt_eq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = lt_eq_dyn_scalar(&a, b).is_err();
-        assert!(r);
 
         // array gt scalar
         let e = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
-        let r = gt_scalar(&a, b).unwrap();
+        let r = crate::cmp::gt(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = gt_dyn_scalar(&a, b).is_err();
-        assert!(r);
 
         // array gt_eq scalar
         let e = BooleanArray::from(
             vec![Some(false), Some(false), Some(false), Some(false), Some(false)],
         );
-        let r = gt_eq_scalar(&a, b).unwrap();
+        let r = crate::cmp::gt_eq(&a, b).unwrap();
         assert_eq!(e, r);
-        let r = gt_eq_dyn_scalar(&a, b).is_err();
-        assert!(r);
     }
 
     #[test]
@@ -4685,15 +4649,15 @@ mod tests {
         let a = Float32Array::from(vec![0.0_f32, -0.0]);
         let b = Float32Array::from(vec![-0.0_f32, 0.0]);
 
-        let result = eq_dyn(&a, &b).unwrap();
+        let result = crate::cmp::eq(&a, &b).unwrap();
         let excepted = BooleanArray::from(vec![false, false]);
         assert_eq!(excepted, result);
 
-        let result = eq_dyn_scalar(&a, 0.0).unwrap();
+        let result = crate::cmp::eq(&a, &Float32Array::new_scalar(0.0)).unwrap();
         let excepted = BooleanArray::from(vec![true, false]);
         assert_eq!(excepted, result);
 
-        let result = eq_dyn_scalar(&a, -0.0).unwrap();
+        let result = crate::cmp::eq(&a, &Float32Array::new_scalar(-0.0)).unwrap();
         let excepted = BooleanArray::from(vec![false, true]);
         assert_eq!(excepted, result);
     }
@@ -4724,7 +4688,7 @@ mod tests {
         let v2 = Arc::new(Int32Array::from(vec![None, Some(0), Some(2)]));
         let b = DictionaryArray::new(keys, v2);
 
-        let r = eq_dyn(&a, &b).unwrap();
+        let r = crate::cmp::eq(&a, &b).unwrap();
         assert_eq!(r.null_count(), 2);
         assert!(r.is_valid(2));
     }
