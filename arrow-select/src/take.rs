@@ -743,6 +743,7 @@ to_indices_reinterpret!(Int64Type, UInt64Type);
 #[cfg(test)]
 mod tests {
     use arrow_array::builder::*;
+    use arrow_data::ArrayData;
     use arrow_schema::{Field, Fields, TimeUnit};
 
     use super::*;
