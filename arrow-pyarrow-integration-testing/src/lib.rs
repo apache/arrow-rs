@@ -21,6 +21,7 @@
 use std::sync::Arc;
 
 use arrow::array::new_empty_array;
+use arrow::record_batch::{RecordBatchIterator, RecordBatchReader};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
@@ -152,6 +153,20 @@ fn reader_return_errors(obj: PyArrowType<ArrowArrayStreamReader>) -> PyResult<()
     }
 }
 
+#[pyfunction]
+fn boxed_reader_roundtrip(
+    obj: PyArrowType<Box<dyn RecordBatchReader + Send>>,
+) -> PyArrowType<Box<dyn RecordBatchReader + Send>> {
+    let schema = obj.0.schema();
+    let batches = obj
+        .0
+        .collect::<Result<Vec<RecordBatch>, ArrowError>>()
+        .unwrap();
+    let reader = RecordBatchIterator::new(batches.into_iter().map(Ok), schema);
+    let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
+    PyArrowType(reader)
+}
+
 #[pymodule]
 fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(double))?;
@@ -166,5 +181,6 @@ fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> 
     m.add_wrapped(wrap_pyfunction!(round_trip_record_batch))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_record_batch_reader))?;
     m.add_wrapped(wrap_pyfunction!(reader_return_errors))?;
+    m.add_wrapped(wrap_pyfunction!(boxed_reader_roundtrip))?;
     Ok(())
 }

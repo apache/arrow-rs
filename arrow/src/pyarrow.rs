@@ -24,6 +24,7 @@ use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 
+use arrow_array::RecordBatchReader;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
@@ -277,10 +278,19 @@ impl FromPyArrow for ArrowArrayStreamReader {
     }
 }
 
-impl IntoPyArrow for ArrowArrayStreamReader {
+impl FromPyArrow for Box<dyn RecordBatchReader + Send> {
+    fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        let stream_reader = ArrowArrayStreamReader::from_pyarrow(value)?;
+        Ok(Box::new(stream_reader))
+    }
+}
+
+// We can't implement `ToPyArrow` for `T: RecordBatchReader + Send` because
+// there is already a blanket implementation for `T: ToPyArrow`.
+impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
     fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
         let mut stream = FFI_ArrowArrayStream::empty();
-        unsafe { export_reader_into_raw(Box::new(self), &mut stream) };
+        unsafe { export_reader_into_raw(self, &mut stream) };
 
         let stream_ptr = (&mut stream) as *mut FFI_ArrowArrayStream;
         let module = py.import("pyarrow")?;
@@ -289,6 +299,13 @@ impl IntoPyArrow for ArrowArrayStreamReader {
         let reader = class.call_method1("_import_from_c", args)?;
 
         Ok(PyObject::from(reader))
+    }
+}
+
+impl IntoPyArrow for ArrowArrayStreamReader {
+    fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
+        let boxed: Box<dyn RecordBatchReader + Send> = Box::new(self);
+        boxed.into_pyarrow(py)
     }
 }
 
