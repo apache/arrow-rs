@@ -981,6 +981,7 @@ impl Rows {
     /// Sets the length of this [`Rows`] to 0
     pub fn clear(&mut self) {
         self.offsets.truncate(1);
+        self.buffer.clear();
     }
 
     /// Returns the number of [`Row`] in this [`Rows`]
@@ -2429,17 +2430,26 @@ mod tests {
             RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
         let mut rows = converter.empty_rows(3, 128);
 
-        let arrays = [
-            Int32Array::from(vec![None, Some(2), Some(4)]),
-            Int32Array::from(vec![Some(2), None, Some(4)]),
-        ];
+        let first = Int32Array::from(vec![None, Some(2), Some(4)]);
+        let second = Int32Array::from(vec![Some(2), None, Some(4)]);
+        let arrays = vec![Arc::new(first) as ArrayRef, Arc::new(second) as ArrayRef];
 
-        for array in arrays {
+        for array in arrays.iter() {
             rows.clear();
-            let array = Arc::new(array) as ArrayRef;
             converter.append(&mut rows, &[array.clone()]).unwrap();
             let back = converter.convert_rows(&rows).unwrap();
-            assert_eq!(&back[0], &array);
+            assert_eq!(&back[0], array);
+        }
+
+        let mut rows_expected = converter.empty_rows(3, 128);
+        converter.append(&mut rows_expected, &arrays[1..]).unwrap();
+
+        for (i, (actual, expected)) in rows.iter().zip(rows_expected.iter()).enumerate() {
+            assert_eq!(
+                actual, expected,
+                "For row {}: expected {:?}, actual: {:?}",
+                i, expected, actual
+            );
         }
     }
 

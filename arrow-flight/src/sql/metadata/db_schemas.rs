@@ -22,11 +22,11 @@
 use std::sync::Arc;
 
 use arrow_arith::boolean::and;
-use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch, Scalar, StringArray};
+use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch, StringArray};
 use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
-use arrow_string::like::like_utf8_scalar;
+use arrow_string::like::like;
 use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
@@ -122,15 +122,13 @@ impl GetDbSchemasBuilder {
 
         if let Some(db_schema_filter_pattern) = db_schema_filter_pattern {
             // use like kernel to get wildcard matching
-            filters.push(like_utf8_scalar(
-                &db_schema_name,
-                &db_schema_filter_pattern,
-            )?)
+            let scalar = StringArray::new_scalar(db_schema_filter_pattern);
+            filters.push(like(&db_schema_name, &scalar)?)
         }
 
         if let Some(catalog_filter_name) = catalog_filter {
-            let scalar = StringArray::from_iter_values([catalog_filter_name]);
-            filters.push(eq(&catalog_name, &Scalar::new(&scalar))?);
+            let scalar = StringArray::new_scalar(catalog_filter_name);
+            filters.push(eq(&catalog_name, &scalar)?);
         }
 
         // `AND` any filters together

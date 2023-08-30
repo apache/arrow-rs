@@ -281,7 +281,7 @@ fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef>
     let ret_code = unsafe { (*stream_ptr).get_schema.unwrap()(stream_ptr, &mut schema) };
 
     if ret_code == 0 {
-        let schema = Schema::try_from(&schema).unwrap();
+        let schema = Schema::try_from(&schema)?;
         Ok(Arc::new(schema))
     } else {
         Err(ArrowError::CDataInterface(format!(

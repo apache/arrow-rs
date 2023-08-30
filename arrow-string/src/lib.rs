@@ -20,5 +20,6 @@
 pub mod concat_elements;
 pub mod length;
 pub mod like;
+mod predicate;
 pub mod regexp;
 pub mod substring;
