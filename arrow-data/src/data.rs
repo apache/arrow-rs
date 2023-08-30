@@ -721,7 +721,9 @@ impl ArrayData {
             )));
         }
 
-        if self.buffers.len() < layout.buffers.len() {
+        if self.buffers.len() < layout.buffers.len()
+            || (!layout.variadic && self.buffers.len() != layout.buffers.len())
+        {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Expected {} buffers in array of type {:?}, got {}",
                 layout.buffers.len(),
@@ -1517,10 +1519,12 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::Null => DataTypeLayout {
             buffers: vec![],
             can_contain_null_mask: false,
+            variadic: false,
         },
         DataType::Boolean => DataTypeLayout {
             buffers: vec![BufferSpec::BitMap],
             can_contain_null_mask: true,
+            variadic: false,
         },
         DataType::Int8 => DataTypeLayout::new_fixed_width::<i8>(),
         DataType::Int16 => DataTypeLayout::new_fixed_width::<i16>(),
@@ -1552,14 +1556,15 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
             DataTypeLayout {
                 buffers: vec![spec],
                 can_contain_null_mask: true,
+                variadic: false,
             }
         }
         DataType::Binary => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeBinary => DataTypeLayout::new_binary::<i64>(),
-        DataType::BinaryView => DataTypeLayout::new_fixed_width::<u128>(),
+        DataType::BinaryView => DataTypeLayout::new_view(),
         DataType::Utf8 => DataTypeLayout::new_binary::<i32>(),
         DataType::LargeUtf8 => DataTypeLayout::new_binary::<i64>(),
-        DataType::Utf8View => DataTypeLayout::new_fixed_width::<u128>(),
+        DataType::Utf8View => DataTypeLayout::new_view(),
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::List(_) => DataTypeLayout::new_fixed_width::<i32>(),
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width::<i64>(),
@@ -1588,6 +1593,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
                     }
                 },
                 can_contain_null_mask: false,
+                variadic: false,
             }
         }
         DataType::Dictionary(key_type, _value_type) => layout(key_type),
@@ -1603,6 +1609,11 @@ pub struct DataTypeLayout {
 
     /// Can contain a null bitmask
     pub can_contain_null_mask: bool,
+
+    /// If the data type contains a variadic number of buffers
+    ///
+    /// This is false except for [`DataType::BinaryView`] and [`DataType::Utf8View`]
+    pub variadic: bool,
 }
 
 impl DataTypeLayout {
@@ -1614,6 +1625,7 @@ impl DataTypeLayout {
                 alignment: mem::align_of::<T>(),
             }],
             can_contain_null_mask: true,
+            variadic: false,
         }
     }
 
@@ -1624,6 +1636,7 @@ impl DataTypeLayout {
         Self {
             buffers: vec![],
             can_contain_null_mask: true,
+            variadic: false,
         }
     }
 
@@ -1642,6 +1655,19 @@ impl DataTypeLayout {
                 BufferSpec::VariableWidth,
             ],
             can_contain_null_mask: true,
+            variadic: false,
+        }
+    }
+
+    /// Describes a view type
+    fn new_view() -> Self {
+        Self {
+            buffers: vec![BufferSpec::FixedWidth {
+                byte_width: mem::size_of::<u128>(),
+                alignment: mem::align_of::<u128>(),
+            }],
+            can_contain_null_mask: true,
+            variadic: true,
         }
     }
 }
