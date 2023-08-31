@@ -392,6 +392,8 @@ impl DataType {
     }
 
     /// Returns true if this type is a variable length byte array type
+    ///
+    /// i.e. `Utf8`, `LargeUtf8`, `Binary`, `LargeBinary`
     #[inline]
     pub fn is_byte_array(&self) -> bool {
         use DataType::*;
