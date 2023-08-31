@@ -295,15 +295,15 @@ impl IntoPyArrow for ArrowArrayStreamReader {
 /// A newtype wrapper around a `T: PyArrowConvert` that implements
 /// [`FromPyObject`] and [`IntoPy`] allowing usage with pyo3 macros
 #[derive(Debug)]
-pub struct PyArrowType<T: FromPyArrow + IntoPyArrow>(pub T);
+pub struct PyArrowType<T>(pub T);
 
-impl<'source, T: FromPyArrow + IntoPyArrow> FromPyObject<'source> for PyArrowType<T> {
+impl<'source, T: FromPyArrow> FromPyObject<'source> for PyArrowType<T> {
     fn extract(value: &'source PyAny) -> PyResult<Self> {
         Ok(Self(T::from_pyarrow(value)?))
     }
 }
 
-impl<T: FromPyArrow + IntoPyArrow> IntoPy<PyObject> for PyArrowType<T> {
+impl<T: IntoPyArrow> IntoPy<PyObject> for PyArrowType<T> {
     fn into_py(self, py: Python) -> PyObject {
         match self.0.into_pyarrow(py) {
             Ok(obj) => obj,
@@ -312,7 +312,7 @@ impl<T: FromPyArrow + IntoPyArrow> IntoPy<PyObject> for PyArrowType<T> {
     }
 }
 
-impl<T: FromPyArrow + IntoPyArrow> From<T> for PyArrowType<T> {
+impl<T> From<T> for PyArrowType<T> {
     fn from(s: T) -> Self {
         Self(s)
     }
