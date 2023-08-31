@@ -31,7 +31,7 @@
 //! ```
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::cast::as_dictionary_array;
+use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer};
@@ -43,10 +43,7 @@ fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     let mut item_capacity = 0;
     let mut bytes_capacity = 0;
     for array in arrays {
-        let a = array
-            .as_any()
-            .downcast_ref::<GenericByteArray<T>>()
-            .unwrap();
+        let a = array.as_bytes::<T>();
 
         // Guaranteed to always have at least one element
         let offsets = a.value_offsets();
@@ -70,7 +67,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     let dictionaries: Vec<_> = arrays
         .iter()
         .map(|a| {
-            let array = as_dictionary_array::<K>(*a);
+            let array = a.as_dictionary::<K>();
             has_nulls |= array.null_count() != 0;
             (array, None)
         })
@@ -565,7 +562,7 @@ mod tests {
         .collect();
 
         let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
-        let dictionary = as_dictionary_array::<Int32Type>(concat.as_ref());
+        let dictionary = concat.as_dictionary::<Int32Type>();
         let actual = collect_string_dictionary(dictionary);
         assert_eq!(actual, expected);
 
@@ -586,7 +583,7 @@ mod tests {
         let expected = vec![Some("foo"), Some("bar"), None, Some("fiz"), None];
 
         let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
-        let dictionary = as_dictionary_array::<Int32Type>(concat.as_ref());
+        let dictionary = concat.as_dictionary::<Int32Type>();
         let actual = collect_string_dictionary(dictionary);
         assert_eq!(actual, expected);
 
@@ -615,7 +612,7 @@ mod tests {
         let expected: Vec<_> = expected.iter().map(|x| Some(x.as_str())).collect();
 
         let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
-        let dictionary = as_dictionary_array::<Int32Type>(concat.as_ref());
+        let dictionary = concat.as_dictionary::<Int32Type>();
         let actual = collect_string_dictionary(dictionary);
         assert_eq!(actual, expected);
 
@@ -656,7 +653,7 @@ mod tests {
 
         // concatenate it with itself
         let combined = concat(&[&copy as _, &array as _]).unwrap();
-        let combined = as_dictionary_array::<Int8Type>(combined.as_ref());
+        let combined = combined.as_dictionary::<Int8Type>();
 
         assert_eq!(
             combined.values(),

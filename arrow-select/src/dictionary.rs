@@ -18,7 +18,7 @@
 use crate::interleave::interleave;
 use ahash::RandomState;
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array, AsArray};
+use arrow_array::cast::AsArray;
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer};
@@ -194,12 +194,10 @@ fn get_masked_values<'a>(
     mask: &BooleanBuffer,
 ) -> Vec<(usize, &'a [u8])> {
     match array.data_type() {
-        DataType::Utf8 => masked_bytes(as_string_array(array), mask),
-        DataType::LargeUtf8 => masked_bytes(as_largestring_array(array), mask),
-        DataType::Binary => masked_bytes(as_generic_binary_array::<i32>(array), mask),
-        DataType::LargeBinary => {
-            masked_bytes(as_generic_binary_array::<i64>(array), mask)
-        }
+        DataType::Utf8 => masked_bytes(array.as_string::<i32>(), mask),
+        DataType::LargeUtf8 => masked_bytes(array.as_string::<i64>(), mask),
+        DataType::Binary => masked_bytes(array.as_binary::<i32>(), mask),
+        DataType::LargeBinary => masked_bytes(array.as_binary::<i64>(), mask),
         _ => unimplemented!(),
     }
 }
