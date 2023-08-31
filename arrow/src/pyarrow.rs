@@ -15,10 +15,45 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Pass Arrow objects from and to Python, using Arrow's
+//! Pass Arrow objects from and to PyArrow, using Arrow's
 //! [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 //! and [pyo3](https://docs.rs/pyo3/latest/pyo3/).
 //! For underlying implementation, see the [ffi] module.
+//!
+//! One can use these to write Python functions that take and return PyArrow
+//! objects, with automatic conversion to corresponding arrow-rs types.
+//!
+//! ```ignore
+//! #[pyfunction]
+//! fn double_array(array: PyArrowType<ArrayData>) -> PyResult<PyArrowType<ArrayData>> {
+//!     let array = array.0; // Extract from PyArrowType wrapper
+//!     let array: Arc<dyn Array> = make_array(array); // Convert ArrayData to ArrayRef
+//!     let array: &Int32Array = array.as_any().downcast_ref()
+//!         .ok_or_else(|| PyValueError::new_err("expected int32 array"))?;
+//!     let array: Int32Array = array.iter().map(|x| x.map(|x| x * 2)).collect();
+//!     Ok(PyArrowType(array.into_data()))
+//! }
+//! ```
+//!
+//! | pyarrow type                | arrow-rs type                                                      |
+//! |-----------------------------|--------------------------------------------------------------------|
+//! | `pyarrow.DataType`          | [DataType]                                                         |
+//! | `pyarrow.Field`             | [Field]                                                            |
+//! | `pyarrow.Schema`            | [Schema]                                                           |
+//! | `pyarrow.Array`             | [ArrayData]                                                        |
+//! | `pyarrow.RecordBatch`       | [RecordBatch]                                                      |
+//! | `pyarrow.RecordBatchReader` | [ArrowArrayStreamReader] / `Box<dyn RecordBatchReader + Send>` (1) |
+//!
+//! (1) `pyarrow.RecordBatchReader` can be imported as [ArrowArrayStreamReader]. Either
+//! [ArrowArrayStreamReader] or `Box<dyn RecordBatchReader + Send>` can be exported
+//! as `pyarrow.RecordBatchReader`. (`Box<dyn RecordBatchReader + Send>` is typically
+//! easier to create.)
+//!
+//! PyArrow has the notion of chunked arrays and tables, but arrow-rs doesn't
+//! have these same concepts. A chunked table is instead represented with
+//! `Vec<RecordBatch>`. A `pyarrow.Table` can be imported to Rust by calling
+//! [pyarrow.Table.to_reader()](https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table.to_reader)
+//! and then importing the reader as a [ArrowArrayStreamReader].
 
 use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
@@ -257,6 +292,7 @@ impl ToPyArrow for RecordBatch {
     }
 }
 
+/// Supports conversion from `pyarrow.RecordBatchReader` to [ArrowArrayStreamReader].
 impl FromPyArrow for ArrowArrayStreamReader {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         validate_class("RecordBatchReader", value)?;
@@ -278,16 +314,10 @@ impl FromPyArrow for ArrowArrayStreamReader {
     }
 }
 
-impl FromPyArrow for Box<dyn RecordBatchReader + Send> {
-    fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
-        let stream_reader = ArrowArrayStreamReader::from_pyarrow(value)?;
-        Ok(Box::new(stream_reader))
-    }
-}
-
-// We can't implement `ToPyArrow` for `T: RecordBatchReader + Send` because
-// there is already a blanket implementation for `T: ToPyArrow`.
+/// Convert a [`RecordBatchReader`] into a `pyarrow.RecordBatchReader`.
 impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
+    // We can't implement `ToPyArrow` for `T: RecordBatchReader + Send` because
+    // there is already a blanket implementation for `T: ToPyArrow`.
     fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
         let mut stream = FFI_ArrowArrayStream::empty();
         unsafe { export_reader_into_raw(self, &mut stream) };
@@ -302,6 +332,7 @@ impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
     }
 }
 
+/// Convert a [`ArrowArrayStreamReader`] into a `pyarrow.RecordBatchReader`.
 impl IntoPyArrow for ArrowArrayStreamReader {
     fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
         let boxed: Box<dyn RecordBatchReader + Send> = Box::new(self);
@@ -309,8 +340,9 @@ impl IntoPyArrow for ArrowArrayStreamReader {
     }
 }
 
-/// A newtype wrapper around a `T: PyArrowConvert` that implements
-/// [`FromPyObject`] and [`IntoPy`] allowing usage with pyo3 macros
+/// A newtype wrapper. When wrapped around a type `T: FromPyArrow`, it
+/// implements `FromPyObject` for the PyArrow objects. When wrapped around a
+/// `T: IntoPyArrow`, it implements `IntoPy<PyObject>` for the wrapped type.
 #[derive(Debug)]
 pub struct PyArrowType<T>(pub T);
 

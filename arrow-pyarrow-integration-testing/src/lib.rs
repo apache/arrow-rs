@@ -155,7 +155,7 @@ fn reader_return_errors(obj: PyArrowType<ArrowArrayStreamReader>) -> PyResult<()
 
 #[pyfunction]
 fn boxed_reader_roundtrip(
-    obj: PyArrowType<Box<dyn RecordBatchReader + Send>>,
+    obj: PyArrowType<ArrowArrayStreamReader>,
 ) -> PyArrowType<Box<dyn RecordBatchReader + Send>> {
     let schema = obj.0.schema();
     let batches = obj
