@@ -586,7 +586,19 @@ impl ObjectStore for LocalFileSystem {
         let to = self.config.path_to_filesystem(to)?;
 
         maybe_spawn_blocking(move || {
-            std::fs::copy(&from, &to).context(UnableToCopyFileSnafu { from, to })?;
+            let mut id = 0;
+            loop {
+                let staged = staged_upload_path(&to, &id.to_string());
+                if let Err(source) = std::fs::hard_link(&from, &staged) {
+                    if source.kind() == ErrorKind::AlreadyExists {
+                        id += 1;
+                        continue;
+                    }
+                    break Err(source);
+                }
+                break std::fs::rename(&staged, &to);
+            }
+            .context(UnableToCopyFileSnafu { from, to })?;
             Ok(())
         })
         .await
@@ -608,7 +620,7 @@ impl ObjectStore for LocalFileSystem {
 
         maybe_spawn_blocking(move || {
             std::fs::hard_link(&from, &to).map_err(|err| match err.kind() {
-                io::ErrorKind::AlreadyExists => Error::AlreadyExists {
+                ErrorKind::AlreadyExists => Error::AlreadyExists {
                     path: to.to_str().unwrap().to_string(),
                     source: err,
                 }
