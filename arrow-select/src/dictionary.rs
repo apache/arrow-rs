@@ -18,7 +18,7 @@
 use crate::interleave::interleave;
 use ahash::RandomState;
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array};
+use arrow_array::cast::{as_generic_binary_array, as_largestring_array, as_string_array, AsArray};
 use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer};

@@ -31,11 +31,10 @@
 //! ```
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::as_dictionary_array;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::sync::Arc;
@@ -66,24 +65,41 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
+    let mut has_nulls = false;
     // Recompute dictionaries
     let dictionaries: Vec<_> = arrays
         .iter()
-        .map(|a| (as_dictionary_array::<K>(*a), None))
+        .map(|a| {
+            let array = as_dictionary_array::<K>(*a);
+            has_nulls |= array.null_count() != 0;
+            (array, None)
+        })
         .collect();
 
     let merged = merge_dictionary_values(&dictionaries)?;
 
     // Recompute keys
-    let mut keys = PrimitiveBuilder::<K>::with_capacity(output_len);
+    let mut key_values = Vec::with_capacity(output_len);
 
     for ((d, _), mapping) in dictionaries.iter().zip(merged.key_mappings) {
-        for key in d.keys_iter() {
-            keys.append_option(key.map(|x| mapping[x]));
+        for key in d.keys().values() {
+            // Use get to safely handle nulls
+            key_values.push(mapping.get(key.as_usize()).copied().unwrap_or_default())
         }
     }
-    let keys = keys.finish();
 
+    let nulls = has_nulls.then(|| {
+        let mut nulls = BooleanBufferBuilder::new(output_len);
+        for (d, _) in &dictionaries {
+            match d.nulls() {
+                Some(n) => nulls.append_buffer(n.inner()),
+                None => nulls.append_n(d.len(), true),
+            }
+        }
+        NullBuffer::new(nulls.finish())
+    });
+
+    let keys = PrimitiveArray::<K>::new(key_values.into(), nulls);
     // Sanity check
     assert_eq!(keys.len(), output_len);
 
