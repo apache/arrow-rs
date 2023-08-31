@@ -421,6 +421,14 @@ def test_record_batch_reader_error():
     with pytest.raises(ValueError, match="test error"):
         rust.reader_return_errors(reader)
 
+    # Due to a long-standing oversight, PyArrow allows binary values in schema
+    # metadata that are not valid UTF-8. This is not allowed in Rust, but we
+    # make sure we error and not panic here.
+    schema = schema.with_metadata({"key": b"\xff"})
+    reader = pa.RecordBatchReader.from_batches(schema, iter_batches())
+    with pytest.raises(ValueError, match="invalid utf-8"):
+        rust.round_trip_record_batch_reader(reader)
+
 def test_reject_other_classes():
     # Arbitrary type that is not a PyArrow type
     not_pyarrow = ["hello"]

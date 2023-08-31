@@ -32,22 +32,19 @@ use arrow_string::regexp::regexp_is_match_utf8_scalar;
 const SIZE: usize = 65536;
 
 fn bench_like_utf8_scalar(arr_a: &StringArray, value_b: &str) {
-    like_utf8_scalar(criterion::black_box(arr_a), criterion::black_box(value_b)).unwrap();
+    like(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_nlike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
-    nlike_utf8_scalar(criterion::black_box(arr_a), criterion::black_box(value_b))
-        .unwrap();
+    nlike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_ilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
-    ilike_utf8_scalar(criterion::black_box(arr_a), criterion::black_box(value_b))
-        .unwrap();
+    ilike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_nilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
-    nilike_utf8_scalar(criterion::black_box(arr_a), criterion::black_box(value_b))
-        .unwrap();
+    nilike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_regexp_is_match_utf8_scalar(arr_a: &StringArray, value_b: &str) {
@@ -103,45 +100,45 @@ fn add_benchmark(c: &mut Criterion) {
 
     let arr_a = create_primitive_array_with_seed::<Int32Type>(SIZE, 0.0, 42);
     let arr_b = create_primitive_array_with_seed::<Int32Type>(SIZE, 0.0, 43);
-    let scalar = Int32Array::from(vec![1]);
+    let scalar = Int32Array::new_scalar(1);
 
     c.bench_function("eq Int32", |b| b.iter(|| eq(&arr_a, &arr_b)));
     c.bench_function("eq scalar Int32", |b| {
-        b.iter(|| eq(&arr_a, &Scalar::new(&scalar)).unwrap())
+        b.iter(|| eq(&arr_a, &scalar).unwrap())
     });
 
     c.bench_function("neq Int32", |b| b.iter(|| neq(&arr_a, &arr_b)));
     c.bench_function("neq scalar Int32", |b| {
-        b.iter(|| neq(&arr_a, &Scalar::new(&scalar)).unwrap())
+        b.iter(|| neq(&arr_a, &scalar).unwrap())
     });
 
     c.bench_function("lt Int32", |b| b.iter(|| lt(&arr_a, &arr_b)));
     c.bench_function("lt scalar Int32", |b| {
-        b.iter(|| lt(&arr_a, &Scalar::new(&scalar)).unwrap())
+        b.iter(|| lt(&arr_a, &scalar).unwrap())
     });
 
     c.bench_function("lt_eq Int32", |b| b.iter(|| lt_eq(&arr_a, &arr_b)));
     c.bench_function("lt_eq scalar Int32", |b| {
-        b.iter(|| lt_eq(&arr_a, &Scalar::new(&scalar)).unwrap())
+        b.iter(|| lt_eq(&arr_a, &scalar).unwrap())
     });
 
     c.bench_function("gt Int32", |b| b.iter(|| gt(&arr_a, &arr_b)));
     c.bench_function("gt scalar Int32", |b| {
-        b.iter(|| gt(&arr_a, &Scalar::new(&scalar)).unwrap())
+        b.iter(|| gt(&arr_a, &scalar).unwrap())
     });
 
     c.bench_function("gt_eq Int32", |b| b.iter(|| gt_eq(&arr_a, &arr_b)));
     c.bench_function("gt_eq scalar Int32", |b| {
-        b.iter(|| gt_eq(&arr_a, &Scalar::new(&scalar)).unwrap())
+        b.iter(|| gt_eq(&arr_a, &scalar).unwrap())
     });
 
     c.bench_function("eq MonthDayNano", |b| {
         b.iter(|| eq(&arr_month_day_nano_a, &arr_month_day_nano_b))
     });
-    let scalar = IntervalMonthDayNanoArray::from(vec![123]);
+    let scalar = IntervalMonthDayNanoArray::new_scalar(123);
 
     c.bench_function("eq scalar MonthDayNano", |b| {
-        b.iter(|| eq(&arr_month_day_nano_b, &Scalar::new(&scalar)).unwrap())
+        b.iter(|| eq(&arr_month_day_nano_b, &scalar).unwrap())
     });
 
     c.bench_function("like_utf8 scalar equals", |b| {
@@ -246,11 +243,11 @@ fn add_benchmark(c: &mut Criterion) {
     );
 
     c.bench_function("like_utf8_scalar_dyn dictionary[10] string[4])", |b| {
-        b.iter(|| like_utf8_scalar_dyn(&dict_arr_a, "test"))
+        b.iter(|| like(&dict_arr_a, &StringArray::new_scalar("test")))
     });
 
     c.bench_function("ilike_utf8_scalar_dyn dictionary[10] string[4])", |b| {
-        b.iter(|| ilike_utf8_scalar_dyn(&dict_arr_a, "test"))
+        b.iter(|| ilike(&dict_arr_a, &StringArray::new_scalar("test")))
     });
 
     let strings = create_string_array::<i32>(20, 0.);

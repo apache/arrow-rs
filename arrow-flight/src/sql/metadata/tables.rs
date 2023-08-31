@@ -23,11 +23,11 @@ use std::sync::Arc;
 
 use arrow_arith::boolean::{and, or};
 use arrow_array::builder::{BinaryBuilder, StringBuilder};
-use arrow_array::{ArrayRef, RecordBatch, Scalar, StringArray};
+use arrow_array::{ArrayRef, RecordBatch, StringArray};
 use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
-use arrow_string::like::like_utf8_scalar;
+use arrow_string::like::like;
 use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
@@ -184,16 +184,13 @@ impl GetTablesBuilder {
         let mut filters = vec![];
 
         if let Some(catalog_filter_name) = catalog_filter {
-            let scalar = StringArray::from_iter_values([catalog_filter_name]);
-            filters.push(eq(&catalog_name, &Scalar::new(&scalar))?);
+            let scalar = StringArray::new_scalar(catalog_filter_name);
+            filters.push(eq(&catalog_name, &scalar)?);
         }
 
         let tt_filter = table_types_filter
             .into_iter()
-            .map(|tt| {
-                let scalar = StringArray::from_iter_values([tt]);
-                eq(&table_type, &Scalar::new(&scalar))
-            })
+            .map(|tt| eq(&table_type, &StringArray::new_scalar(tt)))
             .collect::<std::result::Result<Vec<_>, _>>()?
             .into_iter()
             // We know the arrays are of same length as they are produced fromn the same root array
@@ -204,15 +201,14 @@ impl GetTablesBuilder {
 
         if let Some(db_schema_filter_pattern) = db_schema_filter_pattern {
             // use like kernel to get wildcard matching
-            filters.push(like_utf8_scalar(
-                &db_schema_name,
-                &db_schema_filter_pattern,
-            )?)
+            let scalar = StringArray::new_scalar(db_schema_filter_pattern);
+            filters.push(like(&db_schema_name, &scalar)?)
         }
 
         if let Some(table_name_filter_pattern) = table_name_filter_pattern {
             // use like kernel to get wildcard matching
-            filters.push(like_utf8_scalar(&table_name, &table_name_filter_pattern)?)
+            let scalar = StringArray::new_scalar(table_name_filter_pattern);
+            filters.push(like(&table_name, &scalar)?)
         }
 
         let batch = if let Some(table_schema) = table_schema {
