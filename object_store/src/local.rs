@@ -588,10 +588,12 @@ impl ObjectStore for LocalFileSystem {
         let mut id = 0;
         maybe_spawn_blocking(move || loop {
             let staged = staged_upload_path(&to, &id.to_string());
-            match std::fs::hard_link(&from, &staged)
-                .and_then(|_| std::fs::rename(&staged, &to))
-            {
-                Ok(_) => return Ok(()),
+            match std::fs::hard_link(&from, &staged) {
+                Ok(_) => {
+                    return std::fs::rename(&staged, &to).map_err(|source| {
+                        Error::UnableToCopyFile { from, to, source }.into()
+                    })
+                }
                 Err(source) => match source.kind() {
                     ErrorKind::AlreadyExists => id += 1,
                     ErrorKind::NotFound => create_parent_dirs(&to, source)?,
