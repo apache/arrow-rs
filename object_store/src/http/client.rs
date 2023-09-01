@@ -277,12 +277,11 @@ impl Client {
                             path: to.to_string(),
                             source: Box::new(source),
                         }
-                        .into()
                     }
                     // Some implementations return 404 instead of 409
                     Some(StatusCode::CONFLICT | StatusCode::NOT_FOUND) if !retry => {
                         retry = true;
-                        self.create_parent_directories(&to).await?;
+                        self.create_parent_directories(to).await?;
                         continue;
                     }
                     _ => Error::Request { source }.into(),
