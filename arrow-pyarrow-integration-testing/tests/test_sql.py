@@ -409,6 +409,13 @@ def test_record_batch_reader():
     got_batches = list(b)
     assert got_batches == batches
 
+    # Also try the boxed reader variant
+    a = pa.RecordBatchReader.from_batches(schema, batches)
+    b = rust.boxed_reader_roundtrip(a)
+    assert b.schema == schema
+    got_batches = list(b)
+    assert got_batches == batches
+
 def test_record_batch_reader_error():
     schema = pa.schema([('ints', pa.list_(pa.int32()))])
 
