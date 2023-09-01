@@ -823,4 +823,16 @@ mod tests {
         assert_eq!(data.buffers()[1].len(), 200);
         assert_eq!(data.buffers()[1].capacity(), 256); // Nearest multiple of 64
     }
+
+    #[test]
+    fn concat_sparse_nulls() {
+        let values = StringArray::from_iter_values((0..100).map(|x| x.to_string()));
+        let keys = Int32Array::from(vec![1; 10]);
+        let dict_a = DictionaryArray::new(keys, Arc::new(values));
+        let values = StringArray::new_null(0);
+        let keys = Int32Array::new_null(10);
+        let dict_b = DictionaryArray::new(keys, Arc::new(values));
+        let array = concat(&[&dict_a, &dict_b]).unwrap();
+        assert_eq!(array.null_count(), 10);
+    }
 }

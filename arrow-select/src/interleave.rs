@@ -391,4 +391,25 @@ mod tests {
 
         assert_eq!(v, &expected);
     }
+
+    #[test]
+    fn interleave_sparse_nulls() {
+        let values = StringArray::from_iter_values((0..100).map(|x| x.to_string()));
+        let keys = Int32Array::from_iter_values(0..10);
+        let dict_a = DictionaryArray::new(keys, Arc::new(values));
+        let values = StringArray::new_null(0);
+        let keys = Int32Array::new_null(10);
+        let dict_b = DictionaryArray::new(keys, Arc::new(values));
+
+        let indices = &[(0, 0), (0, 1), (0, 2), (1, 0)];
+        let array = interleave(&[&dict_a, &dict_b], indices).unwrap();
+
+        let expected = DictionaryArray::<Int32Type>::from_iter(vec![
+            Some("0"),
+            Some("1"),
+            Some("2"),
+            None,
+        ]);
+        assert_eq!(array.as_ref(), &expected)
+    }
 }
