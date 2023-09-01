@@ -391,15 +391,6 @@ impl DataType {
         matches!(self, Int16 | Int32 | Int64)
     }
 
-    /// Returns true if this type is a variable length byte array type
-    ///
-    /// i.e. `Utf8`, `LargeUtf8`, `Binary`, `LargeBinary`
-    #[inline]
-    pub fn is_byte_array(&self) -> bool {
-        use DataType::*;
-        matches!(self, Utf8 | LargeUtf8 | Binary | LargeBinary)
-    }
-
     /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union,
     /// or Map), or a dictionary of a nested type
     pub fn is_nested(&self) -> bool {

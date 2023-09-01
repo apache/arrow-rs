@@ -57,28 +57,25 @@ fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
 fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     arrays: &[&dyn Array],
 ) -> Result<ArrayRef, ArrowError> {
-    let output_len = arrays.iter().map(|x| x.len()).sum();
-    if !should_merge_dictionary_values::<K>(arrays, output_len) {
+    let mut output_len = 0;
+    let dictionaries: Vec<_> = arrays
+        .iter()
+        .map(|x| x.as_dictionary::<K>())
+        .inspect(|d| output_len += d.len())
+        .collect();
+
+    if !should_merge_dictionary_values::<K>(&dictionaries, output_len) {
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
-    let mut has_nulls = false;
-    // Recompute dictionaries
-    let dictionaries: Vec<_> = arrays
-        .iter()
-        .map(|a| {
-            let array = a.as_dictionary::<K>();
-            has_nulls |= array.null_count() != 0;
-            (array, None)
-        })
-        .collect();
-
-    let merged = merge_dictionary_values(&dictionaries)?;
+    let merged = merge_dictionary_values(&dictionaries, None)?;
 
     // Recompute keys
     let mut key_values = Vec::with_capacity(output_len);
 
-    for ((d, _), mapping) in dictionaries.iter().zip(merged.key_mappings) {
+    let mut has_nulls = false;
+    for (d, mapping) in dictionaries.iter().zip(merged.key_mappings) {
+        has_nulls |= d.null_count() != 0;
         for key in d.keys().values() {
             // Use get to safely handle nulls
             key_values.push(mapping.get(key.as_usize()).copied().unwrap_or_default())
@@ -87,7 +84,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
 
     let nulls = has_nulls.then(|| {
         let mut nulls = BooleanBufferBuilder::new(output_len);
-        for (d, _) in &dictionaries {
+        for d in &dictionaries {
             match d.nulls() {
                 Some(n) => nulls.append_buffer(n.inner()),
                 None => nulls.append_n(d.len(), true),

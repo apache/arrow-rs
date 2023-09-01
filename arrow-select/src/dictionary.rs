@@ -19,10 +19,12 @@ use crate::interleave::interleave;
 use ahash::RandomState;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
+use arrow_array::types::{
+    ArrowDictionaryKeyType, BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type,
+    Utf8Type,
+};
 use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, ScalarBuffer};
-use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
 /// A best effort interner that maintains a fixed number of buckets
@@ -80,33 +82,60 @@ pub struct MergedDictionaries<K: ArrowDictionaryKeyType> {
     pub values: ArrayRef,
 }
 
+/// Performs a cheap, pointer-based comparison of two byte array
+///
+/// See [`ScalarBuffer::ptr_eq`]
+fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
+    match (a.as_bytes_opt::<T>(), b.as_bytes_opt::<T>()) {
+        (Some(a), Some(b)) => {
+            let values_eq =
+                a.values().ptr_eq(b.values()) && a.offsets().ptr_eq(b.offsets());
+            match (a.nulls(), b.nulls()) {
+                (Some(a), Some(b)) => values_eq && a.inner().ptr_eq(b.inner()),
+                (None, None) => values_eq,
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// A type-erased function that compares two array for pointer equality
+type PtrEq = dyn Fn(&dyn Array, &dyn Array) -> bool;
+
 /// A weak heuristic of whether to merge dictionary values that aims to only
 /// perform the expensive merge computation when it is likely to yield at least
 /// some return over the naive approach used by MutableArrayData
 ///
 /// `len` is the total length of the merged output
 pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
-    arrays: &[&dyn Array],
+    dictionaries: &[&DictionaryArray<K>],
     len: usize,
 ) -> bool {
-    let first_array = &arrays[0].to_data();
-    let first_values = &first_array.child_data()[0];
+    use DataType::*;
+    let first_values = dictionaries[0].values().as_ref();
+    let ptr_eq: Box<PtrEq> = match first_values.data_type() {
+        Utf8 => Box::new(bytes_ptr_eq::<Utf8Type>),
+        LargeUtf8 => Box::new(bytes_ptr_eq::<LargeUtf8Type>),
+        Binary => Box::new(bytes_ptr_eq::<BinaryType>),
+        LargeBinary => Box::new(bytes_ptr_eq::<LargeBinaryType>),
+        _ => return false,
+    };
 
     let mut single_dictionary = true;
     let mut total_values = first_values.len();
-    for a in arrays.iter().skip(1) {
-        let data = a.to_data();
-
-        let values = &data.child_data()[0];
+    for dict in dictionaries.iter().skip(1) {
+        let values = dict.values().as_ref();
         total_values += values.len();
-        single_dictionary &= ArrayData::ptr_eq(values, first_values);
+        if single_dictionary {
+            single_dictionary = ptr_eq(first_values, values)
+        }
     }
 
     let overflow = K::Native::from_usize(total_values).is_none();
     let values_exceed_length = total_values >= len;
-    let is_supported = first_values.data_type().is_byte_array();
 
-    !single_dictionary && is_supported && (overflow || values_exceed_length)
+    !single_dictionary && (overflow || values_exceed_length)
 }
 
 /// Given an array of dictionaries and an optional key mask compute a values array
@@ -118,15 +147,17 @@ pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
 /// may not be unique, unlike `GenericByteDictionaryBuilder` which is slower
 /// but produces unique values
 pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
-    dictionaries: &[(&DictionaryArray<K>, Option<BooleanBuffer>)],
+    dictionaries: &[&DictionaryArray<K>],
+    masks: Option<&[BooleanBuffer]>,
 ) -> Result<MergedDictionaries<K>, ArrowError> {
     let mut num_values = 0;
 
     let mut values = Vec::with_capacity(dictionaries.len());
     let mut value_slices = Vec::with_capacity(dictionaries.len());
 
-    for (dictionary, key_mask) in dictionaries {
-        let key_mask = match (dictionary.logical_nulls(), key_mask) {
+    for (idx, dictionary) in dictionaries.iter().enumerate() {
+        let mask = masks.and_then(|m| m.get(idx));
+        let key_mask = match (dictionary.logical_nulls(), mask) {
             (Some(n), None) => Some(n.into_inner()),
             (None, Some(n)) => Some(n.clone()),
             (Some(n), Some(m)) => Some(n.inner() & m),
@@ -150,7 +181,7 @@ pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
         .iter()
         .enumerate()
         .zip(value_slices)
-        .map(|((dictionary_idx, (dictionary, _)), values)| {
+        .map(|((dictionary_idx, dictionary), values)| {
             let zero = K::Native::from_usize(0).unwrap();
             let mut mapping = vec![zero; dictionary.values().len()];
 
@@ -237,7 +268,7 @@ mod tests {
         let a =
             DictionaryArray::<Int32Type>::from_iter(["a", "b", "a", "b", "d", "c", "e"]);
         let b = DictionaryArray::<Int32Type>::from_iter(["c", "f", "c", "d", "a", "d"]);
-        let merged = merge_dictionary_values(&[(&a, None), (&b, None)]).unwrap();
+        let merged = merge_dictionary_values(&[&a, &b], None).unwrap();
 
         let values = as_string_array(merged.values.as_ref());
         let actual: Vec<_> = values.iter().map(Option::unwrap).collect();
@@ -248,7 +279,7 @@ mod tests {
         assert_eq!(&merged.key_mappings[1], &[3, 5, 2, 0]);
 
         let a_slice = a.slice(1, 4);
-        let merged = merge_dictionary_values(&[(&a_slice, None), (&b, None)]).unwrap();
+        let merged = merge_dictionary_values(&[&a_slice, &b], None).unwrap();
 
         let values = as_string_array(merged.values.as_ref());
         let actual: Vec<_> = values.iter().map(Option::unwrap).collect();
@@ -259,9 +290,10 @@ mod tests {
         assert_eq!(&merged.key_mappings[1], &[3, 4, 2, 0]);
 
         // Mask out only ["b", "b", "d"] from a
-        let mask =
+        let a_mask =
             BooleanBuffer::from_iter([false, true, false, true, true, false, false]);
-        let merged = merge_dictionary_values(&[(&a, Some(mask)), (&b, None)]).unwrap();
+        let b_mask = BooleanBuffer::new_set(b.len());
+        let merged = merge_dictionary_values(&[&a, &b], Some(&[a_mask, b_mask])).unwrap();
 
         let values = as_string_array(merged.values.as_ref());
         let actual: Vec<_> = values.iter().map(Option::unwrap).collect();
@@ -291,7 +323,7 @@ mod tests {
             Arc::new(StringArray::new_null(0)),
         );
 
-        let merged = merge_dictionary_values(&[(&a, None), (&b, None)]).unwrap();
+        let merged = merge_dictionary_values(&[&a, &b], None).unwrap();
         let expected = StringArray::from(vec!["bingo", "hello"]);
         assert_eq!(merged.values.as_ref(), &expected);
         assert_eq!(merged.key_mappings.len(), 2);

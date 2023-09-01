@@ -323,6 +323,14 @@ impl Buffer {
                 length,
             })
     }
+
+    /// Returns true if this [`Buffer`] is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.ptr == other.ptr && self.length == other.length
+    }
 }
 
 /// Creating a `Buffer` instance by copying the memory from a `AsRef<[u8]>` into a newly
