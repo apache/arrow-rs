@@ -586,6 +586,12 @@ impl ObjectStore for LocalFileSystem {
         let from = self.config.path_to_filesystem(from)?;
         let to = self.config.path_to_filesystem(to)?;
         let mut id = 0;
+        // In order to make this atomic we:
+        //
+        // - hard link to a hidden temporary file
+        // - atomically rename this temporary file into place
+        //
+        // This is necessary because hard_link returns an error if the destination already exists
         maybe_spawn_blocking(move || loop {
             let staged = staged_upload_path(&to, &id.to_string());
             match std::fs::hard_link(&from, &staged) {
