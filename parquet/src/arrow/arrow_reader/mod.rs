@@ -480,7 +480,10 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let rg = self.metadata.row_group(rg_idx);
         let meta = rg.column(self.column_idx);
         let offset_index = self.metadata.offset_index();
-        let page_locations = offset_index.map(|i| i[rg_idx][self.column_idx].clone());
+        // `offset_index` may not exist and the inner `Vec` will be empty.
+        let page_locations = offset_index
+            .filter(|i| !i[rg_idx].is_empty())
+            .map(|i| i[rg_idx][self.column_idx].clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
