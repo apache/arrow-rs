@@ -144,6 +144,9 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     concat_fallback(arrays, capacity)
 }
 
+/// Concatenates arrays using MutableArrayData
+///
+/// This will naively concatenate dictionaries
 fn concat_fallback(
     arrays: &[&dyn Array],
     capacity: Capacities,
