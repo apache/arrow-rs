@@ -28,7 +28,7 @@ use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use futures::{stream::BoxStream, StreamExt};
 use futures::{FutureExt, TryStreamExt};
-use snafu::{ensure, OptionExt, ResultExt, Snafu};
+use snafu::{ensure, ResultExt, Snafu};
 use std::fs::{metadata, symlink_metadata, File, Metadata, OpenOptions};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
@@ -78,10 +78,10 @@ pub(crate) enum Error {
         path: PathBuf,
     },
 
-    #[snafu(display("Unable to create file {}: {}", path.display(), err))]
+    #[snafu(display("Unable to create file {}: {}", path.display(), source))]
     UnableToCreateFile {
+        source: io::Error,
         path: PathBuf,
-        err: io::Error,
     },
 
     #[snafu(display("Unable to delete file {}: {}", path.display(), source))]
@@ -336,12 +336,13 @@ impl ObjectStore for LocalFileSystem {
                 // If the file was successfully opened, return it wrapped in a boxed `AsyncWrite` trait object.
                 Ok(file) => return Ok(Box::new(file)),
                 // If the error is that the file was not found, attempt to create the file and any necessary parent directories.
-                Err(err) if err.kind() == ErrorKind::NotFound => {
+                Err(source) if source.kind() == ErrorKind::NotFound => {
                     // Get the path to the parent directory of the file.
-                    let parent = path
-                        .parent()
-                        // If the parent directory does not exist, return a `UnableToCreateFileSnafu` error.
-                        .context(UnableToCreateFileSnafu { path: &path, err })?;
+                    let parent =
+                        path.parent().ok_or_else(|| Error::UnableToCreateFile {
+                            path: path.to_path_buf(),
+                            source,
+                        })?;
 
                     // Create the parent directory and any necessary ancestors.
                     tokio::fs::create_dir_all(parent)
@@ -584,10 +585,27 @@ impl ObjectStore for LocalFileSystem {
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
         let from = self.config.path_to_filesystem(from)?;
         let to = self.config.path_to_filesystem(to)?;
-
-        maybe_spawn_blocking(move || {
-            std::fs::copy(&from, &to).context(UnableToCopyFileSnafu { from, to })?;
-            Ok(())
+        let mut id = 0;
+        // In order to make this atomic we:
+        //
+        // - hard link to a hidden temporary file
+        // - atomically rename this temporary file into place
+        //
+        // This is necessary because hard_link returns an error if the destination already exists
+        maybe_spawn_blocking(move || loop {
+            let staged = staged_upload_path(&to, &id.to_string());
+            match std::fs::hard_link(&from, &staged) {
+                Ok(_) => {
+                    return std::fs::rename(&staged, &to).map_err(|source| {
+                        Error::UnableToCopyFile { from, to, source }.into()
+                    })
+                }
+                Err(source) => match source.kind() {
+                    ErrorKind::AlreadyExists => id += 1,
+                    ErrorKind::NotFound => create_parent_dirs(&to, source)?,
+                    _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
+                },
+            }
         })
         .await
     }
@@ -595,9 +613,14 @@ impl ObjectStore for LocalFileSystem {
     async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
         let from = self.config.path_to_filesystem(from)?;
         let to = self.config.path_to_filesystem(to)?;
-        maybe_spawn_blocking(move || {
-            std::fs::rename(&from, &to).context(UnableToCopyFileSnafu { from, to })?;
-            Ok(())
+        maybe_spawn_blocking(move || loop {
+            match std::fs::rename(&from, &to) {
+                Ok(_) => return Ok(()),
+                Err(source) => match source.kind() {
+                    ErrorKind::NotFound => create_parent_dirs(&to, source)?,
+                    _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
+                },
+            }
         })
         .await
     }
@@ -606,23 +629,35 @@ impl ObjectStore for LocalFileSystem {
         let from = self.config.path_to_filesystem(from)?;
         let to = self.config.path_to_filesystem(to)?;
 
-        maybe_spawn_blocking(move || {
-            std::fs::hard_link(&from, &to).map_err(|err| match err.kind() {
-                io::ErrorKind::AlreadyExists => Error::AlreadyExists {
-                    path: to.to_str().unwrap().to_string(),
-                    source: err,
-                }
-                .into(),
-                _ => Error::UnableToCopyFile {
-                    from,
-                    to,
-                    source: err,
-                }
-                .into(),
-            })
+        maybe_spawn_blocking(move || loop {
+            match std::fs::hard_link(&from, &to) {
+                Ok(_) => return Ok(()),
+                Err(source) => match source.kind() {
+                    ErrorKind::AlreadyExists => {
+                        return Err(Error::AlreadyExists {
+                            path: to.to_str().unwrap().to_string(),
+                            source,
+                        }
+                        .into())
+                    }
+                    ErrorKind::NotFound => create_parent_dirs(&to, source)?,
+                    _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
+                },
+            }
         })
         .await
     }
+}
+
+/// Creates the parent directories of `path` or returns an error based on `source` if no parent
+fn create_parent_dirs(path: &std::path::Path, source: io::Error) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| Error::UnableToCreateFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+
+    std::fs::create_dir_all(parent).context(UnableToCreateDirSnafu { path: parent })?;
+    Ok(())
 }
 
 /// Generates a unique file path `{base}#{suffix}`, returning the opened `File` and `suffix`
@@ -636,20 +671,11 @@ fn new_staged_upload(base: &std::path::Path) -> Result<(File, String)> {
         let mut options = OpenOptions::new();
         match options.read(true).write(true).create_new(true).open(&path) {
             Ok(f) => return Ok((f, suffix)),
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                multipart_id += 1;
-            }
-            Err(err) if err.kind() == ErrorKind::NotFound => {
-                let parent = path
-                    .parent()
-                    .context(UnableToCreateFileSnafu { path: &path, err })?;
-
-                std::fs::create_dir_all(parent)
-                    .context(UnableToCreateDirSnafu { path: parent })?;
-
-                continue;
-            }
-            Err(source) => return Err(Error::UnableToOpenFile { source, path }.into()),
+            Err(source) => match source.kind() {
+                ErrorKind::AlreadyExists => multipart_id += 1,
+                ErrorKind::NotFound => create_parent_dirs(&path, source)?,
+                _ => return Err(Error::UnableToOpenFile { source, path }.into()),
+            },
         }
     }
 }

@@ -256,31 +256,37 @@ impl Client {
     }
 
     pub async fn copy(&self, from: &Path, to: &Path, overwrite: bool) -> Result<()> {
-        let from = self.path_url(from);
-        let to = self.path_url(to);
-        let method = Method::from_bytes(b"COPY").unwrap();
+        let mut retry = false;
+        loop {
+            let method = Method::from_bytes(b"COPY").unwrap();
 
-        let mut builder = self
-            .client
-            .request(method, from)
-            .header("Destination", to.as_str());
+            let mut builder = self
+                .client
+                .request(method, self.path_url(from))
+                .header("Destination", self.path_url(to).as_str());
 
-        if !overwrite {
-            builder = builder.header("Overwrite", "F");
-        }
-
-        match builder.send_retry(&self.retry_config).await {
-            Ok(_) => Ok(()),
-            Err(e)
-                if !overwrite
-                    && matches!(e.status(), Some(StatusCode::PRECONDITION_FAILED)) =>
-            {
-                Err(crate::Error::AlreadyExists {
-                    path: to.to_string(),
-                    source: Box::new(e),
-                })
+            if !overwrite {
+                builder = builder.header("Overwrite", "F");
             }
-            Err(source) => Err(Error::Request { source }.into()),
+
+            return match builder.send_retry(&self.retry_config).await {
+                Ok(_) => Ok(()),
+                Err(source) => Err(match source.status() {
+                    Some(StatusCode::PRECONDITION_FAILED) if !overwrite => {
+                        crate::Error::AlreadyExists {
+                            path: to.to_string(),
+                            source: Box::new(source),
+                        }
+                    }
+                    // Some implementations return 404 instead of 409
+                    Some(StatusCode::CONFLICT | StatusCode::NOT_FOUND) if !retry => {
+                        retry = true;
+                        self.create_parent_directories(to).await?;
+                        continue;
+                    }
+                    _ => Error::Request { source }.into(),
+                }),
+            };
         }
     }
 }

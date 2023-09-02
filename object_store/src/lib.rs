@@ -1105,8 +1105,24 @@ mod tests {
         files.sort_unstable();
         assert_eq!(files, vec![emoji_file.clone(), dst.clone()]);
 
+        let dst2 = Path::from("new/nested/foo.parquet");
+        storage.copy(&emoji_file, &dst2).await.unwrap();
+        let mut files = flatten_list_stream(storage, None).await.unwrap();
+        files.sort_unstable();
+        assert_eq!(files, vec![emoji_file.clone(), dst.clone(), dst2.clone()]);
+
+        let dst3 = Path::from("new/nested2/bar.parquet");
+        storage.rename(&dst, &dst3).await.unwrap();
+        let mut files = flatten_list_stream(storage, None).await.unwrap();
+        files.sort_unstable();
+        assert_eq!(files, vec![emoji_file.clone(), dst2.clone(), dst3.clone()]);
+
+        let err = storage.head(&dst).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }));
+
         storage.delete(&emoji_file).await.unwrap();
-        storage.delete(&dst).await.unwrap();
+        storage.delete(&dst3).await.unwrap();
+        storage.delete(&dst2).await.unwrap();
         let files = flatten_list_stream(storage, Some(&emoji_prefix))
             .await
             .unwrap();
@@ -1605,7 +1621,7 @@ mod tests {
     pub(crate) async fn copy_if_not_exists(storage: &DynObjectStore) {
         // Create two objects
         let path1 = Path::from("test1");
-        let path2 = Path::from("test2");
+        let path2 = Path::from("not_exists_nested/test2");
         let contents1 = Bytes::from("cats");
         let contents2 = Bytes::from("dogs");
 
