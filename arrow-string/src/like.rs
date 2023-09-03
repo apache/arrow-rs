@@ -405,7 +405,6 @@ mod tests {
     macro_rules! test_dict_utf8 {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
-            #[cfg(feature = "dyn_cmp_dict")]
             fn $test_name() {
                 let expected = BooleanArray::from($expected);
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
