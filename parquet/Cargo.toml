@@ -42,7 +42,7 @@ arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
-arrow-ipc = { workspace = true, optional = true }
+arrow-ipc = { workspace = true, default-features = false, optional = true }
 # Intentionally not a path dependency as object_store is released separately
 object_store = { version = "0.7", default-features = false, optional = true }
 
@@ -77,7 +77,7 @@ flate2 = { version = "1.0", default-features = false, features = ["rust_backend"
 lz4 = { version = "1.23", default-features = false }
 zstd = { version = "0.12", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
-arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
+arrow = { workspace = true, features = ["test_utils", "prettyprint", "json"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "io-util", "fs"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 

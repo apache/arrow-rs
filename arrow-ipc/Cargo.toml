@@ -33,6 +33,11 @@ name = "arrow_ipc"
 path = "src/lib.rs"
 bench = false
 
+[features]
+default = ["reader", "writer"]
+reader = []
+writer = []
+
 [dependencies]
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }

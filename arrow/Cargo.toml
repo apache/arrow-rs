@@ -51,7 +51,7 @@ arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
 arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true }
-arrow-ipc = { workspace = true, optional = true }
+arrow-ipc = { workspace = true, optional = true, default-features = true }
 arrow-json = { workspace = true, optional = true }
 arrow-ord = { workspace = true }
 arrow-row = { workspace = true }

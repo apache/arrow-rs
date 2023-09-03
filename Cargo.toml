@@ -83,7 +83,7 @@ arrow-buffer = { version = "46.0.0", path = "./arrow-buffer" }
 arrow-cast = { version = "46.0.0", path = "./arrow-cast" }
 arrow-csv = { version = "46.0.0", path = "./arrow-csv" }
 arrow-data = { version = "46.0.0", path = "./arrow-data" }
-arrow-ipc = { version = "46.0.0", path = "./arrow-ipc" }
+arrow-ipc = { version = "46.0.0", path = "./arrow-ipc", default-features = false }
 arrow-json = { version = "46.0.0", path = "./arrow-json" }
 arrow-ord = { version = "46.0.0", path = "./arrow-ord" }
 arrow-row = { version = "46.0.0", path = "./arrow-row" }
