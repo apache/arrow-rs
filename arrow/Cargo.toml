@@ -63,7 +63,7 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 pyo3 = { version = "0.19", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
-features = ["prettyprint", "ipc_compression", "dyn_cmp_dict", "ffi", "pyarrow"]
+features = ["prettyprint", "ipc_compression", "ffi", "pyarrow"]
 
 [features]
 default = ["csv", "ipc", "json"]
@@ -85,9 +85,6 @@ pyarrow = ["pyo3", "ffi"]
 force_validate = ["arrow-data/force_validate"]
 # Enable ffi support
 ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
-# Enable dyn-comparison of dictionary arrays with other arrays
-# Note: this does not impact comparison against scalars
-dyn_cmp_dict = ["arrow-string/dyn_cmp_dict"]
 chrono-tz = ["arrow-array/chrono-tz"]
 
 [dev-dependencies]
