@@ -43,7 +43,7 @@ jobs:
       env:
         RUSTDOCFLAGS: "-Dwarnings --enable-index-page -Zunstable-options"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Install python dev
@@ -77,7 +77,7 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Download crate docs
         uses: actions/download-artifact@v3
         with:
