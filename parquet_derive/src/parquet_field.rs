@@ -450,8 +450,8 @@ impl Field {
         };
 
         // The below code would support references in field types, but it prevents the compiler
-        // from doing type inference from the compiler, so it is necessary to work out the target
-        // type and annotate it for this to be possible.
+        // from doing type inference, so it is necessary to work out the target type and annotate
+        // it for this to be possible.
         //
         // if let Type::Reference(_, x) = &self.ty {
         //     if **x == Type::TypePath(syn::parse_str("str").unwrap()) {
