@@ -223,6 +223,78 @@ impl Field {
         }
     }
 
+    /// Takes the parsed field of the struct and emits a valid
+    /// column reader snippet. Should match exactly what you
+    /// would write by hand.
+    ///
+    /// Can only generate writers for basic structs, for example:
+    ///
+    /// struct Record {
+    ///   a_bool: bool
+    /// }
+    ///
+    /// but not
+    ///
+    /// struct UnsupportedNestedRecord {
+    ///   a_property: bool,
+    ///   nested_record: Record
+    /// }
+    ///
+    /// because this parsing logic is not sophisticated enough for definition
+    /// levels beyond 2.
+    ///
+    /// `Option` types and references not supported
+    pub fn reader_snippet(&self) -> proc_macro2::TokenStream {
+        use parquet::basic::Type as BasicType;
+
+        let ident = &self.ident;
+        let column_reader = self.ty.column_reader();
+        let parquet_type = self.ty.physical_type_as_rust();
+
+        let default_type = match self.ty.physical_type() {
+            BasicType::BYTE_ARRAY | BasicType::FIXED_LEN_BYTE_ARRAY => quote!{ parquet::data_type::ByteArray::new() },
+            BasicType::BOOLEAN => quote!{ false },
+            BasicType::FLOAT | BasicType::DOUBLE => quote!{ 0. },
+            BasicType::INT32 | BasicType::INT64 | BasicType::INT96 => quote!{ 0 },   
+        };
+
+        let write_batch_expr = quote! {
+            let mut vals_vec = Vec::new();
+            vals_vec.resize(max_records, #default_type);
+            let mut vals: &mut [#parquet_type] = vals_vec.as_mut_slice();
+            if let #column_reader(mut typed) = column_reader {
+                typed.read_records(max_records, None, None, vals)?;
+            } else {
+                panic!("Schema and struct disagree on type for {}", stringify!{#ident});
+            }
+        };
+
+        let vals_writer = match &self.ty {
+            Type::TypePath(_) => self.copied_direct_fields(),
+            Type::Reference(_, ref first_type) => match **first_type {
+                Type::TypePath(_) => self.copied_direct_fields(),
+                Type::Slice(ref second_type) => match **second_type {
+                    Type::TypePath(_) => self.copied_direct_fields(),
+                    ref f => unimplemented!("Unsupported: {:#?}", f),
+                },
+                ref f => unimplemented!("Unsupported: {:#?}", f),
+            },
+            Type::Vec(ref first_type) => match **first_type {
+                Type::TypePath(_) => self.copied_direct_fields(),
+                ref f => unimplemented!("Unsupported: {:#?}", f),
+            },
+            f => unimplemented!("Unsupported: {:#?}", f),
+        };
+
+        quote! {
+            {
+                #write_batch_expr
+
+                #vals_writer
+            }
+        }
+    }
+
     pub fn parquet_type(&self) -> proc_macro2::TokenStream {
         // TODO: Support group types
         // TODO: Add length if dealing with fixedlenbinary
@@ -354,6 +426,51 @@ impl Field {
         }
     }
 
+    fn copied_direct_fields(&self) -> proc_macro2::TokenStream {
+
+        let field_name = &self.ident;
+        let is_a_byte_buf = self.is_a_byte_buf;
+        let is_a_timestamp =
+            self.third_party_type == Some(ThirdPartyType::ChronoNaiveDateTime);
+        let is_a_date = self.third_party_type == Some(ThirdPartyType::ChronoNaiveDate);
+        let is_a_uuid = self.third_party_type == Some(ThirdPartyType::Uuid);
+
+        let value = if is_a_timestamp {
+            quote! { ::chrono::naive::NaiveDateTime::from_timestamp_millis(vals[i]).unwrap() }
+        } else if is_a_date {
+            quote! { ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i]
+            + ((::chrono::naive::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+            - ::chrono::naive::NaiveDate::from_ymd_opt(0, 12, 31).unwrap()).num_days()) as i32).unwrap() }
+        } else if is_a_uuid {
+            quote! { ::uuid::Uuid::parse_str(vals[i].data().convert()).unwrap() }
+        } else if is_a_byte_buf {
+            quote! { vals[i].data().convert() }
+        } else {
+            quote! { vals[i].convert() }
+        };
+
+        // The below code would support references in field types, but it prevents the compiler
+        // from doing type inference from the compiler, so it is necessary to work out the target
+        // type and annotate it for this to be possible.
+        //
+        // if let Type::Reference(_, x) = &self.ty {
+        //     if **x == Type::TypePath(syn::parse_str("str").unwrap()) {
+        //         value = quote!{ *(#value) };
+        //     }
+        //     if let Type::Slice(..) = **x {
+        //         value = quote!{ *(#value) };
+        //     }
+        //     value = quote!{ &*std::rc::Rc::new(#value) };
+        // }
+
+        quote! {
+            let length = std::cmp::min(vals.len(), records.len());
+            for (i, r) in &mut records[..length].iter_mut().enumerate() {
+                r.#field_name = #value;
+            }
+        }
+    }
+
     fn optional_definition_levels(&self) -> proc_macro2::TokenStream {
         let field_name = &self.ident;
 
@@ -398,6 +515,29 @@ impl Type {
             }
             BasicType::FIXED_LEN_BYTE_ARRAY => {
                 syn::parse_quote!(ColumnWriter::FixedLenByteArrayColumnWriter)
+            }
+        }
+    }
+
+    /// Takes a rust type and returns the appropriate
+    /// parquet-rs column reader
+    fn column_reader(&self) -> syn::TypePath {
+        use parquet::basic::Type as BasicType;
+
+        match self.physical_type() {
+            BasicType::BOOLEAN => {
+                syn::parse_quote!(ColumnReader::BoolColumnReader)
+            }
+            BasicType::INT32 => syn::parse_quote!(ColumnReader::Int32ColumnReader),
+            BasicType::INT64 => syn::parse_quote!(ColumnReader::Int64ColumnReader),
+            BasicType::INT96 => syn::parse_quote!(ColumnReader::Int96ColumnReader),
+            BasicType::FLOAT => syn::parse_quote!(ColumnReader::FloatColumnReader),
+            BasicType::DOUBLE => syn::parse_quote!(ColumnReader::DoubleColumnReader),
+            BasicType::BYTE_ARRAY => {
+                syn::parse_quote!(ColumnReader::ByteArrayColumnReader)
+            }
+            BasicType::FIXED_LEN_BYTE_ARRAY => {
+                syn::parse_quote!(ColumnReader::FixedLenByteArrayColumnReader)
             }
         }
     }
@@ -521,6 +661,21 @@ impl Type {
             "f64" => BasicType::DOUBLE,
             "String" | "str" | "Uuid" => BasicType::BYTE_ARRAY,
             f => unimplemented!("{} currently is not supported", f),
+        }
+    }
+
+    fn physical_type_as_rust(&self) -> proc_macro2::TokenStream {
+        use parquet::basic::Type as BasicType;
+
+        match self.physical_type() {
+            BasicType::BOOLEAN => quote!{ bool },
+            BasicType::INT32 => quote!{ i32 },
+            BasicType::INT64 => quote!{ i64 },
+            BasicType::INT96 => unimplemented!("96-bit int currently is not supported"),
+            BasicType::FLOAT => quote!{ f32 },
+            BasicType::DOUBLE => quote!{ f64 },
+            BasicType::BYTE_ARRAY => quote!{ ::parquet::data_type::ByteArray },
+            BasicType::FIXED_LEN_BYTE_ARRAY => quote!{ ::parquet::data_type::ByteArray },
         }
     }
 
@@ -682,6 +837,66 @@ impl Type {
     }
 }
 
+// returns quote of function needed to convert from parquet
+// types back into the types used in the struct fields.
+pub fn get_convertable_quote() -> proc_macro2::TokenStream {
+    quote! {
+        trait Convertable<T: ?Sized> {
+            fn convert(self) -> T;
+        }
+        
+        macro_rules! convert_as {
+            ($from:ty, $to:ty) => {
+                impl Convertable<$to> for $from {
+                    fn convert(self) -> $to {
+                        self as $to
+                    }
+                }
+            };
+        }
+        
+        convert_as!(i32, u8);
+        convert_as!(i32, u16);
+        convert_as!(i32, u32);
+        convert_as!(i32, i8);
+        convert_as!(i32, i16);
+        convert_as!(i32, i32);
+        convert_as!(i32, usize);
+        convert_as!(i32, isize);
+        convert_as!(i64, u64);
+        convert_as!(i64, i64);
+        convert_as!(i64, usize);
+        convert_as!(i64, isize);
+        convert_as!(bool, bool);
+        convert_as!(f32, f32);
+        convert_as!(f64, f64);
+
+        impl Convertable<String> for &[u8] {
+            fn convert(self) -> String {
+                String::from(std::str::from_utf8(self).expect("invalid UTF-8 sequence"))
+            }
+        }
+
+        impl Convertable<Vec<u8>> for &[u8] {
+            fn convert(self) -> Vec<u8> {
+                self.to_vec()
+            }
+        }
+
+        impl<'a> Convertable<&'a str> for &'a [u8] {
+            fn convert(self) -> &'a str {
+                std::str::from_utf8(self).expect("invalid UTF-8 sequence")
+            }
+        }
+
+        impl<'a> Convertable<&'a [u8]> for &'a [u8] {
+            fn convert(self) -> &'a [u8] {
+                self
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -719,6 +934,38 @@ mod test {
                                 typed . write_batch ( & vals [ .. ] , None , None ) ?;
                             }  else {
                                 panic!("Schema and struct disagree on type for {}" , stringify!{ counter } )
+                            }
+                        }
+                   }).to_string()
+        )
+    }
+
+    #[test]
+    fn test_generating_a_simple_reader_snippet() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct ABoringStruct {
+            counter: usize,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let counter = Field::from(&fields[0]);
+
+        let snippet = counter.reader_snippet().to_string();
+        assert_eq!(snippet,
+                   (quote!{
+                        {
+                            let mut vals_vec = Vec::new();
+                            vals_vec.resize(max_records, 0);
+                            let mut vals: &mut[i64] = vals_vec.as_mut_slice();
+                            if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
+                                typed.read_records(max_records, None, None, vals)?;
+                            } else {
+                                panic!("Schema and struct disagree on type for {}", stringify!{ counter });
+                            }
+                            let length = std::cmp::min(vals.len(), records.len());
+                            for (i, r) in &mut records[..length].iter_mut().enumerate() {
+                                r.counter = vals[i].convert();
                             }
                         }
                    }).to_string()
@@ -830,6 +1077,32 @@ mod test {
             vec![
                 syn::parse_quote!(ColumnWriter::BoolColumnWriter),
                 syn::parse_quote!(ColumnWriter::ByteArrayColumnWriter)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_converting_to_column_reader_type() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct ABasicStruct {
+            yes_no: bool,
+            name: String,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let processed: Vec<_> = fields.iter().map(Field::from).collect();
+
+        let column_readers: Vec<_> = processed
+            .iter()
+            .map(|field| field.ty.column_reader())
+            .collect();
+
+        assert_eq!(
+            column_readers,
+            vec![
+                syn::parse_quote!(ColumnReader::BoolColumnReader),
+                syn::parse_quote!(ColumnReader::ByteArrayColumnReader)
             ]
         );
     }
@@ -1007,7 +1280,7 @@ mod test {
     }
 
     #[test]
-    fn test_chrono_timestamp_millis() {
+    fn test_chrono_timestamp_millis_write() {
         let snippet: proc_macro2::TokenStream = quote! {
           struct ATimestampStruct {
             henceforth: chrono::NaiveDateTime,
@@ -1050,7 +1323,35 @@ mod test {
     }
 
     #[test]
-    fn test_chrono_date() {
+    fn test_chrono_timestamp_millis_read() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct ATimestampStruct {
+            henceforth: chrono::NaiveDateTime,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let when = Field::from(&fields[0]);
+        assert_eq!(when.reader_snippet().to_string(),(quote!{
+            {
+                let mut vals_vec = Vec::new();
+                vals_vec.resize(max_records, 0);
+                let mut vals: &mut[i64] = vals_vec.as_mut_slice();
+                if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
+                    typed.read_records(max_records, None, None, vals)?;
+                } else {
+                    panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
+                }
+                let length = std::cmp::min(vals.len(), records.len());
+                for (i, r) in &mut records[..length].iter_mut().enumerate() {
+                    r.henceforth = ::chrono::naive::NaiveDateTime::from_timestamp_millis(vals[i]).unwrap();
+                }
+            }
+        }).to_string());
+    }
+
+    #[test]
+    fn test_chrono_date_write() {
         let snippet: proc_macro2::TokenStream = quote! {
           struct ATimestampStruct {
             henceforth: chrono::NaiveDate,
@@ -1093,7 +1394,37 @@ mod test {
     }
 
     #[test]
-    fn test_uuid() {
+    fn test_chrono_date_read() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct ATimestampStruct {
+            henceforth: chrono::NaiveDate,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let when = Field::from(&fields[0]);
+        assert_eq!(when.reader_snippet().to_string(),(quote!{
+            {
+                let mut vals_vec = Vec::new();
+                vals_vec.resize(max_records, 0);
+                let mut vals: &mut [i32] = vals_vec.as_mut_slice();
+                if let ColumnReader::Int32ColumnReader(mut typed) = column_reader {
+                    typed.read_records(max_records, None, None, vals)?;
+                } else {
+                    panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
+                }
+                let length = std::cmp::min(vals.len(), records.len());
+                for (i, r) in &mut records[..length].iter_mut().enumerate() {
+                    r.henceforth = ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i]
+                        + ((::chrono::naive::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                        - ::chrono::naive::NaiveDate::from_ymd_opt(0, 12, 31).unwrap()).num_days()) as i32).unwrap();
+                }
+            }
+        }).to_string());
+    }
+
+    #[test]
+    fn test_uuid_write() {
         let snippet: proc_macro2::TokenStream = quote! {
           struct AUuidStruct {
             unique_id: uuid::Uuid,
@@ -1130,6 +1461,34 @@ mod test {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_unique_id })
+                }
+            }
+        }).to_string());
+    }
+
+    #[test]
+    fn test_uuid_read() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct AUuidStruct {
+            unique_id: uuid::Uuid,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let when = Field::from(&fields[0]);
+        assert_eq!(when.reader_snippet().to_string(),(quote!{
+            {
+                let mut vals_vec = Vec::new();
+                vals_vec.resize(max_records, parquet::data_type::ByteArray::new());
+                let mut vals: &mut [::parquet::data_type::ByteArray] = vals_vec.as_mut_slice();
+                if let ColumnReader::ByteArrayColumnReader(mut typed) = column_reader {
+                    typed.read_records(max_records, None, None, vals)?;
+                } else {
+                    panic!("Schema and struct disagree on type for {}", stringify!{ unique_id });
+                }
+                let length = std::cmp::min(vals.len(), records.len());
+                for (i, r) in &mut records[..length].iter_mut().enumerate() {
+                    r.unique_id = ::uuid::Uuid::parse_str(vals[i].data().convert()).unwrap();
                 }
             }
         }).to_string());

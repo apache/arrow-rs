@@ -15,19 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains record-based API for reading Parquet files.
+use super::super::errors::ParquetError;
+use super::super::file::reader::RowGroupReader;
 
-mod api;
-pub mod reader;
-mod record_writer;
-mod record_reader;
-mod triplet;
-
-pub use self::{
-    api::{
-        Field, List, ListAccessor, Map, MapAccessor, Row, RowAccessor, RowColumnIter,
-        RowFormatter,
-    },
-    record_writer::RecordWriter,
-    record_reader::RecordReader,
-};
+pub trait RecordReader<T> {
+    fn read_from_row_group(
+        &mut self,
+        row_group_reader: &mut dyn RowGroupReader,
+        max_records: usize,
+      ) -> Result<(), ParquetError>;
+}
