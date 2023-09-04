@@ -43,7 +43,7 @@ jobs:
       run:
         working-directory: object_store
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy
@@ -79,7 +79,7 @@ jobs:
     env:
       RUSTDOCFLAGS: "-Dwarnings"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Run cargo doc
         run: cargo doc --document-private-items --no-deps --workspace --all-features
 
@@ -115,7 +115,7 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Configure Fake GCS Server (GCP emulation)
         # Custom image - see fsouza/fake-gcs-server#1164
@@ -160,7 +160,7 @@ jobs:
       run:
         working-directory: object_store
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
