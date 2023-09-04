@@ -480,7 +480,11 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let rg = self.metadata.row_group(rg_idx);
         let meta = rg.column(self.column_idx);
         let offset_index = self.metadata.offset_index();
-        let page_locations = offset_index.map(|i| i[rg_idx][self.column_idx].clone());
+        // `offset_index` may not exist and `i[rg_idx]` will be empty.
+        // To avoid `i[rg_idx][self.oolumn_idx`] panic, we need to filter out empty `i[rg_idx]`.
+        let page_locations = offset_index
+            .filter(|i| !i[rg_idx].is_empty())
+            .map(|i| i[rg_idx][self.column_idx].clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
@@ -2479,6 +2483,43 @@ mod tests {
             .unwrap();
         assert_ne!(1024, num_rows);
         assert_eq!(reader.batch_size, num_rows as usize);
+    }
+
+    #[test]
+    fn test_read_with_page_index_enabled() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+
+        {
+            // `alltypes_tiny_pages.parquet` has page index
+            let path = format!("{testdata}/alltypes_tiny_pages.parquet");
+            let test_file = File::open(path).unwrap();
+            let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+                test_file,
+                ArrowReaderOptions::new().with_page_index(true),
+            )
+            .unwrap();
+            assert!(!builder.metadata().offset_index().unwrap()[0].is_empty());
+            let reader = builder.build().unwrap();
+            let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(batches.len(), 8);
+        }
+
+        {
+            // `alltypes_plain.parquet` doesn't have page index
+            let path = format!("{testdata}/alltypes_plain.parquet");
+            let test_file = File::open(path).unwrap();
+            let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+                test_file,
+                ArrowReaderOptions::new().with_page_index(true),
+            )
+            .unwrap();
+            // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
+            // we should read the file successfully.
+            assert!(builder.metadata().offset_index().unwrap()[0].is_empty());
+            let reader = builder.build().unwrap();
+            let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(batches.len(), 1);
+        }
     }
 
     #[test]
