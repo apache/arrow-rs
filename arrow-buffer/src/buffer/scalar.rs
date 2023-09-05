@@ -86,6 +86,14 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     pub fn into_inner(self) -> Buffer {
         self.buffer
     }
+
+    /// Returns true if this [`ScalarBuffer`] is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.buffer.ptr_eq(&other.buffer)
+    }
 }
 
 impl<T: ArrowNativeType> Deref for ScalarBuffer<T> {

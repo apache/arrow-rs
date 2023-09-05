@@ -148,6 +148,14 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self(self.0.slice(offset, len.saturating_add(1)))
     }
+
+    /// Returns true if this [`OffsetBuffer`] is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
 }
 
 impl<T: ArrowNativeType> Deref for OffsetBuffer<T> {
