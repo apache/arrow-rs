@@ -252,10 +252,12 @@ impl Field {
         let parquet_type = self.ty.physical_type_as_rust();
 
         let default_type = match self.ty.physical_type() {
-            BasicType::BYTE_ARRAY | BasicType::FIXED_LEN_BYTE_ARRAY => quote!{ parquet::data_type::ByteArray::new() },
-            BasicType::BOOLEAN => quote!{ false },
-            BasicType::FLOAT | BasicType::DOUBLE => quote!{ 0. },
-            BasicType::INT32 | BasicType::INT64 | BasicType::INT96 => quote!{ 0 },   
+            BasicType::BYTE_ARRAY | BasicType::FIXED_LEN_BYTE_ARRAY => {
+                quote! { parquet::data_type::ByteArray::new() }
+            }
+            BasicType::BOOLEAN => quote! { false },
+            BasicType::FLOAT | BasicType::DOUBLE => quote! { 0. },
+            BasicType::INT32 | BasicType::INT64 | BasicType::INT96 => quote! { 0 },
         };
 
         let write_batch_expr = quote! {
@@ -427,7 +429,6 @@ impl Field {
     }
 
     fn copied_direct_fields(&self) -> proc_macro2::TokenStream {
-
         let field_name = &self.ident;
         let is_a_byte_buf = self.is_a_byte_buf;
         let is_a_timestamp =
@@ -668,14 +669,14 @@ impl Type {
         use parquet::basic::Type as BasicType;
 
         match self.physical_type() {
-            BasicType::BOOLEAN => quote!{ bool },
-            BasicType::INT32 => quote!{ i32 },
-            BasicType::INT64 => quote!{ i64 },
+            BasicType::BOOLEAN => quote! { bool },
+            BasicType::INT32 => quote! { i32 },
+            BasicType::INT64 => quote! { i64 },
             BasicType::INT96 => unimplemented!("96-bit int currently is not supported"),
-            BasicType::FLOAT => quote!{ f32 },
-            BasicType::DOUBLE => quote!{ f64 },
-            BasicType::BYTE_ARRAY => quote!{ ::parquet::data_type::ByteArray },
-            BasicType::FIXED_LEN_BYTE_ARRAY => quote!{ ::parquet::data_type::ByteArray },
+            BasicType::FLOAT => quote! { f32 },
+            BasicType::DOUBLE => quote! { f64 },
+            BasicType::BYTE_ARRAY => quote! { ::parquet::data_type::ByteArray },
+            BasicType::FIXED_LEN_BYTE_ARRAY => quote! { ::parquet::data_type::ByteArray },
         }
     }
 
@@ -844,7 +845,7 @@ pub fn get_convertable_quote() -> proc_macro2::TokenStream {
         trait Convertable<T: ?Sized> {
             fn convert(self) -> T;
         }
-        
+
         macro_rules! convert_as {
             ($from:ty, $to:ty) => {
                 impl Convertable<$to> for $from {
@@ -854,7 +855,7 @@ pub fn get_convertable_quote() -> proc_macro2::TokenStream {
                 }
             };
         }
-        
+
         convert_as!(i32, u8);
         convert_as!(i32, u16);
         convert_as!(i32, u32);

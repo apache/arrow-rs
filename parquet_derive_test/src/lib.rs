@@ -17,7 +17,7 @@
 
 #![allow(clippy::approx_constant)]
 
-use parquet_derive::{ParquetRecordWriter, ParquetRecordReader};
+use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
 
 #[derive(ParquetRecordWriter)]
 struct ACompleteRecord<'a> {
@@ -64,14 +64,15 @@ struct APartiallyCompleteRecord {
     pub byte_vec: Vec<u8>,
 }
 
-#[cfg(test)]  
+#[cfg(test)]
 mod tests {
     use super::*;
 
     use std::{env, fs, io::Write, sync::Arc};
 
     use parquet::{
-        file::writer::SerializedFileWriter, record::{RecordWriter, RecordReader},
+        file::writer::SerializedFileWriter,
+        record::{RecordReader, RecordWriter},
         schema::parser::parse_message_type,
     };
 
@@ -195,13 +196,16 @@ mod tests {
             byte_vec: vec![0x17, 0x18, 0x19],
         }];
 
-        use parquet::file::{serialized_reader::SerializedFileReader, reader::FileReader};
+        use parquet::file::{
+            reader::FileReader, serialized_reader::SerializedFileReader,
+        };
 
         let generated_schema = drs.as_slice().schema().unwrap();
 
         let props = Default::default();
         let mut writer =
-            SerializedFileWriter::new(file.try_clone().unwrap(), generated_schema, props).unwrap();
+            SerializedFileWriter::new(file.try_clone().unwrap(), generated_schema, props)
+                .unwrap();
 
         let mut row_group = writer.next_row_group().unwrap();
         drs.as_slice().write_to_row_group(&mut row_group).unwrap();
@@ -211,10 +215,15 @@ mod tests {
         let reader = SerializedFileReader::new(file).unwrap();
 
         let mut row_group = reader.get_row_group(0).unwrap();
-        out.as_mut_slice().read_from_row_group(&mut *row_group, 2).unwrap();
+        out.as_mut_slice()
+            .read_from_row_group(&mut *row_group, 2)
+            .unwrap();
 
         // correct for rounding error when writing milliseconds
-        drs[0].now = chrono::naive::NaiveDateTime::from_timestamp_millis(drs[0].now.timestamp_millis()).unwrap();
+        drs[0].now = chrono::naive::NaiveDateTime::from_timestamp_millis(
+            drs[0].now.timestamp_millis(),
+        )
+        .unwrap();
 
         assert!(out[0].double.is_nan()); // these three lines are necessary because NAN != NAN
         out[0].double = 0.;

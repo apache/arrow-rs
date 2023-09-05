@@ -19,8 +19,8 @@
 
 mod api;
 pub mod reader;
-mod record_writer;
 mod record_reader;
+mod record_writer;
 mod triplet;
 
 pub use self::{
@@ -28,6 +28,6 @@ pub use self::{
         Field, List, ListAccessor, Map, MapAccessor, Row, RowAccessor, RowColumnIter,
         RowFormatter,
     },
-    record_writer::RecordWriter,
     record_reader::RecordReader,
+    record_writer::RecordWriter,
 };

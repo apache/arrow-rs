@@ -175,25 +175,24 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
 ///
 #[proc_macro_derive(ParquetRecordReader)]
 pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input: DeriveInput = parse_macro_input!(input as DeriveInput);
+    let fields = match input.data {
+        Data::Struct(DataStruct { fields, .. }) => fields,
+        Data::Enum(_) => unimplemented!("Enum currently is not supported"),
+        Data::Union(_) => unimplemented!("Union currently is not supported"),
+    };
 
-  let input: DeriveInput = parse_macro_input!(input as DeriveInput);
-  let fields = match input.data {
-      Data::Struct(DataStruct { fields, .. }) => fields,
-      Data::Enum(_) => unimplemented!("Enum currently is not supported"),
-      Data::Union(_) => unimplemented!("Union currently is not supported"),
-  };
+    let field_infos: Vec<_> = fields.iter().map(parquet_field::Field::from).collect();
+    let reader_snippets: Vec<proc_macro2::TokenStream> =
+        field_infos.iter().map(|x| x.reader_snippet()).collect();
+    let i: Vec<_> = (0..reader_snippets.len()).collect();
 
-  let field_infos: Vec<_> = fields.iter().map(parquet_field::Field::from).collect();
-  let reader_snippets: Vec<proc_macro2::TokenStream> =
-      field_infos.iter().map(|x| x.reader_snippet()).collect();
-  let i: Vec<_> = (0..reader_snippets.len()).collect();
+    let derived_for = input.ident;
+    let generics = input.generics;
 
-  let derived_for = input.ident;
-  let generics = input.generics;
+    let convertable = parquet_field::get_convertable_quote();
 
-  let convertable = parquet_field::get_convertable_quote();
-
-  (quote! {
+    (quote! {
     impl #generics ::parquet::record::RecordReader<#derived_for #generics> for &mut [#derived_for #generics] {
       fn read_from_row_group(
         &mut self,
