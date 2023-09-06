@@ -747,6 +747,12 @@ impl<'a> RowIter<'a> {
         }
     }
 
+    /// Sets tree builder for this row iter.
+    pub fn with_tree_builder(mut self, tree_builder: TreeBuilder) -> Self {
+        self.tree_builder = tree_builder;
+        self
+    }
+
     /// Returns common tree builder, so the same settings are applied to both iterators
     /// from file reader and row group.
     #[inline]
