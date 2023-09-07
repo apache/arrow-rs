@@ -19,7 +19,7 @@
 
 use std::pin::Pin;
 
-use futures::Stream;
+use futures::{stream::Peekable, Stream};
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -366,7 +366,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     /// Implementors may override to handle additional calls to do_put()
     async fn do_put_fallback(
         &self,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<Peekable<Streaming<FlightData>>>,
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented(format!(
@@ -379,7 +379,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<Peekable<Streaming<FlightData>>>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_statement_update has no default implementation",
@@ -390,7 +390,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<Peekable<Streaming<FlightData>>>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_query has no default implementation",
@@ -401,7 +401,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_prepared_statement_update(
         &self,
         _query: CommandPreparedStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<Peekable<Streaming<FlightData>>>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_update has no default implementation",
@@ -412,7 +412,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_substrait_plan(
         &self,
         _query: CommandStatementSubstraitPlan,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<Peekable<Streaming<FlightData>>>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_substrait_plan has no default implementation",
@@ -688,9 +688,10 @@ where
 
     async fn do_put(
         &self,
-        mut request: Request<Streaming<FlightData>>,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        let cmd = request.get_mut().message().await?.unwrap();
+        let mut request = request.map(futures::StreamExt::peekable);
+        let cmd = Pin::new(request.get_mut()).peek().await.unwrap().clone()?;
         let message = Any::decode(&*cmd.flight_descriptor.unwrap().cmd)
             .map_err(decode_error_to_status)?;
         match Command::try_from(message).map_err(arrow_error_to_status)? {
