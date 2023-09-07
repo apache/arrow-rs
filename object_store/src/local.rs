@@ -877,19 +877,14 @@ impl AsyncWrite for LocalUpload {
 impl Drop for LocalUpload {
     fn drop(&mut self) {
         match self.inner_state {
-            LocalUploadState::Complete => return,
+            LocalUploadState::Complete => (),
             _ => {
                 self.inner_state = LocalUploadState::Complete;
                 let path = staged_upload_path(&self.dest, &self.multipart_id);
-                // Try to cleanup intermediate file
+                // Try to cleanup intermediate file ignoring any error
                 match tokio::runtime::Handle::try_current() {
-                    Ok(runtime) => {
-                        let _ =
-                            runtime.spawn_blocking(move || std::fs::remove_file(&path));
-                    }
-                    Err(_) => {
-                        let _ = std::fs::remove_file(&path);
-                    }
+                    Ok(r) => drop(r.spawn_blocking(move || std::fs::remove_file(path))),
+                    Err(_) => drop(std::fs::remove_file(path)),
                 };
             }
         }
