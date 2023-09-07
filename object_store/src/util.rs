@@ -32,8 +32,9 @@ where
     D: serde::Deserializer<'de>,
 {
     let s: String = serde::Deserialize::deserialize(deserializer)?;
-    chrono::TimeZone::datetime_from_str(&chrono::Utc, &s, RFC1123_FMT)
-        .map_err(serde::de::Error::custom)
+    let naive = chrono::NaiveDateTime::parse_from_str(&s, RFC1123_FMT)
+        .map_err(serde::de::Error::custom)?;
+    Ok(chrono::TimeZone::from_utc_datetime(&chrono::Utc, &naive))
 }
 
 #[cfg(any(feature = "aws", feature = "azure"))]
