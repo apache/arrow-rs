@@ -690,8 +690,15 @@ where
         &self,
         request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
+        // See issue #4658: https://github.com/apache/arrow-rs/issues/4658
+        // To dispatch to the correct `do_put` method, we cannot discard the first message,
+        // as it may contain the Arrow schema, which the `do_put` handler may need.
+        // To allow the first message to be reused by the `do_put` handler,
+        // we wrap this stream in a `Peekable` one, which allows us to peek at
+        // the first message without discarding it.
         let mut request = request.map(futures::StreamExt::peekable);
         let cmd = Pin::new(request.get_mut()).peek().await.unwrap().clone()?;
+
         let message = Any::decode(&*cmd.flight_descriptor.unwrap().cmd)
             .map_err(decode_error_to_status)?;
         match Command::try_from(message).map_err(arrow_error_to_status)? {
