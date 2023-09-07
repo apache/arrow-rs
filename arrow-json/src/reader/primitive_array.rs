@@ -45,7 +45,13 @@ macro_rules! primitive_parse {
         $(impl ParseJsonNumber for $t {
             fn parse(s: &[u8]) -> Option<Self> {
                 match std::str::from_utf8(s) {
-                    Ok(s) => s.to_string().parse::<$t>().ok(),
+                    Ok(s) => {
+                        if let Ok(res) = s.to_string().parse::<$t>() {
+                            Some(res)
+                        } else {
+                            return s.to_string().parse::<f64>().ok().and_then(NumCast::from)
+                        }
+                    }
                     Err(_) => None,
                 }
             }
