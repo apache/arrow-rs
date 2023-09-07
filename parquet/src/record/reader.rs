@@ -747,9 +747,9 @@ impl<'a> RowIter<'a> {
         }
     }
 
-    /// Sets tree builder for this row iter.
-    pub fn with_tree_builder(mut self, tree_builder: TreeBuilder) -> Self {
-        self.tree_builder = tree_builder;
+    /// Sets batch size for this row iter.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.tree_builder = self.tree_builder.with_batch_size(batch_size);
         self
     }
 
