@@ -747,6 +747,12 @@ impl<'a> RowIter<'a> {
         }
     }
 
+    /// Sets batch size for this row iter.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.tree_builder = self.tree_builder.with_batch_size(batch_size);
+        self
+    }
+
     /// Returns common tree builder, so the same settings are applied to both iterators
     /// from file reader and row group.
     #[inline]
