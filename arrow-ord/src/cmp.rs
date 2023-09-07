@@ -555,7 +555,7 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{DictionaryArray, Int32Array, Scalar};
+    use arrow_array::{DictionaryArray, Int32Array, Scalar, StringArray};
 
     use super::*;
 
@@ -707,5 +707,17 @@ mod tests {
         assert_eq!(r.len(), 0);
         let r = eq(&b, &a).unwrap();
         assert_eq!(r.len(), 0);
+    }
+
+    #[test]
+    fn test_dictionary_nulls() {
+        let values = StringArray::from(vec![Some("us-west"), Some("us-east")]);
+        let nulls = NullBuffer::from(vec![false, true, true]);
+
+        let key_values = vec![100i32, 1i32, 0i32].into();
+        let keys = Int32Array::new(key_values, Some(nulls));
+        let col = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
+
+        neq(&col.slice(0, col.len() - 1), &col.slice(1, col.len() - 1)).unwrap();
     }
 }
