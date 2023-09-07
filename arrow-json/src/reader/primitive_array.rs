@@ -44,9 +44,9 @@ macro_rules! primitive_parse {
     ($($t:ty),+) => {
         $(impl ParseJsonNumber for $t {
             fn parse(s: &[u8]) -> Option<Self> {
-                match lexical_core::parse::<Self>(s) {
+                match s.iter().map(|&b| b as char).collect::<String>().parse::<$t>() {
                     Ok(f) => Some(f),
-                    Err(_) => lexical_core::parse::<f64>(s).ok().and_then(NumCast::from),
+                    Err(_) => s.iter().map(|&b| b as char).collect::<String>().parse::<f64>().ok().and_then(NumCast::from),
                 }
             }
         })+
@@ -57,19 +57,31 @@ primitive_parse!(i8, i16, i32, i64, u8, u16, u32, u64);
 
 impl ParseJsonNumber for f16 {
     fn parse(s: &[u8]) -> Option<Self> {
-        lexical_core::parse::<f32>(s).ok().map(f16::from_f32)
+        s.iter()
+            .map(|&b| b as char)
+            .collect::<String>()
+            .parse::<f16>()
+            .ok()
     }
 }
 
 impl ParseJsonNumber for f32 {
     fn parse(s: &[u8]) -> Option<Self> {
-        lexical_core::parse::<Self>(s).ok()
+        s.iter()
+            .map(|&b| b as char)
+            .collect::<String>()
+            .parse::<f32>()
+            .ok()
     }
 }
 
 impl ParseJsonNumber for f64 {
     fn parse(s: &[u8]) -> Option<Self> {
-        lexical_core::parse::<Self>(s).ok()
+        s.iter()
+            .map(|&b| b as char)
+            .collect::<String>()
+            .parse::<f64>()
+            .ok()
     }
 }
 
