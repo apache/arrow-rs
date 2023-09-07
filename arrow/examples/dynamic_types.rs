@@ -23,7 +23,6 @@ extern crate arrow;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::error::Result;
-use arrow::record_batch::*;
 
 #[cfg(feature = "prettyprint")]
 use arrow::util::pretty::print_batches;
