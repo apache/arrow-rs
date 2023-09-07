@@ -44,9 +44,9 @@ macro_rules! primitive_parse {
     ($($t:ty),+) => {
         $(impl ParseJsonNumber for $t {
             fn parse(s: &[u8]) -> Option<Self> {
-                match s.iter().map(|&b| b as char).collect::<String>().parse::<$t>() {
-                    Ok(f) => Some(f),
-                    Err(_) => s.iter().map(|&b| b as char).collect::<String>().parse::<f64>().ok().and_then(NumCast::from),
+                match std::str::from_utf8(s) {
+                    Ok(s) => s.to_string().parse::<$t>().ok(),
+                    Err(_) => None,
                 }
             }
         })+
@@ -57,31 +57,28 @@ primitive_parse!(i8, i16, i32, i64, u8, u16, u32, u64);
 
 impl ParseJsonNumber for f16 {
     fn parse(s: &[u8]) -> Option<Self> {
-        s.iter()
-            .map(|&b| b as char)
-            .collect::<String>()
-            .parse::<f16>()
-            .ok()
+        match std::str::from_utf8(s) {
+            Ok(s) => s.to_string().parse::<f16>().ok(),
+            Err(_) => None,
+        }
     }
 }
 
 impl ParseJsonNumber for f32 {
     fn parse(s: &[u8]) -> Option<Self> {
-        s.iter()
-            .map(|&b| b as char)
-            .collect::<String>()
-            .parse::<f32>()
-            .ok()
+        match std::str::from_utf8(s) {
+            Ok(s) => s.to_string().parse::<f32>().ok(),
+            Err(_) => None,
+        }
     }
 }
 
 impl ParseJsonNumber for f64 {
     fn parse(s: &[u8]) -> Option<Self> {
-        s.iter()
-            .map(|&b| b as char)
-            .collect::<String>()
-            .parse::<f64>()
-            .ok()
+        match std::str::from_utf8(s) {
+            Ok(s) => s.to_string().parse::<f64>().ok(),
+            Err(_) => None,
+        }
     }
 }
 
