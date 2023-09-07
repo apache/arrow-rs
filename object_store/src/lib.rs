@@ -282,7 +282,7 @@ pub use parse::{parse_url, parse_url_opts};
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::util::maybe_spawn_blocking;
-use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT};
+pub use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
