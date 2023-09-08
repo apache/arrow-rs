@@ -555,11 +555,7 @@ fn status_to_arrow_error(status: tonic::Status) -> ArrowError {
 fn flight_error_to_arrow_error(err: FlightError) -> ArrowError {
     match err {
         FlightError::Arrow(e) => e,
-        FlightError::NotYetImplemented(s) => ArrowError::NotYetImplemented(s),
-        FlightError::Tonic(status) => status_to_arrow_error(status),
-        FlightError::ProtocolError(e) => ArrowError::IpcError(e),
-        FlightError::DecodeError(s) => ArrowError::IpcError(s),
-        FlightError::ExternalError(e) => ArrowError::ExternalError(e),
+        e => ArrowError::ExternalError(Box::new(e))
     }
 }
 
