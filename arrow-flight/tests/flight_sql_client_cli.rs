@@ -50,7 +50,7 @@ use tonic::{Request, Response, Status, Streaming};
 
 const QUERY: &str = "SELECT * FROM table;";
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn test_simple() {
     let test_server = FlightSqlServiceImpl {};
     let fixture = TestFixture::new(&test_server).await;
@@ -94,7 +94,7 @@ async fn test_simple() {
 const PREPARED_QUERY: &str = "SELECT * FROM table WHERE field = $1";
 const PREPARED_STATEMENT_HANDLE: &str = "prepared_statement_handle";
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn test_do_put_prepared_statement() {
     let test_server = FlightSqlServiceImpl {};
     let fixture = TestFixture::new(&test_server).await;
