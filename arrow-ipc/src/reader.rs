@@ -1487,7 +1487,7 @@ mod tests {
         let keys_field = Arc::new(Field::new_dict(
             "keys",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-            true,
+            true, // It is technically not legal for this field to be null.
             1,
             false,
         ));
@@ -1506,7 +1506,7 @@ mod tests {
             Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
-                true,
+                false,
             )),
             false,
         );
