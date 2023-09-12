@@ -46,10 +46,10 @@ macro_rules! primitive_parse {
             fn parse(s: &[u8]) -> Option<Self> {
                 match std::str::from_utf8(s) {
                     Ok(s) => {
-                        if let Ok(res) = s.to_string().parse::<$t>() {
+                        if let Ok(res) = s.parse::<$t>() {
                             Some(res)
                         } else {
-                            return s.to_string().parse::<f64>().ok().and_then(NumCast::from)
+                            return s.parse::<f64>().ok().and_then(NumCast::from)
                         }
                     }
                     Err(_) => None,
@@ -64,7 +64,7 @@ primitive_parse!(i8, i16, i32, i64, u8, u16, u32, u64);
 impl ParseJsonNumber for f16 {
     fn parse(s: &[u8]) -> Option<Self> {
         match std::str::from_utf8(s) {
-            Ok(s) => s.to_string().parse::<f16>().ok(),
+            Ok(s) => s.parse::<f16>().ok(),
             Err(_) => None,
         }
     }
@@ -73,7 +73,7 @@ impl ParseJsonNumber for f16 {
 impl ParseJsonNumber for f32 {
     fn parse(s: &[u8]) -> Option<Self> {
         match std::str::from_utf8(s) {
-            Ok(s) => s.to_string().parse::<f32>().ok(),
+            Ok(s) => s.parse::<f32>().ok(),
             Err(_) => None,
         }
     }
@@ -82,7 +82,7 @@ impl ParseJsonNumber for f32 {
 impl ParseJsonNumber for f64 {
     fn parse(s: &[u8]) -> Option<Self> {
         match std::str::from_utf8(s) {
-            Ok(s) => s.to_string().parse::<f64>().ok(),
+            Ok(s) => s.parse::<f64>().ok(),
             Err(_) => None,
         }
     }

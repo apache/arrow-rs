@@ -77,23 +77,15 @@ where
                 }
                 TapeElement::Number(idx) => {
                     let s = tape.get_string(idx);
-                    let b = s.as_bytes();
-                    let value = match std::str::from_utf8(b) {
-                        Ok(s) => s
-                            .parse::<i64>()
-                            .or_else(|_| s.parse::<f64>().map(|x| x as i64))
-                            .map_err(|_| {
-                                ArrowError::JsonError(format!(
-                                    "failed to parse {s} as {}",
-                                    self.data_type
-                                ))
-                            }),
-                        Err(_) => Err(ArrowError::JsonError(format!(
-                            "failed to parse {s} as {}",
-                            self.data_type
-                        ))),
-                    }?;
-
+                    let value = s
+                        .parse::<i64>()
+                        .or_else(|_| s.parse::<f64>().map(|x| x as i64))
+                        .map_err(|_| {
+                            ArrowError::JsonError(format!(
+                                "failed to parse {s} as {}",
+                                self.data_type
+                            ))
+                        })?;
                     builder.append_value(value)
                 }
                 _ => return Err(tape.error(*p, "primitive")),
