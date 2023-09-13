@@ -258,7 +258,7 @@ impl Format {
         self
     }
 
-    /// Set the regex to check if the value is `NULL`.
+    /// Provide a regex to match null values, defaults to `^$`
     pub fn with_null_regex(mut self, null_regex: Regex) -> Self {
         self.null_regex = NullRegex(Some(null_regex));
         self
@@ -1114,7 +1114,7 @@ impl ReaderBuilder {
         self
     }
 
-    /// Set the regex to check if the value is `NULL`.
+    /// Provide a regex to match null values, defaults to `^$`
     pub fn with_null_regex(mut self, null_regex: Regex) -> Self {
         self.format.null_regex = NullRegex(Some(null_regex));
         self
