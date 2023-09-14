@@ -1011,7 +1011,7 @@ impl Rows {
     /// Panics if `offset` with `length` is greater than row length.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         assert!(
-            offset + length <= self.num_rows(),
+            offset.saturating_add(length) <= self.num_rows(),
             "offset + length is greater than row length"
         );
 
@@ -1023,11 +1023,11 @@ impl Rows {
 
         let start = current_offsets[offset];
         let end = current_offsets[offset + length];
-        let mut buffer: Vec<u8> = vec![0_u8; end - start];
-        buffer.copy_from_slice(&current_buffer[start..end]);
+        let mut buffer: Vec<u8> = Vec::with_capacity(end - start);
+        buffer.extend_from_slice(&current_buffer[start..end]);
 
-        let mut offsets: Vec<usize> = vec![0_usize; length + 1];
-        offsets.copy_from_slice(&current_offsets[offset..offset + length + 1]);
+        let mut offsets: Vec<usize> = Vec::with_capacity(length + 1);
+        offsets.extend_from_slice(&current_offsets[offset..offset + length + 1]);
         // mutate offsets to match new buffer length
         offsets = offsets.iter_mut().map(|x| *x - start).collect();
 
