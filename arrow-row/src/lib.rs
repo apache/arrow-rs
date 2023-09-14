@@ -238,8 +238,7 @@ mod variable;
 /// of this final block as a `u8`. The first 4 blocks have a length of 8, with subsequent
 /// blocks using a length of 32.
 ///
-/// Note the following example encodings use a block size of 4 bytes,
-/// as opposed to 32 bytes for brevity:
+/// Note the following example encodings use a block size of 4 bytes for brevity:
 ///
 /// ```text
 ///                       ┌───┬───┬───┬───┬───┬───┐
