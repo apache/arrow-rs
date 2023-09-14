@@ -2264,6 +2264,101 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_row_slice() {
+        let mut converter = RowConverter::new(vec![
+            SortField::new(DataType::Int16),
+            SortField::new(DataType::Float32),
+        ])
+        .unwrap();
+
+        let cols = [
+            Arc::new(Int16Array::from_iter([Some(1), Some(2), Some(3), Some(4)]))
+                as ArrayRef,
+            Arc::new(Float32Array::from_iter([
+                Some(1.1),
+                Some(1.2),
+                Some(1.3),
+                Some(1.4),
+            ])) as ArrayRef,
+        ];
+        let rows = converter.convert_columns(&cols).unwrap();
+
+        let rows_first_half = rows.slice(0, 2);
+        let rows_last_one = rows.slice(3, 1);
+
+        assert_eq!(rows_first_half.num_rows(), 2);
+        assert_eq!(rows_last_one.num_rows(), 1);
+
+        let expected = converter
+            .convert_columns(&[
+                Arc::new(Int16Array::from_iter([Some(1), Some(2)])) as ArrayRef,
+                Arc::new(Float32Array::from_iter([Some(1.1), Some(1.2)])) as ArrayRef,
+            ])
+            .unwrap();
+        assert_eq!(
+            rows_first_half
+                .into_iter()
+                .map(|row| row.as_ref().to_owned())
+                .collect::<Vec<_>>(),
+            expected
+                .into_iter()
+                .map(|row| row.as_ref().to_owned())
+                .collect::<Vec<_>>(),
+        );
+
+        let expected = converter
+            .convert_columns(&[
+                Arc::new(Int16Array::from_iter([Some(4)])) as ArrayRef,
+                Arc::new(Float32Array::from_iter([Some(1.4)])) as ArrayRef,
+            ])
+            .unwrap();
+        assert_eq!(
+            rows_last_one
+                .into_iter()
+                .map(|row| row.as_ref().to_owned())
+                .collect::<Vec<_>>(),
+            expected
+                .into_iter()
+                .map(|row| row.as_ref().to_owned())
+                .collect::<Vec<_>>(),
+        );
+
+        assert_eq!(
+            rows.num_rows(),
+            4,
+            "expected the original rows to remain intact"
+        );
+        let expected = converter.convert_columns(&cols).unwrap();
+        assert_eq!(
+            rows.into_iter()
+                .map(|row| row.as_ref().to_owned())
+                .collect::<Vec<_>>(),
+            expected
+                .into_iter()
+                .map(|row| row.as_ref().to_owned())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + length is greater than row length")]
+    fn test_row_slice_invalid_slice() {
+        let mut converter = RowConverter::new(vec![
+            SortField::new(DataType::Int16),
+            SortField::new(DataType::Float32),
+        ])
+        .unwrap();
+
+        let cols = [
+            Arc::new(Int16Array::from_iter([Some(1), Some(2)])) as ArrayRef,
+            Arc::new(Float32Array::from_iter([Some(1.1), Some(1.2)])) as ArrayRef,
+        ];
+        let rows = converter.convert_columns(&cols).unwrap();
+
+        rows.slice(1, 2);
+    }
+
     fn generate_primitive_array<K>(len: usize, valid_percent: f64) -> PrimitiveArray<K>
     where
         K: ArrowPrimitiveType,
