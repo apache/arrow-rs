@@ -232,10 +232,11 @@ mod variable;
 /// A non-null, non-empty byte array is encoded as `2_u8` followed by the byte array
 /// encoded using a block based scheme described below.
 ///
-/// The byte array is broken up into 32-byte blocks, each block is written in turn
+/// The byte array is broken up into fixed-width blocks, each block is written in turn
 /// to the output, followed by `0xFF_u8`. The final block is padded to 32-bytes
 /// with `0_u8` and written to the output, followed by the un-padded length in bytes
-/// of this final block as a `u8`.
+/// of this final block as a `u8`. The first 4 blocks have a length of 8, with subsequent
+/// blocks using a length of 32.
 ///
 /// Note the following example encodings use a block size of 4 bytes,
 /// as opposed to 32 bytes for brevity:
@@ -1698,12 +1699,18 @@ mod tests {
             None,
             Some(vec![0_u8; 0]),
             Some(vec![0_u8; 6]),
+            Some(vec![0_u8; variable::MINI_BLOCK_SIZE]),
+            Some(vec![0_u8; variable::MINI_BLOCK_SIZE + 1]),
             Some(vec![0_u8; variable::BLOCK_SIZE]),
             Some(vec![0_u8; variable::BLOCK_SIZE + 1]),
             Some(vec![1_u8; 6]),
+            Some(vec![1_u8; variable::MINI_BLOCK_SIZE]),
+            Some(vec![1_u8; variable::MINI_BLOCK_SIZE + 1]),
             Some(vec![1_u8; variable::BLOCK_SIZE]),
             Some(vec![1_u8; variable::BLOCK_SIZE + 1]),
             Some(vec![0xFF_u8; 6]),
+            Some(vec![0xFF_u8; variable::MINI_BLOCK_SIZE]),
+            Some(vec![0xFF_u8; variable::MINI_BLOCK_SIZE + 1]),
             Some(vec![0xFF_u8; variable::BLOCK_SIZE]),
             Some(vec![0xFF_u8; variable::BLOCK_SIZE + 1]),
         ])) as ArrayRef;
@@ -2221,7 +2228,7 @@ mod tests {
         }
 
         for r in r2.iter() {
-            assert_eq!(r.data.len(), 34);
+            assert_eq!(r.data.len(), 10);
         }
     }
 
