@@ -240,9 +240,9 @@
 
 #[cfg(all(
     target_arch = "wasm32",
-    any(feature = "gcp", feature = "aws", feature = "azure",)
+    any(feature = "gcp", feature = "aws", feature = "azure", feature = "http")
 ))]
-compile_error!("Features 'gcp', 'aws', 'azure' are not supported on wasm.");
+compile_error!("Features 'gcp', 'aws', 'azure', 'http' are not supported on wasm.");
 
 #[cfg(feature = "aws")]
 pub mod aws;
@@ -263,13 +263,16 @@ pub mod path;
 pub mod prefix;
 pub mod throttle;
 
-#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
+#[cfg(feature = "cloud")]
 mod client;
 
-#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
-pub use client::{backoff::BackoffConfig, retry::RetryConfig, CredentialProvider};
+#[cfg(feature = "cloud")]
+pub use client::{
+    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions,
+    CredentialProvider, StaticCredentialProvider,
+};
 
-#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
+#[cfg(feature = "cloud")]
 mod config;
 
 #[cfg(feature = "cloud")]
@@ -294,9 +297,6 @@ use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
-
-#[cfg(any(feature = "azure", feature = "aws", feature = "gcp", feature = "http"))]
-pub use client::{ClientConfigKey, ClientOptions};
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;

@@ -104,7 +104,7 @@ impl ObjectStoreScheme {
     }
 }
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure", feature = "http"))]
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(

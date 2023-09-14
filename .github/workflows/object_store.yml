@@ -60,6 +60,8 @@ jobs:
         run: cargo clippy --features gcp -- -D warnings
       - name: Run clippy with azure feature
         run: cargo clippy --features azure -- -D warnings
+      - name: Run clippy with http feature
+        run: cargo clippy --features http -- -D warnings
       - name: Run clippy with all features
         run: cargo clippy --all-features -- -D warnings
       - name: Run clippy with all features and all targets
