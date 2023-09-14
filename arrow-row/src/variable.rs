@@ -165,24 +165,22 @@ fn decode_blocks(row: &[u8], options: SortOptions, mut f: impl FnMut(&[u8])) -> 
     let mut idx = 1;
     for _ in 0..MINI_BLOCK_COUNT {
         let sentinel = row[idx + MINI_BLOCK_SIZE];
-        if sentinel == continuation {
-            f(&row[idx..idx + MINI_BLOCK_SIZE]);
-            idx += MINI_BLOCK_SIZE + 1;
-            continue;
+        if sentinel != continuation {
+            f(&row[idx..idx + block_len(sentinel)]);
+            return idx + MINI_BLOCK_SIZE + 1;
         }
-        f(&row[idx..idx + block_len(sentinel)]);
-        return idx + MINI_BLOCK_SIZE + 1;
+        f(&row[idx..idx + MINI_BLOCK_SIZE]);
+        idx += MINI_BLOCK_SIZE + 1;
     }
 
     loop {
         let sentinel = row[idx + BLOCK_SIZE];
-        if sentinel == continuation {
-            f(&row[idx..idx + BLOCK_SIZE]);
-            idx += BLOCK_SIZE + 1;
-            continue;
+        if sentinel != continuation {
+            f(&row[idx..idx + block_len(sentinel)]);
+            return idx + BLOCK_SIZE + 1;
         }
-        f(&row[idx..idx + block_len(sentinel)]);
-        return idx + BLOCK_SIZE + 1;
+        f(&row[idx..idx + BLOCK_SIZE]);
+        idx += BLOCK_SIZE + 1;
     }
 }
 
