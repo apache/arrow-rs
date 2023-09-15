@@ -30,28 +30,20 @@ use arrow_array::Array;
 use criterion::{black_box, Criterion};
 use std::sync::Arc;
 
-fn do_bench(
-    c: &mut Criterion,
-    name: &str,
-    cols: Vec<ArrayRef>,
-    preserve_dictionaries: bool,
-) {
+fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let fields: Vec<_> = cols
         .iter()
-        .map(|x| {
-            SortField::new(x.data_type().clone())
-                .preserve_dictionaries(preserve_dictionaries)
-        })
+        .map(|x| SortField::new(x.data_type().clone()))
         .collect();
 
     c.bench_function(&format!("convert_columns {name}"), |b| {
         b.iter(|| {
-            let mut converter = RowConverter::new(fields.clone()).unwrap();
+            let converter = RowConverter::new(fields.clone()).unwrap();
             black_box(converter.convert_columns(&cols).unwrap())
         });
     });
 
-    let mut converter = RowConverter::new(fields).unwrap();
+    let converter = RowConverter::new(fields).unwrap();
     let rows = converter.convert_columns(&cols).unwrap();
     // using a pre-prepared row converter should be faster than the first time
     c.bench_function(&format!("convert_columns_prepared {name}"), |b| {
@@ -65,46 +57,42 @@ fn do_bench(
 
 fn row_bench(c: &mut Criterion) {
     let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
-    do_bench(c, "4096 u64(0)", cols, true);
+    do_bench(c, "4096 u64(0)", cols);
 
     let cols = vec![Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef];
-    do_bench(c, "4096 i64(0)", cols, true);
+    do_bench(c, "4096 i64(0)", cols);
 
     let cols =
         vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
-    do_bench(c, "4096 string(10, 0)", cols, true);
+    do_bench(c, "4096 string(10, 0)", cols);
 
     let cols =
         vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 30)) as ArrayRef];
-    do_bench(c, "4096 string(30, 0)", cols, true);
+    do_bench(c, "4096 string(30, 0)", cols);
 
     let cols =
         vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 100)) as ArrayRef];
-    do_bench(c, "4096 string(100, 0)", cols, true);
+    do_bench(c, "4096 string(100, 0)", cols);
 
     let cols =
         vec![Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 100)) as ArrayRef];
-    do_bench(c, "4096 string(100, 0.5)", cols, true);
+    do_bench(c, "4096 string(100, 0.5)", cols);
 
     let cols =
         vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 10)) as ArrayRef];
-    do_bench(c, "4096 string_dictionary(10, 0)", cols, true);
+    do_bench(c, "4096 string_dictionary(10, 0)", cols);
 
     let cols =
         vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 30)) as ArrayRef];
-    do_bench(c, "4096 string_dictionary(30, 0)", cols, true);
+    do_bench(c, "4096 string_dictionary(30, 0)", cols);
 
     let cols =
         vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 100)) as ArrayRef];
-    do_bench(c, "4096 string_dictionary(100, 0)", cols.clone(), true);
-    let name = "4096 string_dictionary_non_preserving(100, 0)";
-    do_bench(c, name, cols, false);
+    do_bench(c, "4096 string_dictionary(100, 0)", cols.clone());
 
     let cols =
         vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0.5, 100)) as ArrayRef];
-    do_bench(c, "4096 string_dictionary(100, 0.5)", cols.clone(), true);
-    let name = "4096 string_dictionary_non_preserving(100, 0.5)";
-    do_bench(c, name, cols, false);
+    do_bench(c, "4096 string_dictionary(100, 0.5)", cols.clone());
 
     let cols = vec![
         Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 20)) as ArrayRef,
@@ -116,7 +104,6 @@ fn row_bench(c: &mut Criterion) {
         c,
         "4096 string(20, 0.5), string(30, 0), string(100, 0), i64(0)",
         cols,
-        false,
     );
 
     let cols = vec![
@@ -125,7 +112,7 @@ fn row_bench(c: &mut Criterion) {
         Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 100)) as ArrayRef,
         Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef,
     ];
-    do_bench(c, "4096 4096 string_dictionary(20, 0.5), string_dictionary(30, 0), string_dictionary(100, 0), i64(0)", cols, false);
+    do_bench(c, "4096 4096 string_dictionary(20, 0.5), string_dictionary(30, 0), string_dictionary(100, 0), i64(0)", cols);
 }
 
 criterion_group!(benches, row_bench);
