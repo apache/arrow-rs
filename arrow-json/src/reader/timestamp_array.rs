@@ -71,7 +71,14 @@ where
                         TimeUnit::Second => date.timestamp(),
                         TimeUnit::Millisecond => date.timestamp_millis(),
                         TimeUnit::Microsecond => date.timestamp_micros(),
-                        TimeUnit::Nanosecond => date.timestamp_nanos(),
+                        TimeUnit::Nanosecond => {
+                            date.timestamp_nanos_opt().ok_or_else(|| {
+                                ArrowError::ParseError(format!(
+                                    "{} would overflow 64-bit signed nanoseconds",
+                                    date.to_rfc3339(),
+                                ))
+                            })?
+                        }
                     };
                     builder.append_value(value)
                 }
