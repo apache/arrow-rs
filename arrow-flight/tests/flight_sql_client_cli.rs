@@ -22,9 +22,10 @@ use arrow_flight::{
     decode::FlightRecordBatchStream,
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{
-        server::FlightSqlService, ActionBeginSavepointRequest,
-        ActionBeginSavepointResult, ActionBeginTransactionRequest,
-        ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
+        server::{FlightSqlService, PeekableFlightDataStream},
+        ActionBeginSavepointRequest, ActionBeginSavepointResult,
+        ActionBeginTransactionRequest, ActionBeginTransactionResult,
+        ActionCancelQueryRequest, ActionCancelQueryResult,
         ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
         ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
         ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
@@ -43,7 +44,7 @@ use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 use assert_cmd::Command;
 use bytes::Bytes;
-use futures::{stream::Peekable, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use prost::Message;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tonic::{Request, Response, Status, Streaming};
@@ -505,7 +506,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
-        _request: Request<Peekable<Streaming<FlightData>>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_statement_update not implemented",
@@ -515,7 +516,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_substrait_plan(
         &self,
         _ticket: CommandStatementSubstraitPlan,
-        _request: Request<Peekable<Streaming<FlightData>>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_substrait_plan not implemented",
@@ -525,7 +526,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
-        request: Request<Peekable<Streaming<FlightData>>>,
+        request: Request<PeekableFlightDataStream>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         // just make sure decoding the parameters works
         let parameters = FlightRecordBatchStream::new_from_flight_data(
@@ -554,7 +555,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_update(
         &self,
         _query: CommandPreparedStatementUpdate,
-        _request: Request<Peekable<Streaming<FlightData>>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_update not implemented",

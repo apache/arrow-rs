@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_flight::sql::server::PeekableFlightDataStream;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use futures::stream::Peekable;
 use futures::{stream, Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use prost::Message;
@@ -603,7 +603,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
-        _request: Request<Peekable<Streaming<FlightData>>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Ok(FAKE_UPDATE_RESULT)
     }
@@ -611,7 +611,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_substrait_plan(
         &self,
         _ticket: CommandStatementSubstraitPlan,
-        _request: Request<Peekable<Streaming<FlightData>>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_substrait_plan not implemented",
@@ -621,7 +621,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
-        _request: Request<Peekable<Streaming<FlightData>>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_query not implemented",
@@ -631,7 +631,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_update(
         &self,
         _query: CommandPreparedStatementUpdate,
-        _request: Request<Peekable<Streaming<FlightData>>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_update not implemented",

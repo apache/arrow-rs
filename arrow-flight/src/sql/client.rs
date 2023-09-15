@@ -555,7 +555,7 @@ fn status_to_arrow_error(status: tonic::Status) -> ArrowError {
 fn flight_error_to_arrow_error(err: FlightError) -> ArrowError {
     match err {
         FlightError::Arrow(e) => e,
-        e => ArrowError::ExternalError(Box::new(e))
+        e => ArrowError::ExternalError(Box::new(e)),
     }
 }
 
