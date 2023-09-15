@@ -984,20 +984,26 @@ fn build_timestamp_array_impl<T: ArrowTimestampType, Tz: TimeZone>(
                 return Ok(None);
             }
 
-            let date = string_to_datetime(timezone, s).map_err(|e| {
-                ArrowError::ParseError(format!(
-                    "Error parsing column {col_idx} at line {}: {}",
-                    line_number + row_index,
-                    e
-                ))
-            })?;
-
-            Ok(Some(match T::UNIT {
-                TimeUnit::Second => date.timestamp(),
-                TimeUnit::Millisecond => date.timestamp_millis(),
-                TimeUnit::Microsecond => date.timestamp_micros(),
-                TimeUnit::Nanosecond => date.timestamp_nanos(),
-            }))
+            let date = string_to_datetime(timezone, s)
+                .and_then(|date| match T::UNIT {
+                    TimeUnit::Second => Ok(date.timestamp()),
+                    TimeUnit::Millisecond => Ok(date.timestamp_millis()),
+                    TimeUnit::Microsecond => Ok(date.timestamp_micros()),
+                    TimeUnit::Nanosecond => date.timestamp_nanos_opt().ok_or_else(|| {
+                        ArrowError::ParseError(format!(
+                            "{} would overflow 64-bit signed nanoseconds",
+                            date.to_rfc3339(),
+                        ))
+                    }),
+                })
+                .map_err(|e| {
+                    ArrowError::ParseError(format!(
+                        "Error parsing column {col_idx} at line {}: {}",
+                        line_number + row_index,
+                        e
+                    ))
+                })?;
+            Ok(Some(date))
         })
         .collect()
 }
