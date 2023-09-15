@@ -179,9 +179,9 @@ impl FixedSizeBinaryArray {
         self.value_length
     }
 
-    /// Returns a clone of the value data buffer
-    pub fn value_data(&self) -> Buffer {
-        self.value_data.clone()
+    /// Returns the value buffer.
+    pub fn value_data(&self) -> &Buffer {
+        &self.value_data
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
