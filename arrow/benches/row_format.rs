@@ -23,7 +23,8 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Int64Type, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
-    create_primitive_array, create_string_array_with_len, create_string_dict_array,
+    create_dict_from_values, create_primitive_array, create_string_array_with_len,
+    create_string_dict_array,
 };
 use arrow_array::types::Int32Type;
 use arrow_array::Array;
@@ -93,6 +94,21 @@ fn row_bench(c: &mut Criterion) {
     let cols =
         vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0.5, 100)) as ArrayRef];
     do_bench(c, "4096 string_dictionary(100, 0.5)", cols.clone());
+
+    let values = create_string_array_with_len::<i32>(10, 0., 10);
+    let dict = create_dict_from_values::<Int32Type>(4096, 0., &values);
+    let cols = vec![Arc::new(dict) as ArrayRef];
+    do_bench(c, "4096 string_dictionary_low_cardinality(10, 0)", cols);
+
+    let values = create_string_array_with_len::<i32>(10, 0., 30);
+    let dict = create_dict_from_values::<Int32Type>(4096, 0., &values);
+    let cols = vec![Arc::new(dict) as ArrayRef];
+    do_bench(c, "4096 string_dictionary_low_cardinality(30, 0)", cols);
+
+    let values = create_string_array_with_len::<i32>(10, 0., 100);
+    let dict = create_dict_from_values::<Int32Type>(4096, 0., &values);
+    let cols = vec![Arc::new(dict) as ArrayRef];
+    do_bench(c, "4096 string_dictionary_low_cardinality(100, 0)", cols);
 
     let cols = vec![
         Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 20)) as ArrayRef,
