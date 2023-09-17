@@ -316,16 +316,6 @@ impl TryFrom<SchemaAsIpc<'_>> for SchemaResult {
     }
 }
 
-// TryFrom...
-
-impl TryFrom<i32> for DescriptorType {
-    type Error = ArrowError;
-
-    fn try_from(value: i32) -> ArrowResult<Self> {
-        value.try_into()
-    }
-}
-
 impl TryFrom<SchemaAsIpc<'_>> for IpcMessage {
     type Error = ArrowError;
 
