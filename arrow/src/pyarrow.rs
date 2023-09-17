@@ -59,14 +59,14 @@ use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 
-use arrow_array::RecordBatchReader;
+use arrow_array::{RecordBatchIterator, RecordBatchReader};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{PyList, PyTuple};
 
-use crate::array::{make_array, Array, ArrayData};
+use crate::array::{make_array, ArrayData};
 use crate::datatypes::{DataType, Field, Schema};
 use crate::error::ArrowError;
 use crate::ffi;
@@ -270,25 +270,12 @@ impl FromPyArrow for RecordBatch {
 
 impl ToPyArrow for RecordBatch {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        let mut py_arrays = vec![];
-
-        let schema = self.schema();
-        let columns = self.columns().iter();
-
-        for array in columns {
-            py_arrays.push(array.to_data().to_pyarrow(py)?);
-        }
-
-        let py_schema = schema.to_pyarrow(py)?;
-
-        let module = py.import("pyarrow")?;
-        let class = module.getattr("RecordBatch")?;
-        let args = (py_arrays,);
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("schema", py_schema)?;
-        let record = class.call_method("from_arrays", args, Some(kwargs))?;
-
-        Ok(PyObject::from(record))
+        // Workaround apache/arrow#37669 by returning RecordBatchIterator
+        let reader =
+            RecordBatchIterator::new(vec![Ok(self.clone())], self.schema().clone());
+        let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
+        let py_reader = reader.into_pyarrow(py)?;
+        py_reader.call_method0(py, "read_next_batch")
     }
 }
 
