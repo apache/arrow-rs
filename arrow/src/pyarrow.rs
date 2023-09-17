@@ -270,8 +270,7 @@ impl FromPyArrow for RecordBatch {
 
 impl ToPyArrow for RecordBatch {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        // arrow::ffi is implemented for Arrays not RecordBatches, so the next
-        // best thing is to wrap it in a RecordBatchIterator and export that.
+        // Workaround apache/arrow#37669 by returning RecordBatchIterator
         let reader =
             RecordBatchIterator::new(vec![Ok(self.clone())], self.schema().clone());
         let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
