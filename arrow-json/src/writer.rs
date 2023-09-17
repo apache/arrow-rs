@@ -757,7 +757,8 @@ mod tests {
         let ts_nanos = ts_string
             .parse::<chrono::NaiveDateTime>()
             .unwrap()
-            .timestamp_nanos();
+            .timestamp_nanos_opt()
+            .unwrap();
         let ts_micros = ts_nanos / 1000;
         let ts_millis = ts_micros / 1000;
         let ts_secs = ts_millis / 1000;
@@ -809,7 +810,8 @@ mod tests {
         let ts_nanos = ts_string
             .parse::<chrono::NaiveDateTime>()
             .unwrap()
-            .timestamp_nanos();
+            .timestamp_nanos_opt()
+            .unwrap();
         let ts_micros = ts_nanos / 1000;
         let ts_millis = ts_micros / 1000;
         let ts_secs = ts_millis / 1000;
