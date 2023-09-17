@@ -277,16 +277,11 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64, ArrowError> {
     to_timestamp_nanos(string_to_datetime(&Utc, s)?.naive_utc())
 }
 
-/// Defensive check to prevent chrono-rs panics when nanosecond conversion happens on non-supported dates
+/// Fallible conversion of [`NaiveDateTime`] to `i64` nanoseconds
 #[inline]
 fn to_timestamp_nanos(dt: NaiveDateTime) -> Result<i64, ArrowError> {
-    if dt.timestamp().checked_mul(1_000_000_000).is_none() {
-        return Err(ArrowError::ParseError(
-            ERR_NANOSECONDS_NOT_SUPPORTED.to_string(),
-        ));
-    }
-
-    Ok(dt.timestamp_nanos())
+    dt.timestamp_nanos_opt()
+        .ok_or_else(|| ArrowError::ParseError(ERR_NANOSECONDS_NOT_SUPPORTED.to_string()))
 }
 
 /// Accepts a string in ISO8601 standard format and some
@@ -1313,12 +1308,12 @@ mod tests {
 
         // Ensure both T and ' ' variants work
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08T13:42:29.190855").unwrap()
         );
 
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08 13:42:29.190855").unwrap()
         );
 
@@ -1331,12 +1326,12 @@ mod tests {
 
         // Ensure both T and ' ' variants work
         assert_eq!(
-            naive_datetime_whole_secs.timestamp_nanos(),
+            naive_datetime_whole_secs.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08T13:42:29").unwrap()
         );
 
         assert_eq!(
-            naive_datetime_whole_secs.timestamp_nanos(),
+            naive_datetime_whole_secs.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08 13:42:29").unwrap()
         );
 
@@ -1349,7 +1344,7 @@ mod tests {
         );
 
         assert_eq!(
-            naive_datetime_no_time.timestamp_nanos(),
+            naive_datetime_no_time.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08").unwrap()
         )
     }
@@ -1463,12 +1458,12 @@ mod tests {
 
         // Ensure both T and ' ' variants work
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08T13:42:29.190855").unwrap()
         );
 
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08 13:42:29.190855").unwrap()
         );
 
@@ -1479,12 +1474,12 @@ mod tests {
 
         // Ensure both T and ' ' variants work
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08T13:42:29").unwrap()
         );
 
         assert_eq!(
-            naive_datetime.timestamp_nanos(),
+            naive_datetime.timestamp_nanos_opt().unwrap(),
             parse_timestamp("2020-09-08 13:42:29").unwrap()
         );
 
