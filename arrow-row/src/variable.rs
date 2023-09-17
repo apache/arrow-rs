@@ -27,6 +27,8 @@ use arrow_schema::{DataType, SortOptions};
 pub const BLOCK_SIZE: usize = 32;
 
 /// The first block is split into `MINI_BLOCK_COUNT` mini-blocks
+///
+/// This helps to reduce the space amplification for small strings
 pub const MINI_BLOCK_COUNT: usize = 4;
 
 /// The mini block size
@@ -54,6 +56,8 @@ pub fn padded_length(a: Option<usize>) -> usize {
         Some(a) if a <= BLOCK_SIZE => {
             1 + ceil(a, MINI_BLOCK_SIZE) * (MINI_BLOCK_SIZE + 1)
         }
+        // Each miniblock ends with a 1 byte continuation, therefore add
+        // `(MINI_BLOCK_COUNT - 1)` additional bytes over non-miniblock size
         Some(a) => MINI_BLOCK_COUNT + ceil(a, BLOCK_SIZE) * (BLOCK_SIZE + 1),
         None => 1,
     }
@@ -116,6 +120,7 @@ pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usiz
     }
 }
 
+/// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
 #[inline]
 fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
     let block_count = ceil(val.len(), SIZE);
