@@ -24,6 +24,28 @@ use hyper::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 use hyper::HeaderMap;
 use snafu::{OptionExt, ResultExt, Snafu};
 
+#[derive(Debug)]
+/// Configuration for header extraction
+pub struct HeaderConfig {
+    /// Whether to require an ETag header when extracting [`ObjectMeta`] from headers.
+    ///
+    /// Defaults to `true`
+    pub etag_required: bool,
+    /// Whether to require a Last-Modified header when extracting [`ObjectMeta`] from headers.
+    ///
+    /// Defaults to `true`
+    pub last_modified_required: bool,
+}
+
+impl Default for HeaderConfig {
+    fn default() -> Self {
+        Self {
+            etag_required: true,
+            last_modified_required: true,
+        }
+    }
+}
+
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("ETag Header missing from response"))]
@@ -52,17 +74,40 @@ pub enum Error {
 }
 
 /// Extracts [`ObjectMeta`] from the provided [`HeaderMap`]
-pub fn header_meta(location: &Path, headers: &HeaderMap) -> Result<ObjectMeta, Error> {
-    let last_modified = headers.get(LAST_MODIFIED);
-    let last_modified = match last_modified {
+pub fn header_meta(
+    location: &Path,
+    headers: &HeaderMap,
+    cfg: HeaderConfig,
+) -> Result<ObjectMeta, Error> {
+    let last_modified = match headers.get(LAST_MODIFIED) {
         Some(last_modified) => {
             let last_modified = last_modified.to_str().context(BadHeaderSnafu)?;
-            DateTime::parse_from_rfc2822(last_modified)
+            let last_modified = DateTime::parse_from_rfc2822(last_modified)
                 .context(InvalidLastModifiedSnafu { last_modified })?
-                .with_timezone(&Utc)
+                .with_timezone(&Utc);
+            last_modified
         }
-        // If the last modified header is missing, assume the object was created at the epoch
-        None => chrono::Utc.timestamp_nanos(0),
+        None => {
+            if cfg.last_modified_required {
+                return Err(Error::MissingLastModified);
+            } else {
+                chrono::Utc.timestamp_nanos(0)
+            }
+        }
+    };
+
+    let e_tag = match headers.get(ETAG) {
+        Some(e_tag) => {
+            let e_tag = e_tag.to_str().context(BadHeaderSnafu)?;
+            Some(e_tag.to_string())
+        }
+        None => {
+            if cfg.etag_required {
+                return Err(Error::MissingEtag);
+            } else {
+                None
+            }
+        }
     };
 
     let content_length = headers
@@ -74,13 +119,10 @@ pub fn header_meta(location: &Path, headers: &HeaderMap) -> Result<ObjectMeta, E
         .parse()
         .context(InvalidContentLengthSnafu { content_length })?;
 
-    let e_tag = headers.get(ETAG).context(MissingEtagSnafu)?;
-    let e_tag = e_tag.to_str().context(BadHeaderSnafu)?;
-
     Ok(ObjectMeta {
         location: location.clone(),
         last_modified,
         size: content_length,
-        e_tag: Some(e_tag.to_string()),
+        e_tag,
     })
 }
