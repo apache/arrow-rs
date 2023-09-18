@@ -1544,23 +1544,27 @@ mod tests {
         let r = like(&a, &b).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
 
         let a = StringArray::from_iter_values(["a"]);
         let b = Scalar::new(StringArray::new_null(1));
         let r = like(&a, &b).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
 
         let a = StringArray::from_iter_values(["a"]);
         let b = StringArray::new_null(1);
         let r = like(&a, &b).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
 
         let a = StringArray::new_scalar("a");
         let b = StringArray::new_null(1);
         let r = like(&a, &b).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
     }
 }
