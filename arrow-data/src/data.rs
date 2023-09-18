@@ -174,7 +174,7 @@ pub(crate) fn into_buffers(
     }
 }
 
-/// An generic representation of Arrow array data which encapsulates common attributes and
+/// A generic representation of Arrow array data which encapsulates common attributes and
 /// operations for Arrow array. Specific operations for different arrays types (e.g.,
 /// primitive, list, struct) are implemented in `Array`.
 ///
