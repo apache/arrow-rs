@@ -24,6 +24,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use tonic::metadata::AsciiMetadataKey;
 
+use crate::encode::FlightDataEncoderBuilder;
+use crate::error::FlightError;
 use crate::flight_service_client::FlightServiceClient;
 use crate::sql::server::{CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT};
 use crate::sql::{
@@ -32,8 +34,8 @@ use crate::sql::{
     CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
     CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
     CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandStatementQuery, CommandStatementUpdate,
-    DoPutUpdateResult, ProstMessageExt, SqlInfo,
+    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
+    CommandStatementUpdate, DoPutUpdateResult, ProstMessageExt, SqlInfo,
 };
 use crate::{
     Action, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest,
@@ -439,9 +441,12 @@ impl PreparedStatement<Channel> {
 
     /// Executes the prepared statement query on the server.
     pub async fn execute(&mut self) -> Result<FlightInfo, ArrowError> {
+        self.write_bind_params().await?;
+
         let cmd = CommandPreparedStatementQuery {
             prepared_statement_handle: self.handle.clone(),
         };
+
         let result = self
             .flight_sql_client
             .get_flight_info_for_command(cmd)
@@ -451,7 +456,9 @@ impl PreparedStatement<Channel> {
 
     /// Executes the prepared statement update query on the server.
     pub async fn execute_update(&mut self) -> Result<i64, ArrowError> {
-        let cmd = CommandPreparedStatementQuery {
+        self.write_bind_params().await?;
+
+        let cmd = CommandPreparedStatementUpdate {
             prepared_statement_handle: self.handle.clone(),
         };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
@@ -492,6 +499,36 @@ impl PreparedStatement<Channel> {
         Ok(())
     }
 
+    /// Submit parameters to the server, if any have been set on this prepared statement instance
+    async fn write_bind_params(&mut self) -> Result<(), ArrowError> {
+        if let Some(ref params_batch) = self.parameter_binding {
+            let cmd = CommandPreparedStatementQuery {
+                prepared_statement_handle: self.handle.clone(),
+            };
+
+            let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+            let flight_stream_builder = FlightDataEncoderBuilder::new()
+                .with_flight_descriptor(Some(descriptor))
+                .with_schema(params_batch.schema());
+            let flight_data = flight_stream_builder
+                .build(futures::stream::iter(
+                    self.parameter_binding.clone().map(Ok),
+                ))
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(flight_error_to_arrow_error)?;
+
+            self.flight_sql_client
+                .do_put(stream::iter(flight_data))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(status_to_arrow_error)?;
+        }
+
+        Ok(())
+    }
+
     /// Close the prepared statement, so that this PreparedStatement can not used
     /// anymore and server can free up any resources.
     pub async fn close(mut self) -> Result<(), ArrowError> {
@@ -513,6 +550,13 @@ fn decode_error_to_arrow_error(err: prost::DecodeError) -> ArrowError {
 
 fn status_to_arrow_error(status: tonic::Status) -> ArrowError {
     ArrowError::IpcError(format!("{status:?}"))
+}
+
+fn flight_error_to_arrow_error(err: FlightError) -> ArrowError {
+    match err {
+        FlightError::Arrow(e) => e,
+        e => ArrowError::ExternalError(Box::new(e)),
+    }
 }
 
 // A polymorphic structure to natively represent different types of data contained in `FlightData`

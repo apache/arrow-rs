@@ -19,11 +19,13 @@ use std::{net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_flight::{
+    decode::FlightRecordBatchStream,
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{
-        server::FlightSqlService, ActionBeginSavepointRequest,
-        ActionBeginSavepointResult, ActionBeginTransactionRequest,
-        ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
+        server::{FlightSqlService, PeekableFlightDataStream},
+        ActionBeginSavepointRequest, ActionBeginSavepointResult,
+        ActionBeginTransactionRequest, ActionBeginTransactionResult,
+        ActionCancelQueryRequest, ActionCancelQueryResult,
         ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
         ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
         ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
@@ -36,18 +38,20 @@ use arrow_flight::{
     },
     utils::batches_to_flight_data,
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, Ticket,
+    HandshakeResponse, IpcMessage, PutResult, SchemaAsIpc, Ticket,
 };
+use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 use assert_cmd::Command;
-use futures::Stream;
+use bytes::Bytes;
+use futures::{Stream, StreamExt, TryStreamExt};
 use prost::Message;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tonic::{Request, Response, Status, Streaming};
 
 const QUERY: &str = "SELECT * FROM table;";
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn test_simple() {
     let test_server = FlightSqlServiceImpl {};
     let fixture = TestFixture::new(&test_server).await;
@@ -63,7 +67,54 @@ async fn test_simple() {
             .arg(addr.ip().to_string())
             .arg("--port")
             .arg(addr.port().to_string())
+            .arg("statement-query")
             .arg(QUERY)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .unwrap();
+
+    fixture.shutdown_and_wait().await;
+
+    assert_eq!(
+        std::str::from_utf8(&stdout).unwrap().trim(),
+        "+--------------+-----------+\
+        \n| field_string | field_int |\
+        \n+--------------+-----------+\
+        \n| Hello        | 42        |\
+        \n| lovely       |           |\
+        \n| FlightSQL!   | 1337      |\
+        \n+--------------+-----------+",
+    );
+}
+
+const PREPARED_QUERY: &str = "SELECT * FROM table WHERE field = $1";
+const PREPARED_STATEMENT_HANDLE: &str = "prepared_statement_handle";
+
+#[tokio::test]
+async fn test_do_put_prepared_statement() {
+    let test_server = FlightSqlServiceImpl {};
+    let fixture = TestFixture::new(&test_server).await;
+    let addr = fixture.addr;
+
+    let stdout = tokio::task::spawn_blocking(move || {
+        Command::cargo_bin("flight_sql_client")
+            .unwrap()
+            .env_clear()
+            .env("RUST_BACKTRACE", "1")
+            .env("RUST_LOG", "warn")
+            .arg("--host")
+            .arg(addr.ip().to_string())
+            .arg("--port")
+            .arg(addr.port().to_string())
+            .arg("prepared-statement-query")
+            .arg(PREPARED_QUERY)
+            .args(["-p", "$1=string"])
+            .args(["-p", "$2=64"])
             .assert()
             .success()
             .get_output()
@@ -90,7 +141,7 @@ async fn test_simple() {
 /// All tests must complete within this many seconds or else the test server is shutdown
 const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct FlightSqlServiceImpl {}
 
 impl FlightSqlServiceImpl {
@@ -116,6 +167,59 @@ impl FlightSqlServiceImpl {
         ];
         RecordBatch::try_new(Arc::new(schema), cols)
     }
+
+    fn create_fake_prepared_stmt(
+    ) -> Result<ActionCreatePreparedStatementResult, ArrowError> {
+        let handle = PREPARED_STATEMENT_HANDLE.to_string();
+        let schema = Schema::new(vec![
+            Field::new("field_string", DataType::Utf8, false),
+            Field::new("field_int", DataType::Int64, true),
+        ]);
+
+        let parameter_schema = Schema::new(vec![
+            Field::new("$1", DataType::Utf8, false),
+            Field::new("$2", DataType::Int64, true),
+        ]);
+
+        Ok(ActionCreatePreparedStatementResult {
+            prepared_statement_handle: handle.into(),
+            dataset_schema: serialize_schema(&schema)?,
+            parameter_schema: serialize_schema(&parameter_schema)?,
+        })
+    }
+
+    fn fake_flight_info(&self) -> Result<FlightInfo, ArrowError> {
+        let batch = Self::fake_result()?;
+
+        Ok(FlightInfo::new()
+            .try_with_schema(&batch.schema())
+            .expect("encoding schema")
+            .with_endpoint(
+                FlightEndpoint::new().with_ticket(Ticket::new(
+                    FetchResults {
+                        handle: String::from("part_1"),
+                    }
+                    .as_any()
+                    .encode_to_vec(),
+                )),
+            )
+            .with_endpoint(
+                FlightEndpoint::new().with_ticket(Ticket::new(
+                    FetchResults {
+                        handle: String::from("part_2"),
+                    }
+                    .as_any()
+                    .encode_to_vec(),
+                )),
+            )
+            .with_total_records(batch.num_rows() as i64)
+            .with_total_bytes(batch.get_array_memory_size() as i64)
+            .with_ordered(false))
+    }
+}
+
+fn serialize_schema(schema: &Schema) -> Result<Bytes, ArrowError> {
+    Ok(IpcMessage::try_from(SchemaAsIpc::new(schema, &IpcWriteOptions::default()))?.0)
 }
 
 #[tonic::async_trait]
@@ -164,45 +268,21 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         assert_eq!(query.query, QUERY);
 
-        let batch = Self::fake_result().unwrap();
-
-        let info = FlightInfo::new()
-            .try_with_schema(&batch.schema())
-            .expect("encoding schema")
-            .with_endpoint(
-                FlightEndpoint::new().with_ticket(Ticket::new(
-                    FetchResults {
-                        handle: String::from("part_1"),
-                    }
-                    .as_any()
-                    .encode_to_vec(),
-                )),
-            )
-            .with_endpoint(
-                FlightEndpoint::new().with_ticket(Ticket::new(
-                    FetchResults {
-                        handle: String::from("part_2"),
-                    }
-                    .as_any()
-                    .encode_to_vec(),
-                )),
-            )
-            .with_total_records(batch.num_rows() as i64)
-            .with_total_bytes(batch.get_array_memory_size() as i64)
-            .with_ordered(false);
-
-        let resp = Response::new(info);
+        let resp = Response::new(self.fake_flight_info().unwrap());
         Ok(resp)
     }
 
     async fn get_flight_info_prepared_statement(
         &self,
-        _cmd: CommandPreparedStatementQuery,
+        cmd: CommandPreparedStatementQuery,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_prepared_statement not implemented",
-        ))
+        assert_eq!(
+            cmd.prepared_statement_handle,
+            PREPARED_STATEMENT_HANDLE.as_bytes()
+        );
+        let resp = Response::new(self.fake_flight_info().unwrap());
+        Ok(resp)
     }
 
     async fn get_flight_info_substrait_plan(
@@ -426,7 +506,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_statement_update not implemented",
@@ -436,7 +516,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_substrait_plan(
         &self,
         _ticket: CommandStatementSubstraitPlan,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_substrait_plan not implemented",
@@ -446,17 +526,36 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
-        _request: Request<Streaming<FlightData>>,
+        request: Request<PeekableFlightDataStream>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
-        Err(Status::unimplemented(
-            "do_put_prepared_statement_query not implemented",
+        // just make sure decoding the parameters works
+        let parameters = FlightRecordBatchStream::new_from_flight_data(
+            request.into_inner().map_err(|e| e.into()),
+        )
+        .try_collect::<Vec<_>>()
+        .await?;
+
+        for (left, right) in parameters[0].schema().all_fields().iter().zip(vec![
+            Field::new("$1", DataType::Utf8, false),
+            Field::new("$2", DataType::Int64, true),
+        ]) {
+            if left.name() != right.name() || left.data_type() != right.data_type() {
+                return Err(Status::invalid_argument(format!(
+                    "Parameters did not match parameter schema\ngot {}",
+                    parameters[0].schema(),
+                )));
+            }
+        }
+
+        Ok(Response::new(
+            futures::stream::once(async { Ok(PutResult::default()) }).boxed(),
         ))
     }
 
     async fn do_put_prepared_statement_update(
         &self,
         _query: CommandPreparedStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_update not implemented",
@@ -468,9 +567,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _query: ActionCreatePreparedStatementRequest,
         _request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        Err(Status::unimplemented(
-            "do_action_create_prepared_statement not implemented",
-        ))
+        Self::create_fake_prepared_stmt()
+            .map_err(|e| Status::internal(format!("Unable to serialize schema: {e}")))
     }
 
     async fn do_action_close_prepared_statement(

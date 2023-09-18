@@ -15,15 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{sync::Arc, time::Duration};
+use std::{error::Error, sync::Arc, time::Duration};
 
-use arrow_array::RecordBatch;
-use arrow_cast::pretty::pretty_format_batches;
+use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
+use arrow_cast::{cast_with_options, pretty::pretty_format_batches, CastOptions};
 use arrow_flight::{
     sql::client::FlightSqlServiceClient, utils::flight_data_to_batches, FlightData,
+    FlightInfo,
 };
 use arrow_schema::{ArrowError, Schema};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing_log::log::info;
@@ -98,8 +99,20 @@ struct Args {
     #[clap(flatten)]
     client_args: ClientArgs,
 
-    /// SQL query.
-    query: String,
+    #[clap(subcommand)]
+    cmd: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    StatementQuery {
+        query: String,
+    },
+    PreparedStatementQuery {
+        query: String,
+        #[clap(short, value_parser = parse_key_val)]
+        params: Vec<(String, String)>,
+    },
 }
 
 #[tokio::main]
@@ -108,12 +121,50 @@ async fn main() {
     setup_logging();
     let mut client = setup_client(args.client_args).await.expect("setup client");
 
-    let info = client
-        .execute(args.query, None)
-        .await
-        .expect("prepare statement");
-    info!("got flight info");
+    let flight_info = match args.cmd {
+        Command::StatementQuery { query } => client
+            .execute(query, None)
+            .await
+            .expect("execute statement"),
+        Command::PreparedStatementQuery { query, params } => {
+            let mut prepared_stmt = client
+                .prepare(query, None)
+                .await
+                .expect("prepare statement");
 
+            if !params.is_empty() {
+                prepared_stmt
+                    .set_parameters(
+                        construct_record_batch_from_params(
+                            &params,
+                            prepared_stmt
+                                .parameter_schema()
+                                .expect("get parameter schema"),
+                        )
+                        .expect("construct parameters"),
+                    )
+                    .expect("bind parameters")
+            }
+
+            prepared_stmt
+                .execute()
+                .await
+                .expect("execute prepared statement")
+        }
+    };
+
+    let batches = execute_flight(&mut client, flight_info)
+        .await
+        .expect("read flight data");
+
+    let res = pretty_format_batches(batches.as_slice()).expect("format results");
+    println!("{res}");
+}
+
+async fn execute_flight(
+    client: &mut FlightSqlServiceClient<Channel>,
+    info: FlightInfo,
+) -> Result<Vec<RecordBatch>, ArrowError> {
     let schema = Arc::new(Schema::try_from(info.clone()).expect("valid schema"));
     let mut batches = Vec::with_capacity(info.endpoint.len() + 1);
     batches.push(RecordBatch::new_empty(schema));
@@ -134,8 +185,27 @@ async fn main() {
     }
     info!("received data");
 
-    let res = pretty_format_batches(batches.as_slice()).expect("format results");
-    println!("{res}");
+    Ok(batches)
+}
+
+fn construct_record_batch_from_params(
+    params: &[(String, String)],
+    parameter_schema: &Schema,
+) -> Result<RecordBatch, ArrowError> {
+    let mut items = Vec::<(&String, ArrayRef)>::new();
+
+    for (name, value) in params {
+        let field = parameter_schema.field_with_name(name)?;
+        let value_as_array = StringArray::new_scalar(value);
+        let casted = cast_with_options(
+            value_as_array.get().0,
+            field.data_type(),
+            &CastOptions::default(),
+        )?;
+        items.push((name, casted))
+    }
+
+    RecordBatch::try_from_iter(items)
 }
 
 fn setup_logging() {
@@ -202,4 +272,14 @@ async fn setup_client(
     }
 
     Ok(client)
+}
+
+/// Parse a single key-value pair
+fn parse_key_val(
+    s: &str,
+) -> Result<(String, String), Box<dyn Error + Send + Sync + 'static>> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
+    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }

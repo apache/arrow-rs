@@ -19,7 +19,7 @@
 
 use std::pin::Pin;
 
-use futures::Stream;
+use futures::{stream::Peekable, Stream, StreamExt};
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -366,7 +366,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     /// Implementors may override to handle additional calls to do_put()
     async fn do_put_fallback(
         &self,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented(format!(
@@ -379,7 +379,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_statement_update has no default implementation",
@@ -390,7 +390,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_query has no default implementation",
@@ -401,7 +401,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_prepared_statement_update(
         &self,
         _query: CommandPreparedStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_update has no default implementation",
@@ -412,7 +412,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     async fn do_put_substrait_plan(
         &self,
         _query: CommandStatementSubstraitPlan,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_substrait_plan has no default implementation",
@@ -688,9 +688,17 @@ where
 
     async fn do_put(
         &self,
-        mut request: Request<Streaming<FlightData>>,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        let cmd = request.get_mut().message().await?.unwrap();
+        // See issue #4658: https://github.com/apache/arrow-rs/issues/4658
+        // To dispatch to the correct `do_put` method, we cannot discard the first message,
+        // as it may contain the Arrow schema, which the `do_put` handler may need.
+        // To allow the first message to be reused by the `do_put` handler,
+        // we wrap this stream in a `Peekable` one, which allows us to peek at
+        // the first message without discarding it.
+        let mut request = request.map(PeekableFlightDataStream::new);
+        let cmd = Pin::new(request.get_mut()).peek().await.unwrap().clone()?;
+
         let message = Any::decode(&*cmd.flight_descriptor.unwrap().cmd)
             .map_err(decode_error_to_status)?;
         match Command::try_from(message).map_err(arrow_error_to_status)? {
@@ -956,4 +964,90 @@ fn decode_error_to_status(err: prost::DecodeError) -> Status {
 
 fn arrow_error_to_status(err: arrow_schema::ArrowError) -> Status {
     Status::internal(format!("{err:?}"))
+}
+
+/// A wrapper around [`Streaming<FlightData>`] that allows "peeking" at the
+/// message at the front of the stream without consuming it.
+/// This is needed because sometimes the first message in the stream will contain
+/// a [`FlightDescriptor`] in addition to potentially any data, and the dispatch logic
+/// must inspect this information.
+///
+/// # Example
+///
+/// [`PeekableFlightDataStream::peek`] can be used to peek at the first message without
+/// discarding it; otherwise, `PeekableFlightDataStream` can be used as a regular stream.
+/// See the following example:
+///
+/// ```no_run
+/// use arrow_array::RecordBatch;
+/// use arrow_flight::decode::FlightRecordBatchStream;
+/// use arrow_flight::FlightDescriptor;
+/// use arrow_flight::error::FlightError;
+/// use arrow_flight::sql::server::PeekableFlightDataStream;
+/// use tonic::{Request, Status};
+/// use futures::TryStreamExt;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Status> {
+///     let request: Request<PeekableFlightDataStream> = todo!();
+///     let stream: PeekableFlightDataStream = request.into_inner();
+///
+///     // The first message contains the flight descriptor and the schema.
+///     // Read the flight descriptor without discarding the schema:
+///     let flight_descriptor: FlightDescriptor = stream
+///         .peek()
+///         .await
+///         .cloned()
+///         .transpose()?
+///         .and_then(|data| data.flight_descriptor)
+///         .expect("first message should contain flight descriptor");
+///
+///     // Pass the stream through a decoder
+///     let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(
+///         request.into_inner().map_err(|e| e.into()),
+///     )
+///     .try_collect()
+///     .await?;
+/// }
+/// ```
+pub struct PeekableFlightDataStream {
+    inner: Peekable<Streaming<FlightData>>,
+}
+
+impl PeekableFlightDataStream {
+    fn new(stream: Streaming<FlightData>) -> Self {
+        Self {
+            inner: stream.peekable(),
+        }
+    }
+
+    /// Convert this stream into a `Streaming<FlightData>`.
+    /// Any messages observed through [`Self::peek`] will be lost
+    /// after the conversion.
+    pub fn into_inner(self) -> Streaming<FlightData> {
+        self.inner.into_inner()
+    }
+
+    /// Convert this stream into a `Peekable<Streaming<FlightData>>`.
+    /// Preserves the state of the stream, so that calls to [`Self::peek`]
+    /// and [`Self::poll_next`] are the same.
+    pub fn into_peekable(self) -> Peekable<Streaming<FlightData>> {
+        self.inner
+    }
+
+    /// Peek at the head of this stream without advancing it.
+    pub async fn peek(&mut self) -> Option<&Result<FlightData, Status>> {
+        Pin::new(&mut self.inner).peek().await
+    }
+}
+
+impl Stream for PeekableFlightDataStream {
+    type Item = Result<FlightData, Status>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(cx)
+    }
 }
