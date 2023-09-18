@@ -2801,6 +2801,11 @@ where
     if cast_options.safe {
         let iter = from.iter().map(|v| {
             v.and_then(|v| parse_string_to_decimal_native::<T>(v, scale as usize).ok())
+                .and_then(|v| {
+                    T::validate_decimal_precision(v, precision)
+                        .is_ok()
+                        .then_some(v)
+                })
         });
         // Benefit:
         //     20% performance improvement
@@ -2815,13 +2820,17 @@ where
             .iter()
             .map(|v| {
                 v.map(|v| {
-                    parse_string_to_decimal_native::<T>(v, scale as usize).map_err(|_| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast string '{}' to value of {:?} type",
-                            v,
-                            T::DATA_TYPE,
-                        ))
-                    })
+                    parse_string_to_decimal_native::<T>(v, scale as usize)
+                        .map_err(|_| {
+                            ArrowError::CastError(format!(
+                                "Cannot cast string '{}' to value of {:?} type",
+                                v,
+                                T::DATA_TYPE,
+                            ))
+                        })
+                        .and_then(|v| {
+                            T::validate_decimal_precision(v, precision).map(|_| v)
+                        })
                 })
                 .transpose()
             })
@@ -8095,6 +8104,32 @@ mod tests {
         let array = Arc::new(str_array) as ArrayRef;
 
         test_cast_string_to_decimal(array);
+    }
+
+    #[test]
+    fn test_cast_string_to_decimal128_precision_overflow() {
+        let array = StringArray::from(vec!["1000".to_string()]);
+        let array = Arc::new(array) as ArrayRef;
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Decimal128(10, 8),
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let err = cast_with_options(
+            &array,
+            &DataType::Decimal128(10, 8),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!("Invalid argument error: 100000000000 is too large to store in a Decimal128 of precision 10. Max is 9999999999", err.unwrap_err().to_string());
     }
 
     #[test]
