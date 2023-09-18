@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::get::GetClient;
 use crate::client::retry::{self, RetryConfig, RetryExt};
 use crate::client::GetOptionsExt;
 use crate::path::{Path, DELIMITER};
 use crate::util::deserialize_rfc1123;
 use crate::{ClientOptions, GetOptions, ObjectMeta, Result};
+use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use percent_encoding::percent_decode_str;
@@ -235,26 +237,6 @@ impl Client {
         Ok(())
     }
 
-    pub async fn get(&self, location: &Path, options: GetOptions) -> Result<Response> {
-        let url = self.path_url(location);
-        let builder = self.client.get(url);
-
-        builder
-            .with_get_options(options)
-            .send_retry(&self.retry_config)
-            .await
-            .map_err(|source| match source.status() {
-                // Some stores return METHOD_NOT_ALLOWED for get on directories
-                Some(StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED) => {
-                    crate::Error::NotFound {
-                        source: Box::new(source),
-                        path: location.to_string(),
-                    }
-                }
-                _ => Error::Request { source }.into(),
-            })
-    }
-
     pub async fn copy(&self, from: &Path, to: &Path, overwrite: bool) -> Result<()> {
         let mut retry = false;
         loop {
@@ -288,6 +270,40 @@ impl Client {
                 }),
             };
         }
+    }
+}
+
+#[async_trait]
+impl GetClient for Client {
+    const STORE: &'static str = "HTTP";
+
+    async fn get_request(
+        &self,
+        location: &Path,
+        options: GetOptions,
+        head: bool,
+    ) -> Result<Response> {
+        let url = self.path_url(location);
+        let method = match head {
+            true => Method::HEAD,
+            false => Method::GET,
+        };
+        let builder = self.client.request(method, url);
+
+        builder
+            .with_get_options(options)
+            .send_retry(&self.retry_config)
+            .await
+            .map_err(|source| match source.status() {
+                // Some stores return METHOD_NOT_ALLOWED for get on directories
+                Some(StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED) => {
+                    crate::Error::NotFound {
+                        source: Box::new(source),
+                        path: location.to_string(),
+                    }
+                }
+                _ => Error::Request { source }.into(),
+            })
     }
 }
 

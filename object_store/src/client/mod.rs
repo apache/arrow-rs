@@ -27,7 +27,6 @@ pub mod retry;
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod pagination;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod get;
 
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
