@@ -347,8 +347,7 @@ fn fixed_size_binary_substring(
 
     // build value buffer
     let num_of_elements = array.len();
-    let values = array.value_data();
-    let data = values.as_slice();
+    let data = array.value_data();
     let mut new_values = MutableBuffer::new(num_of_elements * (new_len as usize));
     (0..num_of_elements)
         .map(|idx| {
