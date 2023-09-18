@@ -407,7 +407,7 @@ impl<'a> DisplayIndexState<'a> for &'a NullArray {
     }
 
     fn write(&self, state: &Self::State, _idx: usize, f: &mut dyn Write) -> FormatResult {
-        f.write_str(*state)?;
+        f.write_str(state)?;
         Ok(())
     }
 }
