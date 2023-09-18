@@ -19,7 +19,7 @@
 
 use crate::path::Path;
 use crate::ObjectMeta;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use hyper::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 use hyper::HeaderMap;
 use snafu::{OptionExt, ResultExt, Snafu};
@@ -53,18 +53,21 @@ pub enum Error {
 
 /// Extracts [`ObjectMeta`] from the provided [`HeaderMap`]
 pub fn header_meta(location: &Path, headers: &HeaderMap) -> Result<ObjectMeta, Error> {
-    let last_modified = headers
-        .get(LAST_MODIFIED)
-        .context(MissingLastModifiedSnafu)?;
+    let last_modified = headers.get(LAST_MODIFIED);
+    let last_modified = match last_modified {
+        Some(last_modified) => {
+            let last_modified = last_modified.to_str().context(BadHeaderSnafu)?;
+            DateTime::parse_from_rfc2822(last_modified)
+                .context(InvalidLastModifiedSnafu { last_modified })?
+                .with_timezone(&Utc)
+        }
+        // If the last modified header is missing, assume the object was created at the epoch
+        None => chrono::Utc.timestamp_nanos(0),
+    };
 
     let content_length = headers
         .get(CONTENT_LENGTH)
         .context(MissingContentLengthSnafu)?;
-
-    let last_modified = last_modified.to_str().context(BadHeaderSnafu)?;
-    let last_modified = DateTime::parse_from_rfc2822(last_modified)
-        .context(InvalidLastModifiedSnafu { last_modified })?
-        .with_timezone(&Utc);
 
     let content_length = content_length.to_str().context(BadHeaderSnafu)?;
     let content_length = content_length
