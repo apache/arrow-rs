@@ -203,7 +203,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// nullability for some types. This difference can lead to surprising results,
     /// such as [`NullArray::is_null`] always
     /// returns `false`. Other arrays which may have surprising results are [`DictionaryArray]` and
-    /// [`RunArray`]. See [`Self::is_logical_null`] for logical nullability.
+    /// [`RunArray`]. See [`Self::logical_nulls`] for logical nullability.
     ///
     /// Note: When using this function on a slice, the index is relative to the slice.
     ///
