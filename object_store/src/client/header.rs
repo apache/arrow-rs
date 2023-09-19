@@ -100,13 +100,8 @@ pub fn header_meta(
             let e_tag = e_tag.to_str().context(BadHeaderSnafu)?;
             Some(e_tag.to_string())
         }
-        None => {
-            if cfg.etag_required {
-                return Err(Error::MissingEtag);
-            } else {
-                None
-            }
-        }
+        None if cfg.etag_required => return Err(Error::MissingEtag),
+        None => None,
     };
 
     let content_length = headers
