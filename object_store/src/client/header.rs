@@ -86,13 +86,8 @@ pub fn header_meta(
                 .context(InvalidLastModifiedSnafu { last_modified })?
                 .with_timezone(&Utc)
         }
-        None => {
-            if cfg.last_modified_required {
-                return Err(Error::MissingLastModified);
-            } else {
-                chrono::Utc.timestamp_nanos(0)
-            }
-        }
+        None if cfg.last_modified_required => return Err(Error::MissingLastModified),
+        None => Utc.timestamp_nanos(0),
     };
 
     let e_tag = match headers.get(ETAG) {
