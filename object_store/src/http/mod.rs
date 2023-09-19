@@ -40,7 +40,7 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::client::header::header_meta;
+use crate::client::header::{header_meta, HeaderConfig};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
@@ -117,7 +117,12 @@ impl ObjectStore for HttpStore {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let range = options.range.clone();
         let response = self.client.get(location, options).await?;
-        let meta = header_meta(location, response.headers()).context(MetadataSnafu)?;
+        let cfg = HeaderConfig {
+            last_modified_required: false,
+            etag_required: false,
+        };
+        let meta =
+            header_meta(location, response.headers(), cfg).context(MetadataSnafu)?;
 
         let stream = response
             .bytes_stream()
