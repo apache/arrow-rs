@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::client::get::GetClient;
+use crate::client::header::HeaderConfig;
 use crate::client::retry::{self, RetryConfig, RetryExt};
 use crate::client::GetOptionsExt;
 use crate::path::{Path, DELIMITER};
@@ -276,6 +277,11 @@ impl Client {
 #[async_trait]
 impl GetClient for Client {
     const STORE: &'static str = "HTTP";
+
+    const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+        etag_required: false,
+        last_modified_required: false,
+    };
 
     async fn get_request(
         &self,
