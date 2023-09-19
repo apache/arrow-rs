@@ -173,14 +173,16 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn offset(&self) -> usize;
 
-    /// Returns the null buffer of this array if any
+    /// Returns the null buffer of this array if any.
     ///
-    /// Note: some arrays can encode their nullability in their children, for example,
+    /// The null buffer encodes the "physical" nulls of an array and is pre-computed and very efficient.
+    /// However, some arrays can also encode nullability in their children, for example,
     /// [`DictionaryArray::values`] values or [`RunArray::values`], or without a null buffer,
-    /// such as [`NullArray`]. Use [`Array::logical_nulls`] to obtain a computed mask encoding this
+    /// such as [`NullArray`]. To determine if each element of such an array is logically null,
+    /// you can use the slower [`Array::logical_nulls`] to obtain a computed mask .
     fn nulls(&self) -> Option<&NullBuffer>;
 
-    /// Returns the logical null buffer of this array if any
+    /// Returns a potentially computed [`NullBuffer`] that represent the logical null values of this array, if any.
     ///
     /// In most cases this will be the same as [`Array::nulls`], except for:
     ///
@@ -194,18 +196,16 @@ pub trait Array: std::fmt::Debug + Send + Sync {
         self.nulls().cloned()
     }
 
-    /// Returns whether the element at `index` is null, according to [`Array::nulls`]
+    /// Returns whether the element at `index` is "physically" null, as explained
+    /// on [`Array::nulls`].
     ///
-    /// # Notes
-    /// 1. This method returns false for [`NullArray`] as explained below. See
-    /// [`Self::is_logical_null`] for an implementation that returns the logical
-    /// null value.
+    /// Note: For performance reasons, logical nullability can and does differ from the physical
+    /// nullability for some types. This difference can lead to surprising results,
+    /// such as [`NullArray::is_null`] always
+    /// returns `false`. Other arrays which may have surprising results are [`DictionaryArray]` and
+    /// [`RunArray`]. See [`Self::is_logical_null`] for logical nullability.
     ///
-    /// 2. When using this function on a slice, the index is relative to the slice.
-    ///
-    /// 3. This method returns the value in the **physical** validity bitmap for an element,
-    /// as returned by [`Array::nulls`]. If there is no validity bitmap, returns `true`.
-    /// See [`Array::logical_nulls`] for logical nullability
+    /// Note: When using this function on a slice, the index is relative to the slice.
     ///
     /// # Example:
     ///
@@ -213,43 +213,16 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// use arrow_array::{Array, Int32Array, NullArray};
     ///
     /// let array = Int32Array::from(vec![Some(1), None]);
-    ///
     /// assert_eq!(array.is_null(0), false);
     /// assert_eq!(array.is_null(1), true);
     ///
-    /// // NullArrays do not have a validity mask
+    /// // NullArrays do not have a validity mask, and therefore always
+    /// // return false for is_null.
     /// let array = NullArray::new(1);
     /// assert_eq!(array.is_null(0), false);
     /// ```
     fn is_null(&self, index: usize) -> bool {
         self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
-    }
-
-    /// Returns whether the element at `index` contains a logical null
-    /// according to [`Array::logical_nulls`].
-    ///
-    /// See [`Self::is_null`] for an implementation for an implementation
-    /// that returns physical nullability and details on the differences between
-    /// logical and physical nullability.
-    ///
-    /// # Example:
-    ///
-    /// ```
-    /// use arrow_array::{Array, Int32Array, NullArray};
-    ///
-    /// let array = Int32Array::from(vec![Some(1), None]);
-    ///
-    /// assert_eq!(array.is_logical_null(0), false);
-    /// assert_eq!(array.is_logical_null(1), true);
-    ///
-    /// // NullArrays are always logically null
-    /// let array = NullArray::new(1);
-    /// assert_eq!(array.is_logical_null(0), true);
-    /// ```
-    fn is_logical_null(&self, index: usize) -> bool {
-        self.logical_nulls()
-            .map(|n| n.is_null(index))
-            .unwrap_or_default()
     }
 
     /// Returns whether the element at `index` is *not* null, the
