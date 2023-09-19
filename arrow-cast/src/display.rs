@@ -399,8 +399,15 @@ impl<'a> DisplayIndex for &'a BooleanArray {
     }
 }
 
-impl<'a> DisplayIndex for &'a NullArray {
-    fn write(&self, _idx: usize, _f: &mut dyn Write) -> FormatResult {
+impl<'a> DisplayIndexState<'a> for &'a NullArray {
+    type State = &'a str;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        Ok(options.null)
+    }
+
+    fn write(&self, state: &Self::State, _idx: usize, f: &mut dyn Write) -> FormatResult {
+        f.write_str(state)?;
         Ok(())
     }
 }
@@ -1097,5 +1104,13 @@ mod tests {
         assert_eq!(pretty[4], "45 days 14 hours 2 mins 34 secs");
         assert_eq!(iso[5], "-P45DT50554S");
         assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34 secs");
+    }
+
+    #[test]
+    fn test_null() {
+        let array = NullArray::new(2);
+        let options = FormatOptions::new().with_null("NULL");
+        let formatted = format_array(&array, &options);
+        assert_eq!(formatted, &["NULL".to_string(), "NULL".to_string()])
     }
 }

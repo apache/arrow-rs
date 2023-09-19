@@ -49,8 +49,8 @@ impl<T: GetClient> GetClientExt for T {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let range = options.range.clone();
         let response = self.get_request(location, options, false).await?;
-        let meta =
-            header_meta(location, response.headers()).map_err(|e| Error::Generic {
+        let meta = header_meta(location, response.headers(), Default::default())
+            .map_err(|e| Error::Generic {
                 store: T::STORE,
                 source: Box::new(e),
             })?;
@@ -73,9 +73,11 @@ impl<T: GetClient> GetClientExt for T {
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let options = GetOptions::default();
         let response = self.get_request(location, options, true).await?;
-        header_meta(location, response.headers()).map_err(|e| Error::Generic {
-            store: T::STORE,
-            source: Box::new(e),
+        header_meta(location, response.headers(), Default::default()).map_err(|e| {
+            Error::Generic {
+                store: T::STORE,
+                source: Box::new(e),
+            }
         })
     }
 }
