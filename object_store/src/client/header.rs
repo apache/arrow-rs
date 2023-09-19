@@ -82,10 +82,9 @@ pub fn header_meta(
     let last_modified = match headers.get(LAST_MODIFIED) {
         Some(last_modified) => {
             let last_modified = last_modified.to_str().context(BadHeaderSnafu)?;
-            let last_modified = DateTime::parse_from_rfc2822(last_modified)
+            DateTime::parse_from_rfc2822(last_modified)
                 .context(InvalidLastModifiedSnafu { last_modified })?
-                .with_timezone(&Utc);
-            last_modified
+                .with_timezone(&Utc)
         }
         None => {
             if cfg.last_modified_required {
