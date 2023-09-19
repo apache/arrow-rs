@@ -443,19 +443,6 @@ impl Field {
                 quote! { ::uuid::Uuid::parse_str(vals[i].data().convert()).unwrap() }
             }
             _ => match &self.ty {
-                Type::Reference(_, ref first_type) => match **first_type {
-                    Type::TypePath(_) => match self.ty.last_part().as_str() {
-                        "String" => quote! {
-                            std::rc::Rc<String>::new(String::from(std::str::from_utf8(vals[i].data()).expect("invalid UTF-8 sequence")))
-                        },
-                        "str" => quote! {
-                            std::rc::Rc<str>::new(*std::str::from_utf8(vals[i].data()).expect("invalid UTF-8 sequence"))
-                        },
-                        f => unimplemented!("Unsupported: {:#?}", f),
-                    },
-                    Type::Slice(_) => quote! { std::rc::Rc<str>::new(*vals[i].data()) },
-                    ref f => unimplemented!("Unsupported: {:#?}", f),
-                },
                 Type::TypePath(_) => match self.ty.last_part().as_str() {
                     "String" => quote! { String::from(std::str::from_utf8(vals[i].data())
                     .expect("invalid UTF-8 sequence")) },
