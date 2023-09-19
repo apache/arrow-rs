@@ -51,8 +51,10 @@ struct ACompleteRecord<'a> {
 
 #[derive(PartialEq, ParquetRecordWriter, ParquetRecordReader, Debug)]
 struct APartiallyCompleteRecord {
-    pub a_bool: bool,
-    pub a_string: String,
+    pub bool: bool,
+    //pub str_reference: &'a str,
+    pub string: String,
+    //pub string_reference: &'a String,
     pub i16: i16,
     pub i32: i32,
     pub u64: u64,
@@ -62,6 +64,7 @@ struct APartiallyCompleteRecord {
     pub now: chrono::NaiveDateTime,
     pub date: chrono::NaiveDate,
     pub byte_vec: Vec<u8>,
+    //pub byte_slice: &'a [u8],
 }
 
 #[cfg(test)]
@@ -169,8 +172,10 @@ mod tests {
         let file = get_temp_file("test_parquet_derive_combined", &[]);
 
         let mut drs: Vec<APartiallyCompleteRecord> = vec![APartiallyCompleteRecord {
-            a_bool: true,
-            a_string: "a string".into(),
+            bool: true,
+            //str_reference: "a str",
+            string: "a string".into(),
+            //string_reference: &"a string reference".into(),
             i16: -45,
             i32: 456,
             u64: 4563424,
@@ -180,11 +185,14 @@ mod tests {
             now: chrono::Utc::now().naive_local(),
             date: chrono::naive::NaiveDate::from_ymd_opt(2015, 3, 14).unwrap(),
             byte_vec: vec![0x65, 0x66, 0x67],
+            //byte_slice: &vec![0x65, 0x66, 0x67][..],
         }];
 
         let mut out: Vec<APartiallyCompleteRecord> = vec![APartiallyCompleteRecord {
-            a_bool: false,
-            a_string: "a different string".into(),
+            bool: false,
+            //str_reference: "a different str",
+            string: "a different string".into(),
+            //string_reference: &"a different string reference".into(),
             i16: -450,
             i32: 4560,
             u64: 45634240,
@@ -194,6 +202,7 @@ mod tests {
             now: chrono::Utc::now().naive_local(),
             date: chrono::naive::NaiveDate::from_ymd_opt(1982, 1, 27).unwrap(),
             byte_vec: vec![0x17, 0x18, 0x19],
+            //byte_slice: &vec![0x17, 0x18, 0x19][..],
         }];
 
         use parquet::file::{

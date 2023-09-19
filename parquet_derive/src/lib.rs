@@ -190,8 +190,6 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
     let derived_for = input.ident;
     let generics = input.generics;
 
-    let convertable = parquet_field::get_convertable_quote();
-
     (quote! {
     impl #generics ::parquet::record::RecordReader<#derived_for #generics> for &mut [#derived_for #generics] {
       fn read_from_row_group(
@@ -200,8 +198,6 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
         max_records: usize,
       ) -> Result<(), ::parquet::errors::ParquetError> {
         use ::parquet::column::reader::ColumnReader;
-
-        #convertable
 
         let mut row_group_reader = row_group_reader;
         let records = self; // Used by all the reader snippets to be more clear

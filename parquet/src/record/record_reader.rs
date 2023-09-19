@@ -18,6 +18,7 @@
 use super::super::errors::ParquetError;
 use super::super::file::reader::RowGroupReader;
 
+/// read up to `max_records` records from `row_group_reader` into `self`
 pub trait RecordReader<T> {
     fn read_from_row_group(
         &mut self,

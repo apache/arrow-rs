@@ -118,7 +118,7 @@ chunks.as_mut_slice().read_from_row_group(&mut *row_group, 2).unwrap();
 - [ ] Derive writing tuple struct
 - [ ] Derive writing `tuple` container types
 
-- [x] Support reading `String`, `bool`, `i32`, `f32`, `f64`, `Vec<u8>`
+- [x] Support reading `String`, `&str`, `bool`, `i32`, `f32`, `f64`, `Vec<u8>`
 - [ ] Support reading/writing dictionaries
 - [x] Support reading/writing logical types like timestamp
 - [ ] Derive definition_levels for `Option` for reading
