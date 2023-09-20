@@ -186,7 +186,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// In most cases this will be the same as [`Array::nulls`], except for:
     ///
-    /// * ['DictionaryArray`] where [`DictionaryArray::values`] contains nulls
+    /// * [`DictionaryArray`] where [`DictionaryArray::values`] contains nulls
     /// * [`RunArray`] where [`RunArray::values`] contains nulls
     /// * [`NullArray`] where all indices are nulls
     ///
@@ -200,7 +200,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// Note: For performance reasons, this method returns nullability solely as determined by the
     /// null buffer. This difference can lead to surprising results, for example, [`NullArray::is_null`] always
-    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray]` and [`RunArray`] may
+    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray`] and [`RunArray`] may
     /// encode nullability in their children. See [`Self::logical_nulls`] for more information.
     ///
     /// # Example:
@@ -212,7 +212,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.is_null(0), false);
     /// assert_eq!(array.is_null(1), true);
     ///
-    /// // NullArrays do not have a validity mask, and therefore always
+    /// // NullArrays do not have a null buffer, and therefore always
     /// // return false for is_null.
     /// let array = NullArray::new(1);
     /// assert_eq!(array.is_null(0), false);
