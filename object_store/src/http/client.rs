@@ -260,7 +260,7 @@ impl Client {
 
         // We expect a 206 Partial Content response if a range was requested
         // a 200 OK response would indicate the server did not fulfill the request
-        if has_range && res.status() == StatusCode::OK {
+        if has_range && res.status() != StatusCode::PARTIAL_CONTENT {
             return Err(crate::Error::NotSupported {
                 source: Box::new(Error::RangeNotSupported {
                     href: location.to_string(),
