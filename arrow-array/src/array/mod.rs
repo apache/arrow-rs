@@ -175,7 +175,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
 
     /// Returns the null buffer of this array if any.
     ///
-    /// The null buffer encodes the "physical" nulls of an array and is pre-computed and very efficient.
+    /// The null buffer encodes the "physical" nulls of an array.
     /// However, some arrays can also encode nullability in their children, for example,
     /// [`DictionaryArray::values`] values or [`RunArray::values`], or without a null buffer,
     /// such as [`NullArray`]. To determine if each element of such an array is logically null,
@@ -196,16 +196,12 @@ pub trait Array: std::fmt::Debug + Send + Sync {
         self.nulls().cloned()
     }
 
-    /// Returns whether the element at `index` is "physically" null, as explained
-    /// on [`Array::nulls`].
+    /// Returns whether the element at `index` is null according to [`Array::nulls`]
     ///
-    /// Note: For performance reasons, logical nullability can and does differ from the physical
-    /// nullability for some types. This difference can lead to surprising results,
-    /// such as [`NullArray::is_null`] always
-    /// returns `false`. Other arrays which may have surprising results are [`DictionaryArray]` and
-    /// [`RunArray`]. See [`Self::logical_nulls`] for logical nullability.
-    ///
-    /// Note: When using this function on a slice, the index is relative to the slice.
+    /// Note: For performance reasons, this method returns nullability solely as determined by the
+    /// null buffer. This difference can lead to surprising results, for example, [`NullArray::is_null`] always
+    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray]` and [`RunArray`] may
+    /// encode nullability in their children. See [`Self::logical_nulls`] for more information.
     ///
     /// # Example:
     ///
