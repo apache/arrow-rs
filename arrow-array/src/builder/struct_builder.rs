@@ -233,6 +233,12 @@ impl StructBuilder {
     /// Builds the `StructArray` and reset this builder.
     pub fn finish(&mut self) -> StructArray {
         self.validate_content();
+        if self.fields.is_empty() {
+            return StructArray::new_empty_fields(
+                self.len(),
+                self.null_buffer_builder.finish(),
+            );
+        }
 
         let arrays = self.field_builders.iter_mut().map(|f| f.finish()).collect();
         let nulls = self.null_buffer_builder.finish();
@@ -242,6 +248,13 @@ impl StructBuilder {
     /// Builds the `StructArray` without resetting the builder.
     pub fn finish_cloned(&self) -> StructArray {
         self.validate_content();
+
+        if self.fields.is_empty() {
+            return StructArray::new_empty_fields(
+                self.len(),
+                self.null_buffer_builder.finish_cloned(),
+            );
+        }
 
         let arrays = self
             .field_builders
@@ -590,5 +603,20 @@ mod tests {
 
         let mut sa = StructBuilder::new(fields, field_builders);
         sa.finish();
+    }
+
+    #[test]
+    fn test_empty() {
+        let mut builder = StructBuilder::new(Fields::empty(), vec![]);
+        builder.append(true);
+        builder.append(false);
+
+        let a1 = builder.finish_cloned();
+        let a2 = builder.finish();
+        assert_eq!(a1, a2);
+        assert_eq!(a1.len(), 2);
+        assert_eq!(a1.null_count(), 1);
+        assert!(a1.is_valid(0));
+        assert!(a1.is_null(1));
     }
 }
