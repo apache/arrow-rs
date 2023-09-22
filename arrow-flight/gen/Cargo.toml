@@ -34,4 +34,4 @@ publish = false
 # (and checked in) arrow.flight.protocol.rs from changing
 proc-macro2 = { version = "=1.0.67", default-features = false }
 prost-build = { version = "=0.12.1", default-features = false }
-tonic-build = { version = "=0.10.0", default-features = false, features = ["transport", "prost"] }
+tonic-build = { version = "=0.10.1", default-features = false, features = ["transport", "prost"] }
