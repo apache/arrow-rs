@@ -1415,6 +1415,18 @@ mod tests {
 
         assert_eq!(rows.offsets, &[0, 8, 16, 24, 32, 40, 48, 56]);
         assert_eq!(
+            rows.column_offsets,
+            &[
+                [0, 3, 8],
+                [0, 3, 8],
+                [0, 3, 8],
+                [0, 3, 8],
+                [0, 3, 8],
+                [0, 3, 8],
+                [0, 3, 8],
+            ]
+        );
+        assert_eq!(
             rows.buffer,
             &[
                 1, 128, 1, //
@@ -1439,6 +1451,18 @@ mod tests {
         assert!(rows.row(3) < rows.row(0));
         assert!(rows.row(4) < rows.row(1));
         assert!(rows.row(5) < rows.row(4));
+
+        assert!(rows.row(3).column(0) < rows.row(6).column(0));
+        assert!(rows.row(0).column(0) < rows.row(1).column(0));
+        assert!(rows.row(3).column(0) < rows.row(0).column(0));
+        assert!(rows.row(4).column(0) == rows.row(1).column(0));
+        assert!(rows.row(5).column(0) == rows.row(4).column(0));
+
+        assert!(rows.row(3).column(1) > rows.row(6).column(1));
+        assert!(rows.row(0).column(1) < rows.row(1).column(1));
+        assert!(rows.row(3).column(1) > rows.row(0).column(1));
+        assert!(rows.row(4).column(1) < rows.row(1).column(1));
+        assert!(rows.row(5).column(1) < rows.row(4).column(1));
 
         let back = converter.convert_rows(&rows).unwrap();
         for (expected, actual) in cols.iter().zip(&back) {
@@ -1469,6 +1493,7 @@ mod tests {
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
         for i in 0..rows.num_rows() - 1 {
             assert!(rows.row(i) < rows.row(i + 1));
+            assert!(rows.row(i).column(0) < rows.row(i + 1).column(0));
         }
 
         let back = converter.convert_rows(&rows).unwrap();
@@ -1501,6 +1526,7 @@ mod tests {
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
         for i in 0..rows.num_rows() - 1 {
             assert!(rows.row(i) < rows.row(i + 1));
+            assert!(rows.row(i).column(0) < rows.row(i + 1).column(0));
         }
 
         let back = converter.convert_rows(&rows).unwrap();
@@ -1521,6 +1547,10 @@ mod tests {
         assert!(rows.row(2) > rows.row(0));
         assert!(rows.row(1) > rows.row(0));
 
+        assert!(rows.row(2).column(0) > rows.row(1).column(0));
+        assert!(rows.row(2).column(0) > rows.row(0).column(0));
+        assert!(rows.row(1).column(0) > rows.row(0).column(0));
+
         let cols = converter.convert_rows(&rows).unwrap();
         assert_eq!(&cols[0], &col);
 
@@ -1537,6 +1567,9 @@ mod tests {
         assert!(rows.row(2) < rows.row(1));
         assert!(rows.row(2) < rows.row(0));
         assert!(rows.row(1) < rows.row(0));
+        assert!(rows.row(2).column(0) < rows.row(1).column(0));
+        assert!(rows.row(2).column(0) < rows.row(0).column(0));
+        assert!(rows.row(1).column(0) < rows.row(0).column(0));
         let cols = converter.convert_rows(&rows).unwrap();
         assert_eq!(&cols[0], &col);
     }
@@ -1585,6 +1618,7 @@ mod tests {
         let rows = converter.convert_columns(&[col]).unwrap();
         assert_eq!(rows.num_rows(), 10);
         assert_eq!(rows.row(1).data.len(), 0);
+        assert_eq!(rows.row(1).column(0).len(), 0);
     }
 
     #[test]
@@ -1604,6 +1638,11 @@ mod tests {
         assert!(rows.row(2) < rows.row(4));
         assert!(rows.row(3) < rows.row(0));
         assert!(rows.row(3) < rows.row(1));
+
+        assert!(rows.row(1).column(0) < rows.row(0).column(0));
+        assert!(rows.row(2).column(0) < rows.row(4).column(0));
+        assert!(rows.row(3).column(0) < rows.row(0).column(0));
+        assert!(rows.row(3).column(0) < rows.row(1).column(0));
 
         let cols = converter.convert_rows(&rows).unwrap();
         assert_eq!(&cols[0], &col);
@@ -1642,6 +1681,14 @@ mod tests {
                     rows.row(i),
                     rows.row(j)
                 );
+                assert!(
+                    rows.row(i).column(0) < rows.row(j).column(0),
+                    "{} < {} - {:?} < {:?}",
+                    i,
+                    j,
+                    rows.row(i).column(0),
+                    rows.row(j).column(0)
+                );
             }
         }
 
@@ -1667,6 +1714,14 @@ mod tests {
                     j,
                     rows.row(i),
                     rows.row(j)
+                );
+                assert!(
+                    rows.row(i).column(0) > rows.row(j).column(0),
+                    "{} < {} - {:?} < {:?}",
+                    i,
+                    j,
+                    rows.row(i).column(0),
+                    rows.row(j).column(0)
                 );
             }
         }
@@ -1713,6 +1768,15 @@ mod tests {
         assert_eq!(rows_a.row(1), rows_a.row(6));
         assert_eq!(rows_a.row(1), rows_a.row(7));
 
+        assert!(rows_a.row(3).column(0) < rows_a.row(5).column(0));
+        assert!(rows_a.row(2).column(0) < rows_a.row(1).column(0));
+        assert!(rows_a.row(0).column(0) < rows_a.row(1).column(0));
+        assert!(rows_a.row(3).column(0) < rows_a.row(0).column(0));
+
+        assert_eq!(rows_a.row(1).column(0), rows_a.row(4).column(0));
+        assert_eq!(rows_a.row(1).column(0), rows_a.row(6).column(0));
+        assert_eq!(rows_a.row(1).column(0), rows_a.row(7).column(0));
+
         let cols = converter.convert_rows(&rows_a).unwrap();
         dictionary_eq(&cols[0], &a);
 
@@ -1726,6 +1790,10 @@ mod tests {
         assert_eq!(rows_a.row(1), rows_b.row(0));
         assert_eq!(rows_a.row(3), rows_b.row(1));
         assert!(rows_b.row(2) < rows_a.row(0));
+
+        assert_eq!(rows_a.row(1).column(0), rows_b.row(0).column(0));
+        assert_eq!(rows_a.row(3).column(0), rows_b.row(1).column(0));
+        assert!(rows_b.row(2).column(0) < rows_a.row(0).column(0));
 
         let cols = converter.convert_rows(&rows_b).unwrap();
         dictionary_eq(&cols[0], &b);
@@ -1745,6 +1813,11 @@ mod tests {
         assert!(rows_c.row(0) > rows_c.row(1));
         assert!(rows_c.row(3) > rows_c.row(0));
 
+        assert!(rows_c.row(3).column(0) > rows_c.row(5).column(0));
+        assert!(rows_c.row(2).column(0) > rows_c.row(1).column(0));
+        assert!(rows_c.row(0).column(0) > rows_c.row(1).column(0));
+        assert!(rows_c.row(3).column(0) > rows_c.row(0).column(0));
+
         let cols = converter.convert_rows(&rows_c).unwrap();
         dictionary_eq(&cols[0], &a);
 
@@ -1762,6 +1835,11 @@ mod tests {
         assert!(rows_c.row(2) > rows_c.row(1));
         assert!(rows_c.row(0) > rows_c.row(1));
         assert!(rows_c.row(3) < rows_c.row(0));
+
+        assert!(rows_c.row(3).column(0) < rows_c.row(5).column(0));
+        assert!(rows_c.row(2).column(0) > rows_c.row(1).column(0));
+        assert!(rows_c.row(0).column(0) > rows_c.row(1).column(0));
+        assert!(rows_c.row(3).column(0) < rows_c.row(0).column(0));
 
         let cols = converter.convert_rows(&rows_c).unwrap();
         dictionary_eq(&cols[0], &a);
@@ -1782,6 +1860,7 @@ mod tests {
 
         for (a, b) in r1.iter().zip(r1.iter().skip(1)) {
             assert!(a < b);
+            assert!(a.column(0) < b.column(0));
         }
 
         let back = converter.convert_rows(&r1).unwrap();
@@ -1803,6 +1882,11 @@ mod tests {
         assert!(r2.row(0) < r2.row(1)); // Nulls first
         assert_ne!(r1.row(0), r2.row(0)); // Value does not equal null
         assert_eq!(r1.row(1), r2.row(1)); // Values equal
+
+        assert_eq!(r2.row(0).column(0), r2.row(2).column(0)); // Nulls equal
+        assert!(r2.row(0).column(0) < r2.row(1).column(0)); // Nulls first
+        assert_ne!(r1.row(0).column(0), r2.row(0).column(0)); // Value does not equal null
+        assert_eq!(r1.row(1).column(0), r2.row(1).column(0)); // Values equal
 
         let back = converter.convert_rows(&r2).unwrap();
         assert_eq!(back.len(), 1);
@@ -1834,6 +1918,12 @@ mod tests {
         assert!(rows.row(3) < rows.row(2));
         assert!(rows.row(6) < rows.row(2));
         assert!(rows.row(3) < rows.row(6));
+
+        assert!(rows.row(0).column(0) < rows.row(1).column(0));
+        assert!(rows.row(2).column(0) < rows.row(0).column(0));
+        assert!(rows.row(3).column(0) < rows.row(2).column(0));
+        assert!(rows.row(6).column(0) < rows.row(2).column(0));
+        assert!(rows.row(3).column(0) < rows.row(6).column(0));
     }
 
     #[test]
@@ -1862,6 +1952,11 @@ mod tests {
         assert_eq!(rows.row(3), rows.row(4));
         assert_eq!(rows.row(4), rows.row(5));
         assert!(rows.row(3) < rows.row(0));
+
+        assert_eq!(rows.row(0).column(0), rows.row(1).column(0));
+        assert_eq!(rows.row(3).column(0), rows.row(4).column(0));
+        assert_eq!(rows.row(4).column(0), rows.row(5).column(0));
+        assert!(rows.row(3).column(0) < rows.row(0).column(0));
     }
 
     #[test]
@@ -1925,6 +2020,13 @@ mod tests {
         assert!(rows.row(5) < rows.row(2)); // [] < [32, 42]
         assert!(rows.row(3) < rows.row(5)); // null < []
 
+        assert!(rows.row(0).column(0) > rows.row(1).column(0)); // [32, 52, 32] > [32, 52, 12]
+        assert!(rows.row(2).column(0) < rows.row(1).column(0)); // [32, 42] < [32, 52, 12]
+        assert!(rows.row(3).column(0) < rows.row(2).column(0)); // null < [32, 42]
+        assert!(rows.row(4).column(0) < rows.row(2).column(0)); // [32, null] < [32, 42]
+        assert!(rows.row(5).column(0) < rows.row(2).column(0)); // [] < [32, 42]
+        assert!(rows.row(3).column(0) < rows.row(5).column(0)); // null < []
+
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
@@ -1945,6 +2047,13 @@ mod tests {
         assert!(rows.row(5) < rows.row(2)); // [] < [32, 42]
         assert!(rows.row(3) > rows.row(5)); // null > []
 
+        assert!(rows.row(0).column(0) > rows.row(1).column(0)); // [32, 52, 32] > [32, 52, 12]
+        assert!(rows.row(2).column(0) < rows.row(1).column(0)); // [32, 42] < [32, 52, 12]
+        assert!(rows.row(3).column(0) > rows.row(2).column(0)); // null > [32, 42]
+        assert!(rows.row(4).column(0) > rows.row(2).column(0)); // [32, null] > [32, 42]
+        assert!(rows.row(5).column(0) < rows.row(2).column(0)); // [] < [32, 42]
+        assert!(rows.row(3).column(0) > rows.row(5).column(0)); // null > []
+
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
@@ -1965,6 +2074,13 @@ mod tests {
         assert!(rows.row(5) > rows.row(2)); // [] > [32, 42]
         assert!(rows.row(3) > rows.row(5)); // null > []
 
+        assert!(rows.row(0).column(0) < rows.row(1).column(0)); // [32, 52, 32] < [32, 52, 12]
+        assert!(rows.row(2).column(0) > rows.row(1).column(0)); // [32, 42] > [32, 52, 12]
+        assert!(rows.row(3).column(0) > rows.row(2).column(0)); // null > [32, 42]
+        assert!(rows.row(4).column(0) > rows.row(2).column(0)); // [32, null] > [32, 42]
+        assert!(rows.row(5).column(0) > rows.row(2).column(0)); // [] > [32, 42]
+        assert!(rows.row(3).column(0) > rows.row(5).column(0)); // null > []
+
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
@@ -1984,6 +2100,13 @@ mod tests {
         assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 42]
         assert!(rows.row(5) > rows.row(2)); // [] > [32, 42]
         assert!(rows.row(3) < rows.row(5)); // null < []
+
+        assert!(rows.row(0).column(0) < rows.row(1).column(0)); // [32, 52, 32] < [32, 52, 12]
+        assert!(rows.row(2).column(0) > rows.row(1).column(0)); // [32, 42] > [32, 52, 12]
+        assert!(rows.row(3).column(0) < rows.row(2).column(0)); // null < [32, 42]
+        assert!(rows.row(4).column(0) < rows.row(2).column(0)); // [32, null] < [32, 42]
+        assert!(rows.row(5).column(0) > rows.row(2).column(0)); // [] > [32, 42]
+        assert!(rows.row(3).column(0) < rows.row(5).column(0)); // null < []
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -2048,6 +2171,12 @@ mod tests {
         assert!(rows.row(4) < rows.row(0));
         assert!(rows.row(4) > rows.row(1));
 
+        assert!(rows.row(0).column(0) > rows.row(1).column(0));
+        assert!(rows.row(1).column(0) > rows.row(2).column(0));
+        assert!(rows.row(2).column(0) > rows.row(3).column(0));
+        assert!(rows.row(4).column(0) < rows.row(0).column(0));
+        assert!(rows.row(4).column(0) > rows.row(1).column(0));
+
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
@@ -2067,6 +2196,12 @@ mod tests {
         assert!(rows.row(4) > rows.row(0));
         assert!(rows.row(4) > rows.row(1));
 
+        assert!(rows.row(0).column(0) > rows.row(1).column(0));
+        assert!(rows.row(1).column(0) > rows.row(2).column(0));
+        assert!(rows.row(2).column(0) > rows.row(3).column(0));
+        assert!(rows.row(4).column(0) > rows.row(0).column(0));
+        assert!(rows.row(4).column(0) > rows.row(1).column(0));
+
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
@@ -2085,6 +2220,12 @@ mod tests {
         assert!(rows.row(2) < rows.row(3));
         assert!(rows.row(4) > rows.row(0));
         assert!(rows.row(4) < rows.row(1));
+
+        assert!(rows.row(0).column(0) < rows.row(1).column(0));
+        assert!(rows.row(1).column(0) < rows.row(2).column(0));
+        assert!(rows.row(2).column(0) < rows.row(3).column(0));
+        assert!(rows.row(4).column(0) > rows.row(0).column(0));
+        assert!(rows.row(4).column(0) < rows.row(1).column(0));
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
