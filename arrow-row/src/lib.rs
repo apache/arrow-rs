@@ -994,6 +994,12 @@ impl<'a> Row<'a> {
             config: self.config.clone(),
         }
     }
+
+    pub fn column(&self, column: usize) -> &[u8] {
+        let start = self.offsets[column];
+        let end = self.offsets[column + 1];
+        &self.data[start..end]
+    }
 }
 
 // Manually derive these as don't wish to include `fields`
