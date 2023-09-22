@@ -40,6 +40,9 @@ enum Error {
     #[snafu(display("Request error: {}", source))]
     Reqwest { source: reqwest::Error },
 
+    #[snafu(display("Range request not supported by {}", href))]
+    RangeNotSupported { href: String },
+
     #[snafu(display("Error decoding PROPFIND response: {}", source))]
     InvalidPropFind { source: quick_xml::de::DeError },
 
@@ -294,9 +297,10 @@ impl GetClient for Client {
             true => Method::HEAD,
             false => Method::GET,
         };
+        let has_range = options.range.is_some();
         let builder = self.client.request(method, url);
 
-        builder
+        let res = builder
             .with_get_options(options)
             .send_retry(&self.retry_config)
             .await
@@ -309,7 +313,19 @@ impl GetClient for Client {
                     }
                 }
                 _ => Error::Request { source }.into(),
-            })
+            })?;
+
+        // We expect a 206 Partial Content response if a range was requested
+        // a 200 OK response would indicate the server did not fulfill the request
+        if has_range && res.status() != StatusCode::PARTIAL_CONTENT {
+            return Err(crate::Error::NotSupported {
+                source: Box::new(Error::RangeNotSupported {
+                    href: location.to_string(),
+                }),
+            });
+        }
+
+        Ok(res)
     }
 }
 
