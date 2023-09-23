@@ -17,7 +17,7 @@
 
 //! An object store implementation for generic HTTP servers
 //!
-//! This follows [rfc2518] commonly known called [WebDAV]
+//! This follows [rfc2518] commonly known as [WebDAV]
 //!
 //! Basic get support will work out of the box with most HTTP servers,
 //! even those that don't explicitly support [rfc2518]

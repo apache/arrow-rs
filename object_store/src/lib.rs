@@ -36,7 +36,7 @@
 //! clouds and local test environments, via a simple runtime
 //! configuration change.
 //!
-//! # Features:
+//! # Highlights
 //!
 //! 1. A focused, easy to use, idiomatic, well documented, high
 //! performance, `async` API.
@@ -53,26 +53,31 @@
 //! [InfluxDB IOx]: https://github.com/influxdata/influxdb_iox/
 //! [crates.io]: https://github.com/rust-lang/crates.io
 //!
-//! # Example: Create an [`ObjectStore`] implementation:
+//! # Available [`ObjectStore`] Implementations
+//!
+//! By default, this crate provides the following implementations:
+//!
+//! * Memory: [`InMemory`](memory::InMemory)
+//! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
+//!
+//! Feature flags are used to enable support for other implementations:
 //!
 #![cfg_attr(
     feature = "gcp",
-    doc = "* [Google Cloud Storage](https://cloud.google.com/storage/): [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
+    doc = "* `gcp`: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
 )]
 #![cfg_attr(
     feature = "aws",
-    doc = "* [Amazon S3](https://aws.amazon.com/s3/): [`AmazonS3Builder`](aws::AmazonS3Builder)"
+    doc = "* `aws`: [Amazon S3](https://aws.amazon.com/s3/). See [`AmazonS3Builder`](aws::AmazonS3Builder)"
 )]
 #![cfg_attr(
     feature = "azure",
-    doc = "* [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/): [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
+    doc = "* `azure`: [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/). See [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
 )]
 #![cfg_attr(
     feature = "http",
-    doc = "* [HTTP Storage](https://datatracker.ietf.org/doc/html/rfc2518): [`HttpBuilder`](http::HttpBuilder)"
+    doc = "* `http`: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
-//! * In Memory: [`InMemory`](memory::InMemory)
-//! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
 //!
 //! # Adapters
 //!
