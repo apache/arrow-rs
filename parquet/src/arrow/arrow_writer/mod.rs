@@ -260,11 +260,11 @@ impl Length for ArrowColumnChunk {
 }
 
 impl ChunkReader for ArrowColumnChunk {
-    type T = ChainReader;
+    type T = ArrowColumnChunkReader;
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
         assert_eq!(start, 0); // Assume append_column writes all data in one-shot
-        Ok(ChainReader(self.data.clone().into_iter().peekable()))
+        Ok(ArrowColumnChunkReader(self.data.clone().into_iter().peekable()))
     }
 
     fn get_bytes(&self, _start: u64, _length: usize) -> Result<Bytes> {
@@ -273,9 +273,9 @@ impl ChunkReader for ArrowColumnChunk {
 }
 
 /// A [`Read`] for an iterator of [`Bytes`]
-pub struct ChainReader(Peekable<IntoIter<Bytes>>);
+pub struct ArrowColumnChunkReader(Peekable<IntoIter<Bytes>>);
 
-impl Read for ChainReader {
+impl Read for ArrowColumnChunkReader {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
         let buffer = loop {
             match self.0.peek_mut() {
