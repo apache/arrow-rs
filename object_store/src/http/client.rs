@@ -281,6 +281,8 @@ impl Client {
 impl GetClient for Client {
     const STORE: &'static str = "HTTP";
 
+    /// Override the [`HeaderConfig`] to be less strict to support a
+    /// broader range of HTTP servers (#4831)
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: false,
         last_modified_required: false,

@@ -37,15 +37,6 @@ pub struct HeaderConfig {
     pub last_modified_required: bool,
 }
 
-impl Default for HeaderConfig {
-    fn default() -> Self {
-        Self {
-            etag_required: true,
-            last_modified_required: true,
-        }
-    }
-}
-
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("ETag Header missing from response"))]
