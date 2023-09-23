@@ -36,7 +36,7 @@
 //! clouds and local test environments, via a simple runtime
 //! configuration change.
 //!
-//! # Higlights
+//! # Highlights
 //!
 //! 1. A focused, easy to use, idiomatic, well documented, high
 //! performance, `async` API.
@@ -60,7 +60,7 @@
 //! * Memory: [`InMemory`](memory::InMemory)
 //! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
 //!
-//! Feature flags on used to enable support for other implementations:
+//! Feature flags are used to enable support for other implementations:
 //!
 #![cfg_attr(
     feature = "gcp",
