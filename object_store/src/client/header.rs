@@ -24,7 +24,7 @@ use hyper::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 use hyper::HeaderMap;
 use snafu::{OptionExt, ResultExt, Snafu};
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 /// Configuration for header extraction
 pub struct HeaderConfig {
     /// Whether to require an ETag header when extracting [`ObjectMeta`] from headers.
@@ -35,15 +35,6 @@ pub struct HeaderConfig {
     ///
     /// Defaults to `true`
     pub last_modified_required: bool,
-}
-
-impl Default for HeaderConfig {
-    fn default() -> Self {
-        Self {
-            etag_required: true,
-            last_modified_required: true,
-        }
-    }
 }
 
 #[derive(Debug, Snafu)]

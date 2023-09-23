@@ -34,18 +34,18 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use itertools::Itertools;
 use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::client::header::{header_meta, HeaderConfig};
+use crate::client::get::GetClientExt;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, GetResultPayload, ListResult,
-    MultipartId, ObjectMeta, ObjectStore, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId,
+    ObjectMeta, ObjectStore, Result, RetryConfig,
 };
 
 mod client;
@@ -115,46 +115,11 @@ impl ObjectStore for HttpStore {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        let range = options.range.clone();
-        let response = self.client.get(location, options).await?;
-        let cfg = HeaderConfig {
-            last_modified_required: false,
-            etag_required: false,
-        };
-        let meta =
-            header_meta(location, response.headers(), cfg).context(MetadataSnafu)?;
-
-        let stream = response
-            .bytes_stream()
-            .map_err(|source| Error::Reqwest { source }.into())
-            .boxed();
-
-        Ok(GetResult {
-            payload: GetResultPayload::Stream(stream),
-            range: range.unwrap_or(0..meta.size),
-            meta,
-        })
+        self.client.get_opts(location, options).await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let status = self.client.list(Some(location), "0").await?;
-        match status.response.len() {
-            1 => {
-                let response = status.response.into_iter().next().unwrap();
-                response.check_ok()?;
-                match response.is_dir() {
-                    true => Err(crate::Error::NotFound {
-                        path: location.to_string(),
-                        source: "Is directory".to_string().into(),
-                    }),
-                    false => response.object_meta(self.client.base_url()),
-                }
-            }
-            x => Err(crate::Error::NotFound {
-                path: location.to_string(),
-                source: format!("Expected 1 result, got {x}").into(),
-            }),
-        }
+        self.client.head(location).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
