@@ -29,7 +29,9 @@ use thrift::protocol::{TCompactOutputProtocol, TSerializable};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::{Array, FixedSizeListArray, RecordBatch, RecordBatchWriter};
-use arrow_schema::{ArrowError, DataType as ArrowDataType, IntervalUnit, SchemaRef, Schema};
+use arrow_schema::{
+    ArrowError, DataType as ArrowDataType, IntervalUnit, Schema, SchemaRef,
+};
 
 use super::schema::{
     add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
@@ -301,7 +303,7 @@ impl Read for ArrowColumnChunkReader {
 ///
 /// This allows it to be owned by [`ArrowPageWriter`] whilst allowing access via
 /// [`ArrowRowGroupWriter`] on flush, without requiring self-referential borrows
-type SharedColumnChunk = Arc<Mutex<ArrowColumnChunk>>;
+pub type SharedColumnChunk = Arc<Mutex<ArrowColumnChunk>>;
 
 #[derive(Default)]
 struct ArrowPageWriter {
@@ -347,7 +349,7 @@ impl PageWriter for ArrowPageWriter {
     }
 }
 
-/// Encodes a leaf column to [`ArrowPageWriter`]
+/// Can be passed to [write_leaves] function to serialize arrays to [SharedColumnChunk]s
 pub enum ArrowColumnWriter {
     ByteArray(GenericColumnWriter<'static, ByteArrayEncoder>),
     Column(ColumnWriter<'static>),
@@ -398,13 +400,13 @@ impl ArrowRowGroupWriter {
         Ok(())
     }
 
-    pub fn schema(&self)-> &Arc<Schema> {
+    pub fn schema(&self) -> &Arc<Schema> {
         &self.schema
     }
 
     /// Converts this [ArrowRowGroupWriter] into a collection of individual [ArrowColumnWriter]s
     /// and associated [SharedColumnChunk]s. This permits the caller greater control over how
-    /// data is serialized, such as via parallel threads or async tasks. 
+    /// data is serialized, such as via parallel threads or async tasks.
     pub fn into_col_writers(self) -> Vec<(SharedColumnChunk, ArrowColumnWriter)> {
         self.writers
     }
@@ -427,17 +429,19 @@ impl ArrowRowGroupWriter {
 
 /// Represents components of a [ArrowRowGroupWriter] which have been broken apart by passing ownership
 /// back out to the caller.
-type DeconstructedRowGroupWriterComponents = (Arc<Schema>, Vec<(SharedColumnChunk, ArrowColumnWriter)>);
+type DeconstructedRowGroupWriterComponents =
+    (Arc<Schema>, Vec<(SharedColumnChunk, ArrowColumnWriter)>);
 
-impl From<DeconstructedRowGroupWriterComponents> for ArrowRowGroupWriter{
-    fn from(value: DeconstructedRowGroupWriterComponents) -> Self{
+impl From<DeconstructedRowGroupWriterComponents> for ArrowRowGroupWriter {
+    fn from(value: DeconstructedRowGroupWriterComponents) -> Self {
         let schema = value.0;
         let writers = value.1;
-        Self { writers, 
-            schema, 
-            /// The caller is responsible for tracking buffered_rows when dissasembling and
-            /// reasembling ArrowRowGroupWriter
-            buffered_rows: 0
+        Self {
+            writers,
+            schema,
+            // The caller is responsible for tracking buffered_rows when dissasembling and
+            // reasembling ArrowRowGroupWriter
+            buffered_rows: 0,
         }
     }
 }
@@ -547,7 +551,7 @@ where
     Ok(())
 }
 
-pub fn write_leaf(
+fn write_leaf(
     writer: &mut ColumnWriter<'_>,
     column: &dyn Array,
     levels: LevelInfo,

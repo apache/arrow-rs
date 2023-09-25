@@ -49,10 +49,7 @@ use std::ops::Range;
 
 /// Performs a depth-first scan of the children of `array`, constructing [`LevelInfo`]
 /// for each leaf column encountered
-pub fn calculate_array_levels(
-    array: &ArrayRef,
-    field: &Field,
-) -> Result<Vec<LevelInfo>> {
+pub fn calculate_array_levels(array: &ArrayRef, field: &Field) -> Result<Vec<LevelInfo>> {
     let mut builder = LevelInfoBuilder::try_new(field, Default::default())?;
     builder.write(array, 0..array.len());
     Ok(builder.finish())
