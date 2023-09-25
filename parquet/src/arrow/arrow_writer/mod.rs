@@ -301,7 +301,7 @@ impl Read for ArrowColumnChunkReader {
 
 /// A shared [`ArrowColumnChunk`]
 ///
-/// This allows it to be owned by [`ArrowPageWriter`] whilst allowing access via
+/// This allows it to be owned by lower level page writers whilst allowing access via
 /// [`ArrowRowGroupWriter`] on flush, without requiring self-referential borrows
 pub type SharedColumnChunk = Arc<Mutex<ArrowColumnChunk>>;
 
