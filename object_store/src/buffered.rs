@@ -139,10 +139,10 @@ impl AsyncSeek for BufReader {
         self.cursor = match position {
             SeekFrom::Start(offset) => offset,
             SeekFrom::End(offset) => {
-                self.size.checked_add_signed(offset).ok_or_else(|| Error::new(ErrorKind::InvalidInput, format!("Seeking {offset} from end of {} byte file would result in overflow", self.size)))?
+                checked_add_signed(self.size,offset).ok_or_else(|| Error::new(ErrorKind::InvalidInput, format!("Seeking {offset} from end of {} byte file would result in overflow", self.size)))?
             }
             SeekFrom::Current(offset) => {
-                self.cursor.checked_add_signed(offset).ok_or_else(|| Error::new(ErrorKind::InvalidInput, format!("Seeking {offset} from current offset of {} would result in overflow", self.cursor)))?
+                checked_add_signed(self.cursor, offset).ok_or_else(|| Error::new(ErrorKind::InvalidInput, format!("Seeking {offset} from current offset of {} would result in overflow", self.cursor)))?
             }
         };
         self.buffer = Buffer::Empty;
@@ -201,6 +201,16 @@ impl AsyncBufRead for BufReader {
     }
 }
 
+/// Port of standardised function as requires Rust 1.66
+///
+/// https://github.com/rust-lang/rust/pull/87601/files#diff-b9390ee807a1dae3c3128dce36df56748ad8d23c6e361c0ebba4d744bf6efdb9R1533
+#[inline]
+fn checked_add_signed(a: u64, rhs: i64) -> Option<u64> {
+    let (res, overflowed) = a.overflowing_add(rhs as _);
+    let overflow = overflowed ^ (rhs < 0);
+    (!overflow).then_some(res)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +236,25 @@ mod tests {
 
         assert_eq!(read, BYTES);
         assert_eq!(&out, &data);
+
+        let err = reader.seek(SeekFrom::Current(i64::MIN)).await.unwrap_err();
+        assert_eq!(err.to_string(), "Seeking -9223372036854775808 from current offset of 4096 would result in overflow");
+
+        reader.rewind().await.unwrap();
+
+        let err = reader.seek(SeekFrom::Current(-1)).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Seeking -1 from current offset of 0 would result in overflow"
+        );
+
+        // Seeking beyond the bounds of the file is permitted but should return no data
+        reader.seek(SeekFrom::Start(u64::MAX)).await.unwrap();
+        let buf = reader.fill_buf().await.unwrap();
+        assert!(buf.is_empty());
+
+        let err = reader.seek(SeekFrom::Current(1)).await.unwrap_err();
+        assert_eq!(err.to_string(), "Seeking 1 from current offset of 18446744073709551615 would result in overflow");
 
         for capacity in [200, 1024, 4096, DEFAULT_BUFFER_SIZE] {
             let store = Arc::clone(&store);
