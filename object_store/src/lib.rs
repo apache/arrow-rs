@@ -253,6 +253,7 @@ compile_error!("Features 'gcp', 'aws', 'azure', 'http' are not supported on wasm
 pub mod aws;
 #[cfg(feature = "azure")]
 pub mod azure;
+pub mod buffered;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chunked;
 pub mod delimited;
