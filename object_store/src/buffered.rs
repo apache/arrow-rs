@@ -83,7 +83,7 @@ enum Buffer {
 impl BufReader {
     /// Create a new [`BufReader`] from the provided [`ObjectMeta`] and [`ObjectStore`]
     pub fn new(store: Arc<dyn ObjectStore>, meta: &ObjectMeta) -> Self {
-        Self::with_capacity(store, &meta, DEFAULT_BUFFER_SIZE)
+        Self::with_capacity(store, meta, DEFAULT_BUFFER_SIZE)
     }
 
     /// Create a new [`BufReader`] from the provided [`ObjectMeta`], [`ObjectStore`], and `capacity`
@@ -111,7 +111,7 @@ impl BufReader {
         loop {
             match buf {
                 Buffer::Empty => {
-                    let store = self.store.clone();
+                    let store = Arc::clone(&self.store);
                     let path = self.path.clone();
                     let start = self.cursor.min(self.size) as _;
                     let end = self.cursor.saturating_add(amnt as u64).min(self.size) as _;
@@ -197,7 +197,7 @@ impl AsyncBufRead for BufReader {
             },
             Buffer::Pending(_) => panic!("cannot consume from pending buffer"),
         }
-        self.cursor = self.cursor + amt as u64;
+        self.cursor += amt as u64;
     }
 }
 
