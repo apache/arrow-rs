@@ -49,7 +49,7 @@ use std::ops::Range;
 
 /// Performs a depth-first scan of the children of `array`, constructing [`LevelInfo`]
 /// for each leaf column encountered
-pub(crate) fn calculate_array_levels(
+pub fn calculate_array_levels(
     array: &ArrayRef,
     field: &Field,
 ) -> Result<Vec<LevelInfo>> {
@@ -538,7 +538,7 @@ impl LevelInfoBuilder {
 /// The data necessary to write a primitive Arrow array to parquet, taking into account
 /// any non-primitive parents it may have in the arrow representation
 #[derive(Debug, Eq, PartialEq, Clone)]
-pub(crate) struct LevelInfo {
+pub struct LevelInfo {
     /// Array's definition levels
     ///
     /// Present if `max_def_level != 0`
