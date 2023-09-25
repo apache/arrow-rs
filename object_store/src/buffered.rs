@@ -210,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_buf_reader() {
-        let store = Arc::new(InMemory::new());
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
         let existent = Path::from("exists.txt");
         const BYTES: usize = 4096;
@@ -220,7 +220,7 @@ mod tests {
 
         let meta = store.head(&existent).await.unwrap();
 
-        let mut reader = BufReader::new(store.clone(), &meta);
+        let mut reader = BufReader::new(Arc::clone(&store), &meta);
         let mut out = Vec::with_capacity(BYTES);
         let read = reader.read_to_end(&mut out).await.unwrap();
 
@@ -228,7 +228,8 @@ mod tests {
         assert_eq!(&out, &data);
 
         for capacity in [200, 1024, 4096, DEFAULT_BUFFER_SIZE] {
-            let mut reader = BufReader::with_capacity(store.clone(), &meta, capacity);
+            let store = Arc::clone(&store);
+            let mut reader = BufReader::with_capacity(store, &meta, capacity);
 
             let mut bytes_read = 0;
             loop {
