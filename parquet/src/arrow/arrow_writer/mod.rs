@@ -264,7 +264,9 @@ impl ChunkReader for ArrowColumnChunk {
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
         assert_eq!(start, 0); // Assume append_column writes all data in one-shot
-        Ok(ArrowColumnChunkReader(self.data.clone().into_iter().peekable()))
+        Ok(ArrowColumnChunkReader(
+            self.data.clone().into_iter().peekable(),
+        ))
     }
 
     fn get_bytes(&self, _start: u64, _length: usize) -> Result<Bytes> {
