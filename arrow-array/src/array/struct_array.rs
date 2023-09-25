@@ -197,6 +197,23 @@ impl StructArray {
         }
     }
 
+    /// Create a new [`StructArray`] containing no fields
+    ///
+    /// # Panics
+    ///
+    /// If `len != nulls.len()`
+    pub fn new_empty_fields(len: usize, nulls: Option<NullBuffer>) -> Self {
+        if let Some(n) = &nulls {
+            assert_eq!(len, n.len())
+        }
+        Self {
+            len,
+            data_type: DataType::Struct(Fields::empty()),
+            fields: vec![],
+            nulls,
+        }
+    }
+
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (Fields, Vec<ArrayRef>, Option<NullBuffer>) {
         let f = match self.data_type {
