@@ -203,7 +203,7 @@ impl AsyncBufRead for BufReader {
 
 /// Port of standardised function as requires Rust 1.66
 ///
-/// https://github.com/rust-lang/rust/pull/87601/files#diff-b9390ee807a1dae3c3128dce36df56748ad8d23c6e361c0ebba4d744bf6efdb9R1533
+/// <https://github.com/rust-lang/rust/pull/87601/files#diff-b9390ee807a1dae3c3128dce36df56748ad8d23c6e361c0ebba4d744bf6efdb9R1533>
 #[inline]
 fn checked_add_signed(a: u64, rhs: i64) -> Option<u64> {
     let (res, overflowed) = a.overflowing_add(rhs as _);
