@@ -56,6 +56,7 @@ jobs:
     env:
       ARROW_USE_CCACHE: OFF
       ARROW_CPP_EXE_PATH: /build/cpp/debug
+      ARROW_GO_INTEGRATION: 1
       BUILD_DOCS_CPP: OFF
       # These are necessary because the github runner overrides $HOME
       # https://github.com/actions/runner/issues/863
