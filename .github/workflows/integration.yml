@@ -106,6 +106,8 @@ jobs:
         run: |
           conda run --no-capture-output archery integration \
             --run-flight \
+            --run-c-data \
+            --run-ipc \
             --with-cpp=1 \
             --with-csharp=1 \
             --with-java=1 \
