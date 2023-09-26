@@ -96,6 +96,13 @@ where
 
                     builder.append_value(value)
                 }
+                TapeElement::I32(v) => builder.append_value(v as i64),
+                TapeElement::I64(high) => match tape.get(p + 1) {
+                    TapeElement::I32(low) => {
+                        builder.append_value((high as i64) << 32 | low as i64)
+                    }
+                    _ => unreachable!(),
+                },
                 _ => return Err(tape.error(*p, "primitive")),
             }
         }
