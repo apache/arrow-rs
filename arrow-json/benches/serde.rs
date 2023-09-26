@@ -29,7 +29,7 @@ fn do_bench<R: Serialize>(c: &mut Criterion, name: &str, rows: &[R], schema: &Sc
         b.iter(|| {
             let builder = ReaderBuilder::new(schema.clone()).with_batch_size(64);
             let mut decoder = builder.build_decoder().unwrap();
-            decoder.serialize(&rows)
+            decoder.serialize(rows)
         })
     });
 }
