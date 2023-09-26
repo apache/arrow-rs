@@ -27,10 +27,10 @@ use std::vec::IntoIter;
 use thrift::protocol::{TCompactOutputProtocol, TSerializable};
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::*;
+use arrow_array::{types::*, ArrayRef};
 use arrow_array::{Array, FixedSizeListArray, RecordBatch, RecordBatchWriter};
 use arrow_schema::{
-    ArrowError, DataType as ArrowDataType, IntervalUnit, Schema, SchemaRef,
+    ArrowError, DataType as ArrowDataType, Field, IntervalUnit, Schema, SchemaRef,
 };
 
 use super::schema::{
@@ -54,7 +54,7 @@ use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use levels::{calculate_array_levels, LevelInfo};
 
 mod byte_array;
-pub mod levels;
+mod levels;
 
 /// Arrow writer
 ///
@@ -152,7 +152,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             Some(in_progress) => in_progress
                 .writers
                 .iter()
-                .map(|(_, x)| x.get_estimated_total_bytes() as usize)
+                .map(|x| x.get_estimated_total_bytes() as usize)
                 .sum(),
             None => 0,
         }
@@ -303,7 +303,7 @@ impl Read for ArrowColumnChunkReader {
 ///
 /// This allows it to be owned by lower level page writers whilst allowing access via
 /// [`ArrowRowGroupWriter`] on flush, without requiring self-referential borrows
-pub type SharedColumnChunk = Arc<Mutex<ArrowColumnChunk>>;
+type SharedColumnChunk = Arc<Mutex<ArrowColumnChunk>>;
 
 #[derive(Default)]
 struct ArrowPageWriter {
@@ -349,13 +349,22 @@ impl PageWriter for ArrowPageWriter {
     }
 }
 
-/// Can be passed to [write_leaves] function to serialize arrays to [SharedColumnChunk]s
+/// Serializes [ArrayRef]s to [ArrowColumnChunk]s which can be concatenated
+/// to form a parquet row group
 pub enum ArrowColumnWriter {
     ByteArray(GenericColumnWriter<'static, ByteArrayEncoder>),
     Column(ColumnWriter<'static>),
 }
 
 impl ArrowColumnWriter {
+    /// Serializes an [ArrayRef] to a [ArrowColumnChunk] for an in progress row group.
+    pub fn write(&mut self, array: ArrayRef, field: Arc<Field>) -> Result<()> {
+        let mut levels = calculate_array_levels(&array, &field)?.into_iter();
+        let mut writer_iter = std::iter::once(self);
+        write_leaves(&mut writer_iter, &mut levels, array.as_ref())?;
+        Ok(())
+    }
+
     /// Returns the estimated total bytes for this column writer
     fn get_estimated_total_bytes(&self) -> u64 {
         match self {
@@ -367,7 +376,8 @@ impl ArrowColumnWriter {
 
 /// Encodes [`RecordBatch`] to a parquet row group
 pub struct ArrowRowGroupWriter {
-    writers: Vec<(SharedColumnChunk, ArrowColumnWriter)>,
+    writers: Vec<ArrowColumnWriter>,
+    shared_buffers: Vec<SharedColumnChunk>,
     schema: SchemaRef,
     buffered_rows: usize,
 }
@@ -378,13 +388,21 @@ impl ArrowRowGroupWriter {
         props: &WriterPropertiesPtr,
         arrow: &SchemaRef,
     ) -> Result<Self> {
-        let mut writers = Vec::with_capacity(arrow.fields.len());
+        let mut writers_and_buffers = Vec::with_capacity(arrow.fields.len());
         let mut leaves = parquet.columns().iter();
         for field in &arrow.fields {
-            get_arrow_column_writer(field.data_type(), props, &mut leaves, &mut writers)?;
+            get_arrow_column_writer(
+                field.data_type(),
+                props,
+                &mut leaves,
+                &mut writers_and_buffers,
+            )?;
         }
+        let (shared_buffers, writers): (Vec<_>, Vec<_>) =
+            writers_and_buffers.into_iter().unzip();
         Ok(Self {
             writers,
+            shared_buffers,
             schema: arrow.clone(),
             buffered_rows: 0,
         })
@@ -392,7 +410,7 @@ impl ArrowRowGroupWriter {
 
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         self.buffered_rows += batch.num_rows();
-        let mut writers = self.writers.iter_mut().map(|(_, x)| x);
+        let mut writers = self.writers.iter_mut();
         for (array, field) in batch.columns().iter().zip(&self.schema.fields) {
             let mut levels = calculate_array_levels(array, field)?.into_iter();
             write_leaves(&mut writers, &mut levels, array.as_ref())?;
@@ -404,16 +422,23 @@ impl ArrowRowGroupWriter {
         &self.schema
     }
 
-    /// Converts this [ArrowRowGroupWriter] into a collection of individual [ArrowColumnWriter]s
-    /// and associated [SharedColumnChunk]s. This permits the caller greater control over how
-    /// data is serialized, such as via parallel threads or async tasks.
-    pub fn into_col_writers(self) -> Vec<(SharedColumnChunk, ArrowColumnWriter)> {
-        self.writers
+    /// Takes ownership of all [ArrowColumnWriter]s from this [ArrowRowGroupWriter]
+    /// Caller must restore ownership with give_col_writers before calling close method.
+    pub fn take_col_writers(&mut self) -> Vec<ArrowColumnWriter> {
+        self.writers.drain(..).collect()
+    }
+
+    /// Restores ownership of all [ArrowColumnWriter]s. Caller is responsible for
+    /// returning the [Vec] in the same order returned by take_col_writers method.
+    pub fn give_col_writers(&mut self, writers: Vec<ArrowColumnWriter>) {
+        self.writers = writers;
     }
 
     pub fn close(self) -> Result<Vec<(ArrowColumnChunk, ColumnCloseResult)>> {
-        self.writers
+        self.shared_buffers
             .into_iter()
+            .into_iter()
+            .zip(self.writers.into_iter())
             .map(|(chunk, writer)| {
                 let close_result = match writer {
                     ArrowColumnWriter::ByteArray(c) => c.close()?,
@@ -424,25 +449,6 @@ impl ArrowRowGroupWriter {
                 Ok((chunk, close_result))
             })
             .collect()
-    }
-}
-
-/// Represents components of a [ArrowRowGroupWriter] which have been broken apart by passing ownership
-/// back out to the caller.
-type DeconstructedRowGroupWriterComponents =
-    (Arc<Schema>, Vec<(SharedColumnChunk, ArrowColumnWriter)>);
-
-impl From<DeconstructedRowGroupWriterComponents> for ArrowRowGroupWriter {
-    fn from(value: DeconstructedRowGroupWriterComponents) -> Self {
-        let schema = value.0;
-        let writers = value.1;
-        Self {
-            writers,
-            schema,
-            // The caller is responsible for tracking buffered_rows when dissasembling and
-            // reasembling ArrowRowGroupWriter
-            buffered_rows: 0,
-        }
     }
 }
 
@@ -511,7 +517,7 @@ fn get_arrow_column_writer(
 }
 
 /// Write the leaves of `array` in depth-first order to `writers` with `levels`
-pub fn write_leaves<'a, W>(
+fn write_leaves<'a, W>(
     writers: &mut W,
     levels: &mut IntoIter<LevelInfo>,
     array: &(dyn Array + 'static),
