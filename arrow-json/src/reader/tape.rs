@@ -18,6 +18,7 @@
 use crate::reader::serializer::TapeSerializer;
 use arrow_schema::ArrowError;
 use serde::Serialize;
+use std::fmt::Write;
 
 /// We decode JSON to a flattened tape representation,
 /// allowing for efficient traversal of the JSON data
@@ -54,6 +55,25 @@ pub enum TapeElement {
     ///
     /// Contains the offset into the [`Tape`] string data
     Number(u32),
+
+    /// The high bits of a i64
+    ///
+    /// Followed by [`Self::I32`] containing the low bits
+    I64(i32),
+
+    /// A 32-bit signed integer
+    ///
+    /// May be preceded by [`Self::I64`] containing high bits
+    I32(i32),
+
+    /// The high bits of a 64-bit float
+    ///
+    /// Followed by [`Self::F32`] containing the low bits
+    F64(u32),
+
+    /// A 32-bit float or the low-bits of a 64-bit float if preceded by [`Self::F64`]
+    F32(u32),
+
     /// A true literal
     True,
     /// A false literal
@@ -104,10 +124,15 @@ impl<'a> Tape<'a> {
             | TapeElement::Number(_)
             | TapeElement::True
             | TapeElement::False
-            | TapeElement::Null => Ok(cur_idx + 1),
+            | TapeElement::Null
+            | TapeElement::I32(_)
+            | TapeElement::F32(_) => Ok(cur_idx + 1),
+            TapeElement::I64(_) | TapeElement::F64(_) => Ok(cur_idx + 2),
             TapeElement::StartList(end_idx) => Ok(end_idx + 1),
             TapeElement::StartObject(end_idx) => Ok(end_idx + 1),
-            _ => Err(self.error(cur_idx, expected)),
+            TapeElement::EndObject(_) | TapeElement::EndList(_) => {
+                Err(self.error(cur_idx, expected))
+            }
         }
     }
 
@@ -153,6 +178,28 @@ impl<'a> Tape<'a> {
             TapeElement::True => out.push_str("true"),
             TapeElement::False => out.push_str("false"),
             TapeElement::Null => out.push_str("null"),
+            TapeElement::I64(high) => match self.get(idx + 1) {
+                TapeElement::I32(low) => {
+                    let val = (high as i64) << 32 | low as i64;
+                    let _ = write!(out, "{val}");
+                    return idx + 2;
+                }
+                _ => unreachable!(),
+            },
+            TapeElement::I32(val) => {
+                let _ = write!(out, "{val}");
+            }
+            TapeElement::F64(high) => match self.get(idx + 1) {
+                TapeElement::F32(low) => {
+                    let val = f64::from_bits((high as u64) << 32 | low as u64);
+                    let _ = write!(out, "{val}");
+                    return idx + 2;
+                }
+                _ => unreachable!(),
+            },
+            TapeElement::F32(val) => {
+                let _ = write!(out, "{}", f32::from_bits(val));
+            }
         }
         idx + 1
     }
