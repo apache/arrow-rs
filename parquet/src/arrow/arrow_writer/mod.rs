@@ -437,8 +437,7 @@ impl ArrowRowGroupWriter {
     pub fn close(self) -> Result<Vec<(ArrowColumnChunk, ColumnCloseResult)>> {
         self.shared_buffers
             .into_iter()
-            .into_iter()
-            .zip(self.writers.into_iter())
+            .zip(self.writers)
             .map(|(chunk, writer)| {
                 let close_result = match writer {
                     ArrowColumnWriter::ByteArray(c) => c.close()?,
