@@ -705,7 +705,7 @@ impl ArrayData {
     ///
     /// This can be useful for when interacting with data sent over IPC or FFI, that may
     /// not meet the minimum alignment requirements
-    fn align_buffers(&mut self) {
+    pub fn align_buffers(&mut self) {
         let layout = layout(&self.data_type);
         for (buffer, spec) in self.buffers.iter_mut().zip(&layout.buffers) {
             if let BufferSpec::FixedWidth { alignment, .. } = spec {
