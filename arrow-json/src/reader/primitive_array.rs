@@ -91,11 +91,12 @@ impl<P: ArrowPrimitiveType> PrimitiveArrayDecoder<P> {
 impl<P> ArrayDecoder for PrimitiveArrayDecoder<P>
 where
     P: ArrowPrimitiveType + Parser,
-    P::Native: ParseJsonNumber,
+    P::Native: ParseJsonNumber + NumCast,
 {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let mut builder = PrimitiveBuilder::<P>::with_capacity(pos.len())
             .with_data_type(self.data_type.clone());
+        let d = &self.data_type;
 
         for p in pos {
             match tape.get(*p) {
@@ -103,10 +104,7 @@ where
                 TapeElement::String(idx) => {
                     let s = tape.get_string(idx);
                     let value = P::parse(s).ok_or_else(|| {
-                        ArrowError::JsonError(format!(
-                            "failed to parse \"{s}\" as {}",
-                            self.data_type
-                        ))
+                        ArrowError::JsonError(format!("failed to parse \"{s}\" as {d}",))
                     })?;
 
                     builder.append_value(value)
@@ -115,14 +113,44 @@ where
                     let s = tape.get_string(idx);
                     let value =
                         ParseJsonNumber::parse(s.as_bytes()).ok_or_else(|| {
-                            ArrowError::JsonError(format!(
-                                "failed to parse {s} as {}",
-                                self.data_type
-                            ))
+                            ArrowError::JsonError(format!("failed to parse {s} as {d}",))
                         })?;
 
                     builder.append_value(value)
                 }
+                TapeElement::F32(v) => {
+                    let v = f32::from_bits(v);
+                    let value = NumCast::from(v).ok_or_else(|| {
+                        ArrowError::JsonError(format!("failed to parse {v} as {d}",))
+                    })?;
+                    builder.append_value(value)
+                }
+                TapeElement::I32(v) => {
+                    let value = NumCast::from(v).ok_or_else(|| {
+                        ArrowError::JsonError(format!("failed to parse {v} as {d}",))
+                    })?;
+                    builder.append_value(value)
+                }
+                TapeElement::F64(high) => match tape.get(p + 1) {
+                    TapeElement::F32(low) => {
+                        let v = f64::from_bits((high as u64) << 32 | low as u64);
+                        let value = NumCast::from(v).ok_or_else(|| {
+                            ArrowError::JsonError(format!("failed to parse {v} as {d}",))
+                        })?;
+                        builder.append_value(value)
+                    }
+                    _ => unreachable!(),
+                },
+                TapeElement::I64(high) => match tape.get(p + 1) {
+                    TapeElement::I32(low) => {
+                        let v = (high as i64) << 32 | low as i64;
+                        let value = NumCast::from(v).ok_or_else(|| {
+                            ArrowError::JsonError(format!("failed to parse {v} as {d}",))
+                        })?;
+                        builder.append_value(value)
+                    }
+                    _ => unreachable!(),
+                },
                 _ => return Err(tape.error(*p, "primitive")),
             }
         }
