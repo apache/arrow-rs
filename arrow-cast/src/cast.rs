@@ -365,9 +365,8 @@ where
     if cast_options.safe {
         array
             .unary_opt::<_, Decimal128Type>(|v| {
-                (mul * v.as_()).round().to_i128().and_then(|v| {
-                    (Decimal128Type::validate_decimal_precision(v, precision).is_ok())
-                        .then_some(v)
+                (mul * v.as_()).round().to_i128().filter(|v| {
+                    Decimal128Type::validate_decimal_precision(*v, precision).is_ok()
                 })
             })
             .with_precision_and_scale(precision, scale)
@@ -411,9 +410,8 @@ where
     if cast_options.safe {
         array
             .unary_opt::<_, Decimal256Type>(|v| {
-                i256::from_f64((v.as_() * mul).round()).and_then(|v| {
-                    (Decimal256Type::validate_decimal_precision(v, precision).is_ok())
-                        .then_some(v)
+                i256::from_f64((v.as_() * mul).round()).filter(|v| {
+                    Decimal256Type::validate_decimal_precision(*v, precision).is_ok()
                 })
             })
             .with_precision_and_scale(precision, scale)
