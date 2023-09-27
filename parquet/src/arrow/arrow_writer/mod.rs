@@ -28,8 +28,10 @@ use thrift::protocol::{TCompactOutputProtocol, TSerializable};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
-use arrow_array::{Array, FixedSizeListArray, RecordBatch, RecordBatchWriter};
-use arrow_schema::{ArrowError, DataType as ArrowDataType, IntervalUnit, SchemaRef};
+use arrow_array::{ArrayRef, RecordBatch, RecordBatchWriter};
+use arrow_schema::{
+    ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef,
+};
 
 use super::schema::{
     add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
@@ -49,7 +51,7 @@ use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::SerializedFileWriter;
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
-use levels::{calculate_array_levels, LevelInfo};
+use levels::{calculate_array_levels, ArrayLevels};
 
 mod byte_array;
 mod levels;
@@ -150,7 +152,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             Some(in_progress) => in_progress
                 .writers
                 .iter()
-                .map(|(_, x)| x.get_estimated_total_bytes() as usize)
+                .map(|x| x.get_estimated_total_bytes())
                 .sum(),
             None => 0,
         }
@@ -274,7 +276,7 @@ impl ChunkReader for ArrowColumnChunk {
     }
 }
 
-/// A [`Read`] for an iterator of [`Bytes`]
+/// A [`Read`] for [`ArrowColumnChunk`]
 pub struct ArrowColumnChunkReader(Peekable<IntoIter<Bytes>>);
 
 impl Read for ArrowColumnChunkReader {
@@ -347,31 +349,68 @@ impl PageWriter for ArrowPageWriter {
     }
 }
 
-/// Encodes a leaf column to [`ArrowPageWriter`]
-enum ArrowColumnWriter {
+/// A leaf column that can be encoded by [`ArrowColumnWriter`]
+pub struct ArrowLeafColumn(ArrayLevels);
+
+/// Computes the [`ArrowLeafColumn`] for a given potentially nested [`ArrayRef`]
+pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafColumn>> {
+    let levels = calculate_array_levels(array, field)?;
+    Ok(levels.into_iter().map(ArrowLeafColumn).collect())
+}
+
+/// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunk`]
+pub struct ArrowColumnWriter {
+    writer: ArrowColumnWriterImpl,
+    chunk: SharedColumnChunk,
+}
+
+enum ArrowColumnWriterImpl {
     ByteArray(GenericColumnWriter<'static, ByteArrayEncoder>),
     Column(ColumnWriter<'static>),
 }
 
 impl ArrowColumnWriter {
+    /// Write an [`ArrowLeafColumn`]
+    pub fn write(&mut self, col: &ArrowLeafColumn) -> Result<()> {
+        match &mut self.writer {
+            ArrowColumnWriterImpl::Column(c) => {
+                write_leaf(c, &col.0)?;
+            }
+            ArrowColumnWriterImpl::ByteArray(c) => {
+                write_primitive(c, col.0.array().as_ref(), &col.0)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Close this column returning the [`ArrowColumnChunk`] and [`ColumnCloseResult`]
+    pub fn close(self) -> Result<(ArrowColumnChunk, ColumnCloseResult)> {
+        let result = match self.writer {
+            ArrowColumnWriterImpl::ByteArray(c) => c.close()?,
+            ArrowColumnWriterImpl::Column(c) => c.close()?,
+        };
+        let chunk = Arc::try_unwrap(self.chunk).ok().unwrap();
+        Ok((chunk.into_inner().unwrap(), result))
+    }
+
     /// Returns the estimated total bytes for this column writer
-    fn get_estimated_total_bytes(&self) -> u64 {
-        match self {
-            ArrowColumnWriter::ByteArray(c) => c.get_estimated_total_bytes(),
-            ArrowColumnWriter::Column(c) => c.get_estimated_total_bytes(),
+    pub fn get_estimated_total_bytes(&self) -> usize {
+        match &self.writer {
+            ArrowColumnWriterImpl::ByteArray(c) => c.get_estimated_total_bytes() as _,
+            ArrowColumnWriterImpl::Column(c) => c.get_estimated_total_bytes() as _,
         }
     }
 }
 
 /// Encodes [`RecordBatch`] to a parquet row group
-pub struct ArrowRowGroupWriter {
-    writers: Vec<(SharedColumnChunk, ArrowColumnWriter)>,
+struct ArrowRowGroupWriter {
+    writers: Vec<ArrowColumnWriter>,
     schema: SchemaRef,
     buffered_rows: usize,
 }
 
 impl ArrowRowGroupWriter {
-    pub fn new(
+    fn new(
         parquet: &SchemaDescriptor,
         props: &WriterPropertiesPtr,
         arrow: &SchemaRef,
@@ -388,51 +427,50 @@ impl ArrowRowGroupWriter {
         })
     }
 
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+    fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         self.buffered_rows += batch.num_rows();
-        let mut writers = self.writers.iter_mut().map(|(_, x)| x);
-        for (array, field) in batch.columns().iter().zip(&self.schema.fields) {
-            let mut levels = calculate_array_levels(array, field)?.into_iter();
-            write_leaves(&mut writers, &mut levels, array.as_ref())?;
+        let mut writers = self.writers.iter_mut();
+        for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
+            for leaf in compute_leaves(field.as_ref(), column)? {
+                writers.next().unwrap().write(&leaf)?
+            }
         }
         Ok(())
     }
 
-    pub fn close(self) -> Result<Vec<(ArrowColumnChunk, ColumnCloseResult)>> {
+    fn close(self) -> Result<Vec<(ArrowColumnChunk, ColumnCloseResult)>> {
         self.writers
             .into_iter()
-            .map(|(chunk, writer)| {
-                let close_result = match writer {
-                    ArrowColumnWriter::ByteArray(c) => c.close()?,
-                    ArrowColumnWriter::Column(c) => c.close()?,
-                };
-
-                let chunk = Arc::try_unwrap(chunk).ok().unwrap().into_inner().unwrap();
-                Ok((chunk, close_result))
-            })
+            .map(|writer| writer.close())
             .collect()
     }
 }
 
-/// Get an [`ArrowColumnWriter`] along with a reference to its [`SharedColumnChunk`]
+/// Gets the [`ArrowColumnWriter`] for the given `data_type`
 fn get_arrow_column_writer(
     data_type: &ArrowDataType,
     props: &WriterPropertiesPtr,
     leaves: &mut Iter<'_, ColumnDescPtr>,
-    out: &mut Vec<(SharedColumnChunk, ArrowColumnWriter)>,
+    out: &mut Vec<ArrowColumnWriter>,
 ) -> Result<()> {
     let col = |desc: &ColumnDescPtr| {
         let page_writer = Box::<ArrowPageWriter>::default();
         let chunk = page_writer.buffer.clone();
         let writer = get_column_writer(desc.clone(), props.clone(), page_writer);
-        (chunk, ArrowColumnWriter::Column(writer))
+        ArrowColumnWriter {
+            chunk,
+            writer: ArrowColumnWriterImpl::Column(writer),
+        }
     };
 
     let bytes = |desc: &ColumnDescPtr| {
         let page_writer = Box::<ArrowPageWriter>::default();
         let chunk = page_writer.buffer.clone();
         let writer = GenericColumnWriter::new(desc.clone(), props.clone(), page_writer);
-        (chunk, ArrowColumnWriter::ByteArray(writer))
+        ArrowColumnWriter {
+            chunk,
+            writer: ArrowColumnWriterImpl::ByteArray(writer),
+        }
     };
 
     match data_type {
@@ -478,52 +516,8 @@ fn get_arrow_column_writer(
     Ok(())
 }
 
-/// Write the leaves of `array` in depth-first order to `writers` with `levels`
-fn write_leaves<'a, W>(
-    writers: &mut W,
-    levels: &mut IntoIter<LevelInfo>,
-    array: &(dyn Array + 'static),
-) -> Result<()>
-where
-    W: Iterator<Item = &'a mut ArrowColumnWriter>,
-{
-    match array.data_type() {
-        ArrowDataType::List(_) => {
-            write_leaves(writers, levels, array.as_list::<i32>().values().as_ref())?
-        }
-        ArrowDataType::LargeList(_) => {
-            write_leaves(writers, levels, array.as_list::<i64>().values().as_ref())?
-        }
-        ArrowDataType::FixedSizeList(_, _) => {
-            let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
-            write_leaves(writers, levels, array.values().as_ref())?
-        }
-        ArrowDataType::Struct(_) => {
-            for column in array.as_struct().columns() {
-                write_leaves(writers, levels, column.as_ref())?
-            }
-        }
-        ArrowDataType::Map(_, _) => {
-            let map = array.as_map();
-            write_leaves(writers, levels, map.keys().as_ref())?;
-            write_leaves(writers, levels, map.values().as_ref())?
-        }
-        _ => {
-            let levels = levels.next().unwrap();
-            match writers.next().unwrap() {
-                ArrowColumnWriter::Column(c) => write_leaf(c, array, levels)?,
-                ArrowColumnWriter::ByteArray(c) => write_primitive(c, array, levels)?,
-            };
-        }
-    }
-    Ok(())
-}
-
-fn write_leaf(
-    writer: &mut ColumnWriter<'_>,
-    column: &dyn Array,
-    levels: LevelInfo,
-) -> Result<usize> {
+fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usize> {
+    let column = levels.array().as_ref();
     let indices = levels.non_null_indices();
     match writer {
         ColumnWriter::Int32ColumnWriter(ref mut typed) => {
@@ -678,7 +672,7 @@ fn write_leaf(
 fn write_primitive<E: ColumnValueEncoder>(
     writer: &mut GenericColumnWriter<E>,
     values: &E::Values,
-    levels: LevelInfo,
+    levels: &ArrayLevels,
 ) -> Result<usize> {
     writer.write_batch_internal(
         values,
