@@ -1545,11 +1545,13 @@ mod not_wasm_tests {
         for d in &data {
             writer.write_all(d).await.unwrap();
         }
+        writer.flush().await.unwrap();
 
         let mut writer = integration.append(&location).await.unwrap();
         for d in &data {
             writer.write_all(d).await.unwrap();
         }
+        writer.flush().await.unwrap();
 
         let read_data = integration
             .get(&location)
