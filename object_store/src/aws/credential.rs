@@ -185,13 +185,7 @@ impl<'a> AwsAuthorizer<'a> {
             self.service
         );
 
-        let string_to_sign = format!(
-            "{}\n{}\n{}\n{}",
-            ALGORITHM,
-            date.format("%Y%m%dT%H%M%SZ"),
-            scope,
-            hashed_canonical_request
-        );
+        let string_to_sign = self.string_to_sign(date, &scope, &hashed_canonical_request);
 
         // sign the string
         let signature =
@@ -206,6 +200,21 @@ impl<'a> AwsAuthorizer<'a> {
 
         let authorization_val = HeaderValue::from_str(&authorisation).unwrap();
         request.headers_mut().insert(AUTH_HEADER, authorization_val);
+    }
+
+    fn string_to_sign(
+        &self,
+        date: DateTime<Utc>,
+        scope: &str,
+        hashed_canonical_request: &str,
+    ) -> String {
+        format!(
+            "{}\n{}\n{}\n{}",
+            ALGORITHM,
+            date.format("%Y%m%dT%H%M%SZ"),
+            scope,
+            hashed_canonical_request
+        )
     }
 }
 
