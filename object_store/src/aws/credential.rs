@@ -178,12 +178,7 @@ impl<'a> AwsAuthorizer<'a> {
         );
 
         let hashed_canonical_request = hex_digest(canonical_request.as_bytes());
-        let scope = format!(
-            "{}/{}/{}/aws4_request",
-            date.format("%Y%m%d"),
-            self.region,
-            self.service
-        );
+        let scope = self.scope(date);
 
         let string_to_sign = self.string_to_sign(date, &scope, &hashed_canonical_request);
 
@@ -214,6 +209,15 @@ impl<'a> AwsAuthorizer<'a> {
             date.format("%Y%m%dT%H%M%SZ"),
             scope,
             hashed_canonical_request
+        )
+    }
+
+    fn scope(&self, date: DateTime<Utc>) -> String {
+        format!(
+            "{}/{}/{}/aws4_request",
+            date.format("%Y%m%d"),
+            self.region,
+            self.service
         )
     }
 }
