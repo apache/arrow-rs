@@ -166,20 +166,18 @@ impl<'a> AwsAuthorizer<'a> {
         let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
         let canonical_query = canonicalize_query(request.url());
 
-        // https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
-        let canonical_request = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}",
-            request.method().as_str(),
-            canonical_uri,
-            canonical_query,
-            canonical_headers,
-            signed_headers,
-            digest
-        );
-
         let scope = self.scope(date);
 
-        let string_to_sign = self.string_to_sign(date, &scope, &canonical_request);
+        let string_to_sign = self.string_to_sign(
+            date,
+            &scope,
+            request.method(),
+            &canonical_uri,
+            &canonical_query,
+            &canonical_headers,
+            &signed_headers,
+            &digest,
+        );
 
         // sign the string
         let signature =
@@ -196,12 +194,29 @@ impl<'a> AwsAuthorizer<'a> {
         request.headers_mut().insert(AUTH_HEADER, authorization_val);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn string_to_sign(
         &self,
         date: DateTime<Utc>,
         scope: &str,
-        canonical_request: &str,
+        request_method: &Method,
+        canonical_uri: &str,
+        canonical_query: &str,
+        canonical_headers: &str,
+        signed_headers: &str,
+        digest: &str,
     ) -> String {
+        // https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
+        let canonical_request = format!(
+            "{}\n{}\n{}\n{}\n{}\n{}",
+            request_method.as_str(),
+            canonical_uri,
+            canonical_query,
+            canonical_headers,
+            signed_headers,
+            digest
+        );
+
         let hashed_canonical_request = hex_digest(canonical_request.as_bytes());
 
         format!(
