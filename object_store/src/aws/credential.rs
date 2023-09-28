@@ -89,6 +89,7 @@ const DATE_HEADER: &str = "x-amz-date";
 const HASH_HEADER: &str = "x-amz-content-sha256";
 const TOKEN_HEADER: &str = "x-amz-security-token";
 const AUTH_HEADER: &str = "authorization";
+const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 
 impl<'a> AwsAuthorizer<'a> {
     /// Create a new [`AwsAuthorizer`]
@@ -185,7 +186,8 @@ impl<'a> AwsAuthorizer<'a> {
         );
 
         let string_to_sign = format!(
-            "AWS4-HMAC-SHA256\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}",
+            ALGORITHM,
             date.format("%Y%m%dT%H%M%SZ"),
             scope,
             hashed_canonical_request
@@ -198,8 +200,8 @@ impl<'a> AwsAuthorizer<'a> {
 
         // build the actual auth header
         let authorisation = format!(
-            "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
-            self.credential.key_id, scope, signed_headers, signature
+            "{} Credential={}/{}, SignedHeaders={}, Signature={}",
+            ALGORITHM, self.credential.key_id, scope, signed_headers, signature
         );
 
         let authorization_val = HeaderValue::from_str(&authorisation).unwrap();
