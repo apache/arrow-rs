@@ -177,10 +177,9 @@ impl<'a> AwsAuthorizer<'a> {
             digest
         );
 
-        let hashed_canonical_request = hex_digest(canonical_request.as_bytes());
         let scope = self.scope(date);
 
-        let string_to_sign = self.string_to_sign(date, &scope, &hashed_canonical_request);
+        let string_to_sign = self.string_to_sign(date, &scope, &canonical_request);
 
         // sign the string
         let signature =
@@ -201,8 +200,10 @@ impl<'a> AwsAuthorizer<'a> {
         &self,
         date: DateTime<Utc>,
         scope: &str,
-        hashed_canonical_request: &str,
+        canonical_request: &str,
     ) -> String {
+        let hashed_canonical_request = hex_digest(canonical_request.as_bytes());
+
         format!(
             "{}\n{}\n{}\n{}",
             ALGORITHM,
