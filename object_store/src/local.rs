@@ -1494,6 +1494,8 @@ mod not_wasm_tests {
 
         writer.write_all(data.as_ref()).await.unwrap();
 
+        writer.flush().await.unwrap();
+
         let read_data = integration
             .get(&location)
             .await
