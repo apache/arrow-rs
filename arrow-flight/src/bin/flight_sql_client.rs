@@ -17,13 +17,14 @@
 
 use std::{error::Error, sync::Arc, time::Duration};
 
+use anyhow::{Context, Result};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
 use arrow_cast::{cast_with_options, pretty::pretty_format_batches, CastOptions};
 use arrow_flight::{
     sql::client::FlightSqlServiceClient, utils::flight_data_to_batches, FlightData,
     FlightInfo,
 };
-use arrow_schema::{ArrowError, Schema};
+use arrow_schema::Schema;
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
@@ -116,21 +117,23 @@ enum Command {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let args = Args::parse();
-    setup_logging();
-    let mut client = setup_client(args.client_args).await.expect("setup client");
+    setup_logging()?;
+    let mut client = setup_client(args.client_args)
+        .await
+        .context("setup client")?;
 
     let flight_info = match args.cmd {
         Command::StatementQuery { query } => client
             .execute(query, None)
             .await
-            .expect("execute statement"),
+            .context("execute statement")?,
         Command::PreparedStatementQuery { query, params } => {
             let mut prepared_stmt = client
                 .prepare(query, None)
                 .await
-                .expect("prepare statement");
+                .context("prepare statement")?;
 
             if !params.is_empty() {
                 prepared_stmt
@@ -139,33 +142,35 @@ async fn main() {
                             &params,
                             prepared_stmt
                                 .parameter_schema()
-                                .expect("get parameter schema"),
+                                .context("get parameter schema")?,
                         )
-                        .expect("construct parameters"),
+                        .context("construct parameters")?,
                     )
-                    .expect("bind parameters")
+                    .context("bind parameters")?;
             }
 
             prepared_stmt
                 .execute()
                 .await
-                .expect("execute prepared statement")
+                .context("execute prepared statement")?
         }
     };
 
     let batches = execute_flight(&mut client, flight_info)
         .await
-        .expect("read flight data");
+        .context("read flight data")?;
 
-    let res = pretty_format_batches(batches.as_slice()).expect("format results");
+    let res = pretty_format_batches(batches.as_slice()).context("format results")?;
     println!("{res}");
+
+    Ok(())
 }
 
 async fn execute_flight(
     client: &mut FlightSqlServiceClient<Channel>,
     info: FlightInfo,
-) -> Result<Vec<RecordBatch>, ArrowError> {
-    let schema = Arc::new(Schema::try_from(info.clone()).expect("valid schema"));
+) -> Result<Vec<RecordBatch>> {
+    let schema = Arc::new(Schema::try_from(info.clone()).context("valid schema")?);
     let mut batches = Vec::with_capacity(info.endpoint.len() + 1);
     batches.push(RecordBatch::new_empty(schema));
     info!("decoded schema");
@@ -174,13 +179,13 @@ async fn execute_flight(
         let Some(ticket) = &endpoint.ticket else {
             panic!("did not get ticket");
         };
-        let flight_data = client.do_get(ticket.clone()).await.expect("do get");
+        let flight_data = client.do_get(ticket.clone()).await.context("do get")?;
         let flight_data: Vec<FlightData> = flight_data
             .try_collect()
             .await
-            .expect("collect data stream");
+            .context("collect data stream")?;
         let mut endpoint_batches = flight_data_to_batches(&flight_data)
-            .expect("convert flight data to record batches");
+            .context("convert flight data to record batches")?;
         batches.append(&mut endpoint_batches);
     }
     info!("received data");
@@ -191,7 +196,7 @@ async fn execute_flight(
 fn construct_record_batch_from_params(
     params: &[(String, String)],
     parameter_schema: &Schema,
-) -> Result<RecordBatch, ArrowError> {
+) -> Result<RecordBatch> {
     let mut items = Vec::<(&String, ArrayRef)>::new();
 
     for (name, value) in params {
@@ -205,23 +210,22 @@ fn construct_record_batch_from_params(
         items.push((name, casted))
     }
 
-    RecordBatch::try_from_iter(items)
+    Ok(RecordBatch::try_from_iter(items)?)
 }
 
-fn setup_logging() {
-    tracing_log::LogTracer::init().expect("tracing log init");
+fn setup_logging() -> Result<()> {
+    tracing_log::LogTracer::init().context("tracing log init")?;
     tracing_subscriber::fmt::init();
+    Ok(())
 }
 
-async fn setup_client(
-    args: ClientArgs,
-) -> Result<FlightSqlServiceClient<Channel>, ArrowError> {
+async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel>> {
     let port = args.port.unwrap_or(if args.tls { 443 } else { 80 });
 
     let protocol = if args.tls { "https" } else { "http" };
 
     let mut endpoint = Endpoint::new(format!("{}://{}:{}", protocol, args.host, port))
-        .map_err(|_| ArrowError::IpcError("Cannot create endpoint".to_string()))?
+        .context("create endpoint")?
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(20))
         .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
@@ -232,15 +236,12 @@ async fn setup_client(
 
     if args.tls {
         let tls_config = ClientTlsConfig::new();
-        endpoint = endpoint.tls_config(tls_config).map_err(|_| {
-            ArrowError::IpcError("Cannot create TLS endpoint".to_string())
-        })?;
+        endpoint = endpoint
+            .tls_config(tls_config)
+            .context("create TLS endpoint")?;
     }
 
-    let channel = endpoint
-        .connect()
-        .await
-        .map_err(|e| ArrowError::IpcError(format!("Cannot connect to endpoint: {e}")))?;
+    let channel = endpoint.connect().await.context("connect to endpoint")?;
 
     let mut client = FlightSqlServiceClient::new(channel);
     info!("connected");
@@ -260,7 +261,7 @@ async fn setup_client(
             client
                 .handshake(&username, &password)
                 .await
-                .expect("handshake");
+                .context("handshake")?;
             info!("performed handshake");
         }
         (Some(_), None) => {
