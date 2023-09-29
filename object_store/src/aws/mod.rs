@@ -209,6 +209,11 @@ impl AmazonS3 {
     pub fn credentials(&self) -> &AwsCredentialProvider {
         &self.client.config().credentials
     }
+
+    /// Create a full URL to the resource specified by `path` with this instance's configuration.
+    pub fn path_url(&self, path: &Path) -> String {
+        self.client.config().path_url(path)
+    }
 }
 
 #[async_trait]
