@@ -441,9 +441,9 @@ impl ArrowColumnChunk {
 ///
 /// // Spawn work to encode columns
 /// let mut worker_iter = workers.iter_mut();
-/// for (a, f) in to_write.iter().zip(&schema.fields) {
-///     for c in compute_leaves(f, a).unwrap() {
-///         worker_iter.next().unwrap().1.send(c).unwrap();
+/// for (arr, field) in to_write.iter().zip(&schema.fields) {
+///     for leaves in compute_leaves(field, arr).unwrap() {
+///         worker_iter.next().unwrap().1.send(leaves).unwrap();
 ///     }
 /// }
 ///
