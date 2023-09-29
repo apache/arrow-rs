@@ -223,6 +223,22 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
                 Ok(new_null_array(&DataType::Null, indices.len()))
             }
         }
+        DataType::Union(fields, _mode) => {
+            let mut field_type_ids = Vec::with_capacity(fields.len());
+            let mut children = Vec::with_capacity(fields.len());
+            let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
+            let type_ids = Int8Array::try_new(values.type_ids().clone(), values.nulls().cloned())?;
+            let type_ids = take_impl(&type_ids, indices)?.to_data().buffer(0).into();
+            for (type_id, field) in fields.iter() {
+                let values = values.child(type_id);
+                let values = take_impl(values, indices)?;
+                let field = (**field).clone();
+                children.push((field, values));
+                field_type_ids.push(type_id);
+            }
+            let array = UnionArray::try_new(field_type_ids.as_slice(), type_ids, None, children)?;
+            Ok(Arc::new(array))
+        }
         t => unimplemented!("Take not supported for data type {:?}", t)
     }
 }
@@ -2023,8 +2039,8 @@ mod tests {
             Some((Some(true), Some(31))),
             None,
         ]);
-        let strings = StringArray::from(vec![Some("foo"), None, None, None, None]);
-        let type_ids = Buffer::from_slice_ref(vec![0i8; 5]);
+        let strings = StringArray::from(vec![Some("a"), None, Some("c"), None, Some("d")]);
+        let type_ids = Buffer::from_slice_ref(vec![1i8; 5]);
 
         let children: Vec<(Field, Arc<dyn Array>)> = vec![
             (Field::new("f1", structs.data_type().clone(), true), Arc::new(structs)),
@@ -2032,7 +2048,15 @@ mod tests {
         ];
         let array = UnionArray::try_new(&[0, 1], type_ids, None, children).unwrap();
 
-        let index = UInt32Array::from(vec![0, 3, 1, 0, 2, 4]);
+        let indices = vec![0, 3, 1, 0, 2, 4];
+        let index = UInt32Array::from(indices.clone());
         let actual = take(&array, &index, None).unwrap();
+        let actual = actual.as_any().downcast_ref::<UnionArray>().unwrap();
+        let strings = actual.child(1);
+        let strings = strings.as_any().downcast_ref::<StringArray>().unwrap();
+
+        let actual = strings.iter().map(|s| s.clone()).collect::<Vec<_>>();
+        let expected = vec![Some("a"), None, None, Some("a"), Some("c"), Some("d")];
+        assert_eq!(expected, actual);
     }
 }
