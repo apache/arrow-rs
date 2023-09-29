@@ -28,7 +28,7 @@ use arrow_buffer::{
     ScalarBuffer,
 };
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, FieldRef};
+use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
 
 use num::{One, Zero};
 
@@ -223,7 +223,7 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
                 Ok(new_null_array(&DataType::Null, indices.len()))
             }
         }
-        DataType::Union(fields, _mode) => {
+        DataType::Union(fields, UnionMode::Sparse) => {
             let mut field_type_ids = Vec::with_capacity(fields.len());
             let mut children = Vec::with_capacity(fields.len());
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
@@ -2062,7 +2062,7 @@ mod tests {
         let strings = actual.child(1);
         let strings = strings.as_any().downcast_ref::<StringArray>().unwrap();
 
-        let actual = strings.iter().map(|s| s.clone()).collect::<Vec<_>>();
+        let actual = strings.iter().collect::<Vec<_>>();
         let expected = vec![Some("a"), None, None, Some("a"), Some("c"), Some("d")];
         assert_eq!(expected, actual);
     }
