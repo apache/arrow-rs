@@ -2013,4 +2013,26 @@ mod tests {
         let values = r.as_string::<i32>().iter().collect::<Vec<_>>();
         assert_eq!(&values, &[Some("foo"), None, None, None])
     }
+
+    #[test]
+    fn test_take_union() {
+        let structs = create_test_struct(vec![
+            Some((Some(true), Some(42))),
+            Some((Some(false), Some(28))),
+            Some((Some(false), Some(19))),
+            Some((Some(true), Some(31))),
+            None,
+        ]);
+        let strings = StringArray::from(vec![Some("foo"), None, None, None, None]);
+        let type_ids = Buffer::from_slice_ref(vec![0i8; 5]);
+
+        let children: Vec<(Field, Arc<dyn Array>)> = vec![
+            (Field::new("f1", structs.data_type().clone(), true), Arc::new(structs)),
+            (Field::new("f2", strings.data_type().clone(), true), Arc::new(strings)),
+        ];
+        let array = UnionArray::try_new(&[0, 1], type_ids, None, children).unwrap();
+
+        let index = UInt32Array::from(vec![0, 3, 1, 0, 2, 4]);
+        let actual = take(&array, &index, None).unwrap();
+    }
 }
