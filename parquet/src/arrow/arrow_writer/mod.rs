@@ -55,7 +55,7 @@ use levels::{calculate_array_levels, ArrayLevels};
 mod byte_array;
 mod levels;
 
-/// Arrow writer
+/// Encodes [`RecordBatch`] to parquet
 ///
 /// Writes Arrow `RecordBatch`es to a Parquet writer. Multiple [`RecordBatch`] will be encoded
 /// to the same row group, up to `max_row_group_size` rows. Any remaining rows will be
