@@ -156,7 +156,6 @@ impl<'a> AwsAuthorizer<'a> {
         request.headers_mut().insert(HASH_HEADER, header_digest);
 
         let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
-        let canonical_query = canonicalize_query(request.url());
 
         let scope = self.scope(date);
 
@@ -165,7 +164,6 @@ impl<'a> AwsAuthorizer<'a> {
             &scope,
             request.method(),
             request.url(),
-            &canonical_query,
             &canonical_headers,
             &signed_headers,
             &digest,
@@ -193,7 +191,6 @@ impl<'a> AwsAuthorizer<'a> {
         scope: &str,
         request_method: &Method,
         url: &Url,
-        canonical_query: &str,
         canonical_headers: &str,
         signed_headers: &str,
         digest: &str,
@@ -205,6 +202,8 @@ impl<'a> AwsAuthorizer<'a> {
             "s3" => url.path().to_string(),
             _ => utf8_percent_encode(url.path(), &STRICT_PATH_ENCODE_SET).to_string(),
         };
+
+        let canonical_query = canonicalize_query(url);
 
         // https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
         let canonical_request = format!(
