@@ -2039,12 +2039,19 @@ mod tests {
             Some((Some(true), Some(31))),
             None,
         ]);
-        let strings = StringArray::from(vec![Some("a"), None, Some("c"), None, Some("d")]);
+        let strings =
+            StringArray::from(vec![Some("a"), None, Some("c"), None, Some("d")]);
         let type_ids = Buffer::from_slice_ref(vec![1i8; 5]);
 
         let children: Vec<(Field, Arc<dyn Array>)> = vec![
-            (Field::new("f1", structs.data_type().clone(), true), Arc::new(structs)),
-            (Field::new("f2", strings.data_type().clone(), true), Arc::new(strings)),
+            (
+                Field::new("f1", structs.data_type().clone(), true),
+                Arc::new(structs),
+            ),
+            (
+                Field::new("f2", strings.data_type().clone(), true),
+                Arc::new(strings),
+            ),
         ];
         let array = UnionArray::try_new(&[0, 1], type_ids, None, children).unwrap();
 
