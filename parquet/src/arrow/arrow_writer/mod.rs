@@ -382,7 +382,7 @@ impl ArrowColumnChunk {
     }
 }
 
-/// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunkData`]
+/// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunk`]
 ///
 /// Note: This is a low-level interface for applications that require fine-grained control
 /// of encoding, see [`ArrowWriter`] for a higher-level interface
