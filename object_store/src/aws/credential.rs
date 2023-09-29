@@ -155,14 +155,6 @@ impl<'a> AwsAuthorizer<'a> {
         let header_digest = HeaderValue::from_str(&digest).unwrap();
         request.headers_mut().insert(HASH_HEADER, header_digest);
 
-        // Each path segment must be URI-encoded twice (except for Amazon S3 which only gets URI-encoded once).
-        // see https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
-        let canonical_uri = match self.service {
-            "s3" => request.url().path().to_string(),
-            _ => utf8_percent_encode(request.url().path(), &STRICT_PATH_ENCODE_SET)
-                .to_string(),
-        };
-
         let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
         let canonical_query = canonicalize_query(request.url());
 
@@ -172,7 +164,7 @@ impl<'a> AwsAuthorizer<'a> {
             date,
             &scope,
             request.method(),
-            &canonical_uri,
+            request.url(),
             &canonical_query,
             &canonical_headers,
             &signed_headers,
@@ -200,12 +192,20 @@ impl<'a> AwsAuthorizer<'a> {
         date: DateTime<Utc>,
         scope: &str,
         request_method: &Method,
-        canonical_uri: &str,
+        url: &Url,
         canonical_query: &str,
         canonical_headers: &str,
         signed_headers: &str,
         digest: &str,
     ) -> String {
+        // Each path segment must be URI-encoded twice (except for Amazon S3 which only gets
+        // URI-encoded once).
+        // see https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
+        let canonical_uri = match self.service {
+            "s3" => url.path().to_string(),
+            _ => utf8_percent_encode(url.path(), &STRICT_PATH_ENCODE_SET).to_string(),
+        };
+
         // https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
