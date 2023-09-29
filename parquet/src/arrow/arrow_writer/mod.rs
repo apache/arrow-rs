@@ -18,7 +18,6 @@
 //! Contains writer which writes arrow data into parquet data.
 
 use bytes::Bytes;
-use std::fmt::Debug;
 use std::io::{Read, Write};
 use std::iter::Peekable;
 use std::slice::Iter;
@@ -49,7 +48,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ColumnChunkMetaData, KeyValue, RowGroupMetaDataPtr};
 use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::reader::{ChunkReader, Length};
-use crate::file::writer::SerializedFileWriter;
+use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use levels::{calculate_array_levels, ArrayLevels};
 
@@ -99,7 +98,7 @@ pub struct ArrowWriter<W: Write> {
     max_row_group_size: usize,
 }
 
-impl<W: Write + Send> Debug for ArrowWriter<W> {
+impl<W: Write + Send> std::fmt::Debug for ArrowWriter<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let buffered_memory = self.in_progress_size();
         f.debug_struct("ArrowWriter")
@@ -210,8 +209,8 @@ impl<W: Write + Send> ArrowWriter<W> {
         };
 
         let mut row_group_writer = self.writer.next_row_group()?;
-        for (chunk, close) in in_progress.close()? {
-            row_group_writer.append_column(&chunk, close)?;
+        for chunk in in_progress.close()? {
+            chunk.append_to_row_group(&mut row_group_writer)?;
         }
         row_group_writer.close()?;
         Ok(())
@@ -250,18 +249,18 @@ impl<W: Write + Send> RecordBatchWriter for ArrowWriter<W> {
 
 /// A single column chunk produced by [`ArrowColumnWriter`]
 #[derive(Default)]
-pub struct ArrowColumnChunk {
+struct ArrowColumnChunkData {
     length: usize,
     data: Vec<Bytes>,
 }
 
-impl Length for ArrowColumnChunk {
+impl Length for ArrowColumnChunkData {
     fn len(&self) -> u64 {
         self.length as _
     }
 }
 
-impl ChunkReader for ArrowColumnChunk {
+impl ChunkReader for ArrowColumnChunkData {
     type T = ArrowColumnChunkReader;
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
@@ -276,8 +275,8 @@ impl ChunkReader for ArrowColumnChunk {
     }
 }
 
-/// A [`Read`] for [`ArrowColumnChunk`]
-pub struct ArrowColumnChunkReader(Peekable<IntoIter<Bytes>>);
+/// A [`Read`] for [`ArrowColumnChunkData`]
+struct ArrowColumnChunkReader(Peekable<IntoIter<Bytes>>);
 
 impl Read for ArrowColumnChunkReader {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
@@ -299,11 +298,11 @@ impl Read for ArrowColumnChunkReader {
     }
 }
 
-/// A shared [`ArrowColumnChunk`]
+/// A shared [`ArrowColumnChunkData`]
 ///
 /// This allows it to be owned by [`ArrowPageWriter`] whilst allowing access via
 /// [`ArrowRowGroupWriter`] on flush, without requiring self-referential borrows
-type SharedColumnChunk = Arc<Mutex<ArrowColumnChunk>>;
+type SharedColumnChunk = Arc<Mutex<ArrowColumnChunkData>>;
 
 #[derive(Default)]
 struct ArrowPageWriter {
@@ -350,6 +349,7 @@ impl PageWriter for ArrowPageWriter {
 }
 
 /// A leaf column that can be encoded by [`ArrowColumnWriter`]
+#[derive(Debug)]
 pub struct ArrowLeafColumn(ArrayLevels);
 
 /// Computes the [`ArrowLeafColumn`] for a potentially nested [`ArrayRef`]
@@ -358,7 +358,31 @@ pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafCo
     Ok(levels.into_iter().map(ArrowLeafColumn).collect())
 }
 
-/// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunk`]
+/// The data for a single column chunk, see [`ArrowColumnWriter`]
+pub struct ArrowColumnChunk {
+    data: ArrowColumnChunkData,
+    close: ColumnCloseResult,
+}
+
+impl std::fmt::Debug for ArrowColumnChunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArrowColumnChunk")
+            .field("length", &self.data.length)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ArrowColumnChunk {
+    /// Calls [`SerializedRowGroupWriter::append_column`] with this column's data
+    pub fn append_to_row_group<W: Write + Send>(
+        self,
+        writer: &mut SerializedRowGroupWriter<'_, W>,
+    ) -> Result<()> {
+        writer.append_column(&self.data, self.close)
+    }
+}
+
+/// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunkData`]
 ///
 /// Note: This is a low-level interface for applications that require fine-grained control
 /// of encoding, see [`ArrowWriter`] for a higher-level interface
@@ -426,8 +450,8 @@ pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafCo
 /// // Finish up parallel column encoding
 /// for (handle, send) in workers {
 ///     drop(send); // Drop send side to signal termination
-///     let (chunk, result) = handle.join().unwrap().unwrap();
-///     row_group.append_column(&chunk, result).unwrap();
+///     let chunk = handle.join().unwrap().unwrap();
+///     chunk.append_to_row_group(&mut row_group).unwrap();
 /// }
 /// row_group.close().unwrap();
 ///
@@ -437,6 +461,12 @@ pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafCo
 pub struct ArrowColumnWriter {
     writer: ArrowColumnWriterImpl,
     chunk: SharedColumnChunk,
+}
+
+impl std::fmt::Debug for ArrowColumnWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArrowColumnWriter").finish_non_exhaustive()
+    }
 }
 
 enum ArrowColumnWriterImpl {
@@ -458,14 +488,15 @@ impl ArrowColumnWriter {
         Ok(())
     }
 
-    /// Close this column returning the [`ArrowColumnChunk`] and [`ColumnCloseResult`]
-    pub fn close(self) -> Result<(ArrowColumnChunk, ColumnCloseResult)> {
-        let result = match self.writer {
+    /// Close this column returning the written [`ArrowColumnChunk`]
+    pub fn close(self) -> Result<ArrowColumnChunk> {
+        let close = match self.writer {
             ArrowColumnWriterImpl::ByteArray(c) => c.close()?,
             ArrowColumnWriterImpl::Column(c) => c.close()?,
         };
         let chunk = Arc::try_unwrap(self.chunk).ok().unwrap();
-        Ok((chunk.into_inner().unwrap(), result))
+        let data = chunk.into_inner().unwrap();
+        Ok(ArrowColumnChunk { data, close })
     }
 
     /// Returns the estimated total bytes for this column writer
@@ -509,7 +540,7 @@ impl ArrowRowGroupWriter {
         Ok(())
     }
 
-    fn close(self) -> Result<Vec<(ArrowColumnChunk, ColumnCloseResult)>> {
+    fn close(self) -> Result<Vec<ArrowColumnChunk>> {
         self.writers
             .into_iter()
             .map(|writer| writer.close())
