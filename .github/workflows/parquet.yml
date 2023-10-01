@@ -124,7 +124,7 @@ jobs:
         with:
           target: wasm32-unknown-unknown,wasm32-wasi
       - name: Install clang # Needed for zlib compilation
-        run: apt-get update && apt-get install -y clang
+        run: apt-get update && apt-get install -y clang gcc-multilib
       - name: Build wasm32-unknown-unknown
         run: cargo build -p parquet --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
