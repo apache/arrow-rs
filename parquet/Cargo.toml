@@ -168,5 +168,10 @@ name = "arrow_reader"
 required-features = ["arrow", "test_common", "experimental"]
 harness = false
 
+[[bench]]
+name = "compression"
+required-features = ["experimental", "default"]
+harness = false
+
 [lib]
 bench = false
