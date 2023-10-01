@@ -39,6 +39,7 @@ on:
       - arrow-integration-test/**
       - arrow-ipc/**
       - arrow-json/**
+      - arrow-avro/**
       - arrow-ord/**
       - arrow-row/**
       - arrow-schema/**
@@ -78,6 +79,8 @@ jobs:
         run: cargo test -p arrow-csv --all-features
       - name: Test arrow-json with all features
         run: cargo test -p arrow-json --all-features
+      - name: Test arrow-avro with all features
+        run: cargo test -p arrow-avro --all-features
       - name: Test arrow-string with all features
         run: cargo test -p arrow-string --all-features
       - name: Test arrow-ord with all features
@@ -202,6 +205,8 @@ jobs:
         run: cargo clippy -p arrow-csv --all-targets --all-features -- -D warnings
       - name: Clippy arrow-json with all features
         run: cargo clippy -p arrow-json --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-avro with all features
+        run: cargo clippy -p arrow-avro --all-targets --all-features -- -D warnings
       - name: Clippy arrow-string with all features
         run: cargo clippy -p arrow-string --all-targets --all-features -- -D warnings
       - name: Clippy arrow-ord with all features

@@ -15,34 +15,31 @@
 # specific language governing permissions and limitations
 # under the License.
 
-arrow:
-  - arrow-arith/**/*
-  - arrow-array/**/*
-  - arrow-buffer/**/*
-  - arrow-cast/**/*
-  - arrow-csv/**/*
-  - arrow-data/**/*
-  - arrow-flight/**/*
-  - arrow-integration-test/**/*
-  - arrow-integration-testing/**/*
-  - arrow-ipc/**/*
-  - arrow-json/**/*
-  - arrow-avro/**/*
-  - arrow-ord/**/*
-  - arrow-row/**/*
-  - arrow-schema/**/*
-  - arrow-select/**/*
-  - arrow-string/**/*
-  - arrow/**/*
+[package]
+name = "arrow-avro"
+version = { workspace = true }
+description = "Support for parsing Avro format into the Arrow format"
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+include = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
 
-arrow-flight:
-  - arrow-flight/**/*
+[lib]
+name = "arrow_avro"
+path = "src/lib.rs"
+bench = false
 
-parquet:
-  - parquet/**/*
+[dependencies]
+arrow-array = { workspace = true  }
+arrow-buffer = { workspace = true  }
+arrow-cast = { workspace = true  }
+arrow-data = { workspace = true  }
+arrow-schema = { workspace = true  }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
 
-parquet-derive:
-  - parquet_derive/**/*
+[dev-dependencies]
 
-object-store:
-  - object_store/**/*

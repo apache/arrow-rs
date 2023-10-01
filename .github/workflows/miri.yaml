@@ -36,6 +36,7 @@ on:
       - arrow-data/**
       - arrow-ipc/**
       - arrow-json/**
+      - arrow-avro/**
       - arrow-schema/**
       - arrow-select/**
       - arrow-string/**

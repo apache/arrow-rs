@@ -40,6 +40,7 @@ on:
       - arrow-ipc/**
       - arrow-csv/**
       - arrow-json/**
+      - arrow-avro/**
       - parquet/**
       - .github/**
 

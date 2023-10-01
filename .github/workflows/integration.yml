@@ -38,6 +38,7 @@ on:
       - arrow-integration-testing/**
       - arrow-ipc/**
       - arrow-json/**
+      - arrow-avro/**
       - arrow-ord/**
       - arrow-pyarrow-integration-testing/**
       - arrow-schema/**
