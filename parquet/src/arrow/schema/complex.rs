@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::arrow::schema::primitive::convert_primitive;
-use crate::arrow::ProjectionMask;
+use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
@@ -550,7 +550,16 @@ fn convert_field(
 
             field.with_metadata(hint.metadata().clone())
         }
-        None => Field::new(name, data_type, nullable),
+        None => {
+            let mut ret = Field::new(name, data_type, nullable);
+            let basic_info = parquet_type.get_basic_info();
+            if basic_info.has_id() {
+                let mut meta = HashMap::with_capacity(1);
+                meta.insert(PARQUET_FIELD_ID_META_KEY.to_string(), basic_info.id().to_string());
+                ret.set_metadata(meta);
+            }
+            ret
+        },
     }
 }
 
