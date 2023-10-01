@@ -123,6 +123,8 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           target: wasm32-unknown-unknown,wasm32-wasi
+      - name: Install clang # Needed for zlib compilation
+        run: apt-get update && apt-get install clang
       - name: Build wasm32-unknown-unknown
         run: cargo build -p parquet --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
