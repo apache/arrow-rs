@@ -124,9 +124,9 @@ jobs:
         with:
           target: wasm32-unknown-unknown,wasm32-wasi
       - name: Build wasm32-unknown-unknown
-        run: cargo build -p parquet --no-default-features --features cli,snap,flate2,brotli --target wasm32-unknown-unknown
+        run: cargo build -p parquet --target wasm32-unknown-unknown
       - name: Build wasm32-wasi
-        run: cargo build -p parquet --no-default-features --features cli,snap,flate2,brotli --target wasm32-wasi
+        run: cargo build -p parquet --target wasm32-wasi
 
   pyspark-integration-test:
     name: PySpark Integration Test

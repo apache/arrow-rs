@@ -386,9 +386,6 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
         Compression::BROTLI(_) => {
             Box::new(brotli::Decompressor::new(input_file, 0)) as Box<dyn Read>
         }
-        Compression::LZ4 => Box::new(lz4::Decoder::new(input_file).map_err(|e| {
-            ParquetFromCsvError::with_context(e, "Failed to create lz4::Decoder")
-        })?) as Box<dyn Read>,
         Compression::ZSTD(_) => Box::new(zstd::Decoder::new(input_file).map_err(|e| {
             ParquetFromCsvError::with_context(e, "Failed to create zstd::Decoder")
         })?) as Box<dyn Read>,
@@ -691,21 +688,6 @@ mod tests {
                 write_tmp_file(&mut encoder);
                 encoder.into_inner()
             }
-            Compression::LZ4 => {
-                let mut encoder = lz4::EncoderBuilder::new()
-                    .build(input_file)
-                    .map_err(|e| {
-                        ParquetFromCsvError::with_context(
-                            e,
-                            "Failed to create lz4::Encoder",
-                        )
-                    })
-                    .unwrap();
-                write_tmp_file(&mut encoder);
-                let (inner, err) = encoder.finish();
-                err.unwrap();
-                inner
-            }
 
             Compression::ZSTD(level) => {
                 let mut encoder =
@@ -758,7 +740,6 @@ mod tests {
         test_convert_compressed_csv_to_parquet(Compression::BROTLI(
             BrotliLevel::try_new(2).unwrap(),
         ));
-        test_convert_compressed_csv_to_parquet(Compression::LZ4);
         test_convert_compressed_csv_to_parquet(Compression::ZSTD(
             ZstdLevel::try_new(1).unwrap(),
         ));
