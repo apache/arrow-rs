@@ -694,8 +694,7 @@ mod tests {
             Compression::LZ4 => {
                 let mut encoder = lz4_flex::frame::FrameEncoder::new(input_file);
                 write_tmp_file(&mut encoder);
-                let inner = encoder.finish().unwrap();
-                inner
+                encoder.finish().unwrap()
             }
 
             Compression::ZSTD(level) => {
