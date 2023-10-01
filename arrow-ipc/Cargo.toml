@@ -40,7 +40,7 @@ arrow-cast = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 flatbuffers = { version = "23.1.21", default-features = false }
-lz4_flex = { version = "0.11", default-features = false, features = ["std"], optional = true }
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.12.0", default-features = false, optional = true }
 
 [features]

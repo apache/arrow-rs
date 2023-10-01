@@ -148,12 +148,12 @@ impl CompressionCodec {
 
 #[cfg(feature = "lz4")]
 fn compress_lz4(input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
-    let capacity = lz4_flex::block::get_maximum_output_size(input.len());
-    let start = output.len();
-    output.resize(start + capacity, 0);
-    let compressed_len = lz4_flex::compress_into(input, &mut output[start..])
+    use std::io::Write;
+    let mut encoder = lz4_flex::frame::FrameEncoder::new(output);
+    encoder.write_all(input)?;
+    encoder
+        .finish()
         .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
-    output.truncate(start + compressed_len);
     Ok(())
 }
 
@@ -167,8 +167,10 @@ fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> 
 
 #[cfg(feature = "lz4")]
 fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
-    lz4_flex::decompress(input, decompressed_size)
-        .map_err(|e| ArrowError::ExternalError(Box::new(e)))
+    use std::io::Read;
+    let mut output = Vec::with_capacity(decompressed_size);
+    lz4_flex::frame::FrameDecoder::new(input).read_to_end(&mut output)?;
+    Ok(output)
 }
 
 #[cfg(not(feature = "lz4"))]

@@ -183,7 +183,8 @@ impl ArrowJson {
                         return Ok(false);
                     }
                 }
-                _ => return Ok(false),
+                Some(Err(e)) => return Err(e),
+                None => return Ok(false),
             }
         }
 
