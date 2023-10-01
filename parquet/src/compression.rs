@@ -383,6 +383,67 @@ impl BrotliLevel {
     }
 }
 
+#[cfg(any(feature = "lz4", test))]
+mod lz4_codec {
+    use std::io::{Read, Write};
+
+    use crate::compression::Codec;
+    use crate::errors::{ParquetError, Result};
+
+    const LZ4_BUFFER_SIZE: usize = 4096;
+
+    /// Codec for LZ4 compression algorithm.
+    pub struct LZ4Codec {}
+
+    impl LZ4Codec {
+        /// Creates new LZ4 compression codec.
+        pub(crate) fn new() -> Self {
+            Self {}
+        }
+    }
+
+    impl Codec for LZ4Codec {
+        fn decompress(
+            &mut self,
+            input_buf: &[u8],
+            output_buf: &mut Vec<u8>,
+            _uncompress_size: Option<usize>,
+        ) -> Result<usize> {
+            let mut decoder = lz4_flex::frame::FrameDecoder::new(input_buf);
+            let mut buffer: [u8; LZ4_BUFFER_SIZE] = [0; LZ4_BUFFER_SIZE];
+            let mut total_len = 0;
+            loop {
+                let len = decoder.read(&mut buffer)?;
+                if len == 0 {
+                    break;
+                }
+                total_len += len;
+                output_buf.write_all(&buffer[0..len])?;
+            }
+            Ok(total_len)
+        }
+
+        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+            let mut encoder = lz4_flex::frame::FrameEncoder::new(output_buf);
+            let mut from = 0;
+            loop {
+                let to = std::cmp::min(from + LZ4_BUFFER_SIZE, input_buf.len());
+                encoder.write_all(&input_buf[from..to])?;
+                from += LZ4_BUFFER_SIZE;
+                if from >= input_buf.len() {
+                    break;
+                }
+            }
+            match encoder.finish() {
+                Ok(_) => Ok(()),
+                Err(e) => Err(ParquetError::External(Box::new(e))),
+            }
+        }
+    }
+}
+#[cfg(any(feature = "lz4", test))]
+pub use lz4_codec::*;
+
 #[cfg(any(feature = "zstd", test))]
 mod zstd_codec {
     use std::io::{self, Write};
@@ -525,6 +586,7 @@ pub use lz4_raw_codec::*;
 
 #[cfg(any(feature = "lz4", test))]
 mod lz4_hadoop_codec {
+    use crate::compression::lz4_codec::LZ4Codec;
     use crate::compression::lz4_raw_codec::LZ4RawCodec;
     use crate::compression::Codec;
     use crate::errors::{ParquetError, Result};
@@ -646,23 +708,40 @@ mod lz4_hadoop_codec {
                 }
             };
             output_buf.resize(output_len + required_len, 0);
-            let output = &mut output_buf[output_len..];
-            let n = match try_decompress_hadoop(input_buf, output) {
-                Ok(n) => Ok(n),
+            match try_decompress_hadoop(input_buf, &mut output_buf[output_len..]) {
+                Ok(n) => {
+                    if n != required_len {
+                        return Err(ParquetError::General(
+                            "LZ4HadoopCodec uncompress_size is not the expected one"
+                                .into(),
+                        ));
+                    }
+                    Ok(n)
+                }
                 Err(e) if !self.backward_compatible_lz4 => Err(e.into()),
                 // Fallback done to be backward compatible with older versions of this
                 // library and older versions of parquet-cpp.
-                Err(_) => match lz4_flex::decompress_into(input_buf, output) {
-                    Ok(n) => Ok(n),
-                    Err(e) => Err(ParquetError::External(Box::new(e))),
-                },
-            }?;
-            if n != required_len {
-                return Err(ParquetError::General(
-                    "LZ4HadoopCodec uncompress_size is not the expected one".into(),
-                ));
+                Err(_) => {
+                    // Truncate any inserted element before tryingg next algorithm.
+                    output_buf.truncate(output_len);
+                    match LZ4Codec::new().decompress(
+                        input_buf,
+                        output_buf,
+                        uncompress_size,
+                    ) {
+                        Ok(n) => Ok(n),
+                        Err(_) => {
+                            // Truncate any inserted element before tryingg next algorithm.
+                            output_buf.truncate(output_len);
+                            LZ4RawCodec::new().decompress(
+                                input_buf,
+                                output_buf,
+                                uncompress_size,
+                            )
+                        }
+                    }
+                }
             }
-            Ok(n)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
