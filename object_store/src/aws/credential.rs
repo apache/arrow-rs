@@ -233,8 +233,12 @@ impl<'a> AwsAuthorizer<'a> {
             .append_pair("X-Amz-Expires", &expires_in.as_secs().to_string())
             .append_pair("X-Amz-SignedHeaders", "host");
 
-        // TODO: For S3, you must include the X-Amz-Security-Token query parameter in the URL if
+        // For S3, you must include the X-Amz-Security-Token query parameter in the URL if
         // using credentials sourced from the STS service.
+        if let Some(ref token) = self.credential.token {
+            url.query_pairs_mut()
+                .append_pair("X-Amz-Security-Token", token);
+        }
 
         // We don't have a payload; the user is going to send the payload directly themselves.
         let digest = UNSIGNED_PAYLOAD;
