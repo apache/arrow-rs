@@ -474,6 +474,7 @@ pub struct ColumnChunkMetaData {
     statistics: Option<Statistics>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
+    bloom_filter_length: Option<i32>,
     offset_index_offset: Option<i64>,
     offset_index_length: Option<i32>,
     column_index_offset: Option<i64>,
@@ -591,6 +592,11 @@ impl ColumnChunkMetaData {
         self.bloom_filter_offset
     }
 
+    /// Returns the offset for the bloom filter.
+    pub fn bloom_filter_length(&self) -> Option<i32> {
+        self.bloom_filter_length
+    }
+
     /// Returns the offset for the column index.
     pub fn column_index_offset(&self) -> Option<i64> {
         self.column_index_offset
@@ -657,6 +663,7 @@ impl ColumnChunkMetaData {
             })
             .transpose()?;
         let bloom_filter_offset = col_metadata.bloom_filter_offset;
+        let bloom_filter_length = col_metadata.bloom_filter_length;
         let offset_index_offset = cc.offset_index_offset;
         let offset_index_length = cc.offset_index_length;
         let column_index_offset = cc.column_index_offset;
@@ -677,6 +684,7 @@ impl ColumnChunkMetaData {
             statistics,
             encoding_stats,
             bloom_filter_offset,
+            bloom_filter_length,
             offset_index_offset,
             offset_index_length,
             column_index_offset,
@@ -722,6 +730,7 @@ impl ColumnChunkMetaData {
                 .as_ref()
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
+            bloom_filter_length: self.bloom_filter_length,
         }
     }
 
@@ -752,6 +761,7 @@ impl ColumnChunkMetaDataBuilder {
             statistics: None,
             encoding_stats: None,
             bloom_filter_offset: None,
+            bloom_filter_length: None,
             offset_index_offset: None,
             offset_index_length: None,
             column_index_offset: None,
@@ -834,6 +844,12 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets optional bloom filter offset in bytes.
     pub fn set_bloom_filter_offset(mut self, value: Option<i64>) -> Self {
         self.0.bloom_filter_offset = value;
+        self
+    }
+
+    /// Sets optional bloom filter length in bytes.
+    pub fn set_bloom_filter_length(mut self, value: Option<i32>) -> Self {
+        self.0.bloom_filter_length = value;
         self
     }
 
@@ -1053,6 +1069,7 @@ mod tests {
                 },
             ])
             .set_bloom_filter_offset(Some(6000))
+            .set_bloom_filter_length(Some(25))
             .set_offset_index_offset(Some(7000))
             .set_offset_index_length(Some(25))
             .set_column_index_offset(Some(8000))

@@ -267,12 +267,19 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                     Some(bloom_filter) => {
                         let start_offset = self.buf.bytes_written();
                         bloom_filter.write(&mut self.buf)?;
+                        let end_offset = self.buf.bytes_written();
                         // set offset and index for bloom filter
                         column_chunk
                             .meta_data
                             .as_mut()
                             .expect("can't have bloom filter without column metadata")
                             .bloom_filter_offset = Some(start_offset as i64);
+                        column_chunk
+                            .meta_data
+                            .as_mut()
+                            .expect("can't have bloom filter without column metadata")
+                            .bloom_filter_length =
+                            Some((end_offset - start_offset) as i32)
                     }
                     None => {}
                 }
