@@ -135,13 +135,12 @@ pub struct Sbbf(Vec<Block>);
 
 const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
 
-/// given an initial offset, and a [ChunkReader], try to read out a bloom filter header and return
+/// given an initial offset, and a byte buffer, try to read out a bloom filter header and return
 /// both the header and the offset after it (for bitset).
-fn chunk_read_bloom_filter_header_and_offset<R: ChunkReader>(
+fn chunk_read_bloom_filter_header_and_offset(
     offset: u64,
-    reader: Arc<R>,
+    buffer: Bytes,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
-    let buffer = reader.get_bytes(offset, SBBF_HEADER_SIZE_ESTIMATE)?;
     let (header, length) = read_bloom_filter_header_and_length(buffer)?;
     Ok((header, offset + length))
 }
@@ -271,8 +270,13 @@ impl Sbbf {
             return Ok(None);
         };
 
+        let buffer = match column_metadata.bloom_filter_length() {
+            Some(length) => reader.get_bytes(offset, length as usize),
+            None => reader.get_bytes(offset, SBBF_HEADER_SIZE_ESTIMATE),
+        }?;
+
         let (header, bitset_offset) =
-            chunk_read_bloom_filter_header_and_offset(offset, reader.clone())?;
+            chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
 
         match header.algorithm {
             BloomFilterAlgorithm::BLOCK(_) => {
@@ -289,11 +293,17 @@ impl Sbbf {
                 // this match exists to future proof the singleton hash enum
             }
         }
-        // length in bytes
-        let length: usize = header.num_bytes.try_into().map_err(|_| {
-            ParquetError::General("Bloom filter length is invalid".to_string())
-        })?;
-        let bitset = reader.get_bytes(bitset_offset, length)?;
+
+        let bitset = match column_metadata.bloom_filter_length() {
+            Some(_) => buffer.slice((bitset_offset - offset) as usize..),
+            None => {
+                let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
+                    ParquetError::General("Bloom filter length is invalid".to_string())
+                })?;
+                reader.get_bytes(bitset_offset, bitset_length)?
+            }
+        };
+
         Ok(Some(Self::new(&bitset)))
     }
 

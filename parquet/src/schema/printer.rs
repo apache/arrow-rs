@@ -167,6 +167,11 @@ fn print_column_chunk_metadata(
         Some(bfo) => bfo.to_string(),
     };
     writeln!(out, "bloom filter offset: {bloom_filter_offset_str}");
+    let bloom_filter_length_str = match cc_metadata.bloom_filter_length() {
+        None => "N/A".to_owned(),
+        Some(bfo) => bfo.to_string(),
+    };
+    writeln!(out, "bloom filter length: {bloom_filter_length_str}");
     let offset_index_offset_str = match cc_metadata.offset_index_offset() {
         None => "N/A".to_owned(),
         Some(oio) => oio.to_string(),
