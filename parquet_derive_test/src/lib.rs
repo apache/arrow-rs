@@ -150,7 +150,7 @@ mod tests {
             borrowed_maybe_borrowed_byte_vec: &borrowed_maybe_borrowed_byte_vec,
         }];
 
-        let generated_schema = drs.as_slice().schema().unwrap();
+        let generated_schema = drs.schema().unwrap();
 
         assert_eq!(&schema, &generated_schema);
 
@@ -159,7 +159,7 @@ mod tests {
             SerializedFileWriter::new(file, generated_schema, props).unwrap();
 
         let mut row_group = writer.next_row_group().unwrap();
-        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
+        drs.write_to_row_group(&mut row_group).unwrap();
         row_group.close().unwrap();
         writer.close().unwrap();
     }
@@ -200,7 +200,7 @@ mod tests {
             reader::FileReader, serialized_reader::SerializedFileReader,
         };
 
-        let generated_schema = drs.as_slice().schema().unwrap();
+        let generated_schema = drs.schema().unwrap();
 
         let props = Default::default();
         let mut writer =
@@ -208,16 +208,14 @@ mod tests {
                 .unwrap();
 
         let mut row_group = writer.next_row_group().unwrap();
-        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
+        drs.write_to_row_group(&mut row_group).unwrap();
         row_group.close().unwrap();
         writer.close().unwrap();
 
         let reader = SerializedFileReader::new(file).unwrap();
 
         let mut row_group = reader.get_row_group(0).unwrap();
-        out.as_mut_slice()
-            .read_from_row_group(&mut *row_group, 2)
-            .unwrap();
+        out.read_from_row_group(&mut *row_group, 2).unwrap();
 
         // correct for rounding error when writing milliseconds
         drs[0].now = chrono::naive::NaiveDateTime::from_timestamp_millis(
