@@ -252,10 +252,10 @@ impl Field {
         // generate the code to read the column into a vector `vals`
         let write_batch_expr = quote! {
             let mut vals_vec = Vec::new();
-            vals_vec.resize(max_records, Default::default());
+            vals_vec.resize(num_records, Default::default());
             let mut vals: &mut [#parquet_type] = vals_vec.as_mut_slice();
             if let #column_reader(mut typed) = column_reader {
-                typed.read_records(max_records, None, None, vals)?;
+                typed.read_records(num_records, None, None, vals)?;
             } else {
                 panic!("Schema and struct disagree on type for {}", stringify!{#ident});
             }
@@ -457,8 +457,7 @@ impl Field {
         };
 
         quote! {
-            let length = std::cmp::min(vals.len(), records.len());
-            for (i, r) in &mut records[..length].iter_mut().enumerate() {
+            for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
                 r.#field_name = #value;
             }
         }
@@ -891,15 +890,14 @@ mod test {
                    (quote!{
                         {
                             let mut vals_vec = Vec::new();
-                            vals_vec.resize(max_records, Default::default());
+                            vals_vec.resize(num_records, Default::default());
                             let mut vals: &mut[i64] = vals_vec.as_mut_slice();
                             if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
-                                typed.read_records(max_records, None, None, vals)?;
+                                typed.read_records(num_records, None, None, vals)?;
                             } else {
                                 panic!("Schema and struct disagree on type for {}", stringify!{ counter });
                             }
-                            let length = std::cmp::min(vals.len(), records.len());
-                            for (i, r) in &mut records[..length].iter_mut().enumerate() {
+                            for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
                                 r.counter = vals[i] as usize;
                             }
                         }
@@ -1270,15 +1268,14 @@ mod test {
         assert_eq!(when.reader_snippet().to_string(),(quote!{
             {
                 let mut vals_vec = Vec::new();
-                vals_vec.resize(max_records, Default::default());
+                vals_vec.resize(num_records, Default::default());
                 let mut vals: &mut[i64] = vals_vec.as_mut_slice();
                 if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
-                    typed.read_records(max_records, None, None, vals)?;
+                    typed.read_records(num_records, None, None, vals)?;
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
                 }
-                let length = std::cmp::min(vals.len(), records.len());
-                for (i, r) in &mut records[..length].iter_mut().enumerate() {
+                for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
                     r.henceforth = ::chrono::naive::NaiveDateTime::from_timestamp_millis(vals[i]).unwrap();
                 }
             }
@@ -1341,15 +1338,14 @@ mod test {
         assert_eq!(when.reader_snippet().to_string(),(quote!{
             {
                 let mut vals_vec = Vec::new();
-                vals_vec.resize(max_records, Default::default());
+                vals_vec.resize(num_records, Default::default());
                 let mut vals: &mut [i32] = vals_vec.as_mut_slice();
                 if let ColumnReader::Int32ColumnReader(mut typed) = column_reader {
-                    typed.read_records(max_records, None, None, vals)?;
+                    typed.read_records(num_records, None, None, vals)?;
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
                 }
-                let length = std::cmp::min(vals.len(), records.len());
-                for (i, r) in &mut records[..length].iter_mut().enumerate() {
+                for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
                     r.henceforth = ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i]
                         + ((::chrono::naive::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
                         .signed_duration_since(
@@ -1416,15 +1412,14 @@ mod test {
         assert_eq!(when.reader_snippet().to_string(),(quote!{
             {
                 let mut vals_vec = Vec::new();
-                vals_vec.resize(max_records, Default::default());
+                vals_vec.resize(num_records, Default::default());
                 let mut vals: &mut [::parquet::data_type::ByteArray] = vals_vec.as_mut_slice();
                 if let ColumnReader::ByteArrayColumnReader(mut typed) = column_reader {
-                    typed.read_records(max_records, None, None, vals)?;
+                    typed.read_records(num_records, None, None, vals)?;
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{ unique_id });
                 }
-                let length = std::cmp::min(vals.len(), records.len());
-                for (i, r) in &mut records[..length].iter_mut().enumerate() {
+                for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
                     r.unique_id = ::uuid::Uuid::parse_str(vals[i].data().convert()).unwrap();
                 }
             }

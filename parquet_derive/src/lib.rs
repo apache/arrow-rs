@@ -68,7 +68,7 @@ mod parquet_field;
 ///  let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
 ///
 ///  let mut row_group = writer.next_row_group().unwrap();
-///  samples.as_slice().write_to_row_group(&mut row_group).unwrap();
+///  samples.write_to_row_group(&mut row_group).unwrap();
 ///  writer.close_row_group(row_group).unwrap();
 ///  writer.close().unwrap();
 /// }
@@ -95,7 +95,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         field_infos.iter().map(|x| x.parquet_type()).collect();
 
     (quote! {
-    impl #generics ::parquet::record::RecordWriter<#derived_for #generics> for &[#derived_for #generics] {
+    impl #generics ::parquet::record::RecordWriter<#derived_for #generics> for Vec<#derived_for #generics> {
       fn write_to_row_group<W: ::std::io::Write + Send>(
         &self,
         row_group_writer: &mut ::parquet::file::writer::SerializedRowGroupWriter<'_, W>
@@ -168,7 +168,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
 ///
 ///   let reader = SerializedFileReader::new(file).unwrap();
 ///   let mut row_group = reader.get_row_group(0).unwrap();
-///   samples.as_mut_slice().read_from_row_group(&mut *row_group, 2).unwrap();
+///   samples.read_from_row_group(&mut *row_group, 2).unwrap();
 ///   samples
 /// }
 /// ```
@@ -191,7 +191,7 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
     let generics = input.generics;
 
     (quote! {
-    impl #generics ::parquet::record::RecordReader<#derived_for #generics> for &mut [#derived_for #generics] {
+    impl #generics ::parquet::record::RecordReader<#derived_for #generics> for Vec<#derived_for #generics> {
       fn read_from_row_group(
         &mut self,
         row_group_reader: &mut dyn ::parquet::file::reader::RowGroupReader,
@@ -201,6 +201,7 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
 
         let mut row_group_reader = row_group_reader;
         let records = self; // Used by all the reader snippets to be more clear
+        let num_records = std::cmp::min(max_records, records.len());
 
         #(
           {

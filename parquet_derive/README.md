@@ -71,7 +71,7 @@ let mut row_group = writer.next_row_group().unwrap();
 let chunks = vec![ACompleteRecord{...}];
 
 // The derived `RecordWriter` takes over here
-(&chunks[..]).write_to_row_group(&mut row_group);
+chunks.write_to_row_group(&mut row_group);
 
 writer.close_row_group(row_group).unwrap();
 writer.close().unwrap();
@@ -105,7 +105,7 @@ let mut row_group = reader.get_row_group(0).unwrap();
 let mut chunks = vec![ACompleteRecord{ ... }];
 
 // The derived `RecordReader` takes over here
-chunks.as_mut_slice().read_from_row_group(&mut *row_group, 2).unwrap();
+chunks.read_from_row_group(&mut *row_group, 2).unwrap();
 ```
 
 ## Features
