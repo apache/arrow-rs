@@ -227,7 +227,7 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
             let mut field_type_ids = Vec::with_capacity(fields.len());
             let mut children = Vec::with_capacity(fields.len());
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
-            let type_ids = take_native(values.type_ids(), indices);
+            let type_ids = take_native(values.type_ids(), indices).into_inner();
             for (type_id, field) in fields.iter() {
                 let values = values.child(type_id);
                 let values = take_impl(values, indices)?;
