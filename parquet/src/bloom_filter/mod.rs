@@ -296,7 +296,12 @@ impl Sbbf {
 
         let bitset = match column_metadata.bloom_filter_length() {
             Some(_) => buffer.slice((bitset_offset - offset) as usize..),
-            None => reader.get_bytes(bitset_offset, header.num_bytes as usize)?,
+            None => {
+                let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
+                    ParquetError::General("Bloom filter length is invalid".to_string())
+                })?;
+                reader.get_bytes(bitset_offset, bitset_length)?
+            }
         };
 
         Ok(Some(Self::new(&bitset)))
