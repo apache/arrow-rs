@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Transfer data between the Arrow memory format and Avro
+/// An Avro schema
+pub enum AvroSchema {
 
-pub mod reader;
-pub mod schema;
+}
+
