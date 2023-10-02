@@ -203,7 +203,7 @@ impl TokenProvider for OAuthProvider {
 
         let claim_str = b64_encode_obj(&claims)?;
         let message = [self.jwt_header.as_ref(), claim_str.as_ref()].join(".");
-        let mut sig_bytes = vec![0; self.key_pair.public_modulus_len()];
+        let mut sig_bytes = vec![0; self.key_pair.public().modulus_len()];
         self.key_pair
             .sign(
                 &ring::signature::RSA_PKCS1_SHA256,
