@@ -20,13 +20,20 @@
 use crate::reader::vlq::VLQDecoder;
 use arrow_schema::ArrowError;
 
+/// A file data block
+///
+/// <https://avro.apache.org/docs/1.11.1/specification/#object-container-files>
 #[derive(Debug, Default)]
 pub struct Block {
+    /// The number of objects in this block
     pub count: usize,
+    /// The serialized objects within this block
     pub data: Vec<u8>,
+    /// The sync marker
     pub sync: [u8; 16],
 }
 
+/// A decoder for [`Block`]
 #[derive(Debug)]
 pub struct BlockDecoder {
     state: BlockDecoderState,
