@@ -15,9 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Decoder for [`Header`]
+
+use crate::reader::vlq::VLQDecoder;
 use crate::schema::Schema;
 use arrow_schema::ArrowError;
 
+#[derive(Debug)]
 enum HeaderDecoderState {
     /// Decoding the [`MAGIC`] prefix
     Magic,
@@ -44,7 +48,7 @@ enum HeaderDecoderState {
 pub struct Header {
     meta_offsets: Vec<usize>,
     meta_buf: Vec<u8>,
-    sync: u128,
+    sync: [u8; 16],
 }
 
 impl Header {
@@ -65,7 +69,7 @@ impl Header {
     }
 
     /// Returns the sync token for this file
-    pub fn sync(&self) -> u128 {
+    pub fn sync(&self) -> [u8; 16] {
         self.sync
     }
 }
@@ -74,18 +78,18 @@ impl Header {
 ///
 /// Unfortunately the avro file format does not encode the length of the header, and so it
 /// is necessary to provide a push-based decoder that can be used with streams
+#[derive(Debug)]
 pub struct HeaderDecoder {
     state: HeaderDecoderState,
+    vlq_decoder: VLQDecoder,
 
+    /// The end offsets of strings in `meta_buf`
     meta_offsets: Vec<usize>,
+    /// The raw binary data of the metadata map
     meta_buf: Vec<u8>,
 
     /// The decoded sync marker
     sync_marker: [u8; 16],
-
-    /// Scratch space for decoding VLQ integers
-    vlq_scratch: u64,
-    vlq_shift: u32,
 
     /// The number of remaining tuples in the current block
     tuples_remaining: usize,
@@ -100,8 +104,7 @@ impl Default for HeaderDecoder {
             meta_offsets: vec![],
             meta_buf: vec![],
             sync_marker: [0; 16],
-            vlq_scratch: 0,
-            vlq_shift: 0,
+            vlq_decoder: Default::default(),
             tuples_remaining: 0,
             bytes_remaining: MAGIC.len(),
         }
@@ -111,6 +114,7 @@ impl Default for HeaderDecoder {
 const MAGIC: &[u8; 4] = b"Obj\x01";
 
 impl HeaderDecoder {
+    /// Parse [`Header`] from `buf`, returning the number of bytes read
     pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, ArrowError> {
         let max_read = buf.len();
         while !buf.is_empty() {
@@ -127,12 +131,10 @@ impl HeaderDecoder {
                     buf = &buf[to_decode..];
                     if self.bytes_remaining == 0 {
                         self.state = HeaderDecoderState::BlockCount;
-                        self.vlq_scratch = 0;
-                        self.vlq_shift = 0;
                     }
                 }
                 HeaderDecoderState::BlockCount => {
-                    if let Some(block_count) = self.long(&mut buf) {
+                    if let Some(block_count) = self.vlq_decoder.long(&mut buf) {
                         match block_count.try_into() {
                             Ok(0) => {
                                 self.state = HeaderDecoderState::Sync;
@@ -150,7 +152,7 @@ impl HeaderDecoder {
                     }
                 }
                 HeaderDecoderState::BlockLen => {
-                    if self.long(&mut buf).is_some() {
+                    if self.vlq_decoder.long(&mut buf).is_some() {
                         self.state = HeaderDecoderState::KeyLen
                     }
                 }
@@ -180,13 +182,13 @@ impl HeaderDecoder {
                     }
                 }
                 HeaderDecoderState::KeyLen => {
-                    if let Some(len) = self.long(&mut buf) {
+                    if let Some(len) = self.vlq_decoder.long(&mut buf) {
                         self.bytes_remaining = len as _;
                         self.state = HeaderDecoderState::Key;
                     }
                 }
                 HeaderDecoderState::ValueLen => {
-                    if let Some(len) = self.long(&mut buf) {
+                    if let Some(len) = self.vlq_decoder.long(&mut buf) {
                         self.bytes_remaining = len as _;
                         self.state = HeaderDecoderState::Value;
                     }
@@ -196,6 +198,7 @@ impl HeaderDecoder {
                     let write = &mut self.sync_marker[16 - to_decode..];
                     write[..to_decode].copy_from_slice(&buf[..to_decode]);
                     self.bytes_remaining -= to_decode;
+                    buf = &buf[to_decode..];
                     if self.bytes_remaining == 0 {
                         self.state = HeaderDecoderState::Finished;
                     }
@@ -214,33 +217,18 @@ impl HeaderDecoder {
                 Some(Header {
                     meta_offsets: std::mem::take(&mut self.meta_offsets),
                     meta_buf: std::mem::take(&mut self.meta_buf),
-                    sync: u128::from_ne_bytes(self.sync_marker),
+                    sync: self.sync_marker,
                 })
             }
             _ => None,
         }
-    }
-
-    /// Decode a signed long from `buf`
-    fn long(&mut self, buf: &mut &[u8]) -> Option<i64> {
-        while let Some(byte) = buf.first().copied() {
-            *buf = &buf[1..];
-            self.vlq_scratch |= ((byte & 0x7F) as u64) << self.vlq_shift;
-            self.vlq_shift += 7;
-            if byte & 0x80 == 0 {
-                let val = self.vlq_scratch;
-                self.vlq_scratch = 0;
-                self.vlq_shift = 0;
-                return Some((val >> 1) as i64 ^ -((val & 1) as i64));
-            }
-        }
-        None
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::reader::read_header;
     use crate::schema::SCHEMA_METADATA_KEY;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
@@ -261,32 +249,27 @@ mod test {
         assert_eq!(err, "Parser error: Incorrect avro magic");
     }
 
-    fn read_header(file: &str) -> Header {
+    fn decode_file(file: &str) -> Header {
         let file = File::open(file).unwrap();
-
-        let mut decoder = HeaderDecoder::default();
-        let mut buf_reader = BufReader::with_capacity(100, file);
-        loop {
-            let buf = buf_reader.fill_buf().unwrap();
-            let decoded = decoder.decode(buf).unwrap();
-            buf_reader.consume(decoded);
-            if decoded == 0 {
-                break;
-            }
-        }
-        decoder.flush().unwrap()
+        read_header(BufReader::with_capacity(100, file)).unwrap()
     }
 
     #[test]
     fn test_header() {
-        let header = read_header("../testing/data/avro/alltypes_plain.avro");
+        let header = decode_file("../testing/data/avro/alltypes_plain.avro");
         let schema_json = header.get(SCHEMA_METADATA_KEY).unwrap();
         let _schema: Schema<'_> = serde_json::from_slice(schema_json).unwrap();
-        assert_eq!(header.sync(), 226966037233754408753420635932530907102);
+        assert_eq!(
+            u128::from_le_bytes(header.sync()),
+            226966037233754408753420635932530907102
+        );
 
-        let header = read_header("../testing/data/avro/fixed_length_decimal.avro");
+        let header = decode_file("../testing/data/avro/fixed_length_decimal.avro");
         let schema_json = header.get(SCHEMA_METADATA_KEY).unwrap();
         let _schema: Schema<'_> = serde_json::from_slice(schema_json).unwrap();
-        assert_eq!(header.sync(), 325166208089902833952788552656412487328);
+        assert_eq!(
+            u128::from_le_bytes(header.sync()),
+            325166208089902833952788552656412487328
+        );
     }
 }
