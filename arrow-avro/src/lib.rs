@@ -17,5 +17,9 @@
 
 //! Transfer data between the Arrow memory format and Avro
 
+#![allow(unused)] // Temporary
+
 pub mod reader;
-pub mod schema;
+mod schema;
+
+mod compression;
