@@ -65,7 +65,7 @@ To compile and view in the browser, run `cargo doc --no-deps --open`.
 To generate the parquet format (thrift definitions) code run from the repository root run
 
 ```
-$ docker run -v $(pwd):/thrift/src -it archlinux pacman -Sy --noconfirm thrift  && wget https://raw.githubusercontent.com/apache/parquet-format/apache-parquet-format-2.9.0/src/main/thrift/parquet.thrift -O /tmp/parquet.thrift && thrift --gen rs /tmp/parquet.thrift && sed -i '/use thrift::server::TProcessor;/d' parquet.rs && mv parquet.rs parquet/src/format.rs
+$ docker run -v $(pwd):/thrift/src -it archlinux pacman -Sy --noconfirm thrift  && wget https://raw.githubusercontent.com/apache/parquet-format/master/src/main/thrift/parquet.thrift -O /tmp/parquet.thrift && thrift --gen rs /tmp/parquet.thrift && sed -i '/use thrift::server::TProcessor;/d' parquet.rs && sed -i 's/impl TSerializable for/impl crate::thrift::TSerializable for/g' parquet.rs && sed -i 's/fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol)/fn write_to_out_protocol<T: TOutputProtocol>(\&self, o_prot: \&mut T)/g' parquet.rs && sed -i 's/fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol)/fn read_from_in_protocol<T: TInputProtocol>(i_prot: \&mut T)/g' parquet.rs && mv parquet.rs parquet/src/format.rs
 ```
 
 You may need to manually patch up doc comments that contain unescaped `[]`

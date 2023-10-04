@@ -173,5 +173,10 @@ name = "compression"
 required-features = ["experimental", "default"]
 harness = false
 
+
+[[bench]]
+name = "metadata"
+harness = false
+
 [lib]
 bench = false

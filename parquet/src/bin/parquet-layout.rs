@@ -38,12 +38,13 @@ use std::io::Read;
 
 use clap::Parser;
 use serde::Serialize;
-use thrift::protocol::{TCompactInputProtocol, TSerializable};
+use thrift::protocol::TCompactInputProtocol;
 
 use parquet::basic::{Compression, Encoding};
 use parquet::errors::Result;
 use parquet::file::reader::ChunkReader;
 use parquet::format::PageHeader;
+use parquet::thrift::TSerializable;
 
 #[derive(Serialize, Debug)]
 struct ParquetFile {

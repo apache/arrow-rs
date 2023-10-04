@@ -17,7 +17,7 @@
 
 use crate::arrow::async_reader::AsyncFileReader;
 use crate::errors::{ParquetError, Result};
-use crate::file::footer::{decode_footer, read_metadata};
+use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{
@@ -27,7 +27,6 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use std::future::Future;
-use std::io::Read;
 use std::ops::Range;
 
 /// A data source that can be used with [`MetadataLoader`] to load [`ParquetMetaData`]
@@ -95,16 +94,14 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         let (metadata, remainder) = if length > suffix_len - 8 {
             let metadata_start = file_size - length - 8;
-            let remaining_metadata = fetch.fetch(metadata_start..footer_start).await?;
-
-            let reader = remaining_metadata.as_ref().chain(&suffix[..suffix_len - 8]);
-            (read_metadata(reader)?, None)
+            let meta = fetch.fetch(metadata_start..file_size - 8).await?;
+            (decode_metadata(&meta)?, None)
         } else {
             let metadata_start = file_size - length - 8 - footer_start;
 
             let slice = &suffix[metadata_start..suffix_len - 8];
             (
-                read_metadata(slice)?,
+                decode_metadata(slice)?,
                 Some((footer_start, suffix.slice(..metadata_start))),
             )
         };
