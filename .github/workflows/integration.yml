@@ -87,6 +87,10 @@ jobs:
         with:
           path: rust
           fetch-depth: 0
+      - name: Install pythonnet
+        run: conda run --no-capture-output pip install pythonnet
+      - name: Install archery
+        run: conda run --no-capture-output pip install -e dev/archery[integration]
       - name: Make build directory
         run: mkdir /build
       - name: Build Rust
@@ -101,8 +105,6 @@ jobs:
         run: conda run --no-capture-output ci/scripts/java_build.sh $PWD /build
       - name: Build JS
         run: conda run --no-capture-output ci/scripts/js_build.sh $PWD /build
-      - name: Install archery
-        run: conda run --no-capture-output pip install -e dev/archery
       - name: Run integration tests
         run: |
           conda run --no-capture-output archery integration \
