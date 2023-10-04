@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Transfer data between the Arrow memory format and Avro
+//! Convert data to / from the [Apache Arrow] memory format and [Apache Avro]
+//!
+//! [Apache Arrow]: https://arrow.apache.org
+//! [Apache Avro]: https://avro.apache.org/
 
 #![allow(unused)] // Temporary
 

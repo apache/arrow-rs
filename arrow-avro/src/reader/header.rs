@@ -76,7 +76,7 @@ impl Header {
 
 /// A decoder for [`Header`]
 ///
-/// Unfortunately the avro file format does not encode the length of the header, and so it
+/// The avro file format does not encode the length of the header, and so it
 /// is necessary to provide a push-based decoder that can be used with streams
 #[derive(Debug)]
 pub struct HeaderDecoder {
