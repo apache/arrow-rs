@@ -64,6 +64,17 @@ impl Default for BlockDecoder {
 
 impl BlockDecoder {
     /// Parse [`Block`] from `buf`, returning the number of bytes read
+    ///
+    /// This method can be called multiple times with consecutive chunks of data, allowing
+    /// integration with chunked IO systems like [`BufRead::fill_buf`]
+    ///
+    /// All errors should be considered fatal, and decoding aborted
+    ///
+    /// Once an entire [`Block`] has been decoded this method will not read any further
+    /// input bytes, until [`Self::flush`] is called. Afterwards [`Self::decode`]
+    /// can then be used again to read the next block, if any
+    ///
+    /// [`BufRead::fill_buf`]: std::io::BufRead::fill_buf
     pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, ArrowError> {
         let max_read = buf.len();
         while !buf.is_empty() {

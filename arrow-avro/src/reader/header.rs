@@ -115,6 +115,16 @@ const MAGIC: &[u8; 4] = b"Obj\x01";
 
 impl HeaderDecoder {
     /// Parse [`Header`] from `buf`, returning the number of bytes read
+    ///
+    /// This method can be called multiple times with consecutive chunks of data, allowing
+    /// integration with chunked IO systems like [`BufRead::fill_buf`]
+    ///
+    /// All errors should be considered fatal, and decoding aborted
+    ///
+    /// Once the entire [`Header`] has been decoded this method will not read any further
+    /// input bytes, and the header can be obtained with [`Self::flush`]
+    ///
+    /// [`BufRead::fill_buf`]: std::io::BufRead::fill_buf
     pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, ArrowError> {
         let max_read = buf.len();
         while !buf.is_empty() {
@@ -241,7 +251,7 @@ mod test {
         }
 
         let mut decoder = HeaderDecoder::default();
-        decoder.decode(MAGIC).unwrap();
+        assert_eq!(decoder.decode(MAGIC).unwrap(), 4);
 
         let mut decoder = HeaderDecoder::default();
         decoder.decode(b"Ob").unwrap();
@@ -258,6 +268,8 @@ mod test {
     fn test_header() {
         let header = decode_file("../testing/data/avro/alltypes_plain.avro");
         let schema_json = header.get(SCHEMA_METADATA_KEY).unwrap();
+        let expected = br#"{"type":"record","name":"topLevelRecord","fields":[{"name":"id","type":["int","null"]},{"name":"bool_col","type":["boolean","null"]},{"name":"tinyint_col","type":["int","null"]},{"name":"smallint_col","type":["int","null"]},{"name":"int_col","type":["int","null"]},{"name":"bigint_col","type":["long","null"]},{"name":"float_col","type":["float","null"]},{"name":"double_col","type":["double","null"]},{"name":"date_string_col","type":["bytes","null"]},{"name":"string_col","type":["bytes","null"]},{"name":"timestamp_col","type":[{"type":"long","logicalType":"timestamp-micros"},"null"]}]}"#;
+        assert_eq!(schema_json, expected);
         let _schema: Schema<'_> = serde_json::from_slice(schema_json).unwrap();
         assert_eq!(
             u128::from_le_bytes(header.sync()),
@@ -266,6 +278,8 @@ mod test {
 
         let header = decode_file("../testing/data/avro/fixed_length_decimal.avro");
         let schema_json = header.get(SCHEMA_METADATA_KEY).unwrap();
+        let expected = br#"{"type":"record","name":"topLevelRecord","fields":[{"name":"value","type":[{"type":"fixed","name":"fixed","namespace":"topLevelRecord.value","size":11,"logicalType":"decimal","precision":25,"scale":2},"null"]}]}"#;
+        assert_eq!(schema_json, expected);
         let _schema: Schema<'_> = serde_json::from_slice(schema_json).unwrap();
         assert_eq!(
             u128::from_le_bytes(header.sync()),

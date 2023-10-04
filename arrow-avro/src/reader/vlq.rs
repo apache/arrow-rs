@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Decoder for zig-zag encoded VLQ integers
+/// Decoder for zig-zag encoded variable length (VLW) integers
 ///
+/// See also:
+/// <https://avro.apache.org/docs/1.11.1/specification/#primitive-types-1>
 /// <https://protobuf.dev/programming-guides/encoding/#varints>
 #[derive(Debug, Default)]
 pub struct VLQDecoder {
