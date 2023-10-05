@@ -61,6 +61,18 @@ where
     }
 }
 
+/// Logging CLI config.
+#[derive(Debug, Parser)]
+pub struct LoggingArgs {
+    /// Log verbosity.
+    #[clap(
+        short = 'v',
+        long = "verbose",
+        action = clap::ArgAction::Count,
+    )]
+    log_verbose_count: u8,
+}
+
 #[derive(Debug, Parser)]
 struct ClientArgs {
     /// Additional headers.
@@ -96,6 +108,10 @@ struct ClientArgs {
 
 #[derive(Debug, Parser)]
 struct Args {
+    /// Logging args.
+    #[clap(flatten)]
+    logging_args: LoggingArgs,
+
     /// Client args.
     #[clap(flatten)]
     client_args: ClientArgs,
@@ -119,7 +135,7 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    setup_logging()?;
+    setup_logging(args.logging_args)?;
     let mut client = setup_client(args.client_args)
         .await
         .context("setup client")?;
@@ -213,9 +229,22 @@ fn construct_record_batch_from_params(
     Ok(RecordBatch::try_from_iter(items)?)
 }
 
-fn setup_logging() -> Result<()> {
+fn setup_logging(args: LoggingArgs) -> Result<()> {
+    use tracing_subscriber::{util::SubscriberInitExt, EnvFilter, FmtSubscriber};
+
     tracing_log::LogTracer::init().context("tracing log init")?;
-    tracing_subscriber::fmt::init();
+
+    let filter = match args.log_verbose_count {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    let filter = EnvFilter::try_new(filter).context("set up log env filter")?;
+
+    let subscriber = FmtSubscriber::builder().with_env_filter(filter).finish();
+    subscriber.try_init().context("init logging subscriber")?;
+
     Ok(())
 }
 
