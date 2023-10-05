@@ -101,8 +101,8 @@ struct ACompleteRecord {
 let reader = SerializedFileReader::new(file).unwrap();
 let mut row_group = reader.get_row_group(0).unwrap();
 
-// create your records to read into
-let mut chunks = vec![ACompleteRecord{ ... }];
+// create your records vector to read into
+let mut chunks: Vec<ACompleteRecord> = Vec::new();
 
 // The derived `RecordReader` takes over here
 chunks.read_from_row_group(&mut *row_group, 1).unwrap();
