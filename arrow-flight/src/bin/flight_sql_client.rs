@@ -24,7 +24,10 @@ use arrow_flight::{sql::client::FlightSqlServiceClient, FlightInfo};
 use arrow_schema::Schema;
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use tonic::{
+    metadata::MetadataMap,
+    transport::{Channel, ClientTlsConfig, Endpoint},
+};
 use tracing_log::log::info;
 
 /// A ':' separated key value pair
@@ -192,12 +195,19 @@ async fn execute_flight(
         let Some(ticket) = &endpoint.ticket else {
             panic!("did not get ticket");
         };
-        let flight_data = client.do_get(ticket.clone()).await.context("do get")?;
-        let mut endpoint_batches: Vec<_> = flight_data
+
+        let mut flight_data = client.do_get(ticket.clone()).await.context("do get")?;
+        log_metadata(flight_data.headers(), "header");
+
+        let mut endpoint_batches: Vec<_> = (&mut flight_data)
             .try_collect()
             .await
             .context("collect data stream")?;
         batches.append(&mut endpoint_batches);
+
+        if let Some(trailers) = flight_data.trailers() {
+            log_metadata(&trailers, "trailer");
+        }
     }
     info!("received data");
 
@@ -307,4 +317,28 @@ fn parse_key_val(
         .find('=')
         .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+}
+
+/// Log headers/trailers.
+fn log_metadata(map: &MetadataMap, what: &'static str) {
+    for k_v in map.iter() {
+        match k_v {
+            tonic::metadata::KeyAndValueRef::Ascii(k, v) => {
+                info!(
+                    "{}: {}={}",
+                    what,
+                    k.as_str(),
+                    v.to_str().unwrap_or("<invalid>"),
+                );
+            }
+            tonic::metadata::KeyAndValueRef::Binary(k, v) => {
+                info!(
+                    "{}: {}={}",
+                    what,
+                    k.as_str(),
+                    String::from_utf8_lossy(v.as_ref()),
+                );
+            }
+        }
+    }
 }
