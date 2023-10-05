@@ -115,7 +115,8 @@ pub type OnCloseRowGroup<'a> = Box<
             Vec<Option<ColumnIndex>>,
             Vec<Option<OffsetIndex>>,
         ) -> Result<()>
-        + 'a,
+        + 'a
+        + Send,
 >;
 
 // ----------------------------------------------------------------------
