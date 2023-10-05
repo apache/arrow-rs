@@ -72,6 +72,15 @@ impl InferredType {
 
         Ok(())
     }
+
+    fn is_none_or_any(ty: Option<&Self>) -> bool {
+        matches!(ty, Some(Self::Any) | None)
+    }
+}
+
+/// Shorthand for building list data type of `ty`
+fn list_type_of(ty: DataType) -> DataType {
+    DataType::List(Arc::new(Field::new("item", ty, true)))
 }
 
 /// Coerce data type during inference
@@ -84,23 +93,18 @@ fn coerce_data_type(dt: Vec<&DataType>) -> DataType {
     let dt_init = dt_iter.next().unwrap_or(DataType::Utf8);
 
     dt_iter.fold(dt_init, |l, r| match (l, r) {
+        (DataType::Null, o) | (o, DataType::Null) => o,
         (DataType::Boolean, DataType::Boolean) => DataType::Boolean,
         (DataType::Int64, DataType::Int64) => DataType::Int64,
         (DataType::Float64, DataType::Float64)
         | (DataType::Float64, DataType::Int64)
         | (DataType::Int64, DataType::Float64) => DataType::Float64,
-        (DataType::List(l), DataType::List(r)) => DataType::List(Arc::new(Field::new(
-            "item",
-            coerce_data_type(vec![l.data_type(), r.data_type()]),
-            true,
-        ))),
+        (DataType::List(l), DataType::List(r)) => {
+            list_type_of(coerce_data_type(vec![l.data_type(), r.data_type()]))
+        }
         // coerce scalar and scalar array into scalar array
         (DataType::List(e), not_list) | (not_list, DataType::List(e)) => {
-            DataType::List(Arc::new(Field::new(
-                "item",
-                coerce_data_type(vec![e.data_type(), &not_list]),
-                true,
-            )))
+            list_type_of(coerce_data_type(vec![e.data_type(), &not_list]))
         }
         _ => DataType::Utf8,
     })
@@ -110,11 +114,7 @@ fn generate_datatype(t: &InferredType) -> Result<DataType, ArrowError> {
     Ok(match t {
         InferredType::Scalar(hs) => coerce_data_type(hs.iter().collect()),
         InferredType::Object(spec) => DataType::Struct(generate_fields(spec)?),
-        InferredType::Array(ele_type) => DataType::List(Arc::new(Field::new(
-            "item",
-            generate_datatype(ele_type)?,
-            true,
-        ))),
+        InferredType::Array(ele_type) => list_type_of(generate_datatype(ele_type)?),
         InferredType::Any => DataType::Null,
     })
 }
@@ -277,7 +277,7 @@ fn set_object_scalar_field_type(
     key: &str,
     ftype: DataType,
 ) -> Result<(), ArrowError> {
-    if !field_types.contains_key(key) {
+    if InferredType::is_none_or_any(field_types.get(key)) {
         field_types.insert(key.to_string(), InferredType::Scalar(HashSet::new()));
     }
 
@@ -388,7 +388,7 @@ fn collect_field_types_from_object(
             Value::Array(array) => {
                 let ele_type = infer_array_element_type(array)?;
 
-                if !field_types.contains_key(k) {
+                if InferredType::is_none_or_any(field_types.get(k)) {
                     match ele_type {
                         InferredType::Scalar(_) => {
                             field_types.insert(
@@ -438,8 +438,11 @@ fn collect_field_types_from_object(
                 set_object_scalar_field_type(field_types, k, DataType::Boolean)?;
             }
             Value::Null => {
-                // do nothing, we treat json as nullable by default when
-                // inferring
+                // we treat json as nullable by default when inferring, so just
+                // mark existence of a field if it wasn't known before
+                if !field_types.contains_key(k) {
+                    field_types.insert(k.to_string(), InferredType::Any);
+                }
             }
             Value::Number(n) => {
                 if n.is_i64() {
@@ -520,21 +523,9 @@ mod tests {
     fn test_json_infer_schema() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int64, true),
-            Field::new(
-                "b",
-                DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
-                true,
-            ),
-            Field::new(
-                "c",
-                DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
-                true,
-            ),
-            Field::new(
-                "d",
-                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-                true,
-            ),
+            Field::new("b", list_type_of(DataType::Float64), true),
+            Field::new("c", list_type_of(DataType::Boolean), true),
+            Field::new("d", list_type_of(DataType::Utf8), true),
         ]);
 
         let mut reader =
@@ -589,22 +580,18 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new(
                 "c1",
-                DataType::List(Arc::new(Field::new(
-                    "item",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new("a", DataType::Utf8, true),
-                        Field::new("b", DataType::Int64, true),
-                        Field::new("c", DataType::Boolean, true),
-                    ])),
-                    true,
-                ))),
+                list_type_of(DataType::Struct(Fields::from(vec![
+                    Field::new("a", DataType::Utf8, true),
+                    Field::new("b", DataType::Int64, true),
+                    Field::new("c", DataType::Boolean, true),
+                ]))),
                 true,
             ),
             Field::new("c2", DataType::Float64, true),
             Field::new(
                 "c3",
                 // empty json array's inner types are inferred as null
-                DataType::List(Arc::new(Field::new("item", DataType::Null, true))),
+                list_type_of(DataType::Null),
                 true,
             ),
         ]);
@@ -629,15 +616,7 @@ mod tests {
     #[test]
     fn test_json_infer_schema_nested_list() {
         let schema = Schema::new(vec![
-            Field::new(
-                "c1",
-                DataType::List(Arc::new(Field::new(
-                    "item",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-                    true,
-                ))),
-                true,
-            ),
+            Field::new("c1", list_type_of(list_type_of(DataType::Utf8)), true),
             Field::new("c2", DataType::Float64, true),
         ]);
 
@@ -682,36 +661,22 @@ mod tests {
 
     #[test]
     fn test_coercion_scalar_and_list() {
-        use arrow_schema::DataType::*;
-
         assert_eq!(
-            List(Arc::new(Field::new("item", Float64, true))),
-            coerce_data_type(vec![
-                &Float64,
-                &List(Arc::new(Field::new("item", Float64, true)))
-            ])
+            list_type_of(DataType::Float64),
+            coerce_data_type(vec![&DataType::Float64, &list_type_of(DataType::Float64)])
         );
         assert_eq!(
-            List(Arc::new(Field::new("item", Float64, true))),
-            coerce_data_type(vec![
-                &Float64,
-                &List(Arc::new(Field::new("item", Int64, true)))
-            ])
+            list_type_of(DataType::Float64),
+            coerce_data_type(vec![&DataType::Float64, &list_type_of(DataType::Int64)])
         );
         assert_eq!(
-            List(Arc::new(Field::new("item", Int64, true))),
-            coerce_data_type(vec![
-                &Int64,
-                &List(Arc::new(Field::new("item", Int64, true)))
-            ])
+            list_type_of(DataType::Int64),
+            coerce_data_type(vec![&DataType::Int64, &list_type_of(DataType::Int64)])
         );
         // boolean and number are incompatible, return utf8
         assert_eq!(
-            List(Arc::new(Field::new("item", Utf8, true))),
-            coerce_data_type(vec![
-                &Boolean,
-                &List(Arc::new(Field::new("item", Float64, true)))
-            ])
+            list_type_of(DataType::Utf8),
+            coerce_data_type(vec![&DataType::Boolean, &list_type_of(DataType::Float64)])
         );
     }
 
@@ -722,5 +687,27 @@ mod tests {
             re.err().unwrap().to_string(),
             "Json error: Not valid JSON: expected value at line 1 column 1",
         );
+    }
+
+    #[test]
+    fn test_null_field_inferred_as_null() {
+        let data = r#"
+            {"in":1,    "ni":null, "ns":null, "sn":"4",  "n":null, "an":[],   "na": null, "nas":null}
+            {"in":null, "ni":2,    "ns":"3",  "sn":null, "n":null, "an":null, "na": [],   "nas":["8"]}
+            {"in":1,    "ni":null, "ns":null, "sn":"4",  "n":null, "an":[],   "na": null, "nas":[]}
+        "#;
+        let inferred_schema =
+            infer_json_schema_from_seekable(Cursor::new(data), None).expect("infer");
+        let schema = Schema::new(vec![
+            Field::new("an", list_type_of(DataType::Null), true),
+            Field::new("in", DataType::Int64, true),
+            Field::new("n", DataType::Null, true),
+            Field::new("na", list_type_of(DataType::Null), true),
+            Field::new("nas", list_type_of(DataType::Utf8), true),
+            Field::new("ni", DataType::Int64, true),
+            Field::new("ns", DataType::Utf8, true),
+            Field::new("sn", DataType::Utf8, true),
+        ]);
+        assert_eq!(inferred_schema, schema);
     }
 }
