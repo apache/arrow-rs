@@ -74,11 +74,7 @@ impl InferredType {
     }
 
     fn is_none_or_any(ty: Option<&Self>) -> bool {
-        match ty {
-            Some(Self::Any) => true,
-            None => true,
-            _ => false,
-        }
+        matches!(ty, Some(Self::Any) | None)
     }
 }
 
