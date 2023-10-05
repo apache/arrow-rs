@@ -193,19 +193,6 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
 
     (quote! {
 
-      use std::default;
-
-      impl Default for #derived_for {
-        fn default() -> Self {
-          Self {
-            #(
-              #field_names: Default::default()
-            ),*
-          }
-        }
-      }
-
-
     impl #generics ::parquet::record::RecordReader<#derived_for #generics> for Vec<#derived_for #generics> {
       fn read_from_row_group(
         &mut self,
@@ -218,7 +205,9 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
 
         for _ in 0..num_records {
           self.push(#derived_for {
-            ..Default::default()
+            #(
+              #field_names: Default::default()
+            ),*
           })
         }
 
