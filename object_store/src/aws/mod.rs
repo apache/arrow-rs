@@ -56,6 +56,7 @@ use crate::client::{
 };
 use crate::config::ConfigValue;
 use crate::multipart::{PartId, PutPart, WriteMultiPart};
+use crate::signer::Signer;
 use crate::{
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Path, Result, RetryConfig,
@@ -210,6 +211,14 @@ impl AmazonS3 {
         &self.client.config().credentials
     }
 
+    /// Create a full URL to the resource specified by `path` with this instance's configuration.
+    fn path_url(&self, path: &Path) -> String {
+        self.client.config().path_url(path)
+    }
+}
+
+#[async_trait]
+impl Signer for AmazonS3 {
     /// Create a URL containing the relevant [AWS SigV4] query parameters that authorize a request
     /// via `method` to the resource at `path` valid for the duration specified in `expires_in`.
     ///
@@ -222,8 +231,8 @@ impl AmazonS3 {
     ///
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use object_store::{aws::AmazonS3Builder, path::Path};
-    /// use reqwest::Method;
+    /// use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
+    /// use http::Method;
     /// use std::time::Duration;
     ///
     /// let region = "us-east-1";
@@ -242,7 +251,7 @@ impl AmazonS3 {
     /// #     Ok(())
     /// # }
     /// ```
-    pub async fn signed_url(
+    async fn signed_url(
         &self,
         method: Method,
         path: &Path,
@@ -259,11 +268,6 @@ impl AmazonS3 {
         authorizer.sign(method, &mut url, expires_in);
 
         Ok(url)
-    }
-
-    /// Create a full URL to the resource specified by `path` with this instance's configuration.
-    fn path_url(&self, path: &Path) -> String {
-        self.client.config().path_url(path)
     }
 }
 

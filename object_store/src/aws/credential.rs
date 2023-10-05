@@ -184,41 +184,7 @@ impl<'a> AwsAuthorizer<'a> {
         request.headers_mut().insert(AUTH_HEADER, authorization_val);
     }
 
-    /// Authorize a request via `method` to `url` valid for the duration specified in `expires_in`
-    /// by attaching the relevant [AWS SigV4] query parameters.
-    ///
-    /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
-    ///
-    /// # Example
-    ///
-    /// This example modifies `url` to add the signing parameters needed to enable a user to upload
-    /// a file to "some-folder/some-file.txt" in the next hour.
-    ///
-    /// ```
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use object_store::{aws::{AmazonS3Builder, AwsAuthorizer}, path::Path};
-    /// use reqwest::Method;
-    /// use std::time::Duration;
-    /// use url::Url;
-    ///
-    /// let region = "us-east-1";
-    /// let s3 = AmazonS3Builder::new()
-    ///     .with_region(region)
-    ///     .with_bucket_name("my-bucket")
-    ///     .with_access_key_id("my-access-key-id")
-    ///     .with_secret_access_key("my-secret-access-key")
-    ///     .build()?;
-    /// let credential = s3
-    ///     .credentials()
-    ///     .get_credential()
-    ///     .await?;
-    /// let authorizer = AwsAuthorizer::new(&credential, "s3", region);
-    /// let mut url = Url::parse(&s3.path_url(&Path::from("some-folder/some-file.txt")))?;
-    /// authorizer.sign(Method::PUT, &mut url, Duration::from_secs(60 * 60));
-    /// #     Ok(())
-    /// # }
-    /// ```
-    pub fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) {
+    pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) {
         let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
 
