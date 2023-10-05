@@ -20,10 +20,7 @@ use std::{error::Error, sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
 use arrow_cast::{cast_with_options, pretty::pretty_format_batches, CastOptions};
-use arrow_flight::{
-    sql::client::FlightSqlServiceClient, utils::flight_data_to_batches, FlightData,
-    FlightInfo,
-};
+use arrow_flight::{sql::client::FlightSqlServiceClient, FlightInfo};
 use arrow_schema::Schema;
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
@@ -196,12 +193,10 @@ async fn execute_flight(
             panic!("did not get ticket");
         };
         let flight_data = client.do_get(ticket.clone()).await.context("do get")?;
-        let flight_data: Vec<FlightData> = flight_data
+        let mut endpoint_batches: Vec<_> = flight_data
             .try_collect()
             .await
             .context("collect data stream")?;
-        let mut endpoint_batches = flight_data_to_batches(&flight_data)
-            .context("convert flight data to record batches")?;
         batches.append(&mut endpoint_batches);
     }
     info!("received data");

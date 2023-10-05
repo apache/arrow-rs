@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use tonic::metadata::AsciiMetadataKey;
 
+use crate::decode::FlightRecordBatchStream;
 use crate::encode::FlightDataEncoderBuilder;
 use crate::error::FlightError;
 use crate::flight_service_client::FlightServiceClient;
@@ -37,6 +38,7 @@ use crate::sql::{
     CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
     CommandStatementUpdate, DoPutUpdateResult, ProstMessageExt, SqlInfo,
 };
+use crate::trailers::extract_lazy_trailers;
 use crate::{
     Action, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest,
     HandshakeResponse, IpcMessage, PutResult, Ticket,
@@ -231,14 +233,22 @@ impl FlightSqlServiceClient<Channel> {
     pub async fn do_get(
         &mut self,
         ticket: impl IntoRequest<Ticket>,
-    ) -> Result<Streaming<FlightData>, ArrowError> {
+    ) -> Result<FlightRecordBatchStream, ArrowError> {
         let req = self.set_request_headers(ticket.into_request())?;
-        Ok(self
+
+        let (md, response_stream, _ext) = self
             .flight_client
             .do_get(req)
             .await
             .map_err(status_to_arrow_error)?
-            .into_inner())
+            .into_parts();
+        let (response_stream, trailers) = extract_lazy_trailers(response_stream);
+
+        Ok(FlightRecordBatchStream::new_from_flight_data(
+            response_stream.map_err(FlightError::Tonic),
+        )
+        .with_headers(md)
+        .with_trailers(trailers))
     }
 
     /// Push a stream to the flight service associated with a particular flight stream.
