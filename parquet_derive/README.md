@@ -105,7 +105,7 @@ let mut row_group = reader.get_row_group(0).unwrap();
 let mut chunks = vec![ACompleteRecord{ ... }];
 
 // The derived `RecordReader` takes over here
-chunks.read_from_row_group(&mut *row_group, 2).unwrap();
+chunks.read_from_row_group(&mut *row_group, 1).unwrap();
 ```
 
 ## Features

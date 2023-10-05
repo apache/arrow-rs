@@ -168,7 +168,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
 ///
 ///   let reader = SerializedFileReader::new(file).unwrap();
 ///   let mut row_group = reader.get_row_group(0).unwrap();
-///   samples.read_from_row_group(&mut *row_group, 2).unwrap();
+///   samples.read_from_row_group(&mut *row_group, 1).unwrap();
 ///   samples
 /// }
 /// ```
@@ -183,6 +183,7 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
     };
 
     let field_infos: Vec<_> = fields.iter().map(parquet_field::Field::from).collect();
+    let field_names: Vec<_> = fields.iter().map(|f| f.ident.clone()).collect();
     let reader_snippets: Vec<proc_macro2::TokenStream> =
         field_infos.iter().map(|x| x.reader_snippet()).collect();
     let i: Vec<_> = (0..reader_snippets.len()).collect();
@@ -191,17 +192,37 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
     let generics = input.generics;
 
     (quote! {
+
+      use std::default;
+
+      impl Default for #derived_for {
+        fn default() -> Self {
+          Self {
+            #(
+              #field_names: Default::default()
+            ),*
+          }
+        }
+      }
+
+
     impl #generics ::parquet::record::RecordReader<#derived_for #generics> for Vec<#derived_for #generics> {
       fn read_from_row_group(
         &mut self,
         row_group_reader: &mut dyn ::parquet::file::reader::RowGroupReader,
-        max_records: usize,
+        num_records: usize,
       ) -> Result<(), ::parquet::errors::ParquetError> {
         use ::parquet::column::reader::ColumnReader;
 
         let mut row_group_reader = row_group_reader;
+
+        for _ in 0..num_records {
+          self.push(#derived_for {
+            ..Default::default()
+          })
+        }
+
         let records = self; // Used by all the reader snippets to be more clear
-        let num_records = std::cmp::min(max_records, records.len());
 
         #(
           {

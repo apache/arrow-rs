@@ -182,19 +182,7 @@ mod tests {
             byte_vec: vec![0x65, 0x66, 0x67],
         }];
 
-        let mut out: Vec<APartiallyCompleteRecord> = vec![APartiallyCompleteRecord {
-            bool: false,
-            string: "a different string".into(),
-            i16: -450,
-            i32: 4560,
-            u64: 45634240,
-            isize: -3650,
-            float: 30.5,
-            double: 10.,
-            now: chrono::Utc::now().naive_local(),
-            date: chrono::naive::NaiveDate::from_ymd_opt(1982, 1, 27).unwrap(),
-            byte_vec: vec![0x17, 0x18, 0x19],
-        }];
+        let mut out: Vec<APartiallyCompleteRecord> = Vec::new();
 
         use parquet::file::{
             reader::FileReader, serialized_reader::SerializedFileReader,
@@ -215,7 +203,7 @@ mod tests {
         let reader = SerializedFileReader::new(file).unwrap();
 
         let mut row_group = reader.get_row_group(0).unwrap();
-        out.read_from_row_group(&mut *row_group, 2).unwrap();
+        out.read_from_row_group(&mut *row_group, 1).unwrap();
 
         // correct for rounding error when writing milliseconds
         drs[0].now = chrono::naive::NaiveDateTime::from_timestamp_millis(

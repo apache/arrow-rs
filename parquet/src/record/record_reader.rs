@@ -25,6 +25,6 @@ pub trait RecordReader<T> {
     fn read_from_row_group(
         &mut self,
         row_group_reader: &mut dyn RowGroupReader,
-        max_records: usize,
+        num_records: usize,
     ) -> Result<(), ParquetError>;
 }
