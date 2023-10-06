@@ -36,6 +36,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::bloom_filter::Sbbf;
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation,
     RowGroup, SortingColumn,
@@ -165,6 +166,16 @@ impl ParquetMetaData {
     pub(crate) fn set_offset_index(&mut self, index: Option<ParquetOffsetIndex>) {
         self.offset_index = index;
     }
+
+    /// Override the offset index
+    #[cfg(feature = "arrow")]
+    pub(crate) fn set_row_group_bloom_filter(
+        &mut self,
+        i: usize,
+        bloom_filters: Vec<Option<Sbbf>>,
+    ) {
+        self.row_groups[i].bloom_filters = Some(bloom_filters);
+    }
 }
 
 pub type KeyValue = crate::format::KeyValue;
@@ -272,7 +283,7 @@ impl FileMetaData {
 pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
 
 /// Metadata for a row group.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct RowGroupMetaData {
     columns: Vec<ColumnChunkMetaData>,
     num_rows: i64,
@@ -282,6 +293,7 @@ pub struct RowGroupMetaData {
     // We can't infer from file offset of first column since there may empty columns in row group.
     file_offset: Option<i64>,
     ordinal: Option<i16>,
+    bloom_filters: Option<Vec<Option<Sbbf>>>,
 }
 
 impl RowGroupMetaData {
@@ -313,6 +325,10 @@ impl RowGroupMetaData {
     /// Returns the sort ordering of the rows in this RowGroup if any
     pub fn sorting_columns(&self) -> Option<&Vec<SortingColumn>> {
         self.sorting_columns.as_ref()
+    }
+
+    pub fn bloom_filters(&self) -> Option<&Vec<Option<Sbbf>>> {
+        self.bloom_filters.as_ref()
     }
 
     /// Total byte size of all uncompressed column data in this row group.
@@ -369,6 +385,7 @@ impl RowGroupMetaData {
             schema_descr,
             file_offset: rg.file_offset,
             ordinal: rg.ordinal,
+            bloom_filters: None,
         })
     }
 
@@ -405,6 +422,7 @@ impl RowGroupMetaDataBuilder {
             sorting_columns: None,
             total_byte_size: 0,
             ordinal: None,
+            bloom_filters: None,
         })
     }
 

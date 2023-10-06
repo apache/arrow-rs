@@ -16,12 +16,19 @@
 // under the License.
 
 use crate::arrow::async_reader::AsyncFileReader;
+use crate::bloom_filter::{
+    read_bloom_filter_header_and_length, Sbbf, SBBF_HEADER_SIZE_ESTIMATE,
+};
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, read_metadata};
+use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{
     acc_range, decode_column_index, decode_offset_index,
+};
+use crate::format::{
+    BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash,
 };
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -205,6 +212,75 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         }
 
         Ok(())
+    }
+
+    pub async fn load_bloom_filter(&mut self) -> Result<()> {
+        let mut rg_bloom_fliter = Vec::with_capacity(self.metadata.num_row_groups());
+        let row_groups = self
+            .metadata
+            .row_groups()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        for rg_metadata in row_groups.iter() {
+            let mut bloom_filters = Vec::with_capacity(rg_metadata.num_columns());
+            for column in rg_metadata.columns().iter() {
+                let bf = self.load_row_group_bloom_filter(column).await?;
+                bloom_filters.push(bf);
+            }
+            rg_bloom_fliter.push(bloom_filters);
+        }
+        for (i, bloom_filter) in rg_bloom_fliter.into_iter().enumerate() {
+            self.metadata.set_row_group_bloom_filter(i, bloom_filter);
+        }
+        Ok(())
+    }
+
+    async fn load_row_group_bloom_filter(
+        &mut self,
+        column_metadata: &ColumnChunkMetaData,
+    ) -> Result<Option<Sbbf>, ParquetError> {
+        let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
+            offset.try_into().map_err(|_| {
+                ParquetError::General("Bloom filter offset is invalid".to_string())
+            })?
+        } else {
+            return Ok(None);
+        };
+
+        // let (header, bitset_offset) = chunk_read_bloom_filter_header_and_offset(offset, reader.clone())?;
+
+        let buffer = self
+            .fetch
+            .fetch(offset as usize..offset as usize + SBBF_HEADER_SIZE_ESTIMATE)
+            .await?;
+        let (header, length) = read_bloom_filter_header_and_length(buffer)?;
+        let (header, bitset_offset) = (header, offset + length);
+
+        match header.algorithm {
+            BloomFilterAlgorithm::BLOCK(_) => {
+                // this match exists to future proof the singleton algorithm enum
+            }
+        }
+        match header.compression {
+            BloomFilterCompression::UNCOMPRESSED(_) => {
+                // this match exists to future proof the singleton compression enum
+            }
+        }
+        match header.hash {
+            BloomFilterHash::XXHASH(_) => {
+                // this match exists to future proof the singleton hash enum
+            }
+        }
+        // length in bytes
+        let length: usize = header.num_bytes.try_into().map_err(|_| {
+            ParquetError::General("Bloom filter length is invalid".to_string())
+        })?;
+        let bitset = self
+            .fetch
+            .fetch(bitset_offset as usize..bitset_offset as usize + length)
+            .await?;
+        Ok(Some(Sbbf::new(&bitset)))
     }
 
     /// Returns the finished [`ParquetMetaData`]

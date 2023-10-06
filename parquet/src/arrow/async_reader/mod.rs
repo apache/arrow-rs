@@ -223,6 +223,11 @@ impl ArrowReaderMetadata {
             let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
             let mut loader = MetadataLoader::new(input, m);
             loader.load_page_index(true, true).await?;
+
+            if options.bloom_filter {
+                loader.load_bloom_filter().await?;
+            } 
+
             metadata = Arc::new(loader.finish())
         }
         Self::try_new(metadata, options)

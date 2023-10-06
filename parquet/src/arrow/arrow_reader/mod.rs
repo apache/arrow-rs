@@ -191,6 +191,7 @@ impl<T> ArrowReaderBuilder<T> {
 pub struct ArrowReaderOptions {
     skip_arrow_metadata: bool,
     pub(crate) page_index: bool,
+    pub(crate) bloom_filter: bool,
 }
 
 impl ArrowReaderOptions {
@@ -218,6 +219,13 @@ impl ArrowReaderOptions {
     /// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
+    }
+
+    pub fn with_bloom_filter(self, bloom_filter: bool) -> Self {
+        Self {
+            bloom_filter,
+            ..self
+        }
     }
 }
 
