@@ -989,7 +989,7 @@ impl<'a> Eq for Row<'a> {}
 impl<'a> PartialOrd for Row<'a> {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.data.partial_cmp(other.data)
+        Some(self.cmp(other))
     }
 }
 
@@ -1049,7 +1049,7 @@ impl Eq for OwnedRow {}
 impl PartialOrd for OwnedRow {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.row().partial_cmp(&other.row())
+        Some(self.cmp(other))
     }
 }
 

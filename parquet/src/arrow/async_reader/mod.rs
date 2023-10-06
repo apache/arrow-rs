@@ -625,27 +625,27 @@ impl<'a> InMemoryRowGroup<'a> {
                 .iter()
                 .zip(self.metadata.columns())
                 .enumerate()
-                .filter_map(|(idx, (chunk, chunk_meta))| {
-                    (chunk.is_none() && projection.leaf_included(idx)).then(|| {
-                        // If the first page does not start at the beginning of the column,
-                        // then we need to also fetch a dictionary page.
-                        let mut ranges = vec![];
-                        let (start, _len) = chunk_meta.byte_range();
-                        match page_locations[idx].first() {
-                            Some(first) if first.offset as u64 != start => {
-                                ranges.push(start as usize..first.offset as usize);
-                            }
-                            _ => (),
-                        }
-
-                        ranges.extend(selection.scan_ranges(&page_locations[idx]));
-                        page_start_offsets
-                            .push(ranges.iter().map(|range| range.start).collect());
-
-                        ranges
-                    })
+                .filter(|&(idx, (chunk, _chunk_meta))| {
+                    chunk.is_none() && projection.leaf_included(idx)
                 })
-                .flatten()
+                .flat_map(|(idx, (_chunk, chunk_meta))| {
+                    // If the first page does not start at the beginning of the column,
+                    // then we need to also fetch a dictionary page.
+                    let mut ranges = vec![];
+                    let (start, _len) = chunk_meta.byte_range();
+                    match page_locations[idx].first() {
+                        Some(first) if first.offset as u64 != start => {
+                            ranges.push(start as usize..first.offset as usize);
+                        }
+                        _ => (),
+                    }
+
+                    ranges.extend(selection.scan_ranges(&page_locations[idx]));
+                    page_start_offsets
+                        .push(ranges.iter().map(|range| range.start).collect());
+
+                    ranges
+                })
                 .collect();
 
             let mut chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
@@ -673,12 +673,11 @@ impl<'a> InMemoryRowGroup<'a> {
                 .column_chunks
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, chunk)| {
-                    (chunk.is_none() && projection.leaf_included(idx)).then(|| {
-                        let column = self.metadata.column(idx);
-                        let (start, length) = column.byte_range();
-                        start as usize..(start + length) as usize
-                    })
+                .filter(|&(idx, chunk)| chunk.is_none() && projection.leaf_included(idx))
+                .map(|(idx, _chunk)| {
+                    let column = self.metadata.column(idx);
+                    let (start, length) = column.byte_range();
+                    start as usize..(start + length) as usize
                 })
                 .collect();
 
