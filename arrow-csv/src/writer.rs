@@ -335,6 +335,10 @@ impl WriterBuilder {
                 .unwrap_or_else(|| DEFAULT_NULL_VALUE.to_string()),
         }
     }
+
+    pub fn get_has_headers(&self) -> bool {
+        self.has_headers
+    }
 }
 
 #[cfg(test)]
