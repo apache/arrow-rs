@@ -372,7 +372,7 @@ struct ListResultInternal {
 }
 
 fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<ListResult> {
-    let prefix = prefix.map(Path::from).unwrap_or_else(Path::default);
+    let prefix = prefix.map(Path::from).unwrap_or_default();
     let common_prefixes = value
         .blobs
         .blob_prefix

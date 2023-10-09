@@ -193,11 +193,11 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
         (None, ConvertedType::NONE) => Ok(DataType::Int64),
         (
             Some(LogicalType::Integer {
-                bit_width,
+                bit_width: 64,
                 is_signed,
             }),
             _,
-        ) if bit_width == 64 => match is_signed {
+        ) => match is_signed {
             true => Ok(DataType::Int64),
             false => Ok(DataType::UInt64),
         },

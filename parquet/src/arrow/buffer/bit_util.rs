@@ -84,7 +84,7 @@ mod tests {
             .iter()
             .enumerate()
             .rev()
-            .filter_map(|(x, y)| y.then(|| x))
+            .filter_map(|(x, y)| y.then_some(x))
             .collect();
         assert_eq!(actual, expected);
 
