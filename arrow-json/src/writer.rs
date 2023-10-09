@@ -1338,11 +1338,7 @@ mod tests {
 
         let batch = reader.next().unwrap().unwrap();
 
-        let list_row = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap();
+        let list_row = batch.column(0).as_list::<i32>();
         let values = list_row.values();
         assert_eq!(values.len(), 4);
         assert_eq!(values.null_count(), 1);
