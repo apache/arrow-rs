@@ -18,4 +18,4 @@
 -->
 
 # Examples
-- [`csv_calculation.rs`](csv_calculation.rs): simple use the csv API to calcuate.
+- [`csv_calculation.rs`](csv_calculation.rs): performs a simple calculation using the CSV reader

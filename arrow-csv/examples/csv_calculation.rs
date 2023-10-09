@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::Int16Array;
+use arrow_array::cast::AsArray;
+use arrow_array::types::Int16Type;
 use arrow_csv::ReaderBuilder;
 
 use arrow_schema::{DataType, Field, Schema};
@@ -37,19 +38,12 @@ fn main() {
         .unwrap();
 
     match reader.next() {
-        Some(e) => match e {
-            Ok(s) => {
+        Some(r) => match r {
+            Ok(r) => {
                 // get the column(0) max value
-                println!(
-                    "max value column(0): {:?}",
-                    s.column(0)
-                        .as_any()
-                        .downcast_ref::<Int16Array>()
-                        .unwrap()
-                        .iter()
-                        .max()
-                        .unwrap()
-                );
+                let col = r.column(0).as_primitive::<Int16Type>();
+                let max = col.iter().max().flatten();
+                println!("max value column(0): {max:?}")
             }
             Err(e) => {
                 println!("{e:?}");
