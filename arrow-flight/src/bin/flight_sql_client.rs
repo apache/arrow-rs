@@ -17,7 +17,7 @@
 
 use std::{error::Error, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
 use arrow_cast::{cast_with_options, pretty::pretty_format_batches, CastOptions};
 use arrow_flight::{sql::client::FlightSqlServiceClient, FlightInfo};
@@ -65,6 +65,10 @@ where
 #[derive(Debug, Parser)]
 pub struct LoggingArgs {
     /// Log verbosity.
+    ///
+    /// Use `-v for warn, `-vv for info, -vvv for debug, -vvvv for trace.
+    ///
+    /// Note you can also set logging level using `RUST_LOG` environment variable: `RUST_LOG=debug`
     #[clap(
         short = 'v',
         long = "verbose",
@@ -193,7 +197,7 @@ async fn execute_flight(
 
     for endpoint in info.endpoint {
         let Some(ticket) = &endpoint.ticket else {
-            panic!("did not get ticket");
+            bail!("did not get ticket");
         };
 
         let mut flight_data = client.do_get(ticket.clone()).await.context("do get")?;
@@ -299,10 +303,10 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
             info!("performed handshake");
         }
         (Some(_), None) => {
-            panic!("when username is set, you also need to set a password")
+            bail!("when username is set, you also need to set a password")
         }
         (None, Some(_)) => {
-            panic!("when password is set, you also need to set a username")
+            bail!("when password is set, you also need to set a username")
         }
     }
 
