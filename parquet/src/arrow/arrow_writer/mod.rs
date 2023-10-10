@@ -23,7 +23,7 @@ use std::iter::Peekable;
 use std::slice::Iter;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
-use thrift::protocol::{TCompactOutputProtocol, TSerializable};
+use thrift::protocol::TCompactOutputProtocol;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -50,6 +50,7 @@ use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
+use crate::thrift::TSerializable;
 use levels::{calculate_array_levels, ArrayLevels};
 
 mod byte_array;

@@ -26,13 +26,12 @@ use crate::format::{
     BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, BloomFilterHeader,
     SplitBlockAlgorithm, Uncompressed, XxHash,
 };
-use bytes::{Buf, Bytes};
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+use bytes::Bytes;
 use std::hash::Hasher;
 use std::io::Write;
 use std::sync::Arc;
-use thrift::protocol::{
-    TCompactInputProtocol, TCompactOutputProtocol, TOutputProtocol, TSerializable,
-};
+use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
 use twox_hash::XxHash64;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).
@@ -152,15 +151,11 @@ fn read_bloom_filter_header_and_length(
     buffer: Bytes,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
     let total_length = buffer.len();
-    let mut buf_reader = buffer.reader();
-    let mut prot = TCompactInputProtocol::new(&mut buf_reader);
+    let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
     let header = BloomFilterHeader::read_from_in_protocol(&mut prot).map_err(|e| {
         ParquetError::General(format!("Could not read bloom filter header: {e}"))
     })?;
-    Ok((
-        header,
-        (total_length - buf_reader.into_inner().remaining()) as u64,
-    ))
+    Ok((header, (total_length - prot.as_slice().len()) as u64))
 }
 
 pub(crate) const BITSET_MIN_LENGTH: usize = 32;

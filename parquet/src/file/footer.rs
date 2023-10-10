@@ -18,7 +18,7 @@
 use std::{io::Read, sync::Arc};
 
 use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
-use thrift::protocol::{TCompactInputProtocol, TSerializable};
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
 use crate::basic::ColumnOrder;
 
@@ -62,18 +62,13 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
     }
 
     let start = file_size - footer_metadata_len as u64;
-    read_metadata(chunk_reader.get_read(start)?)
+    decode_metadata(chunk_reader.get_bytes(start, metadata_len)?.as_ref())
 }
 
 /// Decodes [`ParquetMetaData`] from the provided bytes
-pub fn decode_metadata(metadata_read: &[u8]) -> Result<ParquetMetaData> {
-    read_metadata(metadata_read)
-}
-
-/// Decodes [`ParquetMetaData`] from the provided [`Read`]
-pub(crate) fn read_metadata<R: Read>(read: R) -> Result<ParquetMetaData> {
+pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
     // TODO: row group filtering
-    let mut prot = TCompactInputProtocol::new(read);
+    let mut prot = TCompactSliceInputProtocol::new(buf);
     let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not parse metadata: {e}")))?;
     let schema = types::from_thrift(&t_file_metadata.schema)?;

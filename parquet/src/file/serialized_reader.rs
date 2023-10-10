@@ -19,7 +19,6 @@
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
 use std::collections::VecDeque;
-use std::io::Cursor;
 use std::iter;
 use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
@@ -40,8 +39,9 @@ use crate::format::{PageHeader, PageLocation, PageType};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use crate::util::memory::ByteBufferPtr;
-use thrift::protocol::{TCompactInputProtocol, TSerializable};
+use thrift::protocol::TCompactInputProtocol;
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -661,11 +661,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
 
-                    let mut cursor = Cursor::new(buffer.as_ref());
-                    let header = read_page_header(&mut cursor)?;
-                    let offset = cursor.position();
+                    let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
+                    let header = PageHeader::read_from_in_protocol(&mut prot)?;
+                    let offset = buffer.len() - prot.as_slice().len();
 
-                    let bytes = buffer.slice(offset as usize..);
+                    let bytes = buffer.slice(offset..);
                     decode_page(
                         header,
                         bytes.into(),
