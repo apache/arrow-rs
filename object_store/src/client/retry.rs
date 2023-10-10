@@ -39,8 +39,8 @@ pub enum Error {
         body: Option<String>,
     },
 
-    #[snafu(display("Response error after {retries} retries: {source}"))]
-    Response {
+    #[snafu(display("Error after {retries} retries: {source}"))]
+    Reqwest {
         retries: usize,
         source: reqwest::Error,
     },
@@ -52,7 +52,7 @@ impl Error {
         match self {
             Self::BareRedirect => None,
             Self::Client { status, .. } => Some(*status),
-            Self::Response { source, .. } => source.status(),
+            Self::Reqwest { source, .. } => source.status(),
         }
     }
 
@@ -61,7 +61,7 @@ impl Error {
         match self {
             Self::Client { body, .. } => body.as_deref(),
             Self::BareRedirect => None,
-            Self::Response { .. } => None,
+            Self::Reqwest { .. } => None,
         }
     }
 
@@ -99,10 +99,10 @@ impl From<Error> for std::io::Error {
                 status: StatusCode::BAD_REQUEST,
                 ..
             } => Self::new(ErrorKind::InvalidInput, err),
-            Error::Response { source, .. } if source.is_timeout() => {
+            Error::Reqwest { source, .. } if source.is_timeout() => {
                 Self::new(ErrorKind::TimedOut, err)
             }
-            Error::Response { source, .. } if source.is_connect() => {
+            Error::Reqwest { source, .. } if source.is_connect() => {
                 Self::new(ErrorKind::NotConnected, err)
             }
             _ => Self::new(ErrorKind::Other, err),
@@ -208,13 +208,13 @@ impl RetryExt for reqwest::RequestBuilder {
                                             }
                                         }
                                         Err(e) => {
-                                            Error::Response {
+                                            Error::Reqwest {
                                                 retries,
                                                 source: e,
                                             }
                                         }
                                     }
-                                    false => Error::Response {
+                                    false => Error::Reqwest {
                                         retries,
                                         source: e,
                                     }
@@ -223,7 +223,7 @@ impl RetryExt for reqwest::RequestBuilder {
 
                             let sleep = backoff.next();
                             retries += 1;
-                            info!("Encountered response error, backing off for {} seconds, retry {} of {}", sleep.as_secs_f32(), retries, max_retries);
+                            info!("Encountered server error, backing off for {} seconds, retry {} of {}", sleep.as_secs_f32(), retries, max_retries);
                             tokio::time::sleep(sleep).await;
                         }
                     },
@@ -242,7 +242,7 @@ impl RetryExt for reqwest::RequestBuilder {
                             || now.elapsed() > retry_timeout
                             || !do_retry {
 
-                            return Err(Error::Response {
+                            return Err(Error::Reqwest {
                                 retries,
                                 source: e,
                             })
@@ -403,7 +403,7 @@ mod tests {
         }
 
         let e = do_request().await.unwrap_err().to_string();
-        assert!(e.starts_with("Response error after 2 retries: HTTP status server error (502 Bad Gateway) for url"), "{e}");
+        assert!(e.starts_with("Error after 2 retries: HTTP status server error (502 Bad Gateway) for url"), "{e}");
 
         // Panic results in an incomplete message error in the client
         mock.push_fn(|_| panic!());
@@ -416,9 +416,7 @@ mod tests {
         }
         let e = do_request().await.unwrap_err().to_string();
         assert!(
-            e.starts_with(
-                "Response error after 2 retries: error sending request for url"
-            ),
+            e.starts_with("Error after 2 retries: error sending request for url"),
             "{e}"
         );
 
