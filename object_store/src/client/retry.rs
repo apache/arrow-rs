@@ -415,7 +415,12 @@ mod tests {
             mock.push_fn(|_| panic!());
         }
         let e = do_request().await.unwrap_err().to_string();
-        assert!(e.starts_with("Response error after 2 retries: error sending request for url"), "{e}");
+        assert!(
+            e.starts_with(
+                "Response error after 2 retries: error sending request for url"
+            ),
+            "{e}"
+        );
 
         // Shutdown
         mock.shutdown().await
