@@ -44,5 +44,33 @@ that demonstrate how to build a Flight server implemented with [tonic](https://d
 ## Feature Flags
 
 - `flight-sql-experimental`: Enables experimental support for
-  [Apache Arrow FlightSQL](https://arrow.apache.org/docs/format/FlightSql.html),
-  a protocol for interacting with SQL databases.
+  [Apache Arrow FlightSQL], a protocol for interacting with SQL databases.
+
+## CLI
+
+This crates offers a basic [Apache Arrow FlightSQL] command line interface.
+
+The client can be installed from the repository:
+
+```console
+$ cargo install --features=cli,flight-sql-experimental,tls --bin=flight_sql_client --path=. --locked
+```
+
+The client comes with extensive help text:
+
+```console
+$ flight_sql_client help
+```
+
+A query can be executed using:
+
+```console
+$ flight_sql_client --host example.com statement-query "SELECT 1;"
++----------+
+| Int64(1) |
++----------+
+| 1        |
++----------+
+```
+
+[apache arrow flightsql]: https://arrow.apache.org/docs/format/FlightSql.html
