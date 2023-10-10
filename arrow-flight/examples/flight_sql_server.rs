@@ -789,7 +789,6 @@ mod tests {
 
     use arrow_cast::pretty::pretty_format_batches;
     use arrow_flight::sql::client::FlightSqlServiceClient;
-    use arrow_flight::utils::flight_data_to_batches;
     use tonic::transport::server::TcpIncoming;
     use tonic::transport::{Certificate, Endpoint};
     use tower::service_fn;
@@ -955,8 +954,7 @@ mod tests {
 
             let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
             let flight_data = client.do_get(ticket).await.unwrap();
-            let flight_data: Vec<FlightData> = flight_data.try_collect().await.unwrap();
-            let batches = flight_data_to_batches(&flight_data).unwrap();
+            let batches: Vec<_> = flight_data.try_collect().await.unwrap();
 
             let res = pretty_format_batches(batches.as_slice()).unwrap();
             let expected = r#"

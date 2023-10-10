@@ -17,17 +17,17 @@
 
 use std::{error::Error, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
 use arrow_cast::{cast_with_options, pretty::pretty_format_batches, CastOptions};
-use arrow_flight::{
-    sql::client::FlightSqlServiceClient, utils::flight_data_to_batches, FlightData,
-    FlightInfo,
-};
+use arrow_flight::{sql::client::FlightSqlServiceClient, FlightInfo};
 use arrow_schema::Schema;
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use tonic::{
+    metadata::MetadataMap,
+    transport::{Channel, ClientTlsConfig, Endpoint},
+};
 use tracing_log::log::info;
 
 /// A ':' separated key value pair
@@ -59,6 +59,22 @@ where
             )),
         }
     }
+}
+
+/// Logging CLI config.
+#[derive(Debug, Parser)]
+pub struct LoggingArgs {
+    /// Log verbosity.
+    ///
+    /// Use `-v for warn, `-vv for info, -vvv for debug, -vvvv for trace.
+    ///
+    /// Note you can also set logging level using `RUST_LOG` environment variable: `RUST_LOG=debug`
+    #[clap(
+        short = 'v',
+        long = "verbose",
+        action = clap::ArgAction::Count,
+    )]
+    log_verbose_count: u8,
 }
 
 #[derive(Debug, Parser)]
@@ -96,6 +112,10 @@ struct ClientArgs {
 
 #[derive(Debug, Parser)]
 struct Args {
+    /// Logging args.
+    #[clap(flatten)]
+    logging_args: LoggingArgs,
+
     /// Client args.
     #[clap(flatten)]
     client_args: ClientArgs,
@@ -119,7 +139,7 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    setup_logging()?;
+    setup_logging(args.logging_args)?;
     let mut client = setup_client(args.client_args)
         .await
         .context("setup client")?;
@@ -177,16 +197,21 @@ async fn execute_flight(
 
     for endpoint in info.endpoint {
         let Some(ticket) = &endpoint.ticket else {
-            panic!("did not get ticket");
+            bail!("did not get ticket");
         };
-        let flight_data = client.do_get(ticket.clone()).await.context("do get")?;
-        let flight_data: Vec<FlightData> = flight_data
+
+        let mut flight_data = client.do_get(ticket.clone()).await.context("do get")?;
+        log_metadata(flight_data.headers(), "header");
+
+        let mut endpoint_batches: Vec<_> = (&mut flight_data)
             .try_collect()
             .await
             .context("collect data stream")?;
-        let mut endpoint_batches = flight_data_to_batches(&flight_data)
-            .context("convert flight data to record batches")?;
         batches.append(&mut endpoint_batches);
+
+        if let Some(trailers) = flight_data.trailers() {
+            log_metadata(&trailers, "trailer");
+        }
     }
     info!("received data");
 
@@ -213,9 +238,22 @@ fn construct_record_batch_from_params(
     Ok(RecordBatch::try_from_iter(items)?)
 }
 
-fn setup_logging() -> Result<()> {
+fn setup_logging(args: LoggingArgs) -> Result<()> {
+    use tracing_subscriber::{util::SubscriberInitExt, EnvFilter, FmtSubscriber};
+
     tracing_log::LogTracer::init().context("tracing log init")?;
-    tracing_subscriber::fmt::init();
+
+    let filter = match args.log_verbose_count {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    let filter = EnvFilter::try_new(filter).context("set up log env filter")?;
+
+    let subscriber = FmtSubscriber::builder().with_env_filter(filter).finish();
+    subscriber.try_init().context("init logging subscriber")?;
+
     Ok(())
 }
 
@@ -265,10 +303,10 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
             info!("performed handshake");
         }
         (Some(_), None) => {
-            panic!("when username is set, you also need to set a password")
+            bail!("when username is set, you also need to set a password")
         }
         (None, Some(_)) => {
-            panic!("when password is set, you also need to set a username")
+            bail!("when password is set, you also need to set a username")
         }
     }
 
@@ -283,4 +321,28 @@ fn parse_key_val(
         .find('=')
         .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+}
+
+/// Log headers/trailers.
+fn log_metadata(map: &MetadataMap, what: &'static str) {
+    for k_v in map.iter() {
+        match k_v {
+            tonic::metadata::KeyAndValueRef::Ascii(k, v) => {
+                info!(
+                    "{}: {}={}",
+                    what,
+                    k.as_str(),
+                    v.to_str().unwrap_or("<invalid>"),
+                );
+            }
+            tonic::metadata::KeyAndValueRef::Binary(k, v) => {
+                info!(
+                    "{}: {}={}",
+                    what,
+                    k.as_str(),
+                    String::from_utf8_lossy(v.as_ref()),
+                );
+            }
+        }
+    }
 }
