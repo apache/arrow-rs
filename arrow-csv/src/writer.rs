@@ -77,21 +77,21 @@ const DEFAULT_NULL_VALUE: &str = "";
 pub struct Writer<W: Write> {
     /// The object to write to
     writer: csv::Writer<W>,
-    /// Whether file should be written with headers. Defaults to `true`
+    /// Whether file should be written with headers, defaults to `true`
     has_headers: bool,
-    /// The date format for date arrays
+    /// The date format for date arrays, defaults to RFC3339
     date_format: Option<String>,
-    /// The datetime format for datetime arrays
+    /// The datetime format for datetime arrays, defaults to RFC3339
     datetime_format: Option<String>,
-    /// The timestamp format for timestamp arrays
+    /// The timestamp format for timestamp arrays, defaults to RFC3339
     timestamp_format: Option<String>,
-    /// The timestamp format for timestamp (with timezone) arrays
+    /// The timestamp format for timestamp (with timezone) arrays, defaults to RFC3339
     timestamp_tz_format: Option<String>,
-    /// The time format for time arrays
+    /// The time format for time arrays, defaults to RFC3339
     time_format: Option<String>,
     /// Is the beginning-of-writer
     beginning: bool,
-    /// The value to represent null entries
+    /// The value to represent null entries, defaults to [`DEFAULT_NULL_VALUE`]
     null_value: Option<String>,
 }
 
@@ -333,6 +333,7 @@ impl WriterBuilder {
     }
 
     /// Use RFC3339 format for date/time/timestamps (default)
+    #[deprecated(note = "Use WriterBuilder::default()")]
     pub fn with_rfc3339(mut self) -> Self {
         self.date_format = None;
         self.datetime_format = None;
