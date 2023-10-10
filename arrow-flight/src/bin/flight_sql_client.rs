@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{error::Error, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
@@ -30,45 +30,17 @@ use tonic::{
 };
 use tracing_log::log::info;
 
-/// A ':' separated key value pair
-#[derive(Debug, Clone)]
-struct KeyValue<K, V> {
-    pub key: K,
-    pub value: V,
-}
-
-impl<K, V> std::str::FromStr for KeyValue<K, V>
-where
-    K: std::str::FromStr,
-    V: std::str::FromStr,
-    K::Err: std::fmt::Display,
-    V::Err: std::fmt::Display,
-{
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let parts = s.splitn(2, ':').collect::<Vec<_>>();
-        match parts.as_slice() {
-            [key, value] => {
-                let key = K::from_str(key).map_err(|e| e.to_string())?;
-                let value = V::from_str(value.trim()).map_err(|e| e.to_string())?;
-                Ok(Self { key, value })
-            }
-            _ => Err(format!(
-                "Invalid key value pair - expected 'KEY:VALUE' got '{s}'"
-            )),
-        }
-    }
-}
-
 /// Logging CLI config.
 #[derive(Debug, Parser)]
 pub struct LoggingArgs {
     /// Log verbosity.
     ///
-    /// Use `-v for warn, `-vv for info, -vvv for debug, -vvvv for trace.
+    /// Defaults to "warn".
     ///
-    /// Note you can also set logging level using `RUST_LOG` environment variable: `RUST_LOG=debug`
+    /// Use `-v` for "info", `-vv` for "debug", `-vvv` for "trace".
+    ///
+    /// Note you can also set logging level using `RUST_LOG` environment variable:
+    /// `RUST_LOG=debug`.
     #[clap(
         short = 'v',
         long = "verbose",
@@ -81,16 +53,22 @@ pub struct LoggingArgs {
 struct ClientArgs {
     /// Additional headers.
     ///
-    /// Values should be key value pairs separated by ':'
-    #[clap(long, value_delimiter = ',')]
-    headers: Vec<KeyValue<String, String>>,
+    /// Can be given multiple times. Headers and values are separated by '='.
+    ///
+    /// Example: `-H foo=bar -H baz=42`
+    #[clap(long = "header", short = 'H', value_parser = parse_key_val)]
+    headers: Vec<(String, String)>,
 
-    /// Username
-    #[clap(long)]
+    /// Username.
+    ///
+    /// Optional. If given, `password` must also be set.
+    #[clap(long, requires = "password")]
     username: Option<String>,
 
-    /// Password
-    #[clap(long)]
+    /// Password.
+    ///
+    /// Optional. If given, `username` must also be set.
+    #[clap(long, requires = "username")]
     password: Option<String>,
 
     /// Auth token.
@@ -98,14 +76,20 @@ struct ClientArgs {
     token: Option<String>,
 
     /// Use TLS.
+    ///
+    /// If not provided, use cleartext connection.
     #[clap(long)]
     tls: bool,
 
     /// Server host.
+    ///
+    /// Required.
     #[clap(long)]
     host: String,
 
     /// Server port.
+    ///
+    /// Defaults to `443` if `tls` is set, otherwise defaults to `80`.
     #[clap(long)]
     port: Option<u16>,
 }
@@ -124,13 +108,34 @@ struct Args {
     cmd: Command,
 }
 
+/// Different available commands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Execute given statement.
     StatementQuery {
+        /// SQL query.
+        ///
+        /// Required.
         query: String,
     },
+
+    /// Prepare given statement and then execute it.
     PreparedStatementQuery {
+        /// SQL query.
+        ///
+        /// Required.
+        ///
+        /// Can contains placeholders like `$1`.
+        ///
+        /// Example: `SELECT * FROM t WHERE x = $1`
         query: String,
+
+        /// Additional parameters.
+        ///
+        /// Can be given multiple times. Names and values are separated by '='. Values will be
+        /// converted to the type that the server reported for the prepared statement.
+        ///
+        /// Example: `-p $1=42`
         #[clap(short, value_parser = parse_key_val)]
         params: Vec<(String, String)>,
     },
@@ -284,8 +289,8 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
     let mut client = FlightSqlServiceClient::new(channel);
     info!("connected");
 
-    for kv in args.headers {
-        client.set_header(kv.key, kv.value);
+    for (k, v) in args.headers {
+        client.set_header(k, v);
     }
 
     if let Some(token) = args.token {
@@ -314,13 +319,11 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
 }
 
 /// Parse a single key-value pair
-fn parse_key_val(
-    s: &str,
-) -> Result<(String, String), Box<dyn Error + Send + Sync + 'static>> {
+fn parse_key_val(s: &str) -> Result<(String, String), String> {
     let pos = s
         .find('=')
         .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
-    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+    Ok((s[..pos].to_owned(), s[pos + 1..].to_owned()))
 }
 
 /// Log headers/trailers.
