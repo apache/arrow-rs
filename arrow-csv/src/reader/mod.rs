@@ -193,6 +193,7 @@ impl InferredDataType {
     /// Returns the inferred data type
     fn get(&self) -> DataType {
         match self.packed {
+            0 => DataType::Null,
             1 => DataType::Boolean,
             2 => DataType::Int64,
             4 | 6 => DataType::Float64, // Promote Int64 to Float64
@@ -784,6 +785,9 @@ fn parse(
                         tz.as_deref(),
                         null_regex,
                     )
+                }
+                DataType::Null => {
+                    Ok(Arc::new(NullArray::builder(rows.len()).finish()) as ArrayRef)
                 }
                 DataType::Utf8 => Ok(Arc::new(
                     rows.iter()
@@ -1505,6 +1509,62 @@ mod tests {
         let batch = csv.next().unwrap().unwrap();
 
         assert!(!batch.column(1).is_null(0));
+        assert!(!batch.column(1).is_null(1));
+        assert!(batch.column(1).is_null(2));
+        assert!(!batch.column(1).is_null(3));
+        assert!(!batch.column(1).is_null(4));
+    }
+
+    #[test]
+    fn test_init_nulls() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c_int", DataType::UInt64, true),
+            Field::new("c_float", DataType::Float32, true),
+            Field::new("c_string", DataType::Utf8, true),
+            Field::new("c_bool", DataType::Boolean, true),
+            Field::new("c_null", DataType::Null, true),
+        ]));
+        let file = File::open("test/data/init_null_test.csv").unwrap();
+
+        let mut csv = ReaderBuilder::new(schema)
+            .has_header(true)
+            .build(file)
+            .unwrap();
+
+        let batch = csv.next().unwrap().unwrap();
+
+        assert!(batch.column(1).is_null(0));
+        assert!(!batch.column(1).is_null(1));
+        assert!(batch.column(1).is_null(2));
+        assert!(!batch.column(1).is_null(3));
+        assert!(!batch.column(1).is_null(4));
+    }
+
+    #[test]
+    fn test_init_nulls_with_inference() {
+        let format = Format::default().with_header(true).with_delimiter(b',');
+
+        let mut file = File::open("test/data/init_null_test.csv").unwrap();
+        let (schema, _) = format.infer_schema(&mut file, None).unwrap();
+        file.rewind().unwrap();
+
+        let expected_schema = Schema::new(vec![
+            Field::new("c_int", DataType::Int64, true),
+            Field::new("c_float", DataType::Float64, true),
+            Field::new("c_string", DataType::Utf8, true),
+            Field::new("c_bool", DataType::Boolean, true),
+            Field::new("c_null", DataType::Null, true),
+        ]);
+        assert_eq!(schema, expected_schema);
+
+        let mut csv = ReaderBuilder::new(Arc::new(schema))
+            .with_format(format)
+            .build(file)
+            .unwrap();
+
+        let batch = csv.next().unwrap().unwrap();
+
+        assert!(batch.column(1).is_null(0));
         assert!(!batch.column(1).is_null(1));
         assert!(batch.column(1).is_null(2));
         assert!(!batch.column(1).is_null(3));
@@ -2283,7 +2343,7 @@ mod tests {
     #[test]
     fn test_inference() {
         let cases: &[(&[&str], DataType)] = &[
-            (&[], DataType::Utf8),
+            (&[], DataType::Null),
             (&["false", "12"], DataType::Utf8),
             (&["12", "cupcakes"], DataType::Utf8),
             (&["12", "12.4"], DataType::Float64),
