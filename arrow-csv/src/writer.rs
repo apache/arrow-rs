@@ -676,7 +676,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 
         let mut file = tempfile::tempfile().unwrap();
 
-        let builder = WriterBuilder::new().with_rfc3339();
+        let builder = WriterBuilder::new();
         let mut writer = builder.build(&mut file);
         let batches = vec![&batch];
         for batch in batches {
