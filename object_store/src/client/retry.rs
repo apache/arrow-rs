@@ -50,18 +50,18 @@ impl Error {
     /// Returns the status code associated with this error if any
     pub fn status(&self) -> Option<StatusCode> {
         match self {
-            Error::BareRedirect => None,
-            Error::Client { status, .. } => Some(*status),
-            Error::Response { source, .. } => source.status(),
+            Self::BareRedirect => None,
+            Self::Client { status, .. } => Some(*status),
+            Self::Response { source, .. } => source.status(),
         }
     }
 
     /// Returns the error body if any
     pub fn body(&self) -> Option<&str> {
         match self {
-            Error::Client { body, .. } => body.as_deref(),
-            Error::BareRedirect => None,
-            Error::Response { .. } => None,
+            Self::Client { body, .. } => body.as_deref(),
+            Self::BareRedirect => None,
+            Self::Response { .. } => None,
         }
     }
 
