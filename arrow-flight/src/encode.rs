@@ -76,7 +76,7 @@ pub struct FlightDataEncoderBuilder {
     schema: Option<SchemaRef>,
     /// Optional flight descriptor, if known before data.
     descriptor: Option<FlightDescriptor>,
-    /// Deterimines how [`DictionaryArray`]s are encoded for transport.
+    /// Deterimines how `DictionaryArray`s are encoded for transport.
     /// See [`DictionaryHandling`] for more information.
     dictionary_handling: DictionaryHandling,
 }
@@ -209,7 +209,7 @@ pub struct FlightDataEncoder {
     done: bool,
     /// cleared after the first FlightData message is sent
     descriptor: Option<FlightDescriptor>,
-    /// Deterimines how [`DictionaryArray`]s are encoded for transport.
+    /// Deterimines how `DictionaryArray`s are encoded for transport.
     /// See [`DictionaryHandling`] for more information.
     dictionary_handling: DictionaryHandling,
 }
@@ -353,16 +353,31 @@ impl Stream for FlightDataEncoder {
 }
 
 /// Defines how a [`FlightDataEncoder`] encodes [`DictionaryArray`]s
+///
+/// [`DictionaryArray`]: arrow_array::DictionaryArray
 #[derive(Debug, PartialEq)]
 pub enum DictionaryHandling {
-    /// Expands to the underlying type (default). This likely sends more data over the network
-    /// but requires less memory (dictionaries are not tracked) and is more compatible
-    /// with other arrow flight client implementations that may not support `DictionaryEncoding`
-    /// see [`hydrate_dictionary`] for more details.
+    /// Expands to the underlying type (default). This likely sends more data
+    /// over the network but requires less memory (dictionaries are not tracked)
+    /// and is more compatible with other arrow flight client implementations
+    /// that may not support `DictionaryEncoding`
+    ///
+    /// An IPC response, streaming or otherwise, defines its schema up front
+    /// which defines the mapping from dictionary IDs. It then sends these
+    /// dictionaries over the wire.
+    ///
+    /// This requires identifying the different dictionaries in use, assigning
+    /// them IDs, and sending new dictionaries, delta or otherwise, when needed
+    ///
+    /// See also:
+    /// * <https://github.com/apache/arrow-rs/issues/1206>
     Hydrate,
-    /// Send dictionary FlightData with every RecordBatch that contains a [`DictionaryArray`].
-    /// See [`Self::Hydrate`] for more tradeoffs. No attempt is made to skip sending the same (logical)
-    /// dictionary values twice.
+    /// Send dictionary FlightData with every RecordBatch that contains a
+    /// [`DictionaryArray`]. See [`Self::Hydrate`] for more tradeoffs. No
+    /// attempt is made to skip sending the same (logical) dictionary values
+    /// twice.
+    ///
+    /// [`DictionaryArray`]: arrow_array::DictionaryArray
     Resend,
 }
 
@@ -493,20 +508,8 @@ fn prepare_batch_for_flight(
     )?)
 }
 
-/// Hydrates a dictionary to its underlying type
-///
-/// An IPC response, streaming or otherwise, defines its schema up front
-/// which defines the mapping from dictionary IDs. It then sends these
-/// dictionaries over the wire.
-///
-/// This requires identifying the different dictionaries in use, assigning
-/// them IDs, and sending new dictionaries, delta or otherwise, when needed
-///
-/// See also:
-/// * <https://github.com/apache/arrow-rs/issues/1206>
-///
-/// For now we just hydrate the dictionaries to their underlying type. If send_dictionaries
-/// is true, dictionaries are sent with every batch which is not as optimal as described above,
+/// Hydrates a dictionary to its underlying type if send_dictionaries is false. If send_dictionaries
+/// is true, dictionaries are sent with every batch which is not as optimal as described in [DictionaryHandling::Hydrate] above,
 /// but does enable sending DictionaryArray's via Flight.
 fn hydrate_dictionary(array: &ArrayRef, send_dictionaries: bool) -> Result<ArrayRef> {
     let arr = match array.data_type() {
