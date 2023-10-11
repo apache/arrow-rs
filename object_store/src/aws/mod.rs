@@ -232,7 +232,7 @@ impl Signer for AmazonS3 {
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
-    /// # use http::Method;
+    /// # use reqwest::Method;
     /// # use std::time::Duration;
     /// #
     /// let region = "us-east-1";
