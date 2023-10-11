@@ -365,23 +365,13 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        if options.if_match.is_some() || options.if_none_match.is_some() {
-            return Err(super::Error::NotSupported {
-                source: "ETags not supported by LocalFileSystem".to_string().into(),
-            });
-        }
-
         let location = location.clone();
         let path = self.config.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
             let (file, metadata) = open_file(&path)?;
-            if options.if_unmodified_since.is_some()
-                || options.if_modified_since.is_some()
-            {
-                options.check_modified(&location, last_modified(&metadata))?;
-            }
 
             let meta = convert_metadata(metadata, location)?;
+            options.test(&meta)?;
 
             Ok(GetResult {
                 payload: GetResultPayload::File(file, path),
