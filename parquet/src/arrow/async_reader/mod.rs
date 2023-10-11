@@ -77,7 +77,6 @@
 
 use std::collections::VecDeque;
 use std::fmt::Formatter;
-
 use std::io::SeekFrom;
 use std::ops::Range;
 use std::pin::Pin;
@@ -88,7 +87,6 @@ use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
 use futures::stream::Stream;
-
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow_array::RecordBatch;
@@ -102,15 +100,16 @@ use crate::arrow::arrow_reader::{
 };
 use crate::arrow::ProjectionMask;
 
+use crate::bloom_filter::{
+    read_bloom_filter_header_and_length, Sbbf, SBBF_HEADER_SIZE_ESTIMATE,
+};
 use crate::column::page::{PageIterator, PageReader};
-
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
-use crate::format::PageLocation;
-
 use crate::file::FOOTER_SIZE;
+use crate::format::PageLocation;
 
 mod metadata;
 pub use metadata::*;
@@ -300,6 +299,46 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// ```
     pub fn new_with_metadata(input: T, metadata: ArrowReaderMetadata) -> Self {
         Self::new_builder(AsyncReader(input), metadata)
+    }
+
+    /// Read bloom filter for a column in a row group
+    /// Returns `None` if the column does not have a bloom filter
+    ///
+    /// We should call this function after other forms pruning, such as projection and predicate pushdown.
+    pub async fn get_row_group_column_bloom_filter(
+        &mut self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<Sbbf>> {
+        let metadata = self.metadata.row_group(row_group_idx);
+        let column_metadata = metadata.column(column_idx);
+        let offset: usize = if let Some(offset) = column_metadata.bloom_filter_offset() {
+            offset.try_into().map_err(|_| {
+                ParquetError::General("Bloom filter offset is invalid".to_string())
+            })?
+        } else {
+            return Ok(None);
+        };
+
+        let buffer = self
+            .input
+            .0
+            .get_bytes(offset..offset + SBBF_HEADER_SIZE_ESTIMATE)
+            .await
+            .unwrap();
+        let (header, length) = read_bloom_filter_header_and_length(buffer)?;
+        let (header, bitset_offset) = (header, offset + length as usize);
+
+        // length in bytes
+        let length: usize = header.num_bytes.try_into().map_err(|_| {
+            ParquetError::General("Bloom filter length is invalid".to_string())
+        })?;
+        let bitset = self
+            .input
+            .0
+            .get_bytes(bitset_offset..bitset_offset + length)
+            .await?;
+        Ok(Some(Sbbf::new(&bitset)))
     }
 
     /// Build a new [`ParquetRecordBatchStream`]
