@@ -136,7 +136,7 @@ pub(crate) const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
 
 /// given an initial offset, and a byte buffer, try to read out a bloom filter header and return
 /// both the header and the offset after it (for bitset).
-fn chunk_read_bloom_filter_header_and_offset(
+pub(crate) fn chunk_read_bloom_filter_header_and_offset(
     offset: u64,
     buffer: Bytes,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
