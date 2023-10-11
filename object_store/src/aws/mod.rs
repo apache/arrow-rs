@@ -231,10 +231,10 @@ impl Signer for AmazonS3 {
     ///
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
-    /// use http::Method;
-    /// use std::time::Duration;
-    ///
+    /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
+    /// # use http::Method;
+    /// # use std::time::Duration;
+    /// #
     /// let region = "us-east-1";
     /// let s3 = AmazonS3Builder::new()
     ///     .with_region(region)
