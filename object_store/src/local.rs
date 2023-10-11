@@ -369,7 +369,6 @@ impl ObjectStore for LocalFileSystem {
         let path = self.config.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
             let (file, metadata) = open_file(&path)?;
-
             let meta = convert_metadata(metadata, location)?;
             options.test(&meta)?;
 
@@ -984,7 +983,7 @@ fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
     convert_metadata(metadata, location)
 }
 
-fn last_modified(metadata: &std::fs::Metadata) -> DateTime<Utc> {
+fn last_modified(metadata: &Metadata) -> DateTime<Utc> {
     metadata
         .modified()
         .expect("Modified file time should be supported on this platform")
@@ -996,13 +995,30 @@ fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
     let size = usize::try_from(metadata.len()).context(FileSizeOverflowedUsizeSnafu {
         path: location.as_ref(),
     })?;
+    let inode = get_inode(&metadata);
+    let mtime = last_modified.timestamp_micros();
+
+    // Use an ETag scheme based on that used by many popular HTTP servers
+    // <https://httpd.apache.org/docs/2.2/mod/core.html#fileetag>
+    // <https://stackoverflow.com/questions/47512043/how-etags-are-generated-and-configured>
+    let etag = format!("{inode:x}-{mtime:x}-{size:x}");
 
     Ok(ObjectMeta {
         location,
         last_modified,
         size,
-        e_tag: None,
+        e_tag: Some(etag),
     })
+}
+
+#[cfg(unix)]
+fn get_inode(metadata: &Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::ino(metadata)
+}
+
+#[cfg(not(unix))]
+fn get_inode(metadata: &Metadata) -> u64 {
+    0
 }
 
 /// Convert walkdir results and converts not-found errors into `None`.
