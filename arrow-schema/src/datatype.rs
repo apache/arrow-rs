@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
@@ -35,7 +36,7 @@ use crate::{Field, FieldRef, Fields, UnionFields};
 /// Nested types can themselves be nested within other arrays.
 /// For more information on these types please see
 /// [the physical memory layout of Apache Arrow](https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataType {
     /// Null type
@@ -307,6 +308,38 @@ pub enum UnionMode {
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl PartialOrd for DataType {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DataType {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (DataType::Null, DataType::Null) => Ordering::Equal,
+            (DataType::Null, _) => Ordering::Less,
+            (_, DataType::Null) => Ordering::Greater,
+            (DataType::Boolean, DataType::Boolean) => Ordering::Equal,
+            (DataType::Boolean, _) => Ordering::Less,
+            (_, DataType::Boolean) => Ordering::Greater,
+            (a, b) => {
+                if a.is_primitive() && b.is_primitive() {
+                    self.primitive_width()
+                        .unwrap_or(0)
+                        .cmp(&other.primitive_width().unwrap_or(0))
+                } else if a.is_primitive() {
+                    Ordering::Less
+                } else if b.is_primitive() {
+                    Ordering::Greater
+                } else {
+                    a.size().cmp(&b.size())
+                }
+            }
+        }
     }
 }
 
@@ -901,6 +934,21 @@ mod tests {
                 ],
             ),
             UnionMode::Dense,
+        );
+    }
+
+    #[test]
+    fn test_cmp() {
+        assert_eq!(DataType::Null.cmp(&DataType::Boolean), Ordering::Less);
+        assert_eq!(DataType::Boolean.cmp(&DataType::Null), Ordering::Greater);
+        assert_eq!(DataType::Null.cmp(&DataType::Int16), Ordering::Less);
+        assert_eq!(DataType::Int8.cmp(&DataType::Int16), Ordering::Less);
+        assert_eq!(DataType::Int32.cmp(&DataType::UInt16), Ordering::Greater);
+        assert_eq!(DataType::UInt64.cmp(&DataType::UInt64), Ordering::Equal);
+        assert_eq!(
+            DataType::List(Arc::new(Field::new("A", DataType::Int64, true)))
+                .cmp(&DataType::Decimal256(5, 2)),
+            Ordering::Greater
         );
     }
 }
