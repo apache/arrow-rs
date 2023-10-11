@@ -31,9 +31,11 @@ use futures::{ready, stream::BoxStream, Stream, StreamExt};
 /// Arrow Flight implementation;
 ///
 /// # Caveats
-///   1. [`DictionaryArray`](arrow_array::array::DictionaryArray)s
-///   are converted to their underlying types prior to transport, due to
-///   <https://github.com/apache/arrow-rs/issues/3389>.
+///   1. When [`DictionaryHandling`] is [`DictionaryHandling::Hydrate`], [`DictionaryArray`](arrow_array::array::DictionaryArray)s
+///   are converted to their underlying types prior to transport.
+///   When [`DictionaryHandling`] is [`DictionaryHandling::Resend`], Dictionary [`FlightData`] is sent with every
+///   [`RecordBatch`] that contains a [`DictionaryArray`](arrow_array::array::DictionaryArray).
+///   See <https://github.com/apache/arrow-rs/issues/3389>.
 ///
 /// # Example
 /// ```no_run
@@ -74,9 +76,9 @@ pub struct FlightDataEncoderBuilder {
     schema: Option<SchemaRef>,
     /// Optional flight descriptor, if known before data.
     descriptor: Option<FlightDescriptor>,
-    /// Send dictionary FlightData with every RecordBatch that contains DictionaryArray
-    /// If false, the default, dictionaries are hydrated. See [`hydrate_dictionary`].
-    send_dictionaries: bool,
+    /// Deterimines how [`DictionaryArray`]s are encoded for transport.
+    /// See [`DictionaryHandling`] for more information.
+    dictionary_handling: DictionaryHandling,
 }
 
 /// Default target size for encoded [`FlightData`].
@@ -93,7 +95,7 @@ impl Default for FlightDataEncoderBuilder {
             app_metadata: Bytes::new(),
             schema: None,
             descriptor: None,
-            send_dictionaries: false,
+            dictionary_handling: DictionaryHandling::Hydrate,
         }
     }
 }
@@ -118,8 +120,12 @@ impl FlightDataEncoderBuilder {
         self
     }
 
-    pub fn with_send_dictionaries(mut self, send: bool) -> Self {
-        self.send_dictionaries = send;
+    /// Set [`DictionaryHandling`] for encoder
+    pub fn with_dictionary_handling(
+        mut self,
+        dictionary_handling: DictionaryHandling,
+    ) -> Self {
+        self.dictionary_handling = dictionary_handling;
         self
     }
 
@@ -167,7 +173,7 @@ impl FlightDataEncoderBuilder {
             app_metadata,
             schema,
             descriptor,
-            send_dictionaries,
+            dictionary_handling,
         } = self;
 
         FlightDataEncoder::new(
@@ -177,7 +183,7 @@ impl FlightDataEncoderBuilder {
             options,
             app_metadata,
             descriptor,
-            send_dictionaries,
+            dictionary_handling,
         )
     }
 }
@@ -203,9 +209,9 @@ pub struct FlightDataEncoder {
     done: bool,
     /// cleared after the first FlightData message is sent
     descriptor: Option<FlightDescriptor>,
-    /// Send dictionary FlightData with every RecordBatch that contains DictionaryArray
-    /// If false, the default, dictionaries are hydrated. See [`hydrate_dictionary`].
-    send_dictionaries: bool,
+    /// Deterimines how [`DictionaryArray`]s are encoded for transport.
+    /// See [`DictionaryHandling`] for more information.
+    dictionary_handling: DictionaryHandling,
 }
 
 impl FlightDataEncoder {
@@ -216,18 +222,21 @@ impl FlightDataEncoder {
         options: IpcWriteOptions,
         app_metadata: Bytes,
         descriptor: Option<FlightDescriptor>,
-        send_dictionaries: bool,
+        dictionary_handling: DictionaryHandling,
     ) -> Self {
         let mut encoder = Self {
             inner,
             schema: None,
             max_flight_data_size,
-            encoder: FlightIpcEncoder::new(options, !send_dictionaries),
+            encoder: FlightIpcEncoder::new(
+                options,
+                dictionary_handling != DictionaryHandling::Resend,
+            ),
             app_metadata: Some(app_metadata),
             queue: VecDeque::new(),
             done: false,
             descriptor,
-            send_dictionaries,
+            dictionary_handling,
         };
 
         // If schema is known up front, enqueue it immediately
@@ -258,7 +267,8 @@ impl FlightDataEncoder {
     fn encode_schema(&mut self, schema: &SchemaRef) -> SchemaRef {
         // The first message is the schema message, and all
         // batches have the same schema
-        let schema = Arc::new(prepare_schema_for_flight(schema, self.send_dictionaries));
+        let send_dictionaries = self.dictionary_handling == DictionaryHandling::Resend;
+        let schema = Arc::new(prepare_schema_for_flight(schema, send_dictionaries));
         let mut schema_flight_data = self.encoder.encode_schema(&schema);
 
         // attach any metadata requested
@@ -280,7 +290,8 @@ impl FlightDataEncoder {
         };
 
         // encode the batch
-        let batch = prepare_batch_for_flight(&batch, schema, self.send_dictionaries)?;
+        let send_dictionaries = self.dictionary_handling == DictionaryHandling::Resend;
+        let batch = prepare_batch_for_flight(&batch, schema, send_dictionaries)?;
 
         for batch in split_batch_for_grpc_response(batch, self.max_flight_data_size) {
             let (flight_dictionaries, flight_batch) =
@@ -339,6 +350,20 @@ impl Stream for FlightDataEncoder {
             }
         }
     }
+}
+
+/// Defines how a [`FlightDataEncoder`] encodes [`DictionaryArray`]s
+#[derive(Debug, PartialEq)]
+pub enum DictionaryHandling {
+    /// Expands to the underlying type (default). This likely sends more data over the network
+    /// but requires less memory (dictionaries are not tracked) and is more compatible
+    /// with other arrow flight client implementations that may not support `DictionaryEncoding`
+    /// see [`hydrate_dictionary`] for more details.
+    Hydrate,
+    /// Send dictionary FlightData with every RecordBatch that contains a [`DictionaryArray`].
+    /// See [`Self::Hydrate`] for more tradeoffs. No attempt is made to skip sending the same (logical)
+    /// dictionary values twice.
+    Resend,
 }
 
 /// Prepare an arrow Schema for transport over the Arrow Flight protocol
@@ -594,7 +619,7 @@ mod tests {
             RecordBatch::try_new(schema.clone(), vec![arr_two.clone()]).unwrap();
 
         let encoder = FlightDataEncoderBuilder::default()
-            .with_send_dictionaries(true)
+            .with_dictionary_handling(DictionaryHandling::Resend)
             .build(futures::stream::iter(vec![Ok(batch_one), Ok(batch_two)]));
 
         let mut decoder = FlightDataDecoder::new(encoder);
