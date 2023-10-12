@@ -202,7 +202,7 @@ impl ReaderBuilder {
         }
     }
 
-    /// Create a new [`ReaderBuilder`] that will parse JSON values of [`Field::data_type`]
+    /// Create a new [`ReaderBuilder`] that will parse JSON values of `field.data_type()`
     ///
     /// Unlike [`ReaderBuilder::new`] this does not require the root of the JSON data
     /// to be an object, i.e. `{..}`, allowing for parsing of any valid JSON value(s)
