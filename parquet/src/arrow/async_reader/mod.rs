@@ -1657,7 +1657,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 1);
         let row_group = metadata.row_group(0);
         let column = row_group.column(0);
-        assert!(column.bloom_filter_length().is_some() == with_length);
+        assert_eq!(column.bloom_filter_length().is_some(), with_length);
 
         let async_reader = TestReader {
             data: data.clone(),
