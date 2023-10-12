@@ -21,8 +21,8 @@
 //! model. Records are loaded in batches and are then converted from the record-oriented
 //! representation to the columnar arrow data model.
 //!
-//! The reader is agnostic to whitespace, including `\n` and `\r`, and will ignore such characters.
-//! This allows parsing sequences of one or more arbitrarily formatted JSON values, including
+//! The reader ignores whitespace between JSON values, including `\n` and `\r`, allowing
+//! parsing of sequences of one or more arbitrarily formatted JSON values, including
 //! but not limited to newline-delimited JSON.
 //!
 //! # Basic Usage
@@ -146,7 +146,7 @@ use arrow_array::{
     downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray,
 };
 use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
 
 use crate::reader::boolean_array::BooleanArrayDecoder;
@@ -202,9 +202,9 @@ impl ReaderBuilder {
         }
     }
 
-    /// Create a new [`ReaderBuilder`] with the provided [`FieldRef`]
+    /// Create a new [`ReaderBuilder`] that will parse JSON values of [`Field::data_type`]
     ///
-    /// Unlike [`ReaderBuilder::new`] this does not require the root of the JSON schema
+    /// Unlike [`ReaderBuilder::new`] this does not require the root of the JSON data
     /// to be an object, i.e. `{..}`, allowing for parsing of any valid JSON value(s)
     ///
     /// ```
@@ -216,7 +216,7 @@ impl ReaderBuilder {
     /// // Root of JSON schema is a numeric type
     /// let data = "1\n2\n3\n";
     /// let field = Arc::new(Field::new("int", DataType::Int32, true));
-    /// let mut reader = ReaderBuilder::new_field(field.clone()).build(data.as_bytes()).unwrap();
+    /// let mut reader = ReaderBuilder::new_with_field(field.clone()).build(data.as_bytes()).unwrap();
     /// let b = reader.next().unwrap().unwrap();
     /// let values = b.column(0).as_primitive::<Int32Type>().values();
     /// assert_eq!(values, &[1, 2, 3]);
@@ -224,7 +224,7 @@ impl ReaderBuilder {
     /// // Root of JSON schema is a list type
     /// let data = "[1, 2, 3, 4, 5, 6, 7]\n[1, 2, 3]";
     /// let field = Field::new_list("int", field.clone(), true);
-    /// let mut reader = ReaderBuilder::new_field(field).build(data.as_bytes()).unwrap();
+    /// let mut reader = ReaderBuilder::new_with_field(field).build(data.as_bytes()).unwrap();
     /// let b = reader.next().unwrap().unwrap();
     /// let list = b.column(0).as_list::<i32>();
     ///
@@ -232,7 +232,7 @@ impl ReaderBuilder {
     /// let list_values = list.values().as_primitive::<Int32Type>();
     /// assert_eq!(list_values.values(), &[1, 2, 3, 4, 5, 6, 7, 1, 2, 3]);
     /// ```
-    pub fn new_field(field: impl Into<FieldRef>) -> Self {
+    pub fn new_with_field(field: impl Into<FieldRef>) -> Self {
         Self {
             batch_size: 1024,
             coerce_primitive: false,
@@ -2231,7 +2231,9 @@ mod tests {
     #[test]
     fn test_serde_field() {
         let field = Field::new("int", DataType::Int32, true);
-        let mut decoder = ReaderBuilder::new_field(field).build_decoder().unwrap();
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .build_decoder()
+            .unwrap();
         decoder.serialize(&[1_i32, 2, 3, 4]).unwrap();
         let b = decoder.flush().unwrap().unwrap();
         let values = b.column(0).as_primitive::<Int32Type>().values();

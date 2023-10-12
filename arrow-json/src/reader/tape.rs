@@ -297,6 +297,7 @@ macro_rules! next {
 pub struct TapeDecoder {
     elements: Vec<TapeElement>,
 
+    /// The number of rows decoded, including any in progress if `!stack.is_empty()`
     cur_row: usize,
 
     /// Number of rows to read per batch
