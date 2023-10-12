@@ -146,7 +146,7 @@ use arrow_array::{
     downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray,
 };
 use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
+use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
 
 use crate::reader::boolean_array::BooleanArrayDecoder;
