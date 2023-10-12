@@ -267,6 +267,8 @@ pub mod local;
 pub mod memory;
 pub mod path;
 pub mod prefix;
+#[cfg(feature = "cloud")]
+pub mod signer;
 pub mod throttle;
 
 #[cfg(feature = "cloud")]
