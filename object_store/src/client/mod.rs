@@ -478,6 +478,7 @@ impl ClientOptions {
     /// In particular:
     /// * Allows HTTP as metadata endpoints do not use TLS
     /// * Configures a low connection timeout to provide quick feedback if not present
+    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
     pub(crate) fn metadata_client(&self) -> Result<Client> {
         self.clone()
             .with_allow_http(true)
