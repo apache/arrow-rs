@@ -307,10 +307,6 @@ impl ObjectStore for AmazonS3 {
         self.client.get_opts(location, options).await
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        self.client.head(location).await
-    }
-
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.delete_request(location, &()).await
     }

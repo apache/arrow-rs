@@ -554,15 +554,10 @@ impl GetClient for S3Client {
     const STORE: &'static str = STORE;
 
     /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>
-    async fn get_request(
-        &self,
-        path: &Path,
-        options: GetOptions,
-        head: bool,
-    ) -> Result<Response> {
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
-        let method = match head {
+        let method = match options.head {
             true => Method::HEAD,
             false => Method::GET,
         };
