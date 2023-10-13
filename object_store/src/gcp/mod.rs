@@ -58,8 +58,7 @@ use crate::{
 };
 
 use credential::{
-    application_default_credentials, default_gcs_base_url, InstanceCredentialProvider,
-    ServiceAccountCredentials,
+    default_gcs_base_url, InstanceCredentialProvider, ServiceAccountCredentials,
 };
 
 mod credential;
@@ -68,6 +67,7 @@ const STORE: &str = "GCS";
 
 /// [`CredentialProvider`] for [`GoogleCloudStorage`]
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
+use crate::gcp::credential::{ApplicationDefaultCredentials, DEFAULT_AUDIENCE};
 pub use credential::GcpCredential;
 
 #[derive(Debug, Snafu)]
@@ -1043,10 +1043,8 @@ impl GoogleCloudStorageBuilder {
             };
 
         // Then try to initialize from the application credentials file, or the environment.
-        let application_default_credentials = application_default_credentials(
+        let application_default_credentials = ApplicationDefaultCredentials::read(
             self.application_credentials_path.as_deref(),
-            &self.client_options,
-            &self.retry_config,
         )?;
 
         let disable_oauth = service_account_credentials
@@ -1059,10 +1057,6 @@ impl GoogleCloudStorageBuilder {
             .map(|c| c.gcs_base_url.clone())
             .unwrap_or_else(default_gcs_base_url);
 
-        // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
-        let scope = "https://www.googleapis.com/auth/devstorage.full_control";
-        let audience = "https://www.googleapis.com/oauth2/v4/token";
-
         let credentials = if let Some(credentials) = self.credentials {
             credentials
         } else if disable_oauth {
@@ -1071,15 +1065,30 @@ impl GoogleCloudStorageBuilder {
             })) as _
         } else if let Some(credentials) = service_account_credentials {
             Arc::new(TokenCredentialProvider::new(
-                credentials.oauth_provider(scope, audience)?,
+                credentials.oauth_provider()?,
                 self.client_options.client()?,
                 self.retry_config.clone(),
             )) as _
         } else if let Some(credentials) = application_default_credentials {
-            credentials
+            match credentials {
+                ApplicationDefaultCredentials::AuthorizedUser(token) => {
+                    Arc::new(TokenCredentialProvider::new(
+                        token,
+                        self.client_options.client()?,
+                        self.retry_config.clone(),
+                    )) as _
+                }
+                ApplicationDefaultCredentials::ServiceAccount(token) => {
+                    Arc::new(TokenCredentialProvider::new(
+                        token.oauth_provider()?,
+                        self.client_options.client()?,
+                        self.retry_config.clone(),
+                    )) as _
+                }
+            }
         } else {
             Arc::new(TokenCredentialProvider::new(
-                InstanceCredentialProvider::new(audience),
+                InstanceCredentialProvider::new(DEFAULT_AUDIENCE),
                 self.client_options.clone().with_allow_http(true).client()?,
                 self.retry_config.clone(),
             )) as _

@@ -17,10 +17,8 @@
 
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
-use crate::client::{TokenCredentialProvider, TokenProvider};
-use crate::gcp::credential::Error::UnsupportedCredentialsType;
-use crate::gcp::{GcpCredentialProvider, STORE};
-use crate::ClientOptions;
+use crate::client::TokenProvider;
+use crate::gcp::STORE;
 use crate::RetryConfig;
 use async_trait::async_trait;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
@@ -28,6 +26,7 @@ use base64::Engine;
 use futures::TryFutureExt;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
+use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use std::env;
 use std::fs::File;
@@ -36,6 +35,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::info;
+
+// TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
+pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.full_control";
+pub const DEFAULT_AUDIENCE: &str = "https://www.googleapis.com/oauth2/v4/token";
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -68,9 +71,6 @@ pub enum Error {
 
     #[snafu(display("Error getting token response body: {}", source))]
     TokenResponseBody { source: reqwest::Error },
-
-    #[snafu(display("Unsupported ApplicationCredentials type: {}", type_))]
-    UnsupportedCredentialsType { type_: String },
 }
 
 impl From<Error> for crate::Error {
@@ -231,6 +231,8 @@ impl TokenProvider for OAuthProvider {
             .await
             .context(TokenResponseBodySnafu)?;
 
+        println!("{}", response.access_token);
+
         Ok(TemporaryToken {
             token: Arc::new(GcpCredential {
                 bearer: response.access_token,
@@ -291,16 +293,12 @@ impl ServiceAccountCredentials {
     }
 
     /// Create an [`OAuthProvider`] from this credentials struct.
-    pub fn oauth_provider(
-        self,
-        scope: &str,
-        audience: &str,
-    ) -> crate::Result<OAuthProvider> {
+    pub fn oauth_provider(self) -> crate::Result<OAuthProvider> {
         Ok(OAuthProvider::new(
             self.client_email,
             self.private_key,
-            scope.to_string(),
-            audience.to_string(),
+            DEFAULT_SCOPE.to_string(),
+            DEFAULT_AUDIENCE.to_string(),
         )?)
     }
 }
@@ -404,62 +402,29 @@ impl TokenProvider for InstanceCredentialProvider {
     }
 }
 
-/// ApplicationDefaultCredentials
-/// <https://google.aip.dev/auth/4110>
-pub fn application_default_credentials(
-    path: Option<&str>,
-    client: &ClientOptions,
-    retry: &RetryConfig,
-) -> crate::Result<Option<GcpCredentialProvider>> {
-    let file = match ApplicationDefaultCredentialsFile::read(path)? {
-        Some(x) => x,
-        None => return Ok(None),
-    };
-
-    match file.type_.as_str() {
-        // <https://google.aip.dev/auth/4113>
-        "authorized_user" => {
-            let token = AuthorizedUserCredentials {
-                client_id: file.client_id,
-                client_secret: file.client_secret,
-                refresh_token: file.refresh_token,
-            };
-
-            Ok(Some(Arc::new(TokenCredentialProvider::new(
-                token,
-                client.client()?,
-                retry.clone(),
-            ))))
-        }
-        type_ => Err(UnsupportedCredentialsType {
-            type_: type_.to_string(),
-        }
-        .into()),
-    }
-}
-
 /// A deserialized `application_default_credentials.json`-file.
+///
 /// <https://cloud.google.com/docs/authentication/application-default-credentials#personal>
+/// <https://google.aip.dev/auth/4110>
 #[derive(serde::Deserialize)]
-struct ApplicationDefaultCredentialsFile {
-    #[serde(default)]
-    client_id: String,
-    #[serde(default)]
-    client_secret: String,
-    #[serde(default)]
-    refresh_token: String,
-    #[serde(rename = "type")]
-    type_: String,
+#[serde(tag = "type")]
+pub enum ApplicationDefaultCredentials {
+    /// <https://google.aip.dev/auth/4112>
+    #[serde(rename = "service_account")]
+    ServiceAccount(ServiceAccountCredentials),
+    /// <https://google.aip.dev/auth/4113>
+    #[serde(rename = "authorized_user")]
+    AuthorizedUser(AuthorizedUserCredentials),
 }
 
-impl ApplicationDefaultCredentialsFile {
+impl ApplicationDefaultCredentials {
     const CREDENTIALS_PATH: &'static str =
         ".config/gcloud/application_default_credentials.json";
 
     // Create a new application default credential in the following situations:
     //  1. a file is passed in and the type matches.
     //  2. without argument if the well-known configuration file is present.
-    fn read(path: Option<&str>) -> Result<Option<Self>, Error> {
+    pub fn read(path: Option<&str>) -> Result<Option<Self>, Error> {
         if let Some(path) = path {
             return read_credentials_file::<Self>(path).map(Some);
         }
@@ -478,8 +443,8 @@ impl ApplicationDefaultCredentialsFile {
 const DEFAULT_TOKEN_GCP_URI: &str = "https://accounts.google.com/o/oauth2/token";
 
 /// <https://google.aip.dev/auth/4113>
-#[derive(Debug)]
-struct AuthorizedUserCredentials {
+#[derive(Debug, Deserialize)]
+pub struct AuthorizedUserCredentials {
     client_id: String,
     client_secret: String,
     refresh_token: String,
