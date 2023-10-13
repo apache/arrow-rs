@@ -233,29 +233,30 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.delete(location).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        sleep(self.config().wait_list_per_call).await;
-
-        // need to copy to avoid moving / referencing `self`
-        let wait_list_per_entry = self.config().wait_list_per_entry;
-        let stream = self.inner.list(prefix).await?;
-        Ok(throttle_stream(stream, move |_| wait_list_per_entry))
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+        let stream = self.inner.list(prefix);
+        futures::stream::once(async move {
+            let wait_list_per_entry = self.config().wait_list_per_entry;
+            sleep(self.config().wait_list_per_call).await;
+            throttle_stream(stream, move |_| wait_list_per_entry)
+        })
+        .flatten()
+        .boxed()
     }
 
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        sleep(self.config().wait_list_per_call).await;
-
-        // need to copy to avoid moving / referencing `self`
-        let wait_list_per_entry = self.config().wait_list_per_entry;
-        let stream = self.inner.list_with_offset(prefix, offset).await?;
-        Ok(throttle_stream(stream, move |_| wait_list_per_entry))
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
+        let stream = self.inner.list_with_offset(prefix, offset);
+        futures::stream::once(async move {
+            let wait_list_per_entry = self.config().wait_list_per_entry;
+            sleep(self.config().wait_list_per_call).await;
+            throttle_stream(stream, move |_| wait_list_per_entry)
+        })
+        .flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -511,13 +512,7 @@ mod tests {
         let prefix = Path::from("foo");
 
         // clean up store
-        let entries: Vec<_> = store
-            .list(Some(&prefix))
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
+        let entries: Vec<_> = store.list(Some(&prefix)).try_collect().await.unwrap();
 
         for entry in entries {
             store.delete(&entry.location).await.unwrap();
@@ -583,8 +578,6 @@ mod tests {
         let t0 = Instant::now();
         store
             .list(Some(&prefix))
-            .await
-            .unwrap()
             .try_collect::<Vec<_>>()
             .await
             .unwrap();

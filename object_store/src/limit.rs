@@ -23,7 +23,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::Stream;
+use futures::{FutureExt, Stream};
 use std::io::{Error, IoSlice};
 use std::ops::Range;
 use std::pin::Pin;
@@ -147,23 +147,24 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.delete_stream(locations)
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
-        let s = self.inner.list(prefix).await?;
-        Ok(PermitWrapper::new(s, permit).boxed())
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+        let s = self.inner.list(prefix);
+        let fut = Arc::clone(&self.semaphore)
+            .acquire_owned()
+            .map(|permit| PermitWrapper::new(s, permit.unwrap()));
+        fut.into_stream().flatten().boxed()
     }
 
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
-        let s = self.inner.list_with_offset(prefix, offset).await?;
-        Ok(PermitWrapper::new(s, permit).boxed())
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
+        let s = self.inner.list_with_offset(prefix, offset);
+        let fut = Arc::clone(&self.semaphore)
+            .acquire_owned()
+            .map(|permit| PermitWrapper::new(s, permit.unwrap()));
+        fut.into_stream().flatten().boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -272,6 +273,7 @@ mod tests {
     use crate::memory::InMemory;
     use crate::tests::*;
     use crate::ObjectStore;
+    use futures::stream::StreamExt;
     use std::time::Duration;
     use tokio::time::timeout;
 
@@ -288,21 +290,22 @@ mod tests {
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
 
-        let mut streams = Vec::with_capacity(max_requests);
+        let mut futures = Vec::with_capacity(max_requests);
         for _ in 0..max_requests {
-            let stream = integration.list(None).await.unwrap();
-            streams.push(stream);
+            let stream = integration.list_with_delimiter(None);
+            futures.push(stream);
         }
 
         let t = Duration::from_millis(20);
 
         // Expect to not be able to make another request
-        assert!(timeout(t, integration.list(None)).await.is_err());
+        let fut = integration.list(None).collect::<Vec<_>>();
+        assert!(timeout(t, fut).await.is_err());
 
-        // Drop one of the streams
-        streams.pop();
+        // Drop one of the futures
+        futures.pop();
 
         // Can now make another request
-        integration.list(None).await.unwrap();
+        integration.list(None).collect::<Vec<_>>().await;
     }
 }

@@ -478,10 +478,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// `foo/bar_baz/x`.
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>>;
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>>;
 
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
@@ -489,18 +486,15 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// the number of network requests required
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
         let offset = offset.clone();
-        let stream = self
-            .list(prefix)
-            .await?
+        self.list(prefix)
             .try_filter(move |f| futures::future::ready(f.location > offset))
-            .boxed();
-        Ok(stream)
+            .boxed()
     }
 
     /// List objects with the given prefix and an implementation specific
@@ -618,19 +612,16 @@ macro_rules! as_ref_impl {
                 self.as_ref().delete_stream(locations)
             }
 
-            async fn list(
-                &self,
-                prefix: Option<&Path>,
-            ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-                self.as_ref().list(prefix).await
+            fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+                self.as_ref().list(prefix)
             }
 
-            async fn list_with_offset(
+            fn list_with_offset(
                 &self,
                 prefix: Option<&Path>,
                 offset: &Path,
-            ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-                self.as_ref().list_with_offset(prefix, offset).await
+            ) -> BoxStream<'_, Result<ObjectMeta>> {
+                self.as_ref().list_with_offset(prefix, offset)
             }
 
             async fn list_with_delimiter(
@@ -931,7 +922,6 @@ mod test_util {
     ) -> Result<Vec<Path>> {
         storage
             .list(prefix)
-            .await?
             .map_ok(|meta| meta.location)
             .try_collect::<Vec<Path>>()
             .await
@@ -1221,11 +1211,7 @@ mod tests {
         ];
 
         for (prefix, offset) in cases {
-            let s = storage
-                .list_with_offset(prefix.as_ref(), &offset)
-                .await
-                .unwrap();
-
+            let s = storage.list_with_offset(prefix.as_ref(), &offset);
             let mut actual: Vec<_> =
                 s.map_ok(|x| x.location).try_collect().await.unwrap();
 
@@ -1658,12 +1644,7 @@ mod tests {
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {
-        let paths = storage
-            .list(None)
-            .await
-            .unwrap()
-            .map_ok(|meta| meta.location)
-            .boxed();
+        let paths = storage.list(None).map_ok(|meta| meta.location).boxed();
         storage
             .delete_stream(paths)
             .try_collect::<Vec<_>>()
@@ -1672,18 +1653,18 @@ mod tests {
     }
 
     /// Test that the returned stream does not borrow the lifetime of Path
-    async fn list_store<'a, 'b>(
+    fn list_store<'a, 'b>(
         store: &'a dyn ObjectStore,
         path_str: &'b str,
-    ) -> super::Result<BoxStream<'a, super::Result<ObjectMeta>>> {
+    ) -> BoxStream<'a, Result<ObjectMeta>> {
         let path = Path::from(path_str);
-        store.list(Some(&path)).await
+        store.list(Some(&path))
     }
 
     #[tokio::test]
     async fn test_list_lifetimes() {
         let store = memory::InMemory::new();
-        let mut stream = list_store(&store, "path").await.unwrap();
+        let mut stream = list_store(&store, "path");
         assert!(stream.next().await.is_none());
     }
 
