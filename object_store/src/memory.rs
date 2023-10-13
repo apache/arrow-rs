@@ -145,6 +145,7 @@ impl ObjectStore for InMemory {
             last_modified,
             size: data.len(),
             e_tag: None,
+            version: None,
         };
 
         let (range, data) = match options.range {
@@ -191,6 +192,7 @@ impl ObjectStore for InMemory {
             last_modified: entry.1,
             size: entry.0.len(),
             e_tag: None,
+            version: None,
         })
     }
 
@@ -222,6 +224,7 @@ impl ObjectStore for InMemory {
                     last_modified: value.1,
                     size: value.0.len(),
                     e_tag: None,
+                    version: None,
                 })
             })
             .collect();
@@ -266,6 +269,7 @@ impl ObjectStore for InMemory {
                     last_modified: v.1,
                     size: v.0.len(),
                     e_tag: None,
+                    version: None,
                 };
                 objects.push(object);
             }

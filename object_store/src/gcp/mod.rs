@@ -68,6 +68,7 @@ const STORE: &str = "GCS";
 
 /// [`CredentialProvider`] for [`GoogleCloudStorage`]
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
+use crate::client::header::HeaderConfig;
 pub use credential::GcpCredential;
 
 #[derive(Debug, Snafu)]
@@ -388,6 +389,12 @@ impl GoogleCloudStorageClient {
 impl GetClient for GoogleCloudStorageClient {
     const STORE: &'static str = STORE;
 
+    const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+        etag_required: true,
+        last_modified_required: true,
+        version_header: Some("x-goog-generation"),
+    };
+
     /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
     async fn get_request(
         &self,
@@ -403,19 +410,23 @@ impl GetClient for GoogleCloudStorageClient {
             false => Method::GET,
         };
 
-        let mut request = self.client.request(method, url).with_get_options(options);
+        let mut request = self.client.request(method, url);
+
+        if let Some(v) = &options.version {
+            request = request.query(&[("generation", v)]);
+        }
 
         if !credential.bearer.is_empty() {
             request = request.bearer_auth(&credential.bearer);
         }
 
-        let response =
-            request
-                .send_retry(&self.retry_config)
-                .await
-                .context(GetRequestSnafu {
-                    path: path.as_ref(),
-                })?;
+        let response = request
+            .with_get_options(options)
+            .send_retry(&self.retry_config)
+            .await
+            .context(GetRequestSnafu {
+                path: path.as_ref(),
+            })?;
 
         Ok(response)
     }

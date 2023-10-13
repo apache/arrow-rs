@@ -682,6 +682,8 @@ pub struct ObjectMeta {
     pub size: usize,
     /// The unique identifier for the object
     pub e_tag: Option<String>,
+    /// A version indicator for this object
+    pub version: Option<String>,
 }
 
 /// Options for a get request, such as range
@@ -714,6 +716,8 @@ pub struct GetOptions {
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
     pub range: Option<Range<usize>>,
+    /// Request a particular object version
+    pub version: Option<String>,
 }
 
 impl GetOptions {
@@ -1373,6 +1377,24 @@ mod tests {
                 ..GetOptions::default()
             };
             storage.get_opts(&path, options).await.unwrap();
+        }
+
+        if let Some(version) = meta.version {
+            storage.put(&path, "bar".into()).await.unwrap();
+
+            let options = GetOptions {
+                version: Some(version),
+                ..GetOptions::default()
+            };
+
+            // Can retrieve previous version
+            let get_opts = storage.get_opts(&path, options).await.unwrap();
+            let old = get_opts.bytes().await.unwrap();
+            assert_eq!(old, b"foo".as_slice());
+
+            // Current version contains the updated data
+            let current = storage.get(&path).await.unwrap().bytes().await.unwrap();
+            assert_eq!(&current, b"bar".as_slice());
         }
     }
 
