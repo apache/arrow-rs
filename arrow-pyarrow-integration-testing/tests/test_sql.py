@@ -393,6 +393,23 @@ def test_sparse_union_python():
     del a
     del b
 
+def test_tensor_array():
+    tensor_type = pa.fixed_shape_tensor(pa.float32(), [2, 3])
+    inner = pa.array([float(x) for x in range(1, 7)] + [None] * 12, pa.float32())
+    storage = pa.FixedSizeListArray.from_arrays(inner, 6)
+    f32_array = pa.ExtensionArray.from_storage(tensor_type, storage)
+
+    # Round-tripping as an array gives back storage type, because arrow-rs has
+    # no notion of extension types.
+    b = rust.round_trip_array(f32_array)
+    assert b == f32_array.storage
+
+    batch = pa.record_batch([f32_array], ["tensor"])
+    b = rust.round_trip_record_batch(batch)
+    assert b == batch
+
+    del b
+
 def test_record_batch_reader():
     """
     Python -> Rust -> Python

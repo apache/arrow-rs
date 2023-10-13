@@ -36,10 +36,10 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc, time::Duration};
 use tokio::io::AsyncWrite;
 use tracing::info;
 use url::Url;
@@ -56,6 +56,7 @@ use crate::client::{
 };
 use crate::config::ConfigValue;
 use crate::multipart::{PartId, PutPart, WriteMultiPart};
+use crate::signer::Signer;
 use crate::{
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Path, Result, RetryConfig,
@@ -208,6 +209,65 @@ impl AmazonS3 {
     /// Returns the [`AwsCredentialProvider`] used by [`AmazonS3`]
     pub fn credentials(&self) -> &AwsCredentialProvider {
         &self.client.config().credentials
+    }
+
+    /// Create a full URL to the resource specified by `path` with this instance's configuration.
+    fn path_url(&self, path: &Path) -> String {
+        self.client.config().path_url(path)
+    }
+}
+
+#[async_trait]
+impl Signer for AmazonS3 {
+    /// Create a URL containing the relevant [AWS SigV4] query parameters that authorize a request
+    /// via `method` to the resource at `path` valid for the duration specified in `expires_in`.
+    ///
+    /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
+    ///
+    /// # Example
+    ///
+    /// This example returns a URL that will enable a user to upload a file to
+    /// "some-folder/some-file.txt" in the next hour.
+    ///
+    /// ```
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
+    /// # use reqwest::Method;
+    /// # use std::time::Duration;
+    /// #
+    /// let region = "us-east-1";
+    /// let s3 = AmazonS3Builder::new()
+    ///     .with_region(region)
+    ///     .with_bucket_name("my-bucket")
+    ///     .with_access_key_id("my-access-key-id")
+    ///     .with_secret_access_key("my-secret-access-key")
+    ///     .build()?;
+    ///
+    /// let url = s3.signed_url(
+    ///     Method::PUT,
+    ///     &Path::from("some-folder/some-file.txt"),
+    ///     Duration::from_secs(60 * 60)
+    /// ).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    async fn signed_url(
+        &self,
+        method: Method,
+        path: &Path,
+        expires_in: Duration,
+    ) -> Result<Url> {
+        let credential = self.credentials().get_credential().await?;
+        let authorizer =
+            AwsAuthorizer::new(&credential, "s3", &self.client.config().region);
+
+        let path_url = self.path_url(path);
+        let mut url =
+            Url::parse(&path_url).context(UnableToParseUrlSnafu { url: path_url })?;
+
+        authorizer.sign(method, &mut url, expires_in);
+
+        Ok(url)
     }
 }
 

@@ -461,7 +461,10 @@ impl Field {
                     ));
                 }
             },
-            DataType::Null
+            DataType::Null => {
+                self.nullable = true;
+                self.data_type = from.data_type.clone();
+            }
             | DataType::Boolean
             | DataType::Int8
             | DataType::Int16
@@ -494,7 +497,9 @@ impl Field {
             | DataType::LargeUtf8
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => {
-                if self.data_type != from.data_type {
+                if from.data_type == DataType::Null {
+                    self.nullable = true;
+                } else if self.data_type != from.data_type {
                     return Err(ArrowError::SchemaError(
                         format!("Fail to merge schema field '{}' because the from data_type = {} does not equal {}",
                             self.name, from.data_type, self.data_type)
@@ -578,6 +583,21 @@ mod test {
             .expect_err("should fail")
             .to_string();
         assert_eq!("Schema error: Fail to merge schema field 'c1' because the from data_type = Float32 does not equal Int64", result);
+    }
+
+    #[test]
+    fn test_merge_with_null() {
+        let mut field1 = Field::new("c1", DataType::Null, true);
+        field1
+            .try_merge(&Field::new("c1", DataType::Float32, false))
+            .expect("should widen type to nullable float");
+        assert_eq!(Field::new("c1", DataType::Float32, true), field1);
+
+        let mut field2 = Field::new("c2", DataType::Utf8, false);
+        field2
+            .try_merge(&Field::new("c2", DataType::Null, true))
+            .expect("should widen type to nullable utf8");
+        assert_eq!(Field::new("c2", DataType::Utf8, true), field2);
     }
 
     #[test]

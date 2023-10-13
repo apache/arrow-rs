@@ -71,7 +71,14 @@ where
                         TimeUnit::Second => date.timestamp(),
                         TimeUnit::Millisecond => date.timestamp_millis(),
                         TimeUnit::Microsecond => date.timestamp_micros(),
-                        TimeUnit::Nanosecond => date.timestamp_nanos(),
+                        TimeUnit::Nanosecond => {
+                            date.timestamp_nanos_opt().ok_or_else(|| {
+                                ArrowError::ParseError(format!(
+                                    "{} would overflow 64-bit signed nanoseconds",
+                                    date.to_rfc3339(),
+                                ))
+                            })?
+                        }
                     };
                     builder.append_value(value)
                 }
@@ -89,6 +96,13 @@ where
 
                     builder.append_value(value)
                 }
+                TapeElement::I32(v) => builder.append_value(v as i64),
+                TapeElement::I64(high) => match tape.get(p + 1) {
+                    TapeElement::I32(low) => {
+                        builder.append_value((high as i64) << 32 | low as i64)
+                    }
+                    _ => unreachable!(),
+                },
                 _ => return Err(tape.error(*p, "primitive")),
             }
         }

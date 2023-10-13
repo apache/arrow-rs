@@ -100,7 +100,7 @@ fn do_bench(c: &mut Criterion, columns: &[Column], len: usize) {
                     .iter()
                     .map(|a| SortField::new(a.data_type().clone()))
                     .collect();
-                let mut converter = RowConverter::new(fields).unwrap();
+                let converter = RowConverter::new(fields).unwrap();
                 let rows = converter.convert_columns(&arrays).unwrap();
                 let mut sort: Vec<_> = rows.iter().enumerate().collect();
                 sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));

@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::get::GetClient;
+use crate::client::header::HeaderConfig;
 use crate::client::retry::{self, RetryConfig, RetryExt};
 use crate::client::GetOptionsExt;
 use crate::path::{Path, DELIMITER};
 use crate::util::deserialize_rfc1123;
 use crate::{ClientOptions, GetOptions, ObjectMeta, Result};
+use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use percent_encoding::percent_decode_str;
@@ -36,6 +39,9 @@ enum Error {
 
     #[snafu(display("Request error: {}", source))]
     Reqwest { source: reqwest::Error },
+
+    #[snafu(display("Range request not supported by {}", href))]
+    RangeNotSupported { href: String },
 
     #[snafu(display("Error decoding PROPFIND response: {}", source))]
     InvalidPropFind { source: quick_xml::de::DeError },
@@ -235,26 +241,6 @@ impl Client {
         Ok(())
     }
 
-    pub async fn get(&self, location: &Path, options: GetOptions) -> Result<Response> {
-        let url = self.path_url(location);
-        let builder = self.client.get(url);
-
-        builder
-            .with_get_options(options)
-            .send_retry(&self.retry_config)
-            .await
-            .map_err(|source| match source.status() {
-                // Some stores return METHOD_NOT_ALLOWED for get on directories
-                Some(StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED) => {
-                    crate::Error::NotFound {
-                        source: Box::new(source),
-                        path: location.to_string(),
-                    }
-                }
-                _ => Error::Request { source }.into(),
-            })
-    }
-
     pub async fn copy(&self, from: &Path, to: &Path, overwrite: bool) -> Result<()> {
         let mut retry = false;
         loop {
@@ -288,6 +274,60 @@ impl Client {
                 }),
             };
         }
+    }
+}
+
+#[async_trait]
+impl GetClient for Client {
+    const STORE: &'static str = "HTTP";
+
+    /// Override the [`HeaderConfig`] to be less strict to support a
+    /// broader range of HTTP servers (#4831)
+    const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+        etag_required: false,
+        last_modified_required: false,
+    };
+
+    async fn get_request(
+        &self,
+        location: &Path,
+        options: GetOptions,
+        head: bool,
+    ) -> Result<Response> {
+        let url = self.path_url(location);
+        let method = match head {
+            true => Method::HEAD,
+            false => Method::GET,
+        };
+        let has_range = options.range.is_some();
+        let builder = self.client.request(method, url);
+
+        let res = builder
+            .with_get_options(options)
+            .send_retry(&self.retry_config)
+            .await
+            .map_err(|source| match source.status() {
+                // Some stores return METHOD_NOT_ALLOWED for get on directories
+                Some(StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED) => {
+                    crate::Error::NotFound {
+                        source: Box::new(source),
+                        path: location.to_string(),
+                    }
+                }
+                _ => Error::Request { source }.into(),
+            })?;
+
+        // We expect a 206 Partial Content response if a range was requested
+        // a 200 OK response would indicate the server did not fulfill the request
+        if has_range && res.status() != StatusCode::PARTIAL_CONTENT {
+            return Err(crate::Error::NotSupported {
+                source: Box::new(Error::RangeNotSupported {
+                    href: location.to_string(),
+                }),
+            });
+        }
+
+        Ok(res)
     }
 }
 

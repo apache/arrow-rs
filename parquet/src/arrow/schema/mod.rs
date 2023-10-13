@@ -45,6 +45,8 @@ mod primitive;
 use crate::arrow::ProjectionMask;
 pub(crate) use complex::{ParquetField, ParquetFieldType};
 
+use super::PARQUET_FIELD_ID_META_KEY;
+
 /// Convert Parquet schema to Arrow schema including optional metadata
 ///
 /// Attempts to decode any existing Arrow schema metadata, falling back
@@ -268,12 +270,20 @@ fn parse_key_value_metadata(
 /// Convert parquet column schema to arrow field.
 pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field> {
     let field = complex::convert_type(&parquet_column.self_type_ptr())?;
-
-    Ok(Field::new(
+    let mut ret = Field::new(
         parquet_column.name(),
         field.arrow_type,
         field.nullable,
-    ))
+    );
+
+    let basic_info = parquet_column.self_type().get_basic_info();
+    if basic_info.has_id() {
+        let mut meta = HashMap::with_capacity(1);
+        meta.insert(PARQUET_FIELD_ID_META_KEY.to_string(), basic_info.id().to_string());
+        ret.set_metadata(meta);
+    }
+
+    Ok(ret)
 }
 
 pub fn decimal_length_from_precision(precision: u8) -> usize {
@@ -578,6 +588,7 @@ mod tests {
 
     use crate::arrow::PARQUET_FIELD_ID_META_KEY;
     use crate::file::metadata::KeyValue;
+    use crate::file::reader::FileReader;
     use crate::{
         arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
@@ -1807,6 +1818,52 @@ mod tests {
                 "arrow_schema.c41.my_entries.my_value.list.item -> 11",
             ]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_parquet_field_ids_raw() -> Result<()> {
+        let meta = |a: &[(&str, &str)]| -> HashMap<String, String> {
+            a.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        };
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("c1", DataType::Utf8, true).with_metadata(meta(&[
+                    (PARQUET_FIELD_ID_META_KEY, "1"),
+                ])),
+                Field::new("c2", DataType::Utf8, true).with_metadata(meta(&[
+                    (PARQUET_FIELD_ID_META_KEY, "2"),
+                ])),
+            ],
+            HashMap::new(),
+        );
+
+        let writer = ArrowWriter::try_new(
+            vec![],
+            Arc::new(schema.clone()),
+            None,
+        )?;
+        let parquet_bytes = writer.into_inner()?;
+
+        let reader = crate::file::reader::SerializedFileReader::new(
+            bytes::Bytes::from(parquet_bytes),
+        )?;
+        let schema_descriptor = reader.metadata().file_metadata().schema_descr_ptr();
+
+        // don't pass metadata so field ids are read from Parquet and not from serialized Arrow schema
+        let arrow_schema = crate::arrow::parquet_to_arrow_schema(
+            &schema_descriptor,
+            None,
+        )?;
+
+        let parq_schema_descr = crate::arrow::arrow_to_parquet_schema(&arrow_schema)?;
+        let parq_fields = parq_schema_descr.root_schema().get_fields();
+        assert_eq!(parq_fields.len(), 2);
+        assert_eq!(parq_fields[0].get_basic_info().id(), 1);
+        assert_eq!(parq_fields[1].get_basic_info().id(), 2);
 
         Ok(())
     }

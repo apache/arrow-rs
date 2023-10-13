@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::header::header_meta;
+use crate::client::header::{header_meta, HeaderConfig};
 use crate::path::Path;
 use crate::{Error, GetOptions, GetResult, ObjectMeta};
 use crate::{GetResultPayload, Result};
@@ -27,6 +27,12 @@ use reqwest::Response;
 #[async_trait]
 pub trait GetClient: Send + Sync + 'static {
     const STORE: &'static str;
+
+    /// Configure the [`HeaderConfig`] for this client
+    const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+        etag_required: true,
+        last_modified_required: true,
+    };
 
     async fn get_request(
         &self,
@@ -50,9 +56,11 @@ impl<T: GetClient> GetClientExt for T {
         let range = options.range.clone();
         let response = self.get_request(location, options, false).await?;
         let meta =
-            header_meta(location, response.headers()).map_err(|e| Error::Generic {
-                store: T::STORE,
-                source: Box::new(e),
+            header_meta(location, response.headers(), T::HEADER_CONFIG).map_err(|e| {
+                Error::Generic {
+                    store: T::STORE,
+                    source: Box::new(e),
+                }
             })?;
 
         let stream = response
@@ -73,9 +81,11 @@ impl<T: GetClient> GetClientExt for T {
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let options = GetOptions::default();
         let response = self.get_request(location, options, true).await?;
-        header_meta(location, response.headers()).map_err(|e| Error::Generic {
-            store: T::STORE,
-            source: Box::new(e),
+        header_meta(location, response.headers(), T::HEADER_CONFIG).map_err(|e| {
+            Error::Generic {
+                store: T::STORE,
+                source: Box::new(e),
+            }
         })
     }
 }

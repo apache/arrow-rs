@@ -105,15 +105,17 @@ fn make_primitive_scalar<T: num::ToPrimitive + std::fmt::Debug>(
         }
         DataType::Decimal128(_, _) => {
             let right = try_to_type!(scalar, to_i128)?;
-            Ok(Arc::new(PrimitiveArray::<Decimal128Type>::from(vec![
-                right,
-            ])))
+            Ok(Arc::new(
+                PrimitiveArray::<Decimal128Type>::from(vec![right])
+                    .with_data_type(d.clone()),
+            ))
         }
         DataType::Decimal256(_, _) => {
             let right = try_to_type!(scalar, to_i128)?;
-            Ok(Arc::new(PrimitiveArray::<Decimal256Type>::from(vec![
-                i256::from_i128(right),
-            ])))
+            Ok(Arc::new(
+                PrimitiveArray::<Decimal256Type>::from(vec![i256::from_i128(right)])
+                    .with_data_type(d.clone()),
+            ))
         }
         DataType::Date32 => {
             let right = try_to_type!(scalar, to_i32)?;
@@ -125,27 +127,31 @@ fn make_primitive_scalar<T: num::ToPrimitive + std::fmt::Debug>(
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
             let right = try_to_type!(scalar, to_i64)?;
-            Ok(Arc::new(PrimitiveArray::<TimestampNanosecondType>::from(
-                vec![right],
-            )))
+            Ok(Arc::new(
+                PrimitiveArray::<TimestampNanosecondType>::from(vec![right])
+                    .with_data_type(d.clone()),
+            ))
         }
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             let right = try_to_type!(scalar, to_i64)?;
-            Ok(Arc::new(PrimitiveArray::<TimestampMicrosecondType>::from(
-                vec![right],
-            )))
+            Ok(Arc::new(
+                PrimitiveArray::<TimestampMicrosecondType>::from(vec![right])
+                    .with_data_type(d.clone()),
+            ))
         }
         DataType::Timestamp(TimeUnit::Millisecond, _) => {
             let right = try_to_type!(scalar, to_i64)?;
-            Ok(Arc::new(PrimitiveArray::<TimestampMillisecondType>::from(
-                vec![right],
-            )))
+            Ok(Arc::new(
+                PrimitiveArray::<TimestampMillisecondType>::from(vec![right])
+                    .with_data_type(d.clone()),
+            ))
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
             let right = try_to_type!(scalar, to_i64)?;
-            Ok(Arc::new(PrimitiveArray::<TimestampSecondType>::from(vec![
-                right,
-            ])))
+            Ok(Arc::new(
+                PrimitiveArray::<TimestampSecondType>::from(vec![right])
+                    .with_data_type(d.clone()),
+            ))
         }
         DataType::Time32(TimeUnit::Second) => {
             let right = try_to_type!(scalar, to_i32)?;

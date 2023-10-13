@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_flight::sql::server::PeekableFlightDataStream;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use futures::{stream, Stream, TryStreamExt};
@@ -602,7 +603,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Ok(FAKE_UPDATE_RESULT)
     }
@@ -610,7 +611,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_substrait_plan(
         &self,
         _ticket: CommandStatementSubstraitPlan,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_substrait_plan not implemented",
@@ -620,7 +621,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_query not implemented",
@@ -630,7 +631,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_update(
         &self,
         _query: CommandPreparedStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_update not implemented",
@@ -788,7 +789,6 @@ mod tests {
 
     use arrow_cast::pretty::pretty_format_batches;
     use arrow_flight::sql::client::FlightSqlServiceClient;
-    use arrow_flight::utils::flight_data_to_batches;
     use tonic::transport::server::TcpIncoming;
     use tonic::transport::{Certificate, Endpoint};
     use tower::service_fn;
@@ -954,8 +954,7 @@ mod tests {
 
             let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
             let flight_data = client.do_get(ticket).await.unwrap();
-            let flight_data: Vec<FlightData> = flight_data.try_collect().await.unwrap();
-            let batches = flight_data_to_batches(&flight_data).unwrap();
+            let batches: Vec<_> = flight_data.try_collect().await.unwrap();
 
             let res = pretty_format_batches(batches.as_slice()).unwrap();
             let expected = r#"

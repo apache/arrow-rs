@@ -1368,12 +1368,14 @@ pub(crate) mod bytes {
     }
 
     impl ByteArrayNativeType for [u8] {
+        #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
             b
         }
     }
 
     impl ByteArrayNativeType for str {
+        #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
             std::str::from_utf8_unchecked(b)
         }

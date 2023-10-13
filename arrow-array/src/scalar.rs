@@ -98,9 +98,32 @@ impl Datum for &dyn Array {
     }
 }
 
-/// A wrapper around a single value [`Array`] indicating kernels should treat it as a scalar value
+/// A wrapper around a single value [`Array`] that implements
+/// [`Datum`] and indicates [compute] kernels should treat this array
+/// as a scalar value (a single value).
 ///
-/// See [`Datum`] for more information
+/// Using a [`Scalar`] is often much more efficient than creating an
+/// [`Array`] with the same (repeated) value.
+///
+/// See [`Datum`] for more information.
+///
+/// # Example
+///
+/// ```rust
+/// # use arrow_array::{Scalar, Int32Array, ArrayRef};
+/// # fn get_array() -> ArrayRef { std::sync::Arc::new(Int32Array::from(vec![42])) }
+/// // Create a (typed) scalar for Int32Array for the value 42
+/// let scalar = Scalar::new(Int32Array::from(vec![42]));
+///
+/// // Create a scalar using PrimtiveArray::scalar
+/// let scalar = Int32Array::new_scalar(42);
+///
+/// // create a scalar from an ArrayRef (for dynamic typed Arrays)
+/// let array: ArrayRef = get_array();
+/// let scalar = Scalar::new(array);
+/// ```
+///
+/// [compute]: https://docs.rs/arrow/latest/arrow/compute/index.html
 #[derive(Debug, Copy, Clone)]
 pub struct Scalar<T: Array>(T);
 

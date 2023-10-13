@@ -36,7 +36,7 @@
 //! clouds and local test environments, via a simple runtime
 //! configuration change.
 //!
-//! # Features:
+//! # Highlights
 //!
 //! 1. A focused, easy to use, idiomatic, well documented, high
 //! performance, `async` API.
@@ -53,26 +53,31 @@
 //! [InfluxDB IOx]: https://github.com/influxdata/influxdb_iox/
 //! [crates.io]: https://github.com/rust-lang/crates.io
 //!
-//! # Example: Create an [`ObjectStore`] implementation:
+//! # Available [`ObjectStore`] Implementations
+//!
+//! By default, this crate provides the following implementations:
+//!
+//! * Memory: [`InMemory`](memory::InMemory)
+//! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
+//!
+//! Feature flags are used to enable support for other implementations:
 //!
 #![cfg_attr(
     feature = "gcp",
-    doc = "* [Google Cloud Storage](https://cloud.google.com/storage/): [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
+    doc = "* `gcp`: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
 )]
 #![cfg_attr(
     feature = "aws",
-    doc = "* [Amazon S3](https://aws.amazon.com/s3/): [`AmazonS3Builder`](aws::AmazonS3Builder)"
+    doc = "* `aws`: [Amazon S3](https://aws.amazon.com/s3/). See [`AmazonS3Builder`](aws::AmazonS3Builder)"
 )]
 #![cfg_attr(
     feature = "azure",
-    doc = "* [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/): [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
+    doc = "* `azure`: [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/). See [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
 )]
 #![cfg_attr(
     feature = "http",
-    doc = "* [HTTP Storage](https://datatracker.ietf.org/doc/html/rfc2518): [`HttpBuilder`](http::HttpBuilder)"
+    doc = "* `http`: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
-//! * In Memory: [`InMemory`](memory::InMemory)
-//! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
 //!
 //! # Adapters
 //!
@@ -240,14 +245,15 @@
 
 #[cfg(all(
     target_arch = "wasm32",
-    any(feature = "gcp", feature = "aws", feature = "azure",)
+    any(feature = "gcp", feature = "aws", feature = "azure", feature = "http")
 ))]
-compile_error!("Features 'gcp', 'aws', 'azure' are not supported on wasm.");
+compile_error!("Features 'gcp', 'aws', 'azure', 'http' are not supported on wasm.");
 
 #[cfg(feature = "aws")]
 pub mod aws;
 #[cfg(feature = "azure")]
 pub mod azure;
+pub mod buffered;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chunked;
 pub mod delimited;
@@ -261,15 +267,20 @@ pub mod local;
 pub mod memory;
 pub mod path;
 pub mod prefix;
+#[cfg(feature = "cloud")]
+pub mod signer;
 pub mod throttle;
 
-#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
+#[cfg(feature = "cloud")]
 mod client;
 
-#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
-pub use client::{backoff::BackoffConfig, retry::RetryConfig, CredentialProvider};
+#[cfg(feature = "cloud")]
+pub use client::{
+    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions,
+    CredentialProvider, StaticCredentialProvider,
+};
 
-#[cfg(any(feature = "gcp", feature = "aws", feature = "azure", feature = "http"))]
+#[cfg(feature = "cloud")]
 mod config;
 
 #[cfg(feature = "cloud")]
@@ -282,7 +293,7 @@ pub use parse::{parse_url, parse_url_opts};
 use crate::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::util::maybe_spawn_blocking;
-use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT};
+pub use crate::util::{coalesce_ranges, collect_bytes, OBJECT_STORE_COALESCE_DEFAULT};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -294,9 +305,6 @@ use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
-
-#[cfg(any(feature = "azure", feature = "aws", feature = "gcp", feature = "http"))]
-pub use client::{ClientConfigKey, ClientOptions};
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;

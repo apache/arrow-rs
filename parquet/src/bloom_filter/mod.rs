@@ -26,13 +26,12 @@ use crate::format::{
     BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, BloomFilterHeader,
     SplitBlockAlgorithm, Uncompressed, XxHash,
 };
-use bytes::{Buf, Bytes};
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+use bytes::Bytes;
 use std::hash::Hasher;
 use std::io::Write;
 use std::sync::Arc;
-use thrift::protocol::{
-    TCompactInputProtocol, TCompactOutputProtocol, TOutputProtocol, TSerializable,
-};
+use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
 use twox_hash::XxHash64;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).
@@ -133,15 +132,14 @@ impl std::ops::IndexMut<usize> for Block {
 #[derive(Debug, Clone)]
 pub struct Sbbf(Vec<Block>);
 
-const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
+pub(crate) const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
 
-/// given an initial offset, and a [ChunkReader], try to read out a bloom filter header and return
+/// given an initial offset, and a byte buffer, try to read out a bloom filter header and return
 /// both the header and the offset after it (for bitset).
-fn chunk_read_bloom_filter_header_and_offset<R: ChunkReader>(
+pub(crate) fn chunk_read_bloom_filter_header_and_offset(
     offset: u64,
-    reader: Arc<R>,
+    buffer: Bytes,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
-    let buffer = reader.get_bytes(offset, SBBF_HEADER_SIZE_ESTIMATE)?;
     let (header, length) = read_bloom_filter_header_and_length(buffer)?;
     Ok((header, offset + length))
 }
@@ -149,19 +147,15 @@ fn chunk_read_bloom_filter_header_and_offset<R: ChunkReader>(
 /// given a [Bytes] buffer, try to read out a bloom filter header and return both the header and
 /// length of the header.
 #[inline]
-fn read_bloom_filter_header_and_length(
+pub(crate) fn read_bloom_filter_header_and_length(
     buffer: Bytes,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
     let total_length = buffer.len();
-    let mut buf_reader = buffer.reader();
-    let mut prot = TCompactInputProtocol::new(&mut buf_reader);
+    let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
     let header = BloomFilterHeader::read_from_in_protocol(&mut prot).map_err(|e| {
         ParquetError::General(format!("Could not read bloom filter header: {e}"))
     })?;
-    Ok((
-        header,
-        (total_length - buf_reader.into_inner().remaining()) as u64,
-    ))
+    Ok((header, (total_length - prot.as_slice().len()) as u64))
 }
 
 pub(crate) const BITSET_MIN_LENGTH: usize = 32;
@@ -205,7 +199,7 @@ impl Sbbf {
         Self::new(&bitset)
     }
 
-    fn new(bitset: &[u8]) -> Self {
+    pub(crate) fn new(bitset: &[u8]) -> Self {
         let data = bitset
             .chunks_exact(4 * 8)
             .map(|chunk| {
@@ -271,8 +265,13 @@ impl Sbbf {
             return Ok(None);
         };
 
+        let buffer = match column_metadata.bloom_filter_length() {
+            Some(length) => reader.get_bytes(offset, length as usize),
+            None => reader.get_bytes(offset, SBBF_HEADER_SIZE_ESTIMATE),
+        }?;
+
         let (header, bitset_offset) =
-            chunk_read_bloom_filter_header_and_offset(offset, reader.clone())?;
+            chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
 
         match header.algorithm {
             BloomFilterAlgorithm::BLOCK(_) => {
@@ -289,11 +288,17 @@ impl Sbbf {
                 // this match exists to future proof the singleton hash enum
             }
         }
-        // length in bytes
-        let length: usize = header.num_bytes.try_into().map_err(|_| {
-            ParquetError::General("Bloom filter length is invalid".to_string())
-        })?;
-        let bitset = reader.get_bytes(bitset_offset, length)?;
+
+        let bitset = match column_metadata.bloom_filter_length() {
+            Some(_) => buffer.slice((bitset_offset - offset) as usize..),
+            None => {
+                let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
+                    ParquetError::General("Bloom filter length is invalid".to_string())
+                })?;
+                reader.get_bytes(bitset_offset, bitset_length)?
+            }
+        };
+
         Ok(Some(Self::new(&bitset)))
     }
 

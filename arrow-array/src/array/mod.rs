@@ -173,20 +173,22 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn offset(&self) -> usize;
 
-    /// Returns the null buffer of this array if any
+    /// Returns the null buffer of this array if any.
     ///
-    /// Note: some arrays can encode their nullability in their children, for example,
+    /// The null buffer encodes the "physical" nulls of an array.
+    /// However, some arrays can also encode nullability in their children, for example,
     /// [`DictionaryArray::values`] values or [`RunArray::values`], or without a null buffer,
-    /// such as [`NullArray`]. Use [`Array::logical_nulls`] to obtain a computed mask encoding this
+    /// such as [`NullArray`]. To determine if each element of such an array is logically null,
+    /// you can use the slower [`Array::logical_nulls`] to obtain a computed mask .
     fn nulls(&self) -> Option<&NullBuffer>;
 
-    /// Returns the logical null buffer of this array if any
+    /// Returns a potentially computed [`NullBuffer`] that represent the logical null values of this array, if any.
     ///
     /// In most cases this will be the same as [`Array::nulls`], except for:
     ///
-    /// * DictionaryArray where [`DictionaryArray::values`] contains nulls
-    /// * RunArray where [`RunArray::values`] contains nulls
-    /// * NullArray where all indices are nulls
+    /// * [`DictionaryArray`] where [`DictionaryArray::values`] contains nulls
+    /// * [`RunArray`] where [`RunArray::values`] contains nulls
+    /// * [`NullArray`] where all indices are nulls
     ///
     /// In these cases a logical [`NullBuffer`] will be computed, encoding the logical nullability
     /// of these arrays, beyond what is encoded in [`Array::nulls`]
@@ -194,31 +196,33 @@ pub trait Array: std::fmt::Debug + Send + Sync {
         self.nulls().cloned()
     }
 
-    /// Returns whether the element at `index` is null.
-    /// When using this function on a slice, the index is relative to the slice.
+    /// Returns whether the element at `index` is null according to [`Array::nulls`]
     ///
-    /// Note: this method returns the physical nullability, i.e. that encoded in [`Array::nulls`]
-    /// see [`Array::logical_nulls`] for logical nullability
+    /// Note: For performance reasons, this method returns nullability solely as determined by the
+    /// null buffer. This difference can lead to surprising results, for example, [`NullArray::is_null`] always
+    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray`] and [`RunArray`] may
+    /// encode nullability in their children. See [`Self::logical_nulls`] for more information.
     ///
     /// # Example:
     ///
     /// ```
-    /// use arrow_array::{Array, Int32Array};
+    /// use arrow_array::{Array, Int32Array, NullArray};
     ///
     /// let array = Int32Array::from(vec![Some(1), None]);
-    ///
     /// assert_eq!(array.is_null(0), false);
     /// assert_eq!(array.is_null(1), true);
+    ///
+    /// // NullArrays do not have a null buffer, and therefore always
+    /// // return false for is_null.
+    /// let array = NullArray::new(1);
+    /// assert_eq!(array.is_null(0), false);
     /// ```
     fn is_null(&self, index: usize) -> bool {
         self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
     }
 
-    /// Returns whether the element at `index` is not null.
-    /// When using this function on a slice, the index is relative to the slice.
-    ///
-    /// Note: this method returns the physical nullability, i.e. that encoded in [`Array::nulls`]
-    /// see [`Array::logical_nulls`] for logical nullability
+    /// Returns whether the element at `index` is *not* null, the
+    /// opposite of [`Self::is_null`].
     ///
     /// # Example:
     ///

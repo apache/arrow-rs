@@ -23,10 +23,10 @@
 mod ffi;
 
 // --------------------- Array & ArrayData ---------------------
-pub use arrow_array::array::*;
 pub use arrow_array::builder::*;
 pub use arrow_array::cast::*;
 pub use arrow_array::iterator::*;
+pub use arrow_array::*;
 pub use arrow_data::{
     layout, ArrayData, ArrayDataBuilder, ArrayDataRef, BufferSpec, DataTypeLayout,
 };

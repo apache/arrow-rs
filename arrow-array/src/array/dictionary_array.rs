@@ -1005,7 +1005,7 @@ impl<K: ArrowDictionaryKeyType> AnyDictionaryArray for DictionaryArray<K> {
         let v_len = self.values().len();
         assert_ne!(v_len, 0);
         let iter = self.keys().values().iter();
-        iter.map(|x| x.as_usize().min(v_len)).collect()
+        iter.map(|x| x.as_usize().min(v_len - 1)).collect()
     }
 
     fn with_values(&self, values: ArrayRef) -> ArrayRef {
@@ -1384,5 +1384,14 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(values, &[Some(50), None, None, Some(2)])
+    }
+
+    #[test]
+    fn test_normalized_keys() {
+        let values = vec![132, 0, 1].into();
+        let nulls = NullBuffer::from(vec![false, true, true]);
+        let keys = Int32Array::new(values, Some(nulls));
+        let dictionary = DictionaryArray::new(keys, Arc::new(Int32Array::new_null(2)));
+        assert_eq!(&dictionary.normalized_keys(), &[1, 0, 1])
     }
 }

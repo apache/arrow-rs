@@ -174,7 +174,7 @@ pub(crate) fn into_buffers(
     }
 }
 
-/// An generic representation of Arrow array data which encapsulates common attributes and
+/// A generic representation of Arrow array data which encapsulates common attributes and
 /// operations for Arrow array. Specific operations for different arrays types (e.g.,
 /// primitive, list, struct) are implemented in `Array`.
 ///
@@ -705,7 +705,7 @@ impl ArrayData {
     ///
     /// This can be useful for when interacting with data sent over IPC or FFI, that may
     /// not meet the minimum alignment requirements
-    fn align_buffers(&mut self) {
+    pub fn align_buffers(&mut self) {
         let layout = layout(&self.data_type);
         for (buffer, spec) in self.buffers.iter_mut().zip(&layout.buffers) {
             if let BufferSpec::FixedWidth { alignment, .. } = spec {

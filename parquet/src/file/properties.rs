@@ -550,9 +550,7 @@ impl WriterPropertiesBuilder {
     /// Helper method to get existing or new mutable reference of column properties.
     #[inline]
     fn get_mut_props(&mut self, col: ColumnPath) -> &mut ColumnProperties {
-        self.column_properties
-            .entry(col)
-            .or_insert_with(Default::default)
+        self.column_properties.entry(col).or_default()
     }
 
     /// Sets encoding for a column.

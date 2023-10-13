@@ -21,6 +21,7 @@ members = [
     "arrow",
     "arrow-arith",
     "arrow-array",
+    "arrow-avro",
     "arrow-buffer",
     "arrow-cast",
     "arrow-csv",
@@ -61,7 +62,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "46.0.0"
+version = "47.0.0"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -76,18 +77,20 @@ edition = "2021"
 rust-version = "1.62"
 
 [workspace.dependencies]
-arrow = { version = "46.0.0", path = "./arrow", default-features = false }
-arrow-arith = { version = "46.0.0", path = "./arrow-arith" }
-arrow-array = { version = "46.0.0", path = "./arrow-array" }
-arrow-buffer = { version = "46.0.0", path = "./arrow-buffer" }
-arrow-cast = { version = "46.0.0", path = "./arrow-cast" }
-arrow-csv = { version = "46.0.0", path = "./arrow-csv" }
-arrow-data = { version = "46.0.0", path = "./arrow-data" }
-arrow-ipc = { version = "46.0.0", path = "./arrow-ipc" }
-arrow-json = { version = "46.0.0", path = "./arrow-json" }
-arrow-ord = { version = "46.0.0", path = "./arrow-ord" }
-arrow-row = { version = "46.0.0", path = "./arrow-row" }
-arrow-schema = { version = "46.0.0", path = "./arrow-schema" }
-arrow-select = { version = "46.0.0", path = "./arrow-select" }
-arrow-string = { version = "46.0.0", path = "./arrow-string" }
-parquet = { version = "46.0.0", path = "./parquet", default-features = false }
+arrow = { version = "47.0.0", path = "./arrow", default-features = false }
+arrow-arith = { version = "47.0.0", path = "./arrow-arith" }
+arrow-array = { version = "47.0.0", path = "./arrow-array" }
+arrow-buffer = { version = "47.0.0", path = "./arrow-buffer" }
+arrow-cast = { version = "47.0.0", path = "./arrow-cast" }
+arrow-csv = { version = "47.0.0", path = "./arrow-csv" }
+arrow-data = { version = "47.0.0", path = "./arrow-data" }
+arrow-ipc = { version = "47.0.0", path = "./arrow-ipc" }
+arrow-json = { version = "47.0.0", path = "./arrow-json" }
+arrow-ord = { version = "47.0.0", path = "./arrow-ord" }
+arrow-row = { version = "47.0.0", path = "./arrow-row" }
+arrow-schema = { version = "47.0.0", path = "./arrow-schema" }
+arrow-select = { version = "47.0.0", path = "./arrow-select" }
+arrow-string = { version = "47.0.0", path = "./arrow-string" }
+parquet = { version = "47.0.0", path = "./parquet", default-features = false }
+
+chrono = { version = "0.4.31", default-features = false, features = ["clock"] }

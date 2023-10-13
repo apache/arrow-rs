@@ -18,15 +18,18 @@
 extern crate arrow;
 extern crate criterion;
 
+use std::io::Cursor;
+use std::sync::Arc;
+
 use criterion::*;
+use rand::Rng;
 
 use arrow::array::*;
 use arrow::csv;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bench_util::{create_primitive_array, create_string_array_with_len};
-use std::io::Cursor;
-use std::sync::Arc;
+use arrow::util::test_util::seedable_rng;
 
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let batch = RecordBatch::try_from_iter(cols.into_iter().map(|a| ("col", a))).unwrap();
@@ -55,18 +58,49 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
+    let mut rng = seedable_rng();
+
+    let values = Int32Array::from_iter_values((0..4096).map(|_| rng.gen_range(0..1024)));
+    let cols = vec![Arc::new(values) as ArrayRef];
+    do_bench(c, "4096 i32_small(0)", cols);
+
+    let values = Int32Array::from_iter_values((0..4096).map(|_| rng.gen()));
+    let cols = vec![Arc::new(values) as ArrayRef];
+    do_bench(c, "4096 i32(0)", cols);
+
+    let values = UInt64Array::from_iter_values((0..4096).map(|_| rng.gen_range(0..1024)));
+    let cols = vec![Arc::new(values) as ArrayRef];
+    do_bench(c, "4096 u64_small(0)", cols);
+
+    let values = UInt64Array::from_iter_values((0..4096).map(|_| rng.gen()));
+    let cols = vec![Arc::new(values) as ArrayRef];
     do_bench(c, "4096 u64(0)", cols);
 
-    let cols = vec![Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef];
+    let values =
+        Int64Array::from_iter_values((0..4096).map(|_| rng.gen_range(0..1024) - 512));
+    let cols = vec![Arc::new(values) as ArrayRef];
+    do_bench(c, "4096 i64_small(0)", cols);
+
+    let values = Int64Array::from_iter_values((0..4096).map(|_| rng.gen()));
+    let cols = vec![Arc::new(values) as ArrayRef];
     do_bench(c, "4096 i64(0)", cols);
 
-    let cols =
-        vec![Arc::new(create_primitive_array::<Float32Type>(4096, 0.)) as ArrayRef];
+    let cols = vec![Arc::new(Float32Array::from_iter_values(
+        (0..4096).map(|_| rng.gen_range(0..1024000) as f32 / 1000.),
+    )) as _];
+    do_bench(c, "4096 f32_small(0)", cols);
+
+    let values = Float32Array::from_iter_values((0..4096).map(|_| rng.gen()));
+    let cols = vec![Arc::new(values) as ArrayRef];
     do_bench(c, "4096 f32(0)", cols);
 
-    let cols =
-        vec![Arc::new(create_primitive_array::<Float64Type>(4096, 0.)) as ArrayRef];
+    let cols = vec![Arc::new(Float64Array::from_iter_values(
+        (0..4096).map(|_| rng.gen_range(0..1024000) as f64 / 1000.),
+    )) as _];
+    do_bench(c, "4096 f64_small(0)", cols);
+
+    let values = Float64Array::from_iter_values((0..4096).map(|_| rng.gen()));
+    let cols = vec![Arc::new(values) as ArrayRef];
     do_bench(c, "4096 f64(0)", cols);
 
     let cols =

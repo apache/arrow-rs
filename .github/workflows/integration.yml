@@ -38,6 +38,7 @@ on:
       - arrow-integration-testing/**
       - arrow-ipc/**
       - arrow-json/**
+      - arrow-avro/**
       - arrow-ord/**
       - arrow-pyarrow-integration-testing/**
       - arrow-schema/**
@@ -56,6 +57,7 @@ jobs:
     env:
       ARROW_USE_CCACHE: OFF
       ARROW_CPP_EXE_PATH: /build/cpp/debug
+      ARROW_GO_INTEGRATION: 1
       BUILD_DOCS_CPP: OFF
       # These are necessary because the github runner overrides $HOME
       # https://github.com/actions/runner/issues/863
@@ -76,16 +78,20 @@ jobs:
       - name: Check cmake
         run: which cmake
       - name: Checkout Arrow
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: apache/arrow
           submodules: true
           fetch-depth: 0
       - name: Checkout Arrow Rust
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           path: rust
           fetch-depth: 0
+      - name: Install pythonnet
+        run: conda run --no-capture-output pip install pythonnet
+      - name: Install archery
+        run: conda run --no-capture-output pip install -e dev/archery[integration]
       - name: Make build directory
         run: mkdir /build
       - name: Build Rust
@@ -100,12 +106,12 @@ jobs:
         run: conda run --no-capture-output ci/scripts/java_build.sh $PWD /build
       - name: Build JS
         run: conda run --no-capture-output ci/scripts/js_build.sh $PWD /build
-      - name: Install archery
-        run: conda run --no-capture-output pip install -e dev/archery
       - name: Run integration tests
         run: |
           conda run --no-capture-output archery integration \
             --run-flight \
+            --run-c-data \
+            --run-ipc \
             --with-cpp=1 \
             --with-csharp=1 \
             --with-java=1 \
@@ -127,7 +133,7 @@ jobs:
       matrix:
         rust: [ stable ]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain

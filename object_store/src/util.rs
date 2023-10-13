@@ -32,8 +32,9 @@ where
     D: serde::Deserializer<'de>,
 {
     let s: String = serde::Deserialize::deserialize(deserializer)?;
-    chrono::TimeZone::datetime_from_str(&chrono::Utc, &s, RFC1123_FMT)
-        .map_err(serde::de::Error::custom)
+    let naive = chrono::NaiveDateTime::parse_from_str(&s, RFC1123_FMT)
+        .map_err(serde::de::Error::custom)?;
+    Ok(chrono::TimeZone::from_utc_datetime(&chrono::Utc, &naive))
 }
 
 #[cfg(any(feature = "aws", feature = "azure"))]
@@ -46,9 +47,13 @@ pub(crate) fn hmac_sha256(
 }
 
 /// Collect a stream into [`Bytes`] avoiding copying in the event of a single chunk
-pub async fn collect_bytes<S>(mut stream: S, size_hint: Option<usize>) -> Result<Bytes>
+pub async fn collect_bytes<S, E>(
+    mut stream: S,
+    size_hint: Option<usize>,
+) -> Result<Bytes, E>
 where
-    S: Stream<Item = Result<Bytes>> + Send + Unpin,
+    E: Send,
+    S: Stream<Item = Result<Bytes, E>> + Send + Unpin,
 {
     let first = stream.next().await.transpose()?.unwrap_or_default();
 
@@ -98,14 +103,15 @@ pub const OBJECT_STORE_COALESCE_PARALLEL: usize = 10;
 /// * Combine ranges less than `coalesce` bytes apart into a single call to `fetch`
 /// * Make multiple `fetch` requests in parallel (up to maximum of 10)
 ///
-pub async fn coalesce_ranges<F, Fut>(
+pub async fn coalesce_ranges<F, E, Fut>(
     ranges: &[std::ops::Range<usize>],
     fetch: F,
     coalesce: usize,
-) -> Result<Vec<Bytes>>
+) -> Result<Vec<Bytes>, E>
 where
     F: Send + FnMut(std::ops::Range<usize>) -> Fut,
-    Fut: std::future::Future<Output = Result<Bytes>> + Send,
+    E: Send,
+    Fut: std::future::Future<Output = Result<Bytes, E>> + Send,
 {
     let fetch_ranges = merge_ranges(ranges, coalesce);
 
@@ -172,6 +178,8 @@ fn merge_ranges(
 
 #[cfg(test)]
 mod tests {
+    use crate::Error;
+
     use super::*;
     use rand::{thread_rng, Rng};
     use std::ops::Range;
@@ -184,7 +192,7 @@ mod tests {
         let src: Vec<_> = (0..max).map(|x| x as u8).collect();
 
         let mut fetches = vec![];
-        let coalesced = coalesce_ranges(
+        let coalesced = coalesce_ranges::<_, Error, _>(
             &ranges,
             |range| {
                 fetches.push(range.clone());

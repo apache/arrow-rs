@@ -17,7 +17,7 @@
 
 [package]
 name = "object_store"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
@@ -32,7 +32,7 @@ all-features = true
 [dependencies] # In alphabetical order
 async-trait = "0.1.53"
 bytes = "1.0"
-chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
 futures = "0.3"
 humantime = "2.1"
 itertools = "0.11.0"
@@ -51,7 +51,7 @@ serde = { version = "1.0", default-features = false, features = ["derive"], opti
 serde_json = { version = "1.0", default-features = false, optional = true }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"], optional = true }
-ring = { version = "0.16", default-features = false, features = ["std"], optional = true }
+ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

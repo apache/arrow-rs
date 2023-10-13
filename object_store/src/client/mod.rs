@@ -18,6 +18,7 @@
 //! Generic utilities reqwest based ObjectStore implementations
 
 pub mod backoff;
+
 #[cfg(test)]
 pub mod mock_server;
 
@@ -26,7 +27,6 @@ pub mod retry;
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod pagination;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod get;
 
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
@@ -35,7 +35,6 @@ pub mod list;
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod token;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod header;
 
 #[cfg(any(feature = "aws", feature = "gcp"))]
@@ -575,6 +574,7 @@ pub struct StaticCredentialProvider<T> {
 }
 
 impl<T> StaticCredentialProvider<T> {
+    /// A [`CredentialProvider`] for a static credential of type `T`
     pub fn new(credential: T) -> Self {
         Self {
             credential: Arc::new(credential),

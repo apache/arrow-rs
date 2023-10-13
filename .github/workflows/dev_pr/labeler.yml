@@ -27,6 +27,7 @@ arrow:
   - arrow-integration-testing/**/*
   - arrow-ipc/**/*
   - arrow-json/**/*
+  - arrow-avro/**/*
   - arrow-ord/**/*
   - arrow-row/**/*
   - arrow-schema/**/*

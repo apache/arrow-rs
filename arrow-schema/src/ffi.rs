@@ -833,7 +833,7 @@ mod tests {
 
         // Construct a map array from the above two
         let map_data_type =
-            DataType::Map(Arc::new(Field::new("entries", entry_struct, true)), true);
+            DataType::Map(Arc::new(Field::new("entries", entry_struct, false)), true);
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());

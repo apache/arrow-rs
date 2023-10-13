@@ -325,6 +325,8 @@ pub struct MicrosoftAzureBuilder {
     url: Option<String>,
     /// When set to true, azurite storage emulator has to be used
     use_emulator: ConfigValue<bool>,
+    /// Storage endpoint
+    endpoint: Option<String>,
     /// Msi endpoint for acquiring managed identity token
     msi_endpoint: Option<String>,
     /// Object id for use with managed identity authentication
@@ -434,6 +436,14 @@ pub enum AzureConfigKey {
     /// - `use_emulator`
     UseEmulator,
 
+    /// Override the endpoint used to communicate with blob storage
+    ///
+    /// Supported keys:
+    /// - `azure_storage_endpoint`
+    /// - `azure_endpoint`
+    /// - `endpoint`
+    Endpoint,
+
     /// Use object store with url scheme account.dfs.fabric.microsoft.com
     ///
     /// Supported keys:
@@ -501,6 +511,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::Token => "azure_storage_token",
             Self::UseEmulator => "azure_storage_use_emulator",
             Self::UseFabricEndpoint => "azure_use_fabric_endpoint",
+            Self::Endpoint => "azure_storage_endpoint",
             Self::MsiEndpoint => "azure_msi_endpoint",
             Self::ObjectId => "azure_object_id",
             Self::MsiResourceId => "azure_msi_resource_id",
@@ -542,6 +553,9 @@ impl FromStr for AzureConfigKey {
             | "sas_token" => Ok(Self::SasKey),
             "azure_storage_token" | "bearer_token" | "token" => Ok(Self::Token),
             "azure_storage_use_emulator" | "use_emulator" => Ok(Self::UseEmulator),
+            "azure_storage_endpoint" | "azure_endpoint" | "endpoint" => {
+                Ok(Self::Endpoint)
+            }
             "azure_msi_endpoint"
             | "azure_identity_endpoint"
             | "identity_endpoint"
@@ -668,6 +682,7 @@ impl MicrosoftAzureBuilder {
             }
             AzureConfigKey::UseAzureCli => self.use_azure_cli.parse(value),
             AzureConfigKey::UseEmulator => self.use_emulator.parse(value),
+            AzureConfigKey::Endpoint => self.endpoint = Some(value.into()),
             AzureConfigKey::UseFabricEndpoint => self.use_fabric_endpoint.parse(value),
             AzureConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
@@ -726,6 +741,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::UseFabricEndpoint => {
                 Some(self.use_fabric_endpoint.to_string())
             }
+            AzureConfigKey::Endpoint => self.endpoint.clone(),
             AzureConfigKey::MsiEndpoint => self.msi_endpoint.clone(),
             AzureConfigKey::ObjectId => self.object_id.clone(),
             AzureConfigKey::MsiResourceId => self.msi_resource_id.clone(),
@@ -873,9 +889,19 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Override the endpoint used to communicate with blob storage
+    ///
+    /// Defaults to `https://{account}.blob.core.windows.net`
+    pub fn with_endpoint(mut self, endpoint: String) -> Self {
+        self.endpoint = Some(endpoint);
+        self
+    }
+
     /// Set if Microsoft Fabric url scheme should be used (defaults to false)
     /// When disabled the url scheme used is `https://{account}.blob.core.windows.net`
     /// When enabled the url scheme used is `https://{account}.dfs.fabric.microsoft.com`
+    ///
+    /// Note: [`Self::with_endpoint`] will take precedence over this option
     pub fn with_use_fabric_endpoint(mut self, use_fabric_endpoint: bool) -> Self {
         self.use_fabric_endpoint = use_fabric_endpoint.into();
         self
@@ -986,9 +1012,14 @@ impl MicrosoftAzureBuilder {
             (true, url, credential, account_name)
         } else {
             let account_name = self.account_name.ok_or(Error::MissingAccount {})?;
-            let account_url = match self.use_fabric_endpoint.get()? {
-                true => format!("https://{}.blob.fabric.microsoft.com", &account_name),
-                false => format!("https://{}.blob.core.windows.net", &account_name),
+            let account_url = match self.endpoint {
+                Some(account_url) => account_url,
+                None => match self.use_fabric_endpoint.get()? {
+                    true => {
+                        format!("https://{}.blob.fabric.microsoft.com", &account_name)
+                    }
+                    false => format!("https://{}.blob.core.windows.net", &account_name),
+                },
             };
 
             let url = Url::parse(&account_url)

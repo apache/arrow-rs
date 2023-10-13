@@ -388,7 +388,7 @@ mod lz4_codec {
     use std::io::{Read, Write};
 
     use crate::compression::Codec;
-    use crate::errors::Result;
+    use crate::errors::{ParquetError, Result};
 
     const LZ4_BUFFER_SIZE: usize = 4096;
 
@@ -409,7 +409,7 @@ mod lz4_codec {
             output_buf: &mut Vec<u8>,
             _uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let mut decoder = lz4::Decoder::new(input_buf)?;
+            let mut decoder = lz4_flex::frame::FrameDecoder::new(input_buf);
             let mut buffer: [u8; LZ4_BUFFER_SIZE] = [0; LZ4_BUFFER_SIZE];
             let mut total_len = 0;
             loop {
@@ -424,7 +424,7 @@ mod lz4_codec {
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            let mut encoder = lz4::EncoderBuilder::new().build(output_buf)?;
+            let mut encoder = lz4_flex::frame::FrameEncoder::new(output_buf);
             let mut from = 0;
             loop {
                 let to = std::cmp::min(from + LZ4_BUFFER_SIZE, input_buf.len());
@@ -434,7 +434,10 @@ mod lz4_codec {
                     break;
                 }
             }
-            encoder.finish().1.map_err(|e| e.into())
+            match encoder.finish() {
+                Ok(_) => Ok(()),
+                Err(e) => Err(ParquetError::External(Box::new(e))),
+            }
         }
     }
 }
@@ -551,11 +554,7 @@ mod lz4_raw_codec {
                 }
             };
             output_buf.resize(offset + required_len, 0);
-            match lz4::block::decompress_to_buffer(
-                input_buf,
-                Some(required_len.try_into().unwrap()),
-                &mut output_buf[offset..],
-            ) {
+            match lz4_flex::block::decompress_into(input_buf, &mut output_buf[offset..]) {
                 Ok(n) => {
                     if n != required_len {
                         return Err(ParquetError::General(
@@ -564,25 +563,20 @@ mod lz4_raw_codec {
                     }
                     Ok(n)
                 }
-                Err(e) => Err(e.into()),
+                Err(e) => Err(ParquetError::External(Box::new(e))),
             }
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let offset = output_buf.len();
-            let required_len = lz4::block::compress_bound(input_buf.len())?;
+            let required_len = lz4_flex::block::get_maximum_output_size(input_buf.len());
             output_buf.resize(offset + required_len, 0);
-            match lz4::block::compress_to_buffer(
-                input_buf,
-                None,
-                false,
-                &mut output_buf[offset..],
-            ) {
+            match lz4_flex::block::compress_into(input_buf, &mut output_buf[offset..]) {
                 Ok(n) => {
                     output_buf.truncate(offset + n);
                     Ok(())
                 }
-                Err(e) => Err(e.into()),
+                Err(e) => Err(ParquetError::External(Box::new(e))),
             }
         }
     }
@@ -666,11 +660,11 @@ mod lz4_hadoop_codec {
                     "Not enough bytes to hold advertised output",
                 ));
             }
-            let decompressed_size = lz4::block::decompress_to_buffer(
+            let decompressed_size = lz4_flex::decompress_into(
                 &input[..expected_compressed_size as usize],
-                Some(output_len as i32),
                 output,
-            )?;
+            )
+            .map_err(|e| ParquetError::External(Box::new(e)))?;
             if decompressed_size != expected_decompressed_size as usize {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,

@@ -39,7 +39,7 @@ arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
-chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
+chrono = { workspace = true }
 csv = { version = "1.1", default-features = false }
 csv-core = { version = "0.1" }
 lazy_static = { version = "1.4", default-features = false }

@@ -15,18 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
+use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
+use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{
+    ArrowNativeType, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer,
+};
 use arrow_data::transform::MutableArrayData;
-use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
     ($t:ty, $values:ident, $indices:ident, $data_type:ident) => {
         interleave_primitive::<$t>($values, $indices, $data_type)
+    };
+}
+
+macro_rules! dict_helper {
+    ($t:ty, $values:expr, $indices:expr) => {
+        Ok(Arc::new(interleave_dictionaries::<$t>($values, $indices)?) as _)
     };
 }
 
@@ -87,6 +96,10 @@ pub fn interleave(
         DataType::LargeUtf8 => interleave_bytes::<LargeUtf8Type>(values, indices),
         DataType::Binary => interleave_bytes::<BinaryType>(values, indices),
         DataType::LargeBinary => interleave_bytes::<LargeBinaryType>(values, indices),
+        DataType::Dictionary(k, _) => downcast_integer! {
+            k.as_ref() => (dict_helper, values, indices),
+            _ => unreachable!("illegal dictionary key type {k}")
+        },
         _ => interleave_fallback(values, indices)
     }
 }
@@ -97,10 +110,8 @@ pub fn interleave(
 struct Interleave<'a, T> {
     /// The input arrays downcast to T
     arrays: Vec<&'a T>,
-    /// The number of nulls in the interleaved output
-    null_count: usize,
     /// The null buffer of the interleaved output
-    nulls: Option<Buffer>,
+    nulls: Option<NullBuffer>,
 }
 
 impl<'a, T: Array + 'static> Interleave<'a, T> {
@@ -114,22 +125,19 @@ impl<'a, T: Array + 'static> Interleave<'a, T> {
             })
             .collect();
 
-        let mut null_count = 0;
-        let nulls = has_nulls.then(|| {
-            let mut builder = BooleanBufferBuilder::new(indices.len());
-            for (a, b) in indices {
-                let v = arrays[*a].is_valid(*b);
-                null_count += !v as usize;
-                builder.append(v)
+        let nulls = match has_nulls {
+            true => {
+                let mut builder = NullBufferBuilder::new(indices.len());
+                for (a, b) in indices {
+                    let v = arrays[*a].is_valid(*b);
+                    builder.append(v)
+                }
+                builder.finish()
             }
-            builder.into()
-        });
+            false => None,
+        };
 
-        Self {
-            arrays,
-            null_count,
-            nulls,
-        }
+        Self { arrays, nulls }
     }
 }
 
@@ -140,20 +148,14 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, PrimitiveArray<T>>::new(values, indices);
 
-    let mut values = BufferBuilder::<T::Native>::new(indices.len());
+    let mut values = Vec::with_capacity(indices.len());
     for (a, b) in indices {
         let v = interleaved.arrays[*a].value(*b);
-        values.append(v)
+        values.push(v)
     }
 
-    let builder = ArrayDataBuilder::new(data_type.clone())
-        .len(indices.len())
-        .add_buffer(values.finish())
-        .null_bit_buffer(interleaved.nulls)
-        .null_count(interleaved.null_count);
-
-    let data = unsafe { builder.build_unchecked() };
-    Ok(Arc::new(PrimitiveArray::<T>::from(data)))
+    let array = PrimitiveArray::<T>::new(values.into(), interleaved.nulls);
+    Ok(Arc::new(array.with_data_type(data_type.clone())))
 }
 
 fn interleave_bytes<T: ByteArrayType>(
@@ -177,15 +179,55 @@ fn interleave_bytes<T: ByteArrayType>(
         values.extend_from_slice(interleaved.arrays[*a].value(*b).as_ref());
     }
 
-    let builder = ArrayDataBuilder::new(T::DATA_TYPE)
-        .len(indices.len())
-        .add_buffer(offsets.finish())
-        .add_buffer(values.into())
-        .null_bit_buffer(interleaved.nulls)
-        .null_count(interleaved.null_count);
+    // Safety: safe by construction
+    let array = unsafe {
+        let offsets = OffsetBuffer::new_unchecked(offsets.finish().into());
+        GenericByteArray::<T>::new_unchecked(offsets, values.into(), interleaved.nulls)
+    };
+    Ok(Arc::new(array))
+}
 
-    let data = unsafe { builder.build_unchecked() };
-    Ok(Arc::new(GenericByteArray::<T>::from(data)))
+fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
+    arrays: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    let dictionaries: Vec<_> = arrays.iter().map(|x| x.as_dictionary::<K>()).collect();
+    if !should_merge_dictionary_values::<K>(&dictionaries, indices.len()) {
+        return interleave_fallback(arrays, indices);
+    }
+
+    let masks: Vec<_> = dictionaries
+        .iter()
+        .enumerate()
+        .map(|(a_idx, dictionary)| {
+            let mut key_mask = BooleanBufferBuilder::new_from_buffer(
+                MutableBuffer::new_null(dictionary.len()),
+                dictionary.len(),
+            );
+
+            for (_, key_idx) in indices.iter().filter(|(a, _)| *a == a_idx) {
+                key_mask.set_bit(*key_idx, true);
+            }
+            key_mask.finish()
+        })
+        .collect();
+
+    let merged = merge_dictionary_values(&dictionaries, Some(&masks))?;
+
+    // Recompute keys
+    let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
+    for (a, b) in indices {
+        let old_keys: &PrimitiveArray<K> = dictionaries[*a].keys();
+        match old_keys.is_valid(*b) {
+            true => {
+                let old_key = old_keys.values()[*b];
+                keys.append_value(merged.key_mappings[*a][old_key.as_usize()])
+            }
+            false => keys.append_null(),
+        }
+    }
+    let array = unsafe { DictionaryArray::new_unchecked(keys.finish(), merged.values) };
+    Ok(Arc::new(array))
 }
 
 /// Fallback implementation of interleave using [`MutableArrayData`]
@@ -281,6 +323,32 @@ mod tests {
     }
 
     #[test]
+    fn test_interleave_dictionary() {
+        let a = DictionaryArray::<Int32Type>::from_iter(["a", "b", "c", "a", "b"]);
+        let b = DictionaryArray::<Int32Type>::from_iter(["a", "c", "a", "c", "a"]);
+
+        // Should not recompute dictionary
+        let values =
+            interleave(&[&a, &b], &[(0, 2), (0, 2), (0, 2), (1, 0), (1, 1), (0, 1)])
+                .unwrap();
+        let v = values.as_dictionary::<Int32Type>();
+        assert_eq!(v.values().len(), 5);
+
+        let vc = v.downcast_dict::<StringArray>().unwrap();
+        let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
+        assert_eq!(&collected, &["c", "c", "c", "a", "c", "b"]);
+
+        // Should recompute dictionary
+        let values = interleave(&[&a, &b], &[(0, 2), (0, 2), (1, 1)]).unwrap();
+        let v = values.as_dictionary::<Int32Type>();
+        assert_eq!(v.values().len(), 1);
+
+        let vc = v.downcast_dict::<StringArray>().unwrap();
+        let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
+        assert_eq!(&collected, &["c", "c", "c"]);
+    }
+
+    #[test]
     fn test_lists() {
         // [[1, 2], null, [3]]
         let mut a = ListBuilder::new(Int32Builder::new());
@@ -322,5 +390,26 @@ mod tests {
         let expected = expected.finish();
 
         assert_eq!(v, &expected);
+    }
+
+    #[test]
+    fn interleave_sparse_nulls() {
+        let values = StringArray::from_iter_values((0..100).map(|x| x.to_string()));
+        let keys = Int32Array::from_iter_values(0..10);
+        let dict_a = DictionaryArray::new(keys, Arc::new(values));
+        let values = StringArray::new_null(0);
+        let keys = Int32Array::new_null(10);
+        let dict_b = DictionaryArray::new(keys, Arc::new(values));
+
+        let indices = &[(0, 0), (0, 1), (0, 2), (1, 0)];
+        let array = interleave(&[&dict_a, &dict_b], indices).unwrap();
+
+        let expected = DictionaryArray::<Int32Type>::from_iter(vec![
+            Some("0"),
+            Some("1"),
+            Some("2"),
+            None,
+        ]);
+        assert_eq!(array.as_ref(), &expected)
     }
 }

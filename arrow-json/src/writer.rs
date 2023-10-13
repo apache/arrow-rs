@@ -757,7 +757,8 @@ mod tests {
         let ts_nanos = ts_string
             .parse::<chrono::NaiveDateTime>()
             .unwrap()
-            .timestamp_nanos();
+            .timestamp_nanos_opt()
+            .unwrap();
         let ts_micros = ts_nanos / 1000;
         let ts_millis = ts_micros / 1000;
         let ts_secs = ts_millis / 1000;
@@ -809,7 +810,8 @@ mod tests {
         let ts_nanos = ts_string
             .parse::<chrono::NaiveDateTime>()
             .unwrap()
-            .timestamp_nanos();
+            .timestamp_nanos_opt()
+            .unwrap();
         let ts_micros = ts_nanos / 1000;
         let ts_millis = ts_micros / 1000;
         let ts_secs = ts_millis / 1000;
@@ -1336,11 +1338,7 @@ mod tests {
 
         let batch = reader.next().unwrap().unwrap();
 
-        let list_row = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap();
+        let list_row = batch.column(0).as_list::<i32>();
         let values = list_row.values();
         assert_eq!(values.len(), 4);
         assert_eq!(values.null_count(), 1);
@@ -1385,7 +1383,7 @@ mod tests {
             Arc::new(Field::new(
                 "entries",
                 entry_struct.data_type().clone(),
-                true,
+                false,
             )),
             false,
         );

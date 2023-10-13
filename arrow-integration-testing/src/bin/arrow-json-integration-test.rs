@@ -124,7 +124,7 @@ fn canonicalize_schema(schema: &Schema) -> Schema {
                     let key_field = Arc::new(Field::new(
                         "key",
                         first_field.data_type().clone(),
-                        first_field.is_nullable(),
+                        false,
                     ));
                     let second_field = fields.get(1).unwrap();
                     let value_field = Arc::new(Field::new(
@@ -135,8 +135,7 @@ fn canonicalize_schema(schema: &Schema) -> Schema {
 
                     let fields = Fields::from([key_field, value_field]);
                     let struct_type = DataType::Struct(fields);
-                    let child_field =
-                        Field::new("entries", struct_type, child_field.is_nullable());
+                    let child_field = Field::new("entries", struct_type, false);
 
                     Arc::new(Field::new(
                         field.name().as_str(),

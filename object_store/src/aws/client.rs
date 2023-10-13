@@ -212,7 +212,7 @@ pub struct S3Config {
 }
 
 impl S3Config {
-    fn path_url(&self, path: &Path) -> String {
+    pub(crate) fn path_url(&self, path: &Path) -> String {
         format!("{}/{}", self.bucket_endpoint, encode_path(path))
     }
 }

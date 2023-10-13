@@ -155,20 +155,17 @@ fn apply<O: OffsetSizeTrait>(
 ) -> Result<BooleanArray, ArrowError> {
     let l_len = l_v.map(|l| l.len()).unwrap_or(l.len());
     if r_s {
-        let scalar = match r_v {
-            Some(dict) => match dict.nulls().filter(|n| n.null_count() != 0) {
-                Some(_) => return Ok(BooleanArray::new_null(l_len)),
-                None => {
-                    let idx = dict.normalized_keys()[0];
-                    if r.is_null(idx) {
-                        return Ok(BooleanArray::new_null(l_len));
-                    }
-                    r.value(idx)
-                }
-            },
-            None => r.value(0),
+        let idx = match r_v {
+            Some(dict) if dict.null_count() != 0 => {
+                return Ok(BooleanArray::new_null(l_len))
+            }
+            Some(dict) => dict.normalized_keys()[0],
+            None => 0,
         };
-        op_scalar(op, l, l_v, scalar)
+        if r.is_null(idx) {
+            return Ok(BooleanArray::new_null(l_len));
+        }
+        op_scalar(op, l, l_v, r.value(idx))
     } else {
         match (l_s, l_v, r_v) {
             (true, None, None) => {
@@ -1538,5 +1535,36 @@ mod tests {
                 Some(false),
             ]),
         );
+    }
+
+    #[test]
+    fn like_scalar_null() {
+        let a = StringArray::new_scalar("a");
+        let b = Scalar::new(StringArray::new_null(1));
+        let r = like(&a, &b).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
+
+        let a = StringArray::from_iter_values(["a"]);
+        let b = Scalar::new(StringArray::new_null(1));
+        let r = like(&a, &b).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
+
+        let a = StringArray::from_iter_values(["a"]);
+        let b = StringArray::new_null(1);
+        let r = like(&a, &b).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
+
+        let a = StringArray::new_scalar("a");
+        let b = StringArray::new_null(1);
+        let r = like(&a, &b).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r.null_count(), 1);
+        assert!(r.is_null(0));
     }
 }
