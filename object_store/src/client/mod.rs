@@ -396,14 +396,34 @@ impl ClientOptions {
     ///
     /// The timeout is applied from when the request starts connecting until the
     /// response body has finished
+    ///
+    /// Default is 5 seconds
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(ConfigValue::Parsed(timeout));
         self
     }
 
+    /// Disables the request timeout
+    ///
+    /// See [`Self::with_timeout`]
+    pub fn with_timeout_disabled(mut self) -> Self {
+        self.timeout = None;
+        self
+    }
+
     /// Set a timeout for only the connect phase of a Client
+    ///
+    /// Default is 5 seconds
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = Some(ConfigValue::Parsed(timeout));
+        self
+    }
+
+    /// Disables the connection timeout
+    ///
+    /// See [`Self::with_connect_timeout`]
+    pub fn with_connect_timeout_disabled(mut self) -> Self {
+        self.timeout = None;
         self
     }
 
