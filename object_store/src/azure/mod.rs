@@ -1074,7 +1074,7 @@ impl MicrosoftAzureBuilder {
                 );
                 Arc::new(TokenCredentialProvider::new(
                     msi_credential,
-                    self.client_options.clone().with_allow_http(true).client()?,
+                    self.client_options.metadata_client()?,
                     self.retry_config.clone(),
                 )) as _
             };

@@ -1080,7 +1080,7 @@ impl GoogleCloudStorageBuilder {
         } else {
             Arc::new(TokenCredentialProvider::new(
                 InstanceCredentialProvider::new(audience),
-                self.client_options.clone().with_allow_http(true).client()?,
+                self.client_options.metadata_client()?,
                 self.retry_config.clone(),
             )) as _
         };
