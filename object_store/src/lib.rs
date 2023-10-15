@@ -410,7 +410,13 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 
     /// Return the metadata for the specified location
-    async fn head(&self, location: &Path) -> Result<ObjectMeta>;
+    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+        let options = GetOptions {
+            head: true,
+            ..Default::default()
+        };
+        Ok(self.get_opts(location, options).await?.meta)
+    }
 
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> Result<()>;
@@ -716,6 +722,10 @@ pub struct GetOptions {
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
     pub range: Option<Range<usize>>,
+    /// Request transfer of no content
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-head>
+    pub head: bool,
 }
 
 impl GetOptions {
