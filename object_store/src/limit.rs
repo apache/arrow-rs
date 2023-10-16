@@ -19,7 +19,7 @@
 
 use crate::{
     BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, Path, Result, StreamExt,
+    ObjectMeta, ObjectStore, Path, PutResult, Result, StreamExt,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -72,7 +72,7 @@ impl<T: ObjectStore> std::fmt::Display for LimitStore<T> {
 
 #[async_trait]
 impl<T: ObjectStore> ObjectStore for LimitStore<T> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.put(location, bytes).await
     }

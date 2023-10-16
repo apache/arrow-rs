@@ -160,7 +160,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    pub async fn put(&self, location: &Path, bytes: Bytes) -> Result<Response> {
         let mut retry = false;
         loop {
             let url = self.path_url(location);
@@ -170,7 +170,7 @@ impl Client {
             }
 
             match builder.send_retry(&self.retry_config).await {
-                Ok(_) => return Ok(()),
+                Ok(response) => return Ok(response),
                 Err(source) => match source.status() {
                     // Some implementations return 404 instead of 409
                     Some(StatusCode::CONFLICT | StatusCode::NOT_FOUND) if !retry => {

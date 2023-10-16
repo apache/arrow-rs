@@ -21,6 +21,7 @@ use crate::aws::{
     AwsCredentialProvider, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET,
 };
 use crate::client::get::GetClient;
+use crate::client::header::get_etag;
 use crate::client::list::ListClient;
 use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
@@ -122,6 +123,11 @@ pub(crate) enum Error {
 
     #[snafu(display("Got invalid multipart response: {}", source))]
     InvalidMultipartResponse { source: quick_xml::de::DeError },
+
+    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    Metadata {
+        source: crate::client::header::Error,
+    },
 }
 
 impl From<Error> for crate::Error {
@@ -243,12 +249,14 @@ impl S3Client {
     }
 
     /// Make an S3 PUT request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
+    ///
+    /// Returns the ETag
     pub async fn put_request<T: Serialize + ?Sized + Sync>(
         &self,
         path: &Path,
         bytes: Bytes,
         query: &T,
-    ) -> Result<Response> {
+    ) -> Result<String> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
         let mut builder = self.client.request(Method::PUT, url);
@@ -287,7 +295,7 @@ impl S3Client {
                 path: path.as_ref(),
             })?;
 
-        Ok(response)
+        Ok(get_etag(response.headers()).context(MetadataSnafu)?)
     }
 
     /// Make an S3 Delete request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html>

@@ -21,7 +21,8 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, Result,
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+    PutResult, Result,
 };
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
@@ -147,7 +148,7 @@ impl<T: ObjectStore> std::fmt::Display for ThrottledStore<T> {
 
 #[async_trait]
 impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         sleep(self.config().wait_put_per_call).await;
 
         self.inner.put(location, bytes).await

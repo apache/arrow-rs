@@ -320,7 +320,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// The operation is guaranteed to be atomic, it will either successfully
     /// write the entirety of `bytes` to `location`, or fail. No clients
     /// should be able to observe a partially written object
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()>;
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult>;
 
     /// Get a multi-part upload that allows writing data in chunks
     ///
@@ -555,7 +555,7 @@ macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
         impl ObjectStore for $type {
-            async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+            async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
                 self.as_ref().put(location, bytes).await
             }
 
@@ -878,6 +878,13 @@ impl GetResult {
             _ => unimplemented!("File IO not implemented on wasm32."),
         }
     }
+}
+
+/// Result for a put request
+#[derive(Debug)]
+pub struct PutResult {
+    /// The unique identifier for the object
+    pub e_tag: Option<String>,
 }
 
 /// A specialized `Result` for object store-related errors
@@ -1418,6 +1425,23 @@ mod tests {
             ..GetOptions::default()
         };
         storage.get_opts(&path, options).await.unwrap();
+
+        let result = storage.put(&path, "test".into()).await.unwrap();
+        let new_tag = result.e_tag.unwrap();
+        assert_ne!(tag, new_tag);
+
+        let options = GetOptions {
+            if_match: Some(new_tag),
+            ..GetOptions::default()
+        };
+        storage.get_opts(&path, options).await.unwrap();
+
+        let options = GetOptions {
+            if_match: Some(tag),
+            ..GetOptions::default()
+        };
+        let err = storage.get_opts(&path, options).await.unwrap_err();
+        assert!(matches!(err, Error::Precondition { .. }), "{err}");
     }
 
     /// Returns a chunk of length `chunk_length`
@@ -1717,7 +1741,7 @@ mod tests {
     async fn list_store<'a, 'b>(
         store: &'a dyn ObjectStore,
         path_str: &'b str,
-    ) -> super::Result<BoxStream<'a, super::Result<ObjectMeta>>> {
+    ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         let path = Path::from(path_str);
         store.list(Some(&path)).await
     }

@@ -23,7 +23,7 @@ use futures::stream::BoxStream;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult,
 };
 use std::fmt::Formatter;
 use tempfile::tempdir;
@@ -40,7 +40,7 @@ impl std::fmt::Display for MyStore {
 
 #[async_trait]
 impl ObjectStore for MyStore {
-    async fn put(&self, path: &Path, data: Bytes) -> object_store::Result<()> {
+    async fn put(&self, path: &Path, data: Bytes) -> object_store::Result<PutResult> {
         self.0.put(path, data).await
     }
 
