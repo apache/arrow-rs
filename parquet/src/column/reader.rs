@@ -269,7 +269,7 @@ where
                         // Reached end of page, which implies records_read < remaining_records
                         // as otherwise would have stopped reading before reaching the end
                         assert!(records_read < remaining_records); // Sanity check
-                        records_read += 1;
+                        records_read += reader.flush_partial() as usize;
                     }
                     (records_read, levels_read)
                 }
@@ -380,7 +380,7 @@ where
                         // Reached end of page, which implies records_read < remaining_records
                         // as otherwise would have stopped reading before reaching the end
                         assert!(records_read < remaining_records); // Sanity check
-                        records_read += 1;
+                        records_read += decoder.flush_partial() as usize;
                     }
 
                     (records_read, levels_read)
