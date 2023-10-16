@@ -791,7 +791,10 @@ fn parse(
                 }
                 DataType::Utf8 => Ok(Arc::new(
                     rows.iter()
-                        .map(|row| Some(row.get(i)))
+                        .map(|row| {
+                            let s = row.get(i);
+                            (!null_regex.is_null(s)).then_some(s)
+                        })
                         .collect::<StringArray>(),
                 ) as ArrayRef),
                 DataType::Dictionary(key_type, value_type)
@@ -1495,7 +1498,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("c_int", DataType::UInt64, false),
             Field::new("c_float", DataType::Float32, true),
-            Field::new("c_string", DataType::Utf8, false),
+            Field::new("c_string", DataType::Utf8, true),
             Field::new("c_bool", DataType::Boolean, false),
         ]));
 
@@ -1596,8 +1599,7 @@ mod tests {
         assert!(batch.column(0).is_null(1));
         assert!(batch.column(1).is_null(2));
         assert!(batch.column(3).is_null(4));
-        // String won't be empty
-        assert!(!batch.column(2).is_null(3));
+        assert!(batch.column(2).is_null(3));
         assert!(!batch.column(2).is_null(4));
     }
 
@@ -2237,8 +2239,8 @@ mod tests {
 
     fn err_test(csv: &[u8], expected: &str) {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("text1", DataType::Utf8, false),
-            Field::new("text2", DataType::Utf8, false),
+            Field::new("text1", DataType::Utf8, true),
+            Field::new("text2", DataType::Utf8, true),
         ]));
         let buffer = std::io::BufReader::with_capacity(2, Cursor::new(csv));
         let b = ReaderBuilder::new(schema)
