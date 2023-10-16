@@ -57,10 +57,7 @@ use crate::{
     ObjectStore, Result, RetryConfig,
 };
 
-use credential::{
-    application_default_credentials, default_gcs_base_url, InstanceCredentialProvider,
-    ServiceAccountCredentials,
-};
+use credential::{InstanceCredentialProvider, ServiceAccountCredentials};
 
 mod credential;
 
@@ -68,6 +65,7 @@ const STORE: &str = "GCS";
 
 /// [`CredentialProvider`] for [`GoogleCloudStorage`]
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
+use crate::gcp::credential::{ApplicationDefaultCredentials, DEFAULT_GCS_BASE_URL};
 pub use credential::GcpCredential;
 
 #[derive(Debug, Snafu)]
@@ -1034,10 +1032,8 @@ impl GoogleCloudStorageBuilder {
             };
 
         // Then try to initialize from the application credentials file, or the environment.
-        let application_default_credentials = application_default_credentials(
+        let application_default_credentials = ApplicationDefaultCredentials::read(
             self.application_credentials_path.as_deref(),
-            &self.client_options,
-            &self.retry_config,
         )?;
 
         let disable_oauth = service_account_credentials
@@ -1045,14 +1041,10 @@ impl GoogleCloudStorageBuilder {
             .map(|c| c.disable_oauth)
             .unwrap_or(false);
 
-        let gcs_base_url = service_account_credentials
+        let gcs_base_url: String = service_account_credentials
             .as_ref()
-            .map(|c| c.gcs_base_url.clone())
-            .unwrap_or_else(default_gcs_base_url);
-
-        // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
-        let scope = "https://www.googleapis.com/auth/devstorage.full_control";
-        let audience = "https://www.googleapis.com/oauth2/v4/token";
+            .and_then(|c| c.gcs_base_url.clone())
+            .unwrap_or_else(|| DEFAULT_GCS_BASE_URL.to_string());
 
         let credentials = if let Some(credentials) = self.credentials {
             credentials
@@ -1062,15 +1054,30 @@ impl GoogleCloudStorageBuilder {
             })) as _
         } else if let Some(credentials) = service_account_credentials {
             Arc::new(TokenCredentialProvider::new(
-                credentials.oauth_provider(scope, audience)?,
+                credentials.token_provider()?,
                 self.client_options.client()?,
                 self.retry_config.clone(),
             )) as _
         } else if let Some(credentials) = application_default_credentials {
-            credentials
+            match credentials {
+                ApplicationDefaultCredentials::AuthorizedUser(token) => {
+                    Arc::new(TokenCredentialProvider::new(
+                        token,
+                        self.client_options.client()?,
+                        self.retry_config.clone(),
+                    )) as _
+                }
+                ApplicationDefaultCredentials::ServiceAccount(token) => {
+                    Arc::new(TokenCredentialProvider::new(
+                        token.token_provider()?,
+                        self.client_options.client()?,
+                        self.retry_config.clone(),
+                    )) as _
+                }
+            }
         } else {
             Arc::new(TokenCredentialProvider::new(
-                InstanceCredentialProvider::new(audience),
+                InstanceCredentialProvider::default(),
                 self.client_options.metadata_client()?,
                 self.retry_config.clone(),
             )) as _
@@ -1105,7 +1112,7 @@ mod test {
 
     use super::*;
 
-    const FAKE_KEY: &str = r#"{"private_key": "private_key", "client_email":"client_email", "disable_oauth":true}"#;
+    const FAKE_KEY: &str = r#"{"private_key": "private_key", "private_key_id": "private_key_id", "client_email":"client_email", "disable_oauth":true}"#;
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
     #[tokio::test]
@@ -1117,7 +1124,7 @@ mod test {
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
-        if integration.client.base_url == default_gcs_base_url() {
+        if integration.client.base_url == DEFAULT_GCS_BASE_URL {
             // Fake GCS server doesn't currently honor ifGenerationMatch
             // https://github.com/fsouza/fake-gcs-server/issues/994
             copy_if_not_exists(&integration).await;
