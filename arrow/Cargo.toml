@@ -60,7 +60,7 @@ arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
-pyo3 = { version = "0.19", default-features = false, optional = true }
+pyo3 = { version = "0.20", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
 features = ["prettyprint", "ipc_compression", "ffi", "pyarrow"]
