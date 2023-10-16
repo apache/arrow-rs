@@ -36,10 +36,10 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc, time::Duration};
 use tokio::io::AsyncWrite;
 use tracing::info;
 use url::Url;
@@ -56,6 +56,7 @@ use crate::client::{
 };
 use crate::config::ConfigValue;
 use crate::multipart::{PartId, PutPart, WriteMultiPart};
+use crate::signer::Signer;
 use crate::{
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Path, Result, RetryConfig,
@@ -209,6 +210,65 @@ impl AmazonS3 {
     pub fn credentials(&self) -> &AwsCredentialProvider {
         &self.client.config().credentials
     }
+
+    /// Create a full URL to the resource specified by `path` with this instance's configuration.
+    fn path_url(&self, path: &Path) -> String {
+        self.client.config().path_url(path)
+    }
+}
+
+#[async_trait]
+impl Signer for AmazonS3 {
+    /// Create a URL containing the relevant [AWS SigV4] query parameters that authorize a request
+    /// via `method` to the resource at `path` valid for the duration specified in `expires_in`.
+    ///
+    /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
+    ///
+    /// # Example
+    ///
+    /// This example returns a URL that will enable a user to upload a file to
+    /// "some-folder/some-file.txt" in the next hour.
+    ///
+    /// ```
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
+    /// # use reqwest::Method;
+    /// # use std::time::Duration;
+    /// #
+    /// let region = "us-east-1";
+    /// let s3 = AmazonS3Builder::new()
+    ///     .with_region(region)
+    ///     .with_bucket_name("my-bucket")
+    ///     .with_access_key_id("my-access-key-id")
+    ///     .with_secret_access_key("my-secret-access-key")
+    ///     .build()?;
+    ///
+    /// let url = s3.signed_url(
+    ///     Method::PUT,
+    ///     &Path::from("some-folder/some-file.txt"),
+    ///     Duration::from_secs(60 * 60)
+    /// ).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    async fn signed_url(
+        &self,
+        method: Method,
+        path: &Path,
+        expires_in: Duration,
+    ) -> Result<Url> {
+        let credential = self.credentials().get_credential().await?;
+        let authorizer =
+            AwsAuthorizer::new(&credential, "s3", &self.client.config().region);
+
+        let path_url = self.path_url(path);
+        let mut url =
+            Url::parse(&path_url).context(UnableToParseUrlSnafu { url: path_url })?;
+
+        authorizer.sign(method, &mut url, expires_in);
+
+        Ok(url)
+    }
 }
 
 #[async_trait]
@@ -245,10 +305,6 @@ impl ObjectStore for AmazonS3 {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        self.client.head(location).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
@@ -392,6 +448,8 @@ pub struct AmazonS3Builder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AwsCredentialProvider>,
+    /// Skip signing requests
+    skip_signature: ConfigValue<bool>,
     /// Copy if not exists
     copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
 }
@@ -530,6 +588,9 @@ pub enum AmazonS3ConfigKey {
     /// See [`S3CopyIfNotExists`]
     CopyIfNotExists,
 
+    /// Skip signing request
+    SkipSignature,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -552,6 +613,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::ContainerCredentialsRelativeUri => {
                 "aws_container_credentials_relative_uri"
             }
+            Self::SkipSignature => "aws_skip_signature",
             Self::CopyIfNotExists => "copy_if_not_exists",
             Self::Client(opt) => opt.as_ref(),
         }
@@ -586,6 +648,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_container_credentials_relative_uri" => {
                 Ok(Self::ContainerCredentialsRelativeUri)
             }
+            "aws_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
@@ -697,6 +760,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
+            AmazonS3ConfigKey::SkipSignature => self.skip_signature.parse(value),
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
             }
@@ -767,6 +831,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::ContainerCredentialsRelativeUri => {
                 self.container_credentials_relative_uri.clone()
             }
+            AmazonS3ConfigKey::SkipSignature => Some(self.skip_signature.to_string()),
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists.as_ref().map(ToString::to_string)
             }
@@ -921,6 +986,14 @@ impl AmazonS3Builder {
         self
     }
 
+    /// If enabled, [`AmazonS3`] will not fetch credentials and will not sign requests
+    ///
+    /// This can be useful when interacting with public S3 buckets that deny authorized requests
+    pub fn with_skip_signature(mut self, skip_signature: bool) -> Self {
+        self.skip_signature = skip_signature.into();
+        self
+    }
+
     /// Sets the [checksum algorithm] which has to be used for object integrity check during upload.
     ///
     /// [checksum algorithm]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
@@ -1057,8 +1130,7 @@ impl AmazonS3Builder {
 
             Arc::new(TokenCredentialProvider::new(
                 token,
-                // The instance metadata endpoint is access over HTTP
-                self.client_options.clone().with_allow_http(true).client()?,
+                self.client_options.metadata_client()?,
                 self.retry_config.clone(),
             )) as _
         };
@@ -1090,6 +1162,7 @@ impl AmazonS3Builder {
             retry_config: self.retry_config,
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
+            skip_signature: self.skip_signature.get()?,
             checksum,
             copy_if_not_exists,
         };
@@ -1448,5 +1521,31 @@ mod s3_resolve_bucket_region_tests {
         let result = resolve_bucket_region(bucket, &ClientOptions::new()).await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "Tests shouldn't call use remote services by default"]
+    async fn test_disable_creds() {
+        // https://registry.opendata.aws/daylight-osm/
+        let v1 = AmazonS3Builder::new()
+            .with_bucket_name("daylight-map-distribution")
+            .with_region("us-west-1")
+            .with_access_key_id("local")
+            .with_secret_access_key("development")
+            .build()
+            .unwrap();
+
+        let prefix = Path::from("release");
+
+        v1.list_with_delimiter(Some(&prefix)).await.unwrap_err();
+
+        let v2 = AmazonS3Builder::new()
+            .with_bucket_name("daylight-map-distribution")
+            .with_region("us-west-1")
+            .with_skip_signature(true)
+            .build()
+            .unwrap();
+
+        v2.list_with_delimiter(Some(&prefix)).await.unwrap();
     }
 }

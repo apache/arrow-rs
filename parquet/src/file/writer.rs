@@ -21,10 +21,11 @@
 use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
+use crate::thrift::TSerializable;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
-use thrift::protocol::{TCompactOutputProtocol, TSerializable};
+use thrift::protocol::TCompactOutputProtocol;
 
 use crate::column::writer::{
     get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl,

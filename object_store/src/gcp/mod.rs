@@ -387,16 +387,11 @@ impl GetClient for GoogleCloudStorageClient {
     const STORE: &'static str = STORE;
 
     /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
-    async fn get_request(
-        &self,
-        path: &Path,
-        options: GetOptions,
-        head: bool,
-    ) -> Result<Response> {
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
         let credential = self.get_credential().await?;
         let url = self.object_url(path);
 
-        let method = match head {
+        let method = match options.head {
             true => Method::HEAD,
             false => Method::GET,
         };
@@ -600,10 +595,6 @@ impl ObjectStore for GoogleCloudStorage {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        self.client.head(location).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
@@ -1087,7 +1078,7 @@ impl GoogleCloudStorageBuilder {
         } else {
             Arc::new(TokenCredentialProvider::new(
                 InstanceCredentialProvider::default(),
-                self.client_options.clone().with_allow_http(true).client()?,
+                self.client_options.metadata_client()?,
                 self.retry_config.clone(),
             )) as _
         };
@@ -1222,7 +1213,7 @@ mod test {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("HTTP status client error (404 Not Found)"),
+            err.contains("Client error with status 404 Not Found"),
             "{}",
             err
         )

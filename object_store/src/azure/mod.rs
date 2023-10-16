@@ -202,10 +202,6 @@ impl ObjectStore for MicrosoftAzure {
         self.client.get_opts(location, options).await
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        self.client.head(location).await
-    }
-
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.delete_request(location, &()).await
     }
@@ -1074,7 +1070,7 @@ impl MicrosoftAzureBuilder {
                 );
                 Arc::new(TokenCredentialProvider::new(
                     msi_credential,
-                    self.client_options.clone().with_allow_http(true).client()?,
+                    self.client_options.metadata_client()?,
                     self.retry_config.clone(),
                 )) as _
             };

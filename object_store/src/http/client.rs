@@ -288,14 +288,9 @@ impl GetClient for Client {
         last_modified_required: false,
     };
 
-    async fn get_request(
-        &self,
-        location: &Path,
-        options: GetOptions,
-        head: bool,
-    ) -> Result<Response> {
-        let url = self.path_url(location);
-        let method = match head {
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
+        let url = self.path_url(path);
+        let method = match options.head {
             true => Method::HEAD,
             false => Method::GET,
         };
@@ -311,7 +306,7 @@ impl GetClient for Client {
                 Some(StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED) => {
                     crate::Error::NotFound {
                         source: Box::new(source),
-                        path: location.to_string(),
+                        path: path.to_string(),
                     }
                 }
                 _ => Error::Request { source }.into(),
@@ -322,7 +317,7 @@ impl GetClient for Client {
         if has_range && res.status() != StatusCode::PARTIAL_CONTENT {
             return Err(crate::Error::NotSupported {
                 source: Box::new(Error::RangeNotSupported {
-                    href: location.to_string(),
+                    href: path.to_string(),
                 }),
             });
         }

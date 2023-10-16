@@ -53,12 +53,12 @@ impl Type {
   ];
 }
 
-impl TSerializable for Type {
+impl crate::thrift::TSerializable for Type {
   #[allow(clippy::trivially_copy_pass_by_ref)]
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     o_prot.write_i32(self.0)
   }
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<Type> {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<Type> {
     let enum_value = i_prot.read_i32()?;
     Ok(Type::from(enum_value))
   }
@@ -222,12 +222,12 @@ impl ConvertedType {
   ];
 }
 
-impl TSerializable for ConvertedType {
+impl crate::thrift::TSerializable for ConvertedType {
   #[allow(clippy::trivially_copy_pass_by_ref)]
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     o_prot.write_i32(self.0)
   }
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<ConvertedType> {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<ConvertedType> {
     let enum_value = i_prot.read_i32()?;
     Ok(ConvertedType::from(enum_value))
   }
@@ -299,12 +299,12 @@ impl FieldRepetitionType {
   ];
 }
 
-impl TSerializable for FieldRepetitionType {
+impl crate::thrift::TSerializable for FieldRepetitionType {
   #[allow(clippy::trivially_copy_pass_by_ref)]
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     o_prot.write_i32(self.0)
   }
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<FieldRepetitionType> {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<FieldRepetitionType> {
     let enum_value = i_prot.read_i32()?;
     Ok(FieldRepetitionType::from(enum_value))
   }
@@ -397,12 +397,12 @@ impl Encoding {
   ];
 }
 
-impl TSerializable for Encoding {
+impl crate::thrift::TSerializable for Encoding {
   #[allow(clippy::trivially_copy_pass_by_ref)]
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     o_prot.write_i32(self.0)
   }
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<Encoding> {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<Encoding> {
     let enum_value = i_prot.read_i32()?;
     Ok(Encoding::from(enum_value))
   }
@@ -474,12 +474,12 @@ impl CompressionCodec {
   ];
 }
 
-impl TSerializable for CompressionCodec {
+impl crate::thrift::TSerializable for CompressionCodec {
   #[allow(clippy::trivially_copy_pass_by_ref)]
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     o_prot.write_i32(self.0)
   }
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<CompressionCodec> {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<CompressionCodec> {
     let enum_value = i_prot.read_i32()?;
     Ok(CompressionCodec::from(enum_value))
   }
@@ -535,12 +535,12 @@ impl PageType {
   ];
 }
 
-impl TSerializable for PageType {
+impl crate::thrift::TSerializable for PageType {
   #[allow(clippy::trivially_copy_pass_by_ref)]
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     o_prot.write_i32(self.0)
   }
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<PageType> {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<PageType> {
     let enum_value = i_prot.read_i32()?;
     Ok(PageType::from(enum_value))
   }
@@ -592,12 +592,12 @@ impl BoundaryOrder {
   ];
 }
 
-impl TSerializable for BoundaryOrder {
+impl crate::thrift::TSerializable for BoundaryOrder {
   #[allow(clippy::trivially_copy_pass_by_ref)]
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     o_prot.write_i32(self.0)
   }
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<BoundaryOrder> {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<BoundaryOrder> {
     let enum_value = i_prot.read_i32()?;
     Ok(BoundaryOrder::from(enum_value))
   }
@@ -678,8 +678,8 @@ impl Statistics {
   }
 }
 
-impl TSerializable for Statistics {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<Statistics> {
+impl crate::thrift::TSerializable for Statistics {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<Statistics> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Vec<u8>> = None;
     let mut f_2: Option<Vec<u8>> = None;
@@ -735,7 +735,7 @@ impl TSerializable for Statistics {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("Statistics");
     o_prot.write_struct_begin(&struct_ident)?;
     if let Some(ref fld_var) = self.max {
@@ -788,8 +788,8 @@ impl StringType {
   }
 }
 
-impl TSerializable for StringType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<StringType> {
+impl crate::thrift::TSerializable for StringType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<StringType> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -803,7 +803,7 @@ impl TSerializable for StringType {
     let ret = StringType {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("StringType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -825,8 +825,8 @@ impl UUIDType {
   }
 }
 
-impl TSerializable for UUIDType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<UUIDType> {
+impl crate::thrift::TSerializable for UUIDType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<UUIDType> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -840,7 +840,7 @@ impl TSerializable for UUIDType {
     let ret = UUIDType {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("UUIDType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -862,8 +862,8 @@ impl MapType {
   }
 }
 
-impl TSerializable for MapType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MapType> {
+impl crate::thrift::TSerializable for MapType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<MapType> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -877,7 +877,7 @@ impl TSerializable for MapType {
     let ret = MapType {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("MapType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -899,8 +899,8 @@ impl ListType {
   }
 }
 
-impl TSerializable for ListType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<ListType> {
+impl crate::thrift::TSerializable for ListType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<ListType> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -914,7 +914,7 @@ impl TSerializable for ListType {
     let ret = ListType {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("ListType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -936,8 +936,8 @@ impl EnumType {
   }
 }
 
-impl TSerializable for EnumType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<EnumType> {
+impl crate::thrift::TSerializable for EnumType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<EnumType> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -951,7 +951,7 @@ impl TSerializable for EnumType {
     let ret = EnumType {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("EnumType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -973,8 +973,8 @@ impl DateType {
   }
 }
 
-impl TSerializable for DateType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<DateType> {
+impl crate::thrift::TSerializable for DateType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<DateType> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -988,7 +988,7 @@ impl TSerializable for DateType {
     let ret = DateType {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("DateType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -1015,8 +1015,8 @@ impl NullType {
   }
 }
 
-impl TSerializable for NullType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<NullType> {
+impl crate::thrift::TSerializable for NullType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<NullType> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -1030,7 +1030,7 @@ impl TSerializable for NullType {
     let ret = NullType {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("NullType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -1066,8 +1066,8 @@ impl DecimalType {
   }
 }
 
-impl TSerializable for DecimalType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<DecimalType> {
+impl crate::thrift::TSerializable for DecimalType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<DecimalType> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<i32> = None;
     let mut f_2: Option<i32> = None;
@@ -1101,7 +1101,7 @@ impl TSerializable for DecimalType {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("DecimalType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("scale", TType::I32, 1))?;
@@ -1130,8 +1130,8 @@ impl MilliSeconds {
   }
 }
 
-impl TSerializable for MilliSeconds {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MilliSeconds> {
+impl crate::thrift::TSerializable for MilliSeconds {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<MilliSeconds> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -1145,7 +1145,7 @@ impl TSerializable for MilliSeconds {
     let ret = MilliSeconds {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("MilliSeconds");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -1167,8 +1167,8 @@ impl MicroSeconds {
   }
 }
 
-impl TSerializable for MicroSeconds {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<MicroSeconds> {
+impl crate::thrift::TSerializable for MicroSeconds {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<MicroSeconds> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -1182,7 +1182,7 @@ impl TSerializable for MicroSeconds {
     let ret = MicroSeconds {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("MicroSeconds");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -1204,8 +1204,8 @@ impl NanoSeconds {
   }
 }
 
-impl TSerializable for NanoSeconds {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<NanoSeconds> {
+impl crate::thrift::TSerializable for NanoSeconds {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<NanoSeconds> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -1219,7 +1219,7 @@ impl TSerializable for NanoSeconds {
     let ret = NanoSeconds {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("NanoSeconds");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -1238,8 +1238,8 @@ pub enum TimeUnit {
   NANOS(NanoSeconds),
 }
 
-impl TSerializable for TimeUnit {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<TimeUnit> {
+impl crate::thrift::TSerializable for TimeUnit {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<TimeUnit> {
     let mut ret: Option<TimeUnit> = None;
     let mut received_field_count = 0;
     i_prot.read_struct_begin()?;
@@ -1301,7 +1301,7 @@ impl TSerializable for TimeUnit {
       Ok(ret.expect("return value should have been constructed"))
     }
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("TimeUnit");
     o_prot.write_struct_begin(&struct_ident)?;
     match *self {
@@ -1348,8 +1348,8 @@ impl TimestampType {
   }
 }
 
-impl TSerializable for TimestampType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<TimestampType> {
+impl crate::thrift::TSerializable for TimestampType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<TimestampType> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<bool> = None;
     let mut f_2: Option<TimeUnit> = None;
@@ -1383,7 +1383,7 @@ impl TSerializable for TimestampType {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("TimestampType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("isAdjustedToUTC", TType::Bool, 1))?;
@@ -1419,8 +1419,8 @@ impl TimeType {
   }
 }
 
-impl TSerializable for TimeType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<TimeType> {
+impl crate::thrift::TSerializable for TimeType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<TimeType> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<bool> = None;
     let mut f_2: Option<TimeUnit> = None;
@@ -1454,7 +1454,7 @@ impl TSerializable for TimeType {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("TimeType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("isAdjustedToUTC", TType::Bool, 1))?;
@@ -1492,8 +1492,8 @@ impl IntType {
   }
 }
 
-impl TSerializable for IntType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<IntType> {
+impl crate::thrift::TSerializable for IntType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<IntType> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<i8> = None;
     let mut f_2: Option<bool> = None;
@@ -1527,7 +1527,7 @@ impl TSerializable for IntType {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("IntType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("bitWidth", TType::I08, 1))?;
@@ -1558,8 +1558,8 @@ impl JsonType {
   }
 }
 
-impl TSerializable for JsonType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<JsonType> {
+impl crate::thrift::TSerializable for JsonType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<JsonType> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -1573,7 +1573,7 @@ impl TSerializable for JsonType {
     let ret = JsonType {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("JsonType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -1598,8 +1598,8 @@ impl BsonType {
   }
 }
 
-impl TSerializable for BsonType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<BsonType> {
+impl crate::thrift::TSerializable for BsonType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<BsonType> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -1613,7 +1613,7 @@ impl TSerializable for BsonType {
     let ret = BsonType {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("BsonType");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -1642,8 +1642,8 @@ pub enum LogicalType {
   UUID(UUIDType),
 }
 
-impl TSerializable for LogicalType {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<LogicalType> {
+impl crate::thrift::TSerializable for LogicalType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<LogicalType> {
     let mut ret: Option<LogicalType> = None;
     let mut received_field_count = 0;
     i_prot.read_struct_begin()?;
@@ -1775,7 +1775,7 @@ impl TSerializable for LogicalType {
       Ok(ret.expect("return value should have been constructed"))
     }
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("LogicalType");
     o_prot.write_struct_begin(&struct_ident)?;
     match *self {
@@ -1915,8 +1915,8 @@ impl SchemaElement {
   }
 }
 
-impl TSerializable for SchemaElement {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<SchemaElement> {
+impl crate::thrift::TSerializable for SchemaElement {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<SchemaElement> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Type> = None;
     let mut f_2: Option<i32> = None;
@@ -1997,7 +1997,7 @@ impl TSerializable for SchemaElement {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("SchemaElement");
     o_prot.write_struct_begin(&struct_ident)?;
     if let Some(ref fld_var) = self.type_ {
@@ -2084,8 +2084,8 @@ impl DataPageHeader {
   }
 }
 
-impl TSerializable for DataPageHeader {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<DataPageHeader> {
+impl crate::thrift::TSerializable for DataPageHeader {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<DataPageHeader> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<i32> = None;
     let mut f_2: Option<Encoding> = None;
@@ -2139,7 +2139,7 @@ impl TSerializable for DataPageHeader {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("DataPageHeader");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("num_values", TType::I32, 1))?;
@@ -2178,8 +2178,8 @@ impl IndexPageHeader {
   }
 }
 
-impl TSerializable for IndexPageHeader {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<IndexPageHeader> {
+impl crate::thrift::TSerializable for IndexPageHeader {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<IndexPageHeader> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -2193,7 +2193,7 @@ impl TSerializable for IndexPageHeader {
     let ret = IndexPageHeader {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("IndexPageHeader");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -2229,8 +2229,8 @@ impl DictionaryPageHeader {
   }
 }
 
-impl TSerializable for DictionaryPageHeader {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<DictionaryPageHeader> {
+impl crate::thrift::TSerializable for DictionaryPageHeader {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<DictionaryPageHeader> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<i32> = None;
     let mut f_2: Option<Encoding> = None;
@@ -2270,7 +2270,7 @@ impl TSerializable for DictionaryPageHeader {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("DictionaryPageHeader");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("num_values", TType::I32, 1))?;
@@ -2337,8 +2337,8 @@ impl DataPageHeaderV2 {
   }
 }
 
-impl TSerializable for DataPageHeaderV2 {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<DataPageHeaderV2> {
+impl crate::thrift::TSerializable for DataPageHeaderV2 {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<DataPageHeaderV2> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<i32> = None;
     let mut f_2: Option<i32> = None;
@@ -2412,7 +2412,7 @@ impl TSerializable for DataPageHeaderV2 {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("DataPageHeaderV2");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("num_values", TType::I32, 1))?;
@@ -2463,8 +2463,8 @@ impl SplitBlockAlgorithm {
   }
 }
 
-impl TSerializable for SplitBlockAlgorithm {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<SplitBlockAlgorithm> {
+impl crate::thrift::TSerializable for SplitBlockAlgorithm {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<SplitBlockAlgorithm> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -2478,7 +2478,7 @@ impl TSerializable for SplitBlockAlgorithm {
     let ret = SplitBlockAlgorithm {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("SplitBlockAlgorithm");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -2495,8 +2495,8 @@ pub enum BloomFilterAlgorithm {
   BLOCK(SplitBlockAlgorithm),
 }
 
-impl TSerializable for BloomFilterAlgorithm {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<BloomFilterAlgorithm> {
+impl crate::thrift::TSerializable for BloomFilterAlgorithm {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<BloomFilterAlgorithm> {
     let mut ret: Option<BloomFilterAlgorithm> = None;
     let mut received_field_count = 0;
     i_prot.read_struct_begin()?;
@@ -2544,7 +2544,7 @@ impl TSerializable for BloomFilterAlgorithm {
       Ok(ret.expect("return value should have been constructed"))
     }
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("BloomFilterAlgorithm");
     o_prot.write_struct_begin(&struct_ident)?;
     match *self {
@@ -2576,8 +2576,8 @@ impl XxHash {
   }
 }
 
-impl TSerializable for XxHash {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<XxHash> {
+impl crate::thrift::TSerializable for XxHash {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<XxHash> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -2591,7 +2591,7 @@ impl TSerializable for XxHash {
     let ret = XxHash {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("XxHash");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -2608,8 +2608,8 @@ pub enum BloomFilterHash {
   XXHASH(XxHash),
 }
 
-impl TSerializable for BloomFilterHash {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<BloomFilterHash> {
+impl crate::thrift::TSerializable for BloomFilterHash {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<BloomFilterHash> {
     let mut ret: Option<BloomFilterHash> = None;
     let mut received_field_count = 0;
     i_prot.read_struct_begin()?;
@@ -2657,7 +2657,7 @@ impl TSerializable for BloomFilterHash {
       Ok(ret.expect("return value should have been constructed"))
     }
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("BloomFilterHash");
     o_prot.write_struct_begin(&struct_ident)?;
     match *self {
@@ -2688,8 +2688,8 @@ impl Uncompressed {
   }
 }
 
-impl TSerializable for Uncompressed {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<Uncompressed> {
+impl crate::thrift::TSerializable for Uncompressed {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<Uncompressed> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -2703,7 +2703,7 @@ impl TSerializable for Uncompressed {
     let ret = Uncompressed {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("Uncompressed");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -2720,8 +2720,8 @@ pub enum BloomFilterCompression {
   UNCOMPRESSED(Uncompressed),
 }
 
-impl TSerializable for BloomFilterCompression {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<BloomFilterCompression> {
+impl crate::thrift::TSerializable for BloomFilterCompression {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<BloomFilterCompression> {
     let mut ret: Option<BloomFilterCompression> = None;
     let mut received_field_count = 0;
     i_prot.read_struct_begin()?;
@@ -2769,7 +2769,7 @@ impl TSerializable for BloomFilterCompression {
       Ok(ret.expect("return value should have been constructed"))
     }
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("BloomFilterCompression");
     o_prot.write_struct_begin(&struct_ident)?;
     match *self {
@@ -2814,8 +2814,8 @@ impl BloomFilterHeader {
   }
 }
 
-impl TSerializable for BloomFilterHeader {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<BloomFilterHeader> {
+impl crate::thrift::TSerializable for BloomFilterHeader {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<BloomFilterHeader> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<i32> = None;
     let mut f_2: Option<BloomFilterAlgorithm> = None;
@@ -2863,7 +2863,7 @@ impl TSerializable for BloomFilterHeader {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("BloomFilterHeader");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("numBytes", TType::I32, 1))?;
@@ -2933,8 +2933,8 @@ impl PageHeader {
   }
 }
 
-impl TSerializable for PageHeader {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<PageHeader> {
+impl crate::thrift::TSerializable for PageHeader {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<PageHeader> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<PageType> = None;
     let mut f_2: Option<i32> = None;
@@ -3005,7 +3005,7 @@ impl TSerializable for PageHeader {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("PageHeader");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("type", TType::I32, 1))?;
@@ -3067,8 +3067,8 @@ impl KeyValue {
   }
 }
 
-impl TSerializable for KeyValue {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<KeyValue> {
+impl crate::thrift::TSerializable for KeyValue {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<KeyValue> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<String> = None;
     let mut f_2: Option<String> = None;
@@ -3101,7 +3101,7 @@ impl TSerializable for KeyValue {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("KeyValue");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("key", TType::String, 1))?;
@@ -3143,8 +3143,8 @@ impl SortingColumn {
   }
 }
 
-impl TSerializable for SortingColumn {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<SortingColumn> {
+impl crate::thrift::TSerializable for SortingColumn {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<SortingColumn> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<i32> = None;
     let mut f_2: Option<bool> = None;
@@ -3185,7 +3185,7 @@ impl TSerializable for SortingColumn {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("SortingColumn");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("column_idx", TType::I32, 1))?;
@@ -3227,8 +3227,8 @@ impl PageEncodingStats {
   }
 }
 
-impl TSerializable for PageEncodingStats {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<PageEncodingStats> {
+impl crate::thrift::TSerializable for PageEncodingStats {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<PageEncodingStats> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<PageType> = None;
     let mut f_2: Option<Encoding> = None;
@@ -3269,7 +3269,7 @@ impl TSerializable for PageEncodingStats {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("PageEncodingStats");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("page_type", TType::I32, 1))?;
@@ -3355,8 +3355,8 @@ impl ColumnMetaData {
   }
 }
 
-impl TSerializable for ColumnMetaData {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<ColumnMetaData> {
+impl crate::thrift::TSerializable for ColumnMetaData {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<ColumnMetaData> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Type> = None;
     let mut f_2: Option<Vec<Encoding>> = None;
@@ -3498,7 +3498,7 @@ impl TSerializable for ColumnMetaData {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("ColumnMetaData");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("type", TType::I32, 1))?;
@@ -3595,8 +3595,8 @@ impl EncryptionWithFooterKey {
   }
 }
 
-impl TSerializable for EncryptionWithFooterKey {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<EncryptionWithFooterKey> {
+impl crate::thrift::TSerializable for EncryptionWithFooterKey {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<EncryptionWithFooterKey> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -3610,7 +3610,7 @@ impl TSerializable for EncryptionWithFooterKey {
     let ret = EncryptionWithFooterKey {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("EncryptionWithFooterKey");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -3639,8 +3639,8 @@ impl EncryptionWithColumnKey {
   }
 }
 
-impl TSerializable for EncryptionWithColumnKey {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<EncryptionWithColumnKey> {
+impl crate::thrift::TSerializable for EncryptionWithColumnKey {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<EncryptionWithColumnKey> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Vec<String>> = None;
     let mut f_2: Option<Vec<u8>> = None;
@@ -3679,7 +3679,7 @@ impl TSerializable for EncryptionWithColumnKey {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("EncryptionWithColumnKey");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("path_in_schema", TType::List, 1))?;
@@ -3709,8 +3709,8 @@ pub enum ColumnCryptoMetaData {
   ENCRYPTIONWITHCOLUMNKEY(EncryptionWithColumnKey),
 }
 
-impl TSerializable for ColumnCryptoMetaData {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<ColumnCryptoMetaData> {
+impl crate::thrift::TSerializable for ColumnCryptoMetaData {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<ColumnCryptoMetaData> {
     let mut ret: Option<ColumnCryptoMetaData> = None;
     let mut received_field_count = 0;
     i_prot.read_struct_begin()?;
@@ -3765,7 +3765,7 @@ impl TSerializable for ColumnCryptoMetaData {
       Ok(ret.expect("return value should have been constructed"))
     }
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("ColumnCryptoMetaData");
     o_prot.write_struct_begin(&struct_ident)?;
     match *self {
@@ -3832,8 +3832,8 @@ impl ColumnChunk {
   }
 }
 
-impl TSerializable for ColumnChunk {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<ColumnChunk> {
+impl crate::thrift::TSerializable for ColumnChunk {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<ColumnChunk> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<String> = None;
     let mut f_2: Option<i64> = None;
@@ -3908,7 +3908,7 @@ impl TSerializable for ColumnChunk {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("ColumnChunk");
     o_prot.write_struct_begin(&struct_ident)?;
     if let Some(ref fld_var) = self.file_path {
@@ -4000,8 +4000,8 @@ impl RowGroup {
   }
 }
 
-impl TSerializable for RowGroup {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<RowGroup> {
+impl crate::thrift::TSerializable for RowGroup {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<RowGroup> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Vec<ColumnChunk>> = None;
     let mut f_2: Option<i64> = None;
@@ -4078,7 +4078,7 @@ impl TSerializable for RowGroup {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("RowGroup");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("columns", TType::List, 1))?;
@@ -4138,8 +4138,8 @@ impl TypeDefinedOrder {
   }
 }
 
-impl TSerializable for TypeDefinedOrder {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<TypeDefinedOrder> {
+impl crate::thrift::TSerializable for TypeDefinedOrder {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<TypeDefinedOrder> {
     i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
@@ -4153,7 +4153,7 @@ impl TSerializable for TypeDefinedOrder {
     let ret = TypeDefinedOrder {};
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("TypeDefinedOrder");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_stop()?;
@@ -4170,8 +4170,8 @@ pub enum ColumnOrder {
   TYPEORDER(TypeDefinedOrder),
 }
 
-impl TSerializable for ColumnOrder {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<ColumnOrder> {
+impl crate::thrift::TSerializable for ColumnOrder {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<ColumnOrder> {
     let mut ret: Option<ColumnOrder> = None;
     let mut received_field_count = 0;
     i_prot.read_struct_begin()?;
@@ -4219,7 +4219,7 @@ impl TSerializable for ColumnOrder {
       Ok(ret.expect("return value should have been constructed"))
     }
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("ColumnOrder");
     o_prot.write_struct_begin(&struct_ident)?;
     match *self {
@@ -4260,8 +4260,8 @@ impl PageLocation {
   }
 }
 
-impl TSerializable for PageLocation {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<PageLocation> {
+impl crate::thrift::TSerializable for PageLocation {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<PageLocation> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<i64> = None;
     let mut f_2: Option<i32> = None;
@@ -4302,7 +4302,7 @@ impl TSerializable for PageLocation {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("PageLocation");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("offset", TType::I64, 1))?;
@@ -4338,8 +4338,8 @@ impl OffsetIndex {
   }
 }
 
-impl TSerializable for OffsetIndex {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<OffsetIndex> {
+impl crate::thrift::TSerializable for OffsetIndex {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<OffsetIndex> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Vec<PageLocation>> = None;
     loop {
@@ -4372,7 +4372,7 @@ impl TSerializable for OffsetIndex {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("OffsetIndex");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("page_locations", TType::List, 1))?;
@@ -4432,8 +4432,8 @@ impl ColumnIndex {
   }
 }
 
-impl TSerializable for ColumnIndex {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<ColumnIndex> {
+impl crate::thrift::TSerializable for ColumnIndex {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<ColumnIndex> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Vec<bool>> = None;
     let mut f_2: Option<Vec<Vec<u8>>> = None;
@@ -4511,7 +4511,7 @@ impl TSerializable for ColumnIndex {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("ColumnIndex");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("null_pages", TType::List, 1))?;
@@ -4577,8 +4577,8 @@ impl AesGcmV1 {
   }
 }
 
-impl TSerializable for AesGcmV1 {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<AesGcmV1> {
+impl crate::thrift::TSerializable for AesGcmV1 {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<AesGcmV1> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Vec<u8>> = None;
     let mut f_2: Option<Vec<u8>> = None;
@@ -4616,7 +4616,7 @@ impl TSerializable for AesGcmV1 {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("AesGcmV1");
     o_prot.write_struct_begin(&struct_ident)?;
     if let Some(ref fld_var) = self.aad_prefix {
@@ -4664,8 +4664,8 @@ impl AesGcmCtrV1 {
   }
 }
 
-impl TSerializable for AesGcmCtrV1 {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<AesGcmCtrV1> {
+impl crate::thrift::TSerializable for AesGcmCtrV1 {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<AesGcmCtrV1> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<Vec<u8>> = None;
     let mut f_2: Option<Vec<u8>> = None;
@@ -4703,7 +4703,7 @@ impl TSerializable for AesGcmCtrV1 {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("AesGcmCtrV1");
     o_prot.write_struct_begin(&struct_ident)?;
     if let Some(ref fld_var) = self.aad_prefix {
@@ -4736,8 +4736,8 @@ pub enum EncryptionAlgorithm {
   AESGCMCTRV1(AesGcmCtrV1),
 }
 
-impl TSerializable for EncryptionAlgorithm {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<EncryptionAlgorithm> {
+impl crate::thrift::TSerializable for EncryptionAlgorithm {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<EncryptionAlgorithm> {
     let mut ret: Option<EncryptionAlgorithm> = None;
     let mut received_field_count = 0;
     i_prot.read_struct_begin()?;
@@ -4792,7 +4792,7 @@ impl TSerializable for EncryptionAlgorithm {
       Ok(ret.expect("return value should have been constructed"))
     }
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("EncryptionAlgorithm");
     o_prot.write_struct_begin(&struct_ident)?;
     match *self {
@@ -4879,8 +4879,8 @@ impl FileMetaData {
   }
 }
 
-impl TSerializable for FileMetaData {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<FileMetaData> {
+impl crate::thrift::TSerializable for FileMetaData {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<FileMetaData> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<i32> = None;
     let mut f_2: Option<Vec<SchemaElement>> = None;
@@ -4982,7 +4982,7 @@ impl TSerializable for FileMetaData {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("FileMetaData");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("version", TType::I32, 1))?;
@@ -5068,8 +5068,8 @@ impl FileCryptoMetaData {
   }
 }
 
-impl TSerializable for FileCryptoMetaData {
-  fn read_from_in_protocol(i_prot: &mut dyn TInputProtocol) -> thrift::Result<FileCryptoMetaData> {
+impl crate::thrift::TSerializable for FileCryptoMetaData {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<FileCryptoMetaData> {
     i_prot.read_struct_begin()?;
     let mut f_1: Option<EncryptionAlgorithm> = None;
     let mut f_2: Option<Vec<u8>> = None;
@@ -5102,7 +5102,7 @@ impl TSerializable for FileCryptoMetaData {
     };
     Ok(ret)
   }
-  fn write_to_out_protocol(&self, o_prot: &mut dyn TOutputProtocol) -> thrift::Result<()> {
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("FileCryptoMetaData");
     o_prot.write_struct_begin(&struct_ident)?;
     o_prot.write_field_begin(&TFieldIdentifier::new("encryption_algorithm", TType::Struct, 1))?;

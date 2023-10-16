@@ -419,35 +419,6 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let path = self.config.path_to_filesystem(location)?;
-        let location = location.clone();
-
-        maybe_spawn_blocking(move || {
-            let metadata = match metadata(&path) {
-                Err(e) => Err(match e.kind() {
-                    ErrorKind::NotFound => Error::NotFound {
-                        path: path.clone(),
-                        source: e,
-                    },
-                    _ => Error::Metadata {
-                        source: e.into(),
-                        path: location.to_string(),
-                    },
-                }),
-                Ok(m) => match !m.is_dir() {
-                    true => Ok(m),
-                    false => Err(Error::NotFound {
-                        path,
-                        source: io::Error::new(ErrorKind::NotFound, "is directory"),
-                    }),
-                },
-            }?;
-            convert_metadata(metadata, location)
-        })
-        .await
-    }
-
     async fn delete(&self, location: &Path) -> Result<()> {
         let path = self.config.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || match std::fs::remove_file(&path) {
@@ -1604,15 +1575,15 @@ mod unix_test {
         let path = root.path().join(filename);
         unistd::mkfifo(&path, stat::Mode::S_IRWXU).unwrap();
 
-        let location = Path::from(filename);
-        integration.head(&location).await.unwrap();
-
         // Need to open read and write side in parallel
         let spawned = tokio::task::spawn_blocking(|| {
-            OpenOptions::new().write(true).open(path).unwrap();
+            OpenOptions::new().write(true).open(path).unwrap()
         });
 
+        let location = Path::from(filename);
+        integration.head(&location).await.unwrap();
         integration.get(&location).await.unwrap();
+
         spawned.await.unwrap();
     }
 }
