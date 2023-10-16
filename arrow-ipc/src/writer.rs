@@ -832,6 +832,11 @@ impl<W: Write> FileWriter<W> {
         Ok(())
     }
 
+    /// Gets underlying schema.
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
+
     /// Gets a reference to the underlying writer.
     pub fn get_ref(&self) -> &W {
         self.writer.get_ref()
