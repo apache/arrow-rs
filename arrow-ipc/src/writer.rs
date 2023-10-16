@@ -23,6 +23,7 @@
 use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
+use std::sync::Arc;
 
 use flatbuffers::FlatBufferBuilder;
 
@@ -696,7 +697,7 @@ pub struct FileWriter<W: Write> {
     /// IPC write options
     write_options: IpcWriteOptions,
     /// A reference to the schema, used in validating record batches
-    schema: Schema,
+    schema: SchemaRef,
     /// The number of bytes between each block of bytes, as an offset for random access
     block_offsets: usize,
     /// Dictionary blocks that will be written as part of the IPC footer
@@ -739,7 +740,7 @@ impl<W: Write> FileWriter<W> {
         Ok(Self {
             writer,
             write_options,
-            schema: schema.clone(),
+            schema: Arc::new(schema.clone()),
             block_offsets: meta + data + header_size,
             dictionary_blocks: vec![],
             record_blocks: vec![],
@@ -830,6 +831,11 @@ impl<W: Write> FileWriter<W> {
         self.finished = true;
 
         Ok(())
+    }
+
+    /// Returns the arrow [`SchemaRef`] for this arrow file.
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     /// Gets a reference to the underlying writer.
