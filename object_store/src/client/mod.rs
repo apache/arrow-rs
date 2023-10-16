@@ -166,7 +166,7 @@ impl FromStr for ClientConfigKey {
 }
 
 /// HTTP client configuration for remote object stores
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ClientOptions {
     user_agent: Option<ConfigValue<HeaderValue>>,
     content_type_map: HashMap<String, String>,
@@ -186,6 +186,35 @@ pub struct ClientOptions {
     http2_keep_alive_while_idle: ConfigValue<bool>,
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
+}
+
+impl Default for ClientOptions {
+    fn default() -> Self {
+        // Defaults based on
+        // <https://docs.aws.amazon.com/sdkref/latest/guide/feature-smart-config-defaults.html>
+        // <https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/timeouts-and-retries-for-latency-sensitive-applications.html>
+        // Which recommend a connection timeout of 3.1s and a request timeout of 2s
+        Self {
+            user_agent: None,
+            content_type_map: Default::default(),
+            default_content_type: None,
+            default_headers: None,
+            proxy_url: None,
+            proxy_ca_certificate: None,
+            proxy_excludes: None,
+            allow_http: Default::default(),
+            allow_insecure: Default::default(),
+            timeout: Some(Duration::from_secs(5).into()),
+            connect_timeout: Some(Duration::from_secs(5).into()),
+            pool_idle_timeout: None,
+            pool_max_idle_per_host: None,
+            http2_keep_alive_interval: None,
+            http2_keep_alive_timeout: None,
+            http2_keep_alive_while_idle: Default::default(),
+            http1_only: Default::default(),
+            http2_only: Default::default(),
+        }
+    }
 }
 
 impl ClientOptions {
@@ -367,14 +396,34 @@ impl ClientOptions {
     ///
     /// The timeout is applied from when the request starts connecting until the
     /// response body has finished
+    ///
+    /// Default is 5 seconds
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(ConfigValue::Parsed(timeout));
         self
     }
 
+    /// Disables the request timeout
+    ///
+    /// See [`Self::with_timeout`]
+    pub fn with_timeout_disabled(mut self) -> Self {
+        self.timeout = None;
+        self
+    }
+
     /// Set a timeout for only the connect phase of a Client
+    ///
+    /// Default is 5 seconds
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = Some(ConfigValue::Parsed(timeout));
+        self
+    }
+
+    /// Disables the connection timeout
+    ///
+    /// See [`Self::with_connect_timeout`]
+    pub fn with_connect_timeout_disabled(mut self) -> Self {
+        self.timeout = None;
         self
     }
 
@@ -444,7 +493,20 @@ impl ClientOptions {
         }
     }
 
-    pub(crate) fn client(&self) -> super::Result<Client> {
+    /// Create a [`Client`] with overrides optimised for metadata endpoint access
+    ///
+    /// In particular:
+    /// * Allows HTTP as metadata endpoints do not use TLS
+    /// * Configures a low connection timeout to provide quick feedback if not present
+    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+    pub(crate) fn metadata_client(&self) -> Result<Client> {
+        self.clone()
+            .with_allow_http(true)
+            .with_connect_timeout(Duration::from_secs(1))
+            .client()
+    }
+
+    pub(crate) fn client(&self) -> Result<Client> {
         let mut builder = ClientBuilder::new();
 
         match &self.user_agent {

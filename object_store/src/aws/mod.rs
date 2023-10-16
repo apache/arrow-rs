@@ -1130,8 +1130,7 @@ impl AmazonS3Builder {
 
             Arc::new(TokenCredentialProvider::new(
                 token,
-                // The instance metadata endpoint is access over HTTP
-                self.client_options.clone().with_allow_http(true).client()?,
+                self.client_options.metadata_client()?,
                 self.retry_config.clone(),
             )) as _
         };
