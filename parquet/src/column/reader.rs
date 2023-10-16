@@ -124,6 +124,9 @@ pub struct GenericColumnReader<R, D, V> {
     /// so far.
     num_decoded_values: usize,
 
+    /// True if the end of the current data page denotes the end of a record
+    has_record_delimiter: bool,
+
     /// The decoder for the definition levels if any
     def_level_decoder: Option<D>,
 
@@ -179,6 +182,7 @@ where
             num_buffered_values: 0,
             num_decoded_values: 0,
             values_decoder,
+            has_record_delimiter: false,
         }
     }
 
@@ -261,7 +265,7 @@ where
                         remaining_records,
                     )?;
 
-                    if levels_read == remaining_levels {
+                    if levels_read == remaining_levels && self.has_record_delimiter {
                         // Reached end of page, which implies records_read < remaining_records
                         // as otherwise would have stopped reading before reaching the end
                         assert!(records_read < remaining_records); // Sanity check
@@ -372,7 +376,7 @@ where
                     let (mut records_read, levels_read) =
                         decoder.skip_rep_levels(remaining_records, remaining_levels)?;
 
-                    if levels_read == remaining_levels {
+                    if levels_read == remaining_levels && self.has_record_delimiter {
                         // Reached end of page, which implies records_read < remaining_records
                         // as otherwise would have stopped reading before reaching the end
                         assert!(records_read < remaining_records); // Sanity check
@@ -486,6 +490,9 @@ where
                                 )?;
                                 offset += bytes_read;
 
+                                self.has_record_delimiter =
+                                    self.page_reader.at_record_boundary()?;
+
                                 self.rep_level_decoder
                                     .as_mut()
                                     .unwrap()
@@ -537,6 +544,12 @@ where
                             // DataPage v2 only supports RLE encoding for repetition
                             // levels
                             if self.descr.max_rep_level() > 0 {
+                                // Technically a DataPage v2 should not write a record
+                                // across multiple pages, however, the parquet writer
+                                // used to do this so we preserve backwards compatibility
+                                self.has_record_delimiter =
+                                    self.page_reader.at_record_boundary()?;
+
                                 self.rep_level_decoder.as_mut().unwrap().set_data(
                                     Encoding::RLE,
                                     buf.range(0, rep_levels_byte_len as usize),
