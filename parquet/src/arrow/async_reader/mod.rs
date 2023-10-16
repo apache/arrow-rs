@@ -1733,6 +1733,12 @@ mod tests {
                 RowSelector::select(1),
             ]),
             RowSelection::from(vec![
+                RowSelector::select(255),
+                RowSelector::skip(1),
+                RowSelector::select(767),
+                RowSelector::skip(1),
+            ]),
+            RowSelection::from(vec![
                 RowSelector::skip(254),
                 RowSelector::select(1),
                 RowSelector::select(1),
