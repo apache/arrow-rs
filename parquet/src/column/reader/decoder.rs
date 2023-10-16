@@ -451,6 +451,7 @@ impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
         self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width));
         self.buffer_len = 0;
         self.buffer_offset = 0;
+        self.has_partial = false;
     }
 }
 
