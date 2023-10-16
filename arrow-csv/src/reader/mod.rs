@@ -793,11 +793,7 @@ fn parse(
                     rows.iter()
                         .map(|row| {
                             let s = row.get(i);
-                            if null_regex.is_null(s) {
-                                None
-                            } else {
-                                Some(s)
-                            }
+                            (!null_regex.is_null(s)).then_some(s)
                         })
                         .collect::<StringArray>(),
                 ) as ArrayRef),
