@@ -155,7 +155,7 @@ impl ObjectStore for InMemory {
             size: data.len(),
             e_tag: Some(etag),
         };
-        options.test(&meta)?;
+        options.check_preconditions(&meta)?;
 
         let (range, data) = match options.range {
             Some(range) => {

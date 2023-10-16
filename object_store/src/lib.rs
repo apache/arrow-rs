@@ -720,7 +720,7 @@ impl GetOptions {
     /// Returns an error if the modification conditions on this request are not satisfied
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc7232#section-6>
-    fn test(&self, meta: &ObjectMeta) -> Result<()> {
+    fn check_preconditions(&self, meta: &ObjectMeta) -> Result<()> {
         // The use of the invalid etag "*" means no ETag is equivalent to never matching
         let etag = meta.e_tag.as_deref().unwrap_or("*");
         let last_modified = meta.last_modified;
@@ -1712,76 +1712,76 @@ mod tests {
         };
 
         let mut options = GetOptions::default();
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
 
         options.if_modified_since = Some(Utc.timestamp_nanos(50));
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
 
         options.if_modified_since = Some(Utc.timestamp_nanos(100));
-        options.test(&meta).unwrap_err();
+        options.check_preconditions(&meta).unwrap_err();
 
         options.if_modified_since = Some(Utc.timestamp_nanos(101));
-        options.test(&meta).unwrap_err();
+        options.check_preconditions(&meta).unwrap_err();
 
         options = GetOptions::default();
 
         options.if_unmodified_since = Some(Utc.timestamp_nanos(50));
-        options.test(&meta).unwrap_err();
+        options.check_preconditions(&meta).unwrap_err();
 
         options.if_unmodified_since = Some(Utc.timestamp_nanos(100));
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
 
         options.if_unmodified_since = Some(Utc.timestamp_nanos(101));
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
 
         options = GetOptions::default();
 
         options.if_match = Some("123".to_string());
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
 
         options.if_match = Some("123,354".to_string());
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
 
         options.if_match = Some("354, 123,".to_string());
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
 
         options.if_match = Some("354".to_string());
-        options.test(&meta).unwrap_err();
+        options.check_preconditions(&meta).unwrap_err();
 
         options.if_match = Some("*".to_string());
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
 
         // If-Match takes precedence
         options.if_unmodified_since = Some(Utc.timestamp_nanos(200));
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
 
         options = GetOptions::default();
 
         options.if_none_match = Some("123".to_string());
-        options.test(&meta).unwrap_err();
+        options.check_preconditions(&meta).unwrap_err();
 
         options.if_none_match = Some("*".to_string());
-        options.test(&meta).unwrap_err();
+        options.check_preconditions(&meta).unwrap_err();
 
         options.if_none_match = Some("1232".to_string());
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
 
         options.if_none_match = Some("23, 123".to_string());
-        options.test(&meta).unwrap_err();
+        options.check_preconditions(&meta).unwrap_err();
 
         // If-None-Match takes precedence
         options.if_modified_since = Some(Utc.timestamp_nanos(10));
-        options.test(&meta).unwrap_err();
+        options.check_preconditions(&meta).unwrap_err();
 
         // Check missing ETag
         meta.e_tag = None;
         options = GetOptions::default();
 
         options.if_none_match = Some("*".to_string()); // Fails if any file exists
-        options.test(&meta).unwrap_err();
+        options.check_preconditions(&meta).unwrap_err();
 
         options = GetOptions::default();
         options.if_match = Some("*".to_string()); // Passes if file exists
-        options.test(&meta).unwrap();
+        options.check_preconditions(&meta).unwrap();
     }
 }

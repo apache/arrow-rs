@@ -370,7 +370,7 @@ impl ObjectStore for LocalFileSystem {
         maybe_spawn_blocking(move || {
             let (file, metadata) = open_file(&path)?;
             let meta = convert_metadata(metadata, location)?;
-            options.test(&meta)?;
+            options.check_preconditions(&meta)?;
 
             Ok(GetResult {
                 payload: GetResultPayload::File(file, path),
