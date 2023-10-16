@@ -16,6 +16,7 @@
 // under the License.
 
 //! Configuration via [`WriterProperties`] and [`ReaderProperties`]
+use std::str::FromStr;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::basic::{Compression, Encoding};
@@ -68,6 +69,18 @@ impl WriterVersion {
         match self {
             WriterVersion::PARQUET_1_0 => 1,
             WriterVersion::PARQUET_2_0 => 2,
+        }
+    }
+}
+
+impl FromStr for WriterVersion {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_owned().to_uppercase().as_str() {
+            "PARQUET_1_0" => Ok(WriterVersion::PARQUET_1_0),
+            "PARQUET_2_0" => Ok(WriterVersion::PARQUET_2_0),
+            _ => Err(format!("Invalid writer version: {}", s)),
         }
     }
 }
@@ -653,6 +666,19 @@ pub enum EnabledStatistics {
     Chunk,
     /// Compute page-level and chunk-level statistics
     Page,
+}
+
+impl FromStr for EnabledStatistics {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_owned().to_uppercase().as_str() {
+            "NONE" => Ok(EnabledStatistics::None),
+            "CHUNK" => Ok(EnabledStatistics::Chunk),
+            "PAGE" => Ok(EnabledStatistics::Page),
+            _ => Err(format!("Invalid statistics arg: {}", s)),
+        }
+    }
 }
 
 impl Default for EnabledStatistics {

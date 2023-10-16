@@ -18,6 +18,7 @@
 //! Contains Rust mappings for Thrift definition.
 //! Refer to [`parquet.thrift`](https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift) file to see raw definitions.
 
+use std::str::FromStr;
 use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
@@ -278,6 +279,25 @@ pub enum Encoding {
     BYTE_STREAM_SPLIT,
 }
 
+impl FromStr for Encoding {
+    type Err = ParquetError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_owned().to_uppercase().as_str() {
+            "PLAIN" => Ok(Encoding::PLAIN),
+            "PLAIN_DICTIONARY" => Ok(Encoding::PLAIN_DICTIONARY),
+            "RLE" => Ok(Encoding::RLE),
+            "BIT_PACKED" => Ok(Encoding::BIT_PACKED),
+            "DELTA_BINARY_PACKED" => Ok(Encoding::DELTA_BINARY_PACKED),
+            "DELTA_LENGTH_BYTE_ARRAY" => Ok(Encoding::DELTA_LENGTH_BYTE_ARRAY),
+            "DELTA_BYTE_ARRAY" => Ok(Encoding::DELTA_BYTE_ARRAY),
+            "RLE_DICTIONARY" => Ok(Encoding::RLE_DICTIONARY),
+            "BYTE_STREAM_SPLIT" => Ok(Encoding::BYTE_STREAM_SPLIT),
+            _ => Err(general_err!("unknown encoding: {}", s)),
+        }
+    }
+}
+
 // ----------------------------------------------------------------------
 // Mirrors `parquet::CompressionCodec`
 
@@ -293,6 +313,89 @@ pub enum Compression {
     LZ4,
     ZSTD(ZstdLevel),
     LZ4_RAW,
+}
+
+fn split_compression_string(
+    str_setting: &str,
+) -> Result<(&str, Option<u32>), ParquetError> {
+    let split_setting = str_setting.split_once('(');
+
+    match split_setting {
+        Some((codec, level_str)) => {
+            let level =
+                &level_str[..level_str.len() - 1]
+                    .parse::<u32>()
+                    .map_err(|_| {
+                        ParquetError::General(format!(
+                            "invalid compression level: {}",
+                            level_str
+                        ))
+                    })?;
+            Ok((codec, Some(*level)))
+        }
+        None => Ok((str_setting, None)),
+    }
+}
+
+fn check_level_is_none(level: &Option<u32>) -> Result<(), ParquetError> {
+    if level.is_some() {
+        return Err(ParquetError::General(format!("level is not support")));
+    }
+
+    Ok(())
+}
+
+fn require_level(codec: &String, level: Option<u32>) -> Result<u32, ParquetError> {
+    level.ok_or(ParquetError::General(format!("{} require level", codec)))
+}
+
+impl FromStr for Compression {
+    type Err = ParquetError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let (codec, level) = split_compression_string(s)?;
+        let codec = codec.to_uppercase();
+
+        let c = match codec.as_str() {
+            "UNCOMPRESSED" => {
+                check_level_is_none(&level)?;
+                Compression::UNCOMPRESSED
+            }
+            "SNAPPY" => {
+                check_level_is_none(&level)?;
+                Compression::SNAPPY
+            }
+            "GZIP" => {
+                let level = require_level(&codec, level)?;
+                Compression::GZIP(GzipLevel::try_new(level)?)
+            }
+            "LZO" => {
+                check_level_is_none(&level)?;
+                Compression::LZO
+            }
+            "BROTLI" => {
+                let level = require_level(&codec, level)?;
+                Compression::BROTLI(BrotliLevel::try_new(level)?)
+            }
+            "LZ4" => {
+                check_level_is_none(&level)?;
+                Compression::LZ4
+            }
+            "ZSTD" => {
+                let level = require_level(&codec, level)?;
+                Compression::ZSTD(ZstdLevel::try_new(level as i32)?)
+            }
+            "LZ4_RAW" => {
+                check_level_is_none(&level)?;
+                Compression::LZ4_RAW
+            }
+            _ => {
+                return Err(ParquetError::General(format!("unsupport {codec}")));
+            }
+        };
+
+        Ok(c)
+    }
 }
 
 // ----------------------------------------------------------------------
