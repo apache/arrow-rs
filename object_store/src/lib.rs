@@ -690,12 +690,28 @@ pub struct GetOptions {
     /// Request will succeed if the `ObjectMeta::e_tag` matches
     /// otherwise returning [`Error::Precondition`]
     ///
-    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-if-match>
+    /// See <https://datatracker.ietf.org/doc/html/rfc9110#name-if-match>
+    ///
+    /// Examples:
+    ///
+    /// ```text
+    /// If-Match: "xyzzy"
+    /// If-Match: "xyzzy", "r2d2xxxx", "c3piozzzz"
+    /// If-Match: *
+    /// ```
     pub if_match: Option<String>,
     /// Request will succeed if the `ObjectMeta::e_tag` does not match
     /// otherwise returning [`Error::NotModified`]
     ///
-    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.2>
+    /// See <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.2>
+    ///
+    /// Examples:
+    ///
+    /// ```text
+    /// If-None-Match: "xyzzy"
+    /// If-None-Match: "xyzzy", "r2d2xxxx", "c3piozzzz"
+    /// If-None-Match: *
+    /// ```
     pub if_none_match: Option<String>,
     /// Request will succeed if the object has been modified since
     ///
@@ -1364,33 +1380,32 @@ mod tests {
             Err(e) => panic!("{e}"),
         }
 
-        if let Some(tag) = meta.e_tag {
-            let options = GetOptions {
-                if_match: Some(tag.clone()),
-                ..GetOptions::default()
-            };
-            storage.get_opts(&path, options).await.unwrap();
+        let tag = meta.e_tag.unwrap();
+        let options = GetOptions {
+            if_match: Some(tag.clone()),
+            ..GetOptions::default()
+        };
+        storage.get_opts(&path, options).await.unwrap();
 
-            let options = GetOptions {
-                if_match: Some("invalid".to_string()),
-                ..GetOptions::default()
-            };
-            let err = storage.get_opts(&path, options).await.unwrap_err();
-            assert!(matches!(err, Error::Precondition { .. }), "{err}");
+        let options = GetOptions {
+            if_match: Some("invalid".to_string()),
+            ..GetOptions::default()
+        };
+        let err = storage.get_opts(&path, options).await.unwrap_err();
+        assert!(matches!(err, Error::Precondition { .. }), "{err}");
 
-            let options = GetOptions {
-                if_none_match: Some(tag.clone()),
-                ..GetOptions::default()
-            };
-            let err = storage.get_opts(&path, options).await.unwrap_err();
-            assert!(matches!(err, Error::NotModified { .. }), "{err}");
+        let options = GetOptions {
+            if_none_match: Some(tag.clone()),
+            ..GetOptions::default()
+        };
+        let err = storage.get_opts(&path, options).await.unwrap_err();
+        assert!(matches!(err, Error::NotModified { .. }), "{err}");
 
-            let options = GetOptions {
-                if_none_match: Some("invalid".to_string()),
-                ..GetOptions::default()
-            };
-            storage.get_opts(&path, options).await.unwrap();
-        }
+        let options = GetOptions {
+            if_none_match: Some("invalid".to_string()),
+            ..GetOptions::default()
+        };
+        storage.get_opts(&path, options).await.unwrap();
     }
 
     /// Returns a chunk of length `chunk_length`
@@ -1703,7 +1718,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_options() {
+    fn test_preconditions() {
         let mut meta = ObjectMeta {
             location: Path::from("test"),
             last_modified: Utc.timestamp_nanos(100),

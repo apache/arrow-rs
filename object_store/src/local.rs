@@ -1012,11 +1012,14 @@ fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
 }
 
 #[cfg(unix)]
+/// We include the inode when available to yield an ETag more resistant to collisions
+/// and as used by popular web servers such as [Apache](https://httpd.apache.org/docs/2.2/mod/core.html#fileetag)
 fn get_inode(metadata: &Metadata) -> u64 {
     std::os::unix::fs::MetadataExt::ino(metadata)
 }
 
 #[cfg(not(unix))]
+/// On platforms where an inode isn't available, fallback to just relying on size and mtime
 fn get_inode(metadata: &Metadata) -> u64 {
     0
 }
