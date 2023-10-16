@@ -144,7 +144,10 @@ struct TokenResponse {
     expires_in: u64,
 }
 
-/// <https://google.aip.dev/auth/4111>
+/// Self-signed JWT (JSON Web Token).
+///
+/// # References
+/// - <https://google.aip.dev/auth/4111>
 #[derive(Debug)]
 pub struct SelfSignedJwt {
     issuer: String,
@@ -273,8 +276,9 @@ impl ServiceAccountCredentials {
     /// We use a scope of [`DEFAULT_SCOPE`] as opposed to an audience
     /// as GCS appears to not support audience
     ///
-    /// <https://stackoverflow.com/questions/63222450/service-account-authorization-without-oauth-can-we-get-file-from-google-cloud/71834557#71834557>
-    /// <https://www.codejam.info/2022/05/google-cloud-service-account-authorization-without-oauth.html>
+    /// # References
+    /// - <https://stackoverflow.com/questions/63222450/service-account-authorization-without-oauth-can-we-get-file-from-google-cloud/71834557#71834557>
+    /// - <https://www.codejam.info/2022/05/google-cloud-service-account-authorization-without-oauth.html>
     pub fn token_provider(self) -> crate::Result<SelfSignedJwt> {
         Ok(SelfSignedJwt::new(
             self.private_key_id,
@@ -371,15 +375,22 @@ impl TokenProvider for InstanceCredentialProvider {
 
 /// A deserialized `application_default_credentials.json`-file.
 ///
-/// <https://cloud.google.com/docs/authentication/application-default-credentials#personal>
-/// <https://google.aip.dev/auth/4110>
+/// # References
+/// - <https://cloud.google.com/docs/authentication/application-default-credentials#personal>
+/// - <https://google.aip.dev/auth/4110>
 #[derive(serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum ApplicationDefaultCredentials {
-    /// <https://google.aip.dev/auth/4112>
+    /// Service Account.
+    ///
+    /// # References
+    /// - <https://google.aip.dev/auth/4112>
     #[serde(rename = "service_account")]
     ServiceAccount(ServiceAccountCredentials),
-    /// <https://google.aip.dev/auth/4113>
+    /// Authorized user via "gcloud CLI Integration".
+    ///
+    /// # References
+    /// - <https://google.aip.dev/auth/4113>
     #[serde(rename = "authorized_user")]
     AuthorizedUser(AuthorizedUserCredentials),
 }
