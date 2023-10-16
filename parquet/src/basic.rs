@@ -339,7 +339,7 @@ fn split_compression_string(
 
 fn check_level_is_none(level: &Option<u32>) -> Result<(), ParquetError> {
     if level.is_some() {
-        return Err(ParquetError::General(format!("level is not support")));
+        return Err(ParquetError::General("level is not support".to_string()));
     }
 
     Ok(())
