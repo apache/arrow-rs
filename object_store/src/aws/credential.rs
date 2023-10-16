@@ -291,7 +291,7 @@ pub trait CredentialExt {
     /// Sign a request <https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html>
     fn with_aws_sigv4(
         self,
-        credential: &AwsCredential,
+        credential: Option<&AwsCredential>,
         region: &str,
         service: &str,
         sign_payload: bool,
@@ -302,20 +302,25 @@ pub trait CredentialExt {
 impl CredentialExt for RequestBuilder {
     fn with_aws_sigv4(
         self,
-        credential: &AwsCredential,
+        credential: Option<&AwsCredential>,
         region: &str,
         service: &str,
         sign_payload: bool,
         payload_sha256: Option<&[u8]>,
     ) -> Self {
-        let (client, request) = self.build_split();
-        let mut request = request.expect("request valid");
+        match credential {
+            Some(credential) => {
+                let (client, request) = self.build_split();
+                let mut request = request.expect("request valid");
 
-        AwsAuthorizer::new(credential, service, region)
-            .with_sign_payload(sign_payload)
-            .authorize(&mut request, payload_sha256);
+                AwsAuthorizer::new(credential, service, region)
+                    .with_sign_payload(sign_payload)
+                    .authorize(&mut request, payload_sha256);
 
-        Self::from_parts(client, request)
+                Self::from_parts(client, request)
+            }
+            None => self,
+        }
     }
 }
 

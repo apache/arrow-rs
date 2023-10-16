@@ -207,6 +207,7 @@ pub struct S3Config {
     pub retry_config: RetryConfig,
     pub client_options: ClientOptions,
     pub sign_payload: bool,
+    pub skip_signature: bool,
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
 }
@@ -234,8 +235,11 @@ impl S3Client {
         &self.config
     }
 
-    async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
-        self.config.credentials.get_credential().await
+    async fn get_credential(&self) -> Result<Option<Arc<AwsCredential>>> {
+        Ok(match self.config.skip_signature {
+            false => Some(self.config.credentials.get_credential().await?),
+            true => None,
+        })
     }
 
     /// Make an S3 PUT request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
@@ -271,7 +275,7 @@ impl S3Client {
         let response = builder
             .query(query)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -299,7 +303,7 @@ impl S3Client {
             .request(Method::DELETE, url)
             .query(query)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -390,7 +394,7 @@ impl S3Client {
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -459,7 +463,7 @@ impl S3Client {
 
         builder
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -490,7 +494,7 @@ impl S3Client {
             .client
             .request(Method::POST, url)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -535,7 +539,7 @@ impl S3Client {
             .query(&[("uploadId", upload_id)])
             .body(body)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -567,7 +571,7 @@ impl GetClient for S3Client {
         let response = builder
             .with_get_options(options)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,
@@ -621,7 +625,7 @@ impl ListClient for S3Client {
             .request(Method::GET, &url)
             .query(&query)
             .with_aws_sigv4(
-                credential.as_ref(),
+                credential.as_deref(),
                 &self.config.region,
                 "s3",
                 self.config.sign_payload,

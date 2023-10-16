@@ -448,6 +448,8 @@ pub struct AmazonS3Builder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AwsCredentialProvider>,
+    /// Skip signing requests
+    skip_signature: ConfigValue<bool>,
     /// Copy if not exists
     copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
 }
@@ -586,6 +588,9 @@ pub enum AmazonS3ConfigKey {
     /// See [`S3CopyIfNotExists`]
     CopyIfNotExists,
 
+    /// Skip signing request
+    SkipSignature,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -608,6 +613,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::ContainerCredentialsRelativeUri => {
                 "aws_container_credentials_relative_uri"
             }
+            Self::SkipSignature => "aws_skip_signature",
             Self::CopyIfNotExists => "copy_if_not_exists",
             Self::Client(opt) => opt.as_ref(),
         }
@@ -642,6 +648,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_container_credentials_relative_uri" => {
                 Ok(Self::ContainerCredentialsRelativeUri)
             }
+            "aws_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
@@ -753,6 +760,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
+            AmazonS3ConfigKey::SkipSignature => self.skip_signature.parse(value),
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
             }
@@ -823,6 +831,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::ContainerCredentialsRelativeUri => {
                 self.container_credentials_relative_uri.clone()
             }
+            AmazonS3ConfigKey::SkipSignature => Some(self.skip_signature.to_string()),
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists.as_ref().map(ToString::to_string)
             }
@@ -974,6 +983,14 @@ impl AmazonS3Builder {
     /// * true: Unsigned payload option is used. `UNSIGNED-PAYLOAD` literal is included when constructing a canonical request,
     pub fn with_unsigned_payload(mut self, unsigned_payload: bool) -> Self {
         self.unsigned_payload = unsigned_payload.into();
+        self
+    }
+
+    /// If enabled, [`AmazonS3`] will not fetch credentials and will not sign requests
+    ///
+    /// This can be useful when interacting with public S3 buckets that deny authorized requests
+    pub fn with_skip_signature(mut self, skip_signature: bool) -> Self {
+        self.skip_signature = skip_signature.into();
         self
     }
 
@@ -1146,6 +1163,7 @@ impl AmazonS3Builder {
             retry_config: self.retry_config,
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
+            skip_signature: self.skip_signature.get()?,
             checksum,
             copy_if_not_exists,
         };
@@ -1504,5 +1522,31 @@ mod s3_resolve_bucket_region_tests {
         let result = resolve_bucket_region(bucket, &ClientOptions::new()).await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "Tests shouldn't call use remote services by default"]
+    async fn test_disable_creds() {
+        // https://registry.opendata.aws/daylight-osm/
+        let v1 = AmazonS3Builder::new()
+            .with_bucket_name("daylight-map-distribution")
+            .with_region("us-west-1")
+            .with_access_key_id("local")
+            .with_secret_access_key("development")
+            .build()
+            .unwrap();
+
+        let prefix = Path::from("release");
+
+        v1.list_with_delimiter(Some(&prefix)).await.unwrap_err();
+
+        let v2 = AmazonS3Builder::new()
+            .with_bucket_name("daylight-map-distribution")
+            .with_region("us-west-1")
+            .with_skip_signature(true)
+            .build()
+            .unwrap();
+
+        v2.list_with_delimiter(Some(&prefix)).await.unwrap();
     }
 }
