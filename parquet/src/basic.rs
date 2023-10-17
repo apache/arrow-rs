@@ -390,7 +390,9 @@ impl FromStr for Compression {
                 Compression::LZ4_RAW
             }
             _ => {
-                return Err(ParquetError::General(format!("unsupport {codec}")));
+                return Err(ParquetError::General(format!(
+                    "unsupport compression {codec}"
+                )));
             }
         };
 
@@ -2232,5 +2234,94 @@ mod tests {
             SortOrder::UNDEFINED
         );
         assert_eq!(ColumnOrder::UNDEFINED.sort_order(), SortOrder::SIGNED);
+    }
+
+    #[test]
+    fn test_parse_encoding() {
+        let mut encoding: Encoding = "PLAIN".parse().unwrap();
+        assert_eq!(encoding, Encoding::PLAIN);
+        encoding = "PLAIN_DICTIONARY".parse().unwrap();
+        assert_eq!(encoding, Encoding::PLAIN_DICTIONARY);
+        encoding = "RLE".parse().unwrap();
+        assert_eq!(encoding, Encoding::RLE);
+        encoding = "BIT_PACKED".parse().unwrap();
+        assert_eq!(encoding, Encoding::BIT_PACKED);
+        encoding = "DELTA_BINARY_PACKED".parse().unwrap();
+        assert_eq!(encoding, Encoding::DELTA_BINARY_PACKED);
+        encoding = "DELTA_LENGTH_BYTE_ARRAY".parse().unwrap();
+        assert_eq!(encoding, Encoding::DELTA_LENGTH_BYTE_ARRAY);
+        encoding = "DELTA_BYTE_ARRAY".parse().unwrap();
+        assert_eq!(encoding, Encoding::DELTA_BYTE_ARRAY);
+        encoding = "RLE_DICTIONARY".parse().unwrap();
+        assert_eq!(encoding, Encoding::RLE_DICTIONARY);
+        encoding = "BYTE_STREAM_SPLIT".parse().unwrap();
+        assert_eq!(encoding, Encoding::BYTE_STREAM_SPLIT);
+
+        // test lowercase
+        encoding = "Byte_Stream_Split".parse().unwrap();
+        assert_eq!(encoding, Encoding::BYTE_STREAM_SPLIT);
+
+        // test unknown string
+        match "plain_xxx".parse::<Encoding>() {
+            Ok(e) => {
+                panic!("Should not be able to parse {:?}", e);
+            }
+            Err(e) => {
+                assert_eq!(e.to_string(), "Parquet error: unknown encoding: plain_xxx");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_compression() {
+        let mut compress: Compression = "snappy".parse().unwrap();
+        assert_eq!(compress, Compression::SNAPPY);
+        compress = "lzo".parse().unwrap();
+        assert_eq!(compress, Compression::LZO);
+        compress = "zstd(3)".parse().unwrap();
+        assert_eq!(compress, Compression::ZSTD(ZstdLevel::try_new(3).unwrap()));
+        compress = "LZ4_raw".parse().unwrap();
+        assert_eq!(compress, Compression::LZ4_RAW);
+        compress = "uncompressed".parse().unwrap();
+        assert_eq!(compress, Compression::UNCOMPRESSED);
+        compress = "snappy".parse().unwrap();
+        assert_eq!(compress, Compression::SNAPPY);
+        compress = "gzip(9)".parse().unwrap();
+        assert_eq!(compress, Compression::GZIP(GzipLevel::try_new(9).unwrap()));
+        compress = "lzo".parse().unwrap();
+        assert_eq!(compress, Compression::LZO);
+        compress = "brotli(3)".parse().unwrap();
+        assert_eq!(
+            compress,
+            Compression::BROTLI(BrotliLevel::try_new(3).unwrap())
+        );
+        compress = "lz4".parse().unwrap();
+        assert_eq!(compress, Compression::LZ4);
+
+        // test unknown compression
+        match "unknown".parse::<Compression>() {
+            Ok(c) => {
+                panic!("Should not be able to parse {:?}", c);
+            }
+            Err(e) => {
+                assert_eq!(
+                    e.to_string(),
+                    "Parquet error: unsupport compression UNKNOWN"
+                );
+            }
+        }
+
+        // test invalid compress level
+        match "gziP(-10)".parse::<Compression>() {
+            Ok(c) => {
+                panic!("Should not be able to parse {:?}", c);
+            }
+            Err(e) => {
+                assert_eq!(
+                    e.to_string(),
+                    "Parquet error: invalid compression level: -10)"
+                );
+            }
+        }
     }
 }

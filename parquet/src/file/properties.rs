@@ -1208,4 +1208,46 @@ mod tests {
 
         assert_eq!(props.codec_options(), &codec_options);
     }
+
+    #[test]
+    fn test_parse_writerversion() {
+        let mut writer_version = "PARQUET_1_0".parse::<WriterVersion>().unwrap();
+        assert_eq!(writer_version, WriterVersion::PARQUET_1_0);
+        writer_version = "PARQUET_2_0".parse::<WriterVersion>().unwrap();
+        assert_eq!(writer_version, WriterVersion::PARQUET_2_0);
+
+        // test lowercase
+        writer_version = "parquet_1_0".parse::<WriterVersion>().unwrap();
+        assert_eq!(writer_version, WriterVersion::PARQUET_1_0);
+
+        // test invalid version
+        match "PARQUET_-1_0".parse::<WriterVersion>() {
+            Ok(_) => panic!("Should not be able to parse PARQUET_-1_0"),
+            Err(e) => {
+                assert_eq!(e, "Invalid writer version: PARQUET_-1_0");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_enabledstatistics() {
+        let mut enabled_statistics = "NONE".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::None);
+        enabled_statistics = "CHUNK".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::Chunk);
+        enabled_statistics = "PAGE".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::Page);
+
+        // test lowercase
+        enabled_statistics = "none".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::None);
+
+        //test invalid statistics
+        match "ChunkAndPage".parse::<EnabledStatistics>() {
+            Ok(_) => panic!("Should not be able to parse ChunkAndPage"),
+            Err(e) => {
+                assert_eq!(e, "Invalid statistics arg: ChunkAndPage");
+            }
+        }
+    }
 }
