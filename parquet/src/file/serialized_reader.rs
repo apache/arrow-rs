@@ -770,6 +770,15 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
             }
         }
     }
+
+    fn at_record_boundary(&mut self) -> Result<bool> {
+        match &mut self.state {
+            SerializedPageReaderState::Values { .. } => {
+                Ok(self.peek_next_page()?.is_none())
+            }
+            SerializedPageReaderState::Pages { .. } => Ok(true),
+        }
+    }
 }
 
 #[cfg(test)]

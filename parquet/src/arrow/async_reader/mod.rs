@@ -878,12 +878,17 @@ mod tests {
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;
+    use arrow_array::builder::{ListBuilder, StringBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Array, ArrayRef, Int32Array, Int8Array, Scalar, StringArray};
-    use futures::TryStreamExt;
+    use arrow_array::{
+        Array, ArrayRef, Int32Array, Int8Array, Scalar, StringArray, UInt64Array,
+    };
+    use arrow_schema::{DataType, Field, Schema};
+    use futures::{StreamExt, TryStreamExt};
     use rand::{thread_rng, Rng};
     use std::sync::Mutex;
+    use tempfile::tempfile;
 
     #[derive(Clone)]
     struct TestReader {
@@ -1676,5 +1681,92 @@ mod tests {
             .unwrap();
         assert!(sbbf.check(&"Hello"));
         assert!(!sbbf.check(&"Hello_Not_Exists"));
+    }
+
+    #[tokio::test]
+    async fn test_nested_skip() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col_1", DataType::UInt64, false),
+            Field::new_list("col_2", Field::new("item", DataType::Utf8, true), true),
+        ]));
+
+        // Default writer properties
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(256)
+            .set_write_batch_size(256)
+            .set_max_row_group_size(1024);
+
+        // Write data
+        let mut file = tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(&mut file, schema.clone(), Some(props.build())).unwrap();
+
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        for id in 0..1024 {
+            match id % 3 {
+                0 => builder
+                    .append_value([Some("val_1".to_string()), Some(format!("id_{id}"))]),
+                1 => builder.append_value([Some(format!("id_{id}"))]),
+                _ => builder.append_null(),
+            }
+        }
+        let refs = vec![
+            Arc::new(UInt64Array::from_iter_values(0..1024)) as ArrayRef,
+            Arc::new(builder.finish()) as ArrayRef,
+        ];
+
+        let batch = RecordBatch::try_new(schema.clone(), refs).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let selections = [
+            RowSelection::from(vec![
+                RowSelector::skip(313),
+                RowSelector::select(1),
+                RowSelector::skip(709),
+                RowSelector::select(1),
+            ]),
+            RowSelection::from(vec![
+                RowSelector::skip(255),
+                RowSelector::select(1),
+                RowSelector::skip(767),
+                RowSelector::select(1),
+            ]),
+            RowSelection::from(vec![
+                RowSelector::select(255),
+                RowSelector::skip(1),
+                RowSelector::select(767),
+                RowSelector::skip(1),
+            ]),
+            RowSelection::from(vec![
+                RowSelector::skip(254),
+                RowSelector::select(1),
+                RowSelector::select(1),
+                RowSelector::skip(767),
+                RowSelector::select(1),
+            ]),
+        ];
+
+        for selection in selections {
+            let expected = selection.row_count();
+            // Read data
+            let mut reader = ParquetRecordBatchStreamBuilder::new_with_options(
+                tokio::fs::File::from_std(file.try_clone().unwrap()),
+                ArrowReaderOptions::new().with_page_index(true),
+            )
+            .await
+            .unwrap();
+
+            reader = reader.with_row_selection(selection);
+
+            let mut stream = reader.build().unwrap();
+
+            let mut total_rows = 0;
+            while let Some(rb) = stream.next().await {
+                let rb = rb.unwrap();
+                total_rows += rb.num_rows();
+            }
+            assert_eq!(total_rows, expected);
+        }
     }
 }

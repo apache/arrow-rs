@@ -75,10 +75,7 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    async fn list(
-        &self,
-        _: Option<&Path>,
-    ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>> {
+    fn list(&self, _: Option<&Path>) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
         todo!()
     }
 
