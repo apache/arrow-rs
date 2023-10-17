@@ -601,11 +601,8 @@ impl ObjectStore for GoogleCloudStorage {
         self.client.delete_request(location).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        self.client.list(prefix).await
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+        self.client.list(prefix)
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {

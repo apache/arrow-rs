@@ -144,24 +144,21 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.delete(&full_path).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
-        let s = self.inner.list(Some(&prefix)).await?;
-        Ok(s.map_ok(|meta| self.strip_meta(meta)).boxed())
+        let s = self.inner.list(Some(&prefix));
+        s.map_ok(|meta| self.strip_meta(meta)).boxed()
     }
 
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
         let offset = self.full_path(offset);
         let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
-        let s = self.inner.list_with_offset(Some(&prefix), &offset).await?;
-        Ok(s.map_ok(|meta| self.strip_meta(meta)).boxed())
+        let s = self.inner.list_with_offset(Some(&prefix), &offset);
+        s.map_ok(|meta| self.strip_meta(meta)).boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {

@@ -34,7 +34,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
@@ -122,14 +122,13 @@ impl ObjectStore for HttpStore {
         self.client.delete(location).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or_default();
-        let status = self.client.list(prefix, "infinity").await?;
-        Ok(futures::stream::iter(
-            status
+        let prefix = prefix.cloned();
+        futures::stream::once(async move {
+            let status = self.client.list(prefix.as_ref(), "infinity").await?;
+
+            let iter = status
                 .response
                 .into_iter()
                 .filter(|r| !r.is_dir())
@@ -138,9 +137,12 @@ impl ObjectStore for HttpStore {
                     response.object_meta(self.client.base_url())
                 })
                 // Filter out exact prefix matches
-                .filter_ok(move |r| r.location.as_ref().len() > prefix_len),
-        )
-        .boxed())
+                .filter_ok(move |r| r.location.as_ref().len() > prefix_len);
+
+            Ok::<_, crate::Error>(futures::stream::iter(iter))
+        })
+        .try_flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {

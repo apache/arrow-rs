@@ -228,10 +228,7 @@ impl ObjectStore for InMemory {
         Ok(())
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let root = Path::default();
         let prefix = prefix.unwrap_or(&root);
 
@@ -256,7 +253,7 @@ impl ObjectStore for InMemory {
             })
             .collect();
 
-        Ok(futures::stream::iter(values).boxed())
+        futures::stream::iter(values).boxed()
     }
 
     /// The memory implementation returns all results, as opposed to the cloud

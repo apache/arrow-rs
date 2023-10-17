@@ -420,14 +420,14 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let config = Arc::clone(&self.config);
 
         let root_path = match prefix {
-            Some(prefix) => config.path_to_filesystem(prefix)?,
+            Some(prefix) => match config.path_to_filesystem(prefix) {
+                Ok(path) => path,
+                Err(e) => return futures::future::ready(Err(e)).into_stream().boxed(),
+            },
             None => self.config.root.to_file_path().unwrap(),
         };
 
@@ -457,36 +457,34 @@ impl ObjectStore for LocalFileSystem {
         // If no tokio context, return iterator directly as no
         // need to perform chunked spawn_blocking reads
         if tokio::runtime::Handle::try_current().is_err() {
-            return Ok(futures::stream::iter(s).boxed());
+            return futures::stream::iter(s).boxed();
         }
 
         // Otherwise list in batches of CHUNK_SIZE
         const CHUNK_SIZE: usize = 1024;
 
         let buffer = VecDeque::with_capacity(CHUNK_SIZE);
-        let stream =
-            futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
-                if buffer.is_empty() {
-                    (s, buffer) = tokio::task::spawn_blocking(move || {
-                        for _ in 0..CHUNK_SIZE {
-                            match s.next() {
-                                Some(r) => buffer.push_back(r),
-                                None => break,
-                            }
+        futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
+            if buffer.is_empty() {
+                (s, buffer) = tokio::task::spawn_blocking(move || {
+                    for _ in 0..CHUNK_SIZE {
+                        match s.next() {
+                            Some(r) => buffer.push_back(r),
+                            None => break,
                         }
-                        (s, buffer)
-                    })
-                    .await?;
-                }
+                    }
+                    (s, buffer)
+                })
+                .await?;
+            }
 
-                match buffer.pop_front() {
-                    Some(Err(e)) => Err(e),
-                    Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
-                    None => Ok(None),
-                }
-            });
-
-        Ok(stream.boxed())
+            match buffer.pop_front() {
+                Some(Err(e)) => Err(e),
+                Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
+                None => Ok(None),
+            }
+        })
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -1138,21 +1136,14 @@ mod tests {
 
         let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
-        // `list` must fail
-        match store.list(None).await {
-            Err(_) => {
-                // ok, error found
-            }
-            Ok(mut stream) => {
-                let mut any_err = false;
-                while let Some(res) = stream.next().await {
-                    if res.is_err() {
-                        any_err = true;
-                    }
-                }
-                assert!(any_err);
+        let mut stream = store.list(None);
+        let mut any_err = false;
+        while let Some(res) = stream.next().await {
+            if res.is_err() {
+                any_err = true;
             }
         }
+        assert!(any_err);
 
         // `list_with_delimiter
         assert!(store.list_with_delimiter(None).await.is_err());
@@ -1226,13 +1217,7 @@ mod tests {
         prefix: Option<&Path>,
         expected: &[&str],
     ) {
-        let result: Vec<_> = integration
-            .list(prefix)
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
+        let result: Vec<_> = integration.list(prefix).try_collect().await.unwrap();
 
         let mut strings: Vec<_> = result.iter().map(|x| x.location.as_ref()).collect();
         strings.sort_unstable();
@@ -1428,8 +1413,7 @@ mod tests {
 
         std::fs::write(temp_dir.path().join(filename), "foo").unwrap();
 
-        let list_stream = integration.list(None).await.unwrap();
-        let res: Vec<_> = list_stream.try_collect().await.unwrap();
+        let res: Vec<_> = integration.list(None).try_collect().await.unwrap();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].location.as_ref(), filename);
 
