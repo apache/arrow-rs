@@ -1653,9 +1653,9 @@ mod tests {
     }
 
     /// Test that the returned stream does not borrow the lifetime of Path
-    fn list_store<'a, 'b>(
+    fn list_store<'a>(
         store: &'a dyn ObjectStore,
-        path_str: &'b str,
+        path_str: &str,
     ) -> BoxStream<'a, Result<ObjectMeta>> {
         let path = Path::from(path_str);
         store.list(Some(&path))
