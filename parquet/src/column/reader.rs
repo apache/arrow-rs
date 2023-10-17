@@ -269,7 +269,7 @@ where
                         // Reached end of page, which implies records_read < remaining_records
                         // as otherwise would have stopped reading before reaching the end
                         assert!(records_read < remaining_records); // Sanity check
-                        records_read += 1;
+                        records_read += reader.flush_partial() as usize;
                     }
                     (records_read, levels_read)
                 }
@@ -380,7 +380,7 @@ where
                         // Reached end of page, which implies records_read < remaining_records
                         // as otherwise would have stopped reading before reaching the end
                         assert!(records_read < remaining_records); // Sanity check
-                        records_read += 1;
+                        records_read += decoder.flush_partial() as usize;
                     }
 
                     (records_read, levels_read)
@@ -491,7 +491,7 @@ where
                                 offset += bytes_read;
 
                                 self.has_record_delimiter =
-                                    self.page_reader.peek_next_page()?.is_none();
+                                    self.page_reader.at_record_boundary()?;
 
                                 self.rep_level_decoder
                                     .as_mut()
@@ -548,7 +548,7 @@ where
                                 // across multiple pages, however, the parquet writer
                                 // used to do this so we preserve backwards compatibility
                                 self.has_record_delimiter =
-                                    self.page_reader.peek_next_page()?.is_none();
+                                    self.page_reader.at_record_boundary()?;
 
                                 self.rep_level_decoder.as_mut().unwrap().set_data(
                                     Encoding::RLE,

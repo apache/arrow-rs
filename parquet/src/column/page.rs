@@ -320,6 +320,20 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// Skips reading the next page, returns an error if no
     /// column index information
     fn skip_next_page(&mut self) -> Result<()>;
+
+    /// Returns `true` if the next page can be assumed to contain the start of a new record
+    ///
+    /// Prior to parquet V2 the specification was ambiguous as to whether a single record
+    /// could be split across multiple pages, and prior to [(#4327)] the Rust writer would do
+    /// this in certain situations. However, correctly interpreting the offset index relies on
+    /// this assumption holding [(#4943)], and so this mechanism is provided for a [`PageReader`]
+    /// to signal this to the calling context
+    ///
+    /// [(#4327)]: https://github.com/apache/arrow-rs/pull/4327
+    /// [(#4943)]: https://github.com/apache/arrow-rs/pull/4943
+    fn at_record_boundary(&mut self) -> Result<bool> {
+        Ok(self.peek_next_page()?.is_none())
+    }
 }
 
 /// API for writing pages in a column chunk.

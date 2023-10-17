@@ -102,6 +102,9 @@ pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
         num_records: usize,
         num_levels: usize,
     ) -> Result<(usize, usize)>;
+
+    /// Flush any partially read or skipped record
+    fn flush_partial(&mut self) -> bool;
 }
 
 pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
@@ -518,6 +521,10 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
             self.has_partial = partial;
         }
         Ok((total_records_read, total_levels_read))
+    }
+
+    fn flush_partial(&mut self) -> bool {
+        std::mem::take(&mut self.has_partial)
     }
 }
 
