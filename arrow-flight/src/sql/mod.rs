@@ -93,6 +93,7 @@ pub use gen::SqlSupportedTransactions;
 pub use gen::SqlSupportedUnions;
 pub use gen::SqlSupportsConvert;
 pub use gen::SqlTransactionIsolationLevel;
+pub use gen::SubstraitPlan;
 pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
