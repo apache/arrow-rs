@@ -35,9 +35,6 @@ use std::sync::Arc;
 use std::task::Poll;
 use tokio::io::AsyncWrite;
 
-type Entry = (Bytes, DateTime<Utc>);
-type StorageType = Arc<RwLock<BTreeMap<Path, Entry>>>;
-
 /// A specialized `Error` for in-memory object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
@@ -80,7 +77,41 @@ impl From<Error> for super::Error {
 /// storage provider.
 #[derive(Debug, Default)]
 pub struct InMemory {
-    storage: StorageType,
+    storage: SharedStorage,
+}
+
+#[derive(Debug, Clone)]
+struct Entry {
+    data: Bytes,
+    last_modified: DateTime<Utc>,
+    e_tag: usize,
+}
+
+impl Entry {
+    fn new(data: Bytes, last_modified: DateTime<Utc>, e_tag: usize) -> Self {
+        Self {
+            data,
+            last_modified,
+            e_tag,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct Storage {
+    next_etag: usize,
+    map: BTreeMap<Path, Entry>,
+}
+
+type SharedStorage = Arc<RwLock<Storage>>;
+
+impl Storage {
+    fn insert(&mut self, location: &Path, bytes: Bytes) {
+        let etag = self.next_etag;
+        self.next_etag += 1;
+        let entry = Entry::new(bytes, Utc::now(), etag);
+        self.map.insert(location.clone(), entry);
+    }
 }
 
 impl std::fmt::Display for InMemory {
@@ -92,9 +123,7 @@ impl std::fmt::Display for InMemory {
 #[async_trait]
 impl ObjectStore for InMemory {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.storage
-            .write()
-            .insert(location.clone(), (bytes, Utc::now()));
+        self.storage.write().insert(location, bytes);
         Ok(())
     }
 
@@ -128,33 +157,30 @@ impl ObjectStore for InMemory {
         Ok(Box::new(InMemoryAppend {
             location: location.clone(),
             data: Vec::<u8>::new(),
-            storage: StorageType::clone(&self.storage),
+            storage: SharedStorage::clone(&self.storage),
         }))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        if options.if_match.is_some() || options.if_none_match.is_some() {
-            return Err(super::Error::NotSupported {
-                source: "ETags not supported by InMemory".to_string().into(),
-            });
-        }
-        let (data, last_modified) = self.entry(location).await?;
-        options.check_modified(location, last_modified)?;
+        let entry = self.entry(location).await?;
+        let e_tag = entry.e_tag.to_string();
+
         let meta = ObjectMeta {
             location: location.clone(),
-            last_modified,
-            size: data.len(),
-            e_tag: None,
+            last_modified: entry.last_modified,
+            size: entry.data.len(),
+            e_tag: Some(e_tag),
         };
+        options.check_preconditions(&meta)?;
 
         let (range, data) = match options.range {
             Some(range) => {
-                let len = data.len();
+                let len = entry.data.len();
                 ensure!(range.end <= len, OutOfRangeSnafu { range, len });
                 ensure!(range.start <= range.end, BadRangeSnafu { range });
-                (range.clone(), data.slice(range))
+                (range.clone(), entry.data.slice(range))
             }
-            None => (0..data.len(), data),
+            None => (0..entry.data.len(), entry.data),
         };
         let stream = futures::stream::once(futures::future::ready(Ok(data)));
 
@@ -170,15 +196,18 @@ impl ObjectStore for InMemory {
         location: &Path,
         ranges: &[Range<usize>],
     ) -> Result<Vec<Bytes>> {
-        let data = self.entry(location).await?;
+        let entry = self.entry(location).await?;
         ranges
             .iter()
             .map(|range| {
                 let range = range.clone();
-                let len = data.0.len();
-                ensure!(range.end <= data.0.len(), OutOfRangeSnafu { range, len });
+                let len = entry.data.len();
+                ensure!(
+                    range.end <= entry.data.len(),
+                    OutOfRangeSnafu { range, len }
+                );
                 ensure!(range.start <= range.end, BadRangeSnafu { range });
-                Ok(data.0.slice(range))
+                Ok(entry.data.slice(range))
             })
             .collect()
     }
@@ -188,14 +217,14 @@ impl ObjectStore for InMemory {
 
         Ok(ObjectMeta {
             location: location.clone(),
-            last_modified: entry.1,
-            size: entry.0.len(),
-            e_tag: None,
+            last_modified: entry.last_modified,
+            size: entry.data.len(),
+            e_tag: Some(entry.e_tag.to_string()),
         })
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
-        self.storage.write().remove(location);
+        self.storage.write().map.remove(location);
         Ok(())
     }
 
@@ -208,6 +237,7 @@ impl ObjectStore for InMemory {
 
         let storage = self.storage.read();
         let values: Vec<_> = storage
+            .map
             .range((prefix)..)
             .take_while(|(key, _)| key.as_ref().starts_with(prefix.as_ref()))
             .filter(|(key, _)| {
@@ -219,9 +249,9 @@ impl ObjectStore for InMemory {
             .map(|(key, value)| {
                 Ok(ObjectMeta {
                     location: key.clone(),
-                    last_modified: value.1,
-                    size: value.0.len(),
-                    e_tag: None,
+                    last_modified: value.last_modified,
+                    size: value.data.len(),
+                    e_tag: Some(value.e_tag.to_string()),
                 })
             })
             .collect();
@@ -241,7 +271,7 @@ impl ObjectStore for InMemory {
         // Only objects in this base level should be returned in the
         // response. Otherwise, we just collect the common prefixes.
         let mut objects = vec![];
-        for (k, v) in self.storage.read().range((prefix)..) {
+        for (k, v) in self.storage.read().map.range((prefix)..) {
             if !k.as_ref().starts_with(prefix.as_ref()) {
                 break;
             }
@@ -263,9 +293,9 @@ impl ObjectStore for InMemory {
             } else {
                 let object = ObjectMeta {
                     location: k.clone(),
-                    last_modified: v.1,
-                    size: v.0.len(),
-                    e_tag: None,
+                    last_modified: v.last_modified,
+                    size: v.data.len(),
+                    e_tag: Some(v.e_tag.to_string()),
                 };
                 objects.push(object);
             }
@@ -278,23 +308,21 @@ impl ObjectStore for InMemory {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        let data = self.entry(from).await?;
-        self.storage
-            .write()
-            .insert(to.clone(), (data.0, Utc::now()));
+        let entry = self.entry(from).await?;
+        self.storage.write().insert(to, entry.data);
         Ok(())
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let data = self.entry(from).await?;
+        let entry = self.entry(from).await?;
         let mut storage = self.storage.write();
-        if storage.contains_key(to) {
+        if storage.map.contains_key(to) {
             return Err(Error::AlreadyExists {
                 path: to.to_string(),
             }
             .into());
         }
-        storage.insert(to.clone(), (data.0, Utc::now()));
+        storage.insert(to, entry.data);
         Ok(())
     }
 }
@@ -319,9 +347,10 @@ impl InMemory {
         self.fork()
     }
 
-    async fn entry(&self, location: &Path) -> Result<(Bytes, DateTime<Utc>)> {
+    async fn entry(&self, location: &Path) -> Result<Entry> {
         let storage = self.storage.read();
         let value = storage
+            .map
             .get(location)
             .cloned()
             .context(NoDataInMemorySnafu {
@@ -335,7 +364,7 @@ impl InMemory {
 struct InMemoryUpload {
     location: Path,
     data: Vec<u8>,
-    storage: StorageType,
+    storage: Arc<RwLock<Storage>>,
 }
 
 impl AsyncWrite for InMemoryUpload {
@@ -343,7 +372,7 @@ impl AsyncWrite for InMemoryUpload {
         mut self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
+    ) -> Poll<Result<usize, io::Error>> {
         self.data.extend_from_slice(buf);
         Poll::Ready(Ok(buf.len()))
     }
@@ -351,18 +380,16 @@ impl AsyncWrite for InMemoryUpload {
     fn poll_flush(
         self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         let data = Bytes::from(std::mem::take(&mut self.data));
-        self.storage
-            .write()
-            .insert(self.location.clone(), (data, Utc::now()));
+        self.storage.write().insert(&self.location, data);
         Poll::Ready(Ok(()))
     }
 }
@@ -370,7 +397,7 @@ impl AsyncWrite for InMemoryUpload {
 struct InMemoryAppend {
     location: Path,
     data: Vec<u8>,
-    storage: StorageType,
+    storage: Arc<RwLock<Storage>>,
 }
 
 impl AsyncWrite for InMemoryAppend {
@@ -378,7 +405,7 @@ impl AsyncWrite for InMemoryAppend {
         mut self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
+    ) -> Poll<Result<usize, io::Error>> {
         self.data.extend_from_slice(buf);
         Poll::Ready(Ok(buf.len()))
     }
@@ -386,20 +413,18 @@ impl AsyncWrite for InMemoryAppend {
     fn poll_flush(
         mut self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        let storage = StorageType::clone(&self.storage);
+    ) -> Poll<Result<(), io::Error>> {
+        let storage = Arc::clone(&self.storage);
 
         let mut writer = storage.write();
 
-        if let Some((bytes, _)) = writer.remove(&self.location) {
+        if let Some(entry) = writer.map.remove(&self.location) {
             let buf = std::mem::take(&mut self.data);
-            let concat = Bytes::from_iter(bytes.into_iter().chain(buf));
-            writer.insert(self.location.clone(), (concat, Utc::now()));
+            let concat = Bytes::from_iter(entry.data.into_iter().chain(buf));
+            writer.insert(&self.location, concat);
         } else {
-            writer.insert(
-                self.location.clone(),
-                (Bytes::from(std::mem::take(&mut self.data)), Utc::now()),
-            );
+            let data = Bytes::from(std::mem::take(&mut self.data));
+            writer.insert(&self.location, data);
         };
         Poll::Ready(Ok(()))
     }

@@ -365,23 +365,12 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        if options.if_match.is_some() || options.if_none_match.is_some() {
-            return Err(super::Error::NotSupported {
-                source: "ETags not supported by LocalFileSystem".to_string().into(),
-            });
-        }
-
         let location = location.clone();
         let path = self.config.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
             let (file, metadata) = open_file(&path)?;
-            if options.if_unmodified_since.is_some()
-                || options.if_modified_since.is_some()
-            {
-                options.check_modified(&location, last_modified(&metadata))?;
-            }
-
             let meta = convert_metadata(metadata, location)?;
+            options.check_preconditions(&meta)?;
 
             Ok(GetResult {
                 payload: GetResultPayload::File(file, path),
@@ -965,7 +954,7 @@ fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
     convert_metadata(metadata, location)
 }
 
-fn last_modified(metadata: &std::fs::Metadata) -> DateTime<Utc> {
+fn last_modified(metadata: &Metadata) -> DateTime<Utc> {
     metadata
         .modified()
         .expect("Modified file time should be supported on this platform")
@@ -977,13 +966,33 @@ fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
     let size = usize::try_from(metadata.len()).context(FileSizeOverflowedUsizeSnafu {
         path: location.as_ref(),
     })?;
+    let inode = get_inode(&metadata);
+    let mtime = last_modified.timestamp_micros();
+
+    // Use an ETag scheme based on that used by many popular HTTP servers
+    // <https://httpd.apache.org/docs/2.2/mod/core.html#fileetag>
+    // <https://stackoverflow.com/questions/47512043/how-etags-are-generated-and-configured>
+    let etag = format!("{inode:x}-{mtime:x}-{size:x}");
 
     Ok(ObjectMeta {
         location,
         last_modified,
         size,
-        e_tag: None,
+        e_tag: Some(etag),
     })
+}
+
+#[cfg(unix)]
+/// We include the inode when available to yield an ETag more resistant to collisions
+/// and as used by popular web servers such as [Apache](https://httpd.apache.org/docs/2.2/mod/core.html#fileetag)
+fn get_inode(metadata: &Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::ino(metadata)
+}
+
+#[cfg(not(unix))]
+/// On platforms where an inode isn't available, fallback to just relying on size and mtime
+fn get_inode(metadata: &Metadata) -> u64 {
+    0
 }
 
 /// Convert walkdir results and converts not-found errors into `None`.
