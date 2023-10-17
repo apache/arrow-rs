@@ -972,7 +972,7 @@ fn last_modified(metadata: &Metadata) -> DateTime<Utc> {
 }
 
 fn get_etag(metadata: &Metadata) -> String {
-    let inode = get_inode(&metadata);
+    let inode = get_inode(metadata);
     let size = metadata.len();
     let mtime = metadata
         .modified()
