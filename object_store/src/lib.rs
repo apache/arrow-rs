@@ -1430,6 +1430,9 @@ mod tests {
         let new_tag = result.e_tag.unwrap();
         assert_ne!(tag, new_tag);
 
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.e_tag.unwrap(), new_tag);
+
         let options = GetOptions {
             if_match: Some(new_tag),
             ..GetOptions::default()
