@@ -95,18 +95,18 @@
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
+//! # use std::sync::Arc;
+//! # use object_store::{path::Path, ObjectStore};
+//! # use futures::stream::StreamExt;
 //! # // use LocalFileSystem for example
-//! # fn get_object_store() -> LocalFileSystem {
-//! #   LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
 //! # }
-//!
+//! #
 //! # async fn example() {
-//! use std::sync::Arc;
-//! use object_store::{path::Path, ObjectStore};
-//! use futures::stream::StreamExt;
-//!
+//! #
 //! // create an ObjectStore
-//! let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//! let object_store: Arc<dyn ObjectStore> = get_object_store();
 //!
 //! // Recursively list all files below the 'data' path.
 //! // 1. On AWS S3 this would be the 'data/' prefix
@@ -114,21 +114,12 @@
 //! let prefix: Path = "data".try_into().unwrap();
 //!
 //! // Get an `async` stream of Metadata objects:
-//!  let list_stream = object_store
-//!      .list(Some(&prefix))
-//!      .await
-//!      .expect("Error listing files");
+//! let mut list_stream = object_store.list(Some(&prefix));
 //!
-//!  // Print a line about each object based on its metadata
-//!  // using for_each from `StreamExt` trait.
-//!  list_stream
-//!      .for_each(move |meta|  {
-//!          async {
-//!              let meta = meta.expect("Error listing");
-//!              println!("Name: {}, size: {}", meta.location, meta.size);
-//!          }
-//!      })
-//!      .await;
+//! // Print a line about each object
+//! while let Some(meta) = list_stream.next().await.transpose().unwrap() {
+//!     println!("Name: {}, size: {}", meta.location, meta.size);
+//! }
 //! # }
 //! ```
 //!
@@ -147,19 +138,18 @@
 //! from remote storage or files in the local filesystem as a stream.
 //!
 //! ```
+//! # use futures::TryStreamExt;
 //! # use object_store::local::LocalFileSystem;
-//! # // use LocalFileSystem for example
-//! # fn get_object_store() -> LocalFileSystem {
-//! #   LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # use std::sync::Arc;
+//! # use object_store::{path::Path, ObjectStore};
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
 //! # }
-//!
+//! #
 //! # async fn example() {
-//! use std::sync::Arc;
-//! use object_store::{path::Path, ObjectStore};
-//! use futures::stream::StreamExt;
-//!
+//! #
 //! // create an ObjectStore
-//! let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//! let object_store: Arc<dyn ObjectStore> = get_object_store();
 //!
 //! // Retrieve a specific file
 //! let path: Path = "data/file01.parquet".try_into().unwrap();
@@ -171,16 +161,11 @@
 //!     .unwrap()
 //!     .into_stream();
 //!
-//! // Count the '0's using `map` from `StreamExt` trait
+//! // Count the '0's using `try_fold` from `TryStreamExt` trait
 //! let num_zeros = stream
-//!     .map(|bytes| {
-//!         let bytes = bytes.unwrap();
-//!        bytes.iter().filter(|b| **b == 0).count()
-//!     })
-//!     .collect::<Vec<usize>>()
-//!     .await
-//!     .into_iter()
-//!     .sum::<usize>();
+//!     .try_fold(0, |acc, bytes| async move {
+//!         Ok(acc + bytes.iter().filter(|b| **b == 0).count())
+//!     }).await.unwrap();
 //!
 //! println!("Num zeros in {} is {}", path, num_zeros);
 //! # }
@@ -196,22 +181,19 @@
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # fn get_object_store() -> LocalFileSystem {
-//! #     LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # use object_store::ObjectStore;
+//! # use std::sync::Arc;
+//! # use bytes::Bytes;
+//! # use object_store::path::Path;
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
 //! # }
 //! # async fn put() {
-//!  use object_store::ObjectStore;
-//!  use std::sync::Arc;
-//!  use bytes::Bytes;
-//!  use object_store::path::Path;
-//!
-//!  let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//! #
+//!  let object_store: Arc<dyn ObjectStore> = get_object_store();
 //!  let path: Path = "data/file1".try_into().unwrap();
 //!  let bytes = Bytes::from_static(b"hello");
-//!  object_store
-//!      .put(&path, bytes)
-//!      .await
-//!      .unwrap();
+//!  object_store.put(&path, bytes).await.unwrap();
 //! # }
 //! ```
 //!
@@ -220,22 +202,20 @@
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # fn get_object_store() -> LocalFileSystem {
-//! #     LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # use object_store::ObjectStore;
+//! # use std::sync::Arc;
+//! # use bytes::Bytes;
+//! # use tokio::io::AsyncWriteExt;
+//! # use object_store::path::Path;
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
 //! # }
 //! # async fn multi_upload() {
-//!  use object_store::ObjectStore;
-//!  use std::sync::Arc;
-//!  use bytes::Bytes;
-//!  use tokio::io::AsyncWriteExt;
-//!  use object_store::path::Path;
-//!
-//!  let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//! #
+//!  let object_store: Arc<dyn ObjectStore> = get_object_store();
 //!  let path: Path = "data/large_file".try_into().unwrap();
-//!  let (_id, mut writer) =  object_store
-//!      .put_multipart(&path)
-//!      .await
-//!      .unwrap();
+//!  let (_id, mut writer) =  object_store.put_multipart(&path).await.unwrap();
+//!
 //!  let bytes = Bytes::from_static(b"hello");
 //!  writer.write_all(&bytes).await.unwrap();
 //!  writer.flush().await.unwrap();
@@ -433,23 +413,22 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// return Ok. If it is an error, it will be [`Error::NotFound`].
     ///
     /// ```
+    /// # use futures::{StreamExt, TryStreamExt};
     /// # use object_store::local::LocalFileSystem;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let root = tempfile::TempDir::new().unwrap();
     /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-    /// use object_store::{ObjectStore, ObjectMeta};
-    /// use object_store::path::Path;
-    /// use futures::{StreamExt, TryStreamExt};
-    /// use bytes::Bytes;
-    ///
+    /// # use object_store::{ObjectStore, ObjectMeta};
+    /// # use object_store::path::Path;
+    /// # use futures::{StreamExt, TryStreamExt};
+    /// # use bytes::Bytes;
+    /// #
     /// // Create two objects
     /// store.put(&Path::from("foo"), Bytes::from("foo")).await?;
     /// store.put(&Path::from("bar"), Bytes::from("bar")).await?;
     ///
     /// // List object
-    /// let locations = store.list(None).await?
-    ///   .map(|meta: Result<ObjectMeta, _>| meta.map(|m| m.location))
-    ///   .boxed();
+    /// let locations = store.list(None).map_ok(|m| m.location).boxed();
     ///
     /// // Delete them
     /// store.delete_stream(locations).try_collect::<Vec<Path>>().await?;

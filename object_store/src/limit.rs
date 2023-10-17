@@ -148,10 +148,13 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
-        let s = self.inner.list(prefix);
+        let prefix = prefix.cloned();
         let fut = Arc::clone(&self.semaphore)
             .acquire_owned()
-            .map(|permit| PermitWrapper::new(s, permit.unwrap()));
+            .map(move |permit| {
+                let s = self.inner.list(prefix.as_ref());
+                PermitWrapper::new(s, permit.unwrap())
+            });
         fut.into_stream().flatten().boxed()
     }
 
@@ -160,10 +163,14 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'_, Result<ObjectMeta>> {
-        let s = self.inner.list_with_offset(prefix, offset);
+        let prefix = prefix.cloned();
+        let offset = offset.clone();
         let fut = Arc::clone(&self.semaphore)
             .acquire_owned()
-            .map(|permit| PermitWrapper::new(s, permit.unwrap()));
+            .map(move |permit| {
+                let s = self.inner.list_with_offset(prefix.as_ref(), &offset);
+                PermitWrapper::new(s, permit.unwrap())
+            });
         fut.into_stream().flatten().boxed()
     }
 
