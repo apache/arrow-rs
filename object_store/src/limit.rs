@@ -274,6 +274,7 @@ mod tests {
     use crate::tests::*;
     use crate::ObjectStore;
     use futures::stream::StreamExt;
+    use std::pin::Pin;
     use std::time::Duration;
     use tokio::time::timeout;
 
@@ -290,10 +291,11 @@ mod tests {
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
 
-        let mut futures = Vec::with_capacity(max_requests);
+        let mut streams = Vec::with_capacity(max_requests);
         for _ in 0..max_requests {
-            let stream = integration.list_with_delimiter(None);
-            futures.push(stream);
+            let mut stream = integration.list(None).peekable();
+            Pin::new(&mut stream).peek().await; // Ensure semaphore is acquired
+            streams.push(stream);
         }
 
         let t = Duration::from_millis(20);
@@ -302,8 +304,8 @@ mod tests {
         let fut = integration.list(None).collect::<Vec<_>>();
         assert!(timeout(t, fut).await.is_err());
 
-        // Drop one of the futures
-        futures.pop();
+        // Drop one of the streams
+        streams.pop();
 
         // Can now make another request
         integration.list(None).collect::<Vec<_>>().await;
