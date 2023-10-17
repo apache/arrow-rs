@@ -47,12 +47,12 @@ impl From<Error> for super::Error {
     }
 }
 
-/// Recognises various URL formats, identifying the relevant [`ObjectStore`](crate::ObjectStore)
+/// Recognises various URL formats, identifying the relevant [`ObjectStore`]
 #[derive(Debug, Eq, PartialEq)]
 enum ObjectStoreScheme {
-    /// Url corresponding to [`LocalFileSystem`](crate::local::LocalFileSystem)
+    /// Url corresponding to [`LocalFileSystem`]
     Local,
-    /// Url corresponding to [`InMemory`](crate::memory::InMemory)
+    /// Url corresponding to [`InMemory`]
     Memory,
     /// Url corresponding to [`AmazonS3`](crate::aws::AmazonS3)
     AmazonS3,
