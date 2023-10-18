@@ -255,7 +255,7 @@ mod gzip_codec {
             output_buf: &mut Vec<u8>,
             _uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let mut decoder = read::GzDecoder::new(input_buf);
+            let mut decoder = read::MultiGzDecoder::new(input_buf);
             decoder.read_to_end(output_buf).map_err(|e| e.into())
         }
 
