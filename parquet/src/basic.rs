@@ -2299,29 +2299,17 @@ mod tests {
         assert_eq!(compress, Compression::LZ4);
 
         // test unknown compression
-        match "unknown".parse::<Compression>() {
-            Ok(c) => {
-                panic!("Should not be able to parse {:?}", c);
-            }
-            Err(e) => {
-                assert_eq!(
-                    e.to_string(),
-                    "Parquet error: unsupport compression UNKNOWN"
-                );
-            }
-        }
+        let mut err = "plain_xxx".parse::<Encoding>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: unknown encoding: plain_xxx"
+        );
 
         // test invalid compress level
-        match "gziP(-10)".parse::<Compression>() {
-            Ok(c) => {
-                panic!("Should not be able to parse {:?}", c);
-            }
-            Err(e) => {
-                assert_eq!(
-                    e.to_string(),
-                    "Parquet error: invalid compression level: -10)"
-                );
-            }
-        }
+        err = "gzip(-10)".parse::<Encoding>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: unknown encoding: gzip(-10)"
+        );
     }
 }
