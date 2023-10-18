@@ -76,12 +76,13 @@ fn read_blocks<R: BufRead>(
 #[cfg(test)]
 mod test {
     use crate::reader::{read_blocks, read_header};
+    use crate::test_util::arrow_test_data;
     use std::fs::File;
     use std::io::BufReader;
 
     #[test]
     fn test_mux() {
-        let file = File::open("../testing/data/avro/alltypes_plain.avro").unwrap();
+        let file = File::open(arrow_test_data("avro/alltypes_plain.avro")).unwrap();
         let mut reader = BufReader::new(file);
         let header = read_header(&mut reader).unwrap();
         for result in read_blocks(reader) {
