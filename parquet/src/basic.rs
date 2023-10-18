@@ -283,16 +283,20 @@ impl FromStr for Encoding {
     type Err = ParquetError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_owned().to_uppercase().as_str() {
-            "PLAIN" => Ok(Encoding::PLAIN),
-            "PLAIN_DICTIONARY" => Ok(Encoding::PLAIN_DICTIONARY),
-            "RLE" => Ok(Encoding::RLE),
-            "BIT_PACKED" => Ok(Encoding::BIT_PACKED),
-            "DELTA_BINARY_PACKED" => Ok(Encoding::DELTA_BINARY_PACKED),
-            "DELTA_LENGTH_BYTE_ARRAY" => Ok(Encoding::DELTA_LENGTH_BYTE_ARRAY),
-            "DELTA_BYTE_ARRAY" => Ok(Encoding::DELTA_BYTE_ARRAY),
-            "RLE_DICTIONARY" => Ok(Encoding::RLE_DICTIONARY),
-            "BYTE_STREAM_SPLIT" => Ok(Encoding::BYTE_STREAM_SPLIT),
+        match s {
+            "PLAIN" | "plain" => Ok(Encoding::PLAIN),
+            "PLAIN_DICTIONARY" | "plain_dictionary" => Ok(Encoding::PLAIN_DICTIONARY),
+            "RLE" | "rle" => Ok(Encoding::RLE),
+            "BIT_PACKED" | "bit_packed" => Ok(Encoding::BIT_PACKED),
+            "DELTA_BINARY_PACKED" | "delta_binary_packed" => {
+                Ok(Encoding::DELTA_BINARY_PACKED)
+            }
+            "DELTA_LENGTH_BYTE_ARRAY" | "delta_length_byte_array" => {
+                Ok(Encoding::DELTA_LENGTH_BYTE_ARRAY)
+            }
+            "DELTA_BYTE_ARRAY" | "delta_byte_array" => Ok(Encoding::DELTA_BYTE_ARRAY),
+            "RLE_DICTIONARY" | "rle_dictionary" => Ok(Encoding::RLE_DICTIONARY),
+            "BYTE_STREAM_SPLIT" | "byte_stream_split" => Ok(Encoding::BYTE_STREAM_SPLIT),
             _ => Err(general_err!("unknown encoding: {}", s)),
         }
     }
@@ -345,7 +349,7 @@ fn check_level_is_none(level: &Option<u32>) -> Result<(), ParquetError> {
     Ok(())
 }
 
-fn require_level(codec: &String, level: Option<u32>) -> Result<u32, ParquetError> {
+fn require_level(codec: &str, level: Option<u32>) -> Result<u32, ParquetError> {
     level.ok_or(ParquetError::General(format!("{} require level", codec)))
 }
 
@@ -354,38 +358,37 @@ impl FromStr for Compression {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let (codec, level) = split_compression_string(s)?;
-        let codec = codec.to_uppercase();
 
-        let c = match codec.as_str() {
-            "UNCOMPRESSED" => {
+        let c = match codec {
+            "UNCOMPRESSED" | "uncompressed" => {
                 check_level_is_none(&level)?;
                 Compression::UNCOMPRESSED
             }
-            "SNAPPY" => {
+            "SNAPPY" | "snappy" => {
                 check_level_is_none(&level)?;
                 Compression::SNAPPY
             }
-            "GZIP" => {
-                let level = require_level(&codec, level)?;
+            "GZIP" | "gzip" => {
+                let level = require_level(codec, level)?;
                 Compression::GZIP(GzipLevel::try_new(level)?)
             }
-            "LZO" => {
+            "LZO" | "lzo" => {
                 check_level_is_none(&level)?;
                 Compression::LZO
             }
-            "BROTLI" => {
-                let level = require_level(&codec, level)?;
+            "BROTLI" | "brotli" => {
+                let level = require_level(codec, level)?;
                 Compression::BROTLI(BrotliLevel::try_new(level)?)
             }
-            "LZ4" => {
+            "LZ4" | "lz4" => {
                 check_level_is_none(&level)?;
                 Compression::LZ4
             }
-            "ZSTD" => {
-                let level = require_level(&codec, level)?;
+            "ZSTD" | "zstd" => {
+                let level = require_level(codec, level)?;
                 Compression::ZSTD(ZstdLevel::try_new(level as i32)?)
             }
-            "LZ4_RAW" => {
+            "LZ4_RAW" | "lz4_raw" => {
                 check_level_is_none(&level)?;
                 Compression::LZ4_RAW
             }
@@ -2258,7 +2261,7 @@ mod tests {
         assert_eq!(encoding, Encoding::BYTE_STREAM_SPLIT);
 
         // test lowercase
-        encoding = "Byte_Stream_Split".parse().unwrap();
+        encoding = "byte_stream_split".parse().unwrap();
         assert_eq!(encoding, Encoding::BYTE_STREAM_SPLIT);
 
         // test unknown string
@@ -2280,7 +2283,7 @@ mod tests {
         assert_eq!(compress, Compression::LZO);
         compress = "zstd(3)".parse().unwrap();
         assert_eq!(compress, Compression::ZSTD(ZstdLevel::try_new(3).unwrap()));
-        compress = "LZ4_raw".parse().unwrap();
+        compress = "LZ4_RAW".parse().unwrap();
         assert_eq!(compress, Compression::LZ4_RAW);
         compress = "uncompressed".parse().unwrap();
         assert_eq!(compress, Compression::UNCOMPRESSED);

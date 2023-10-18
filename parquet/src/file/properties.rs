@@ -77,9 +77,9 @@ impl FromStr for WriterVersion {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_owned().to_uppercase().as_str() {
-            "PARQUET_1_0" => Ok(WriterVersion::PARQUET_1_0),
-            "PARQUET_2_0" => Ok(WriterVersion::PARQUET_2_0),
+        match s {
+            "PARQUET_1_0" | "parquet_1_0" => Ok(WriterVersion::PARQUET_1_0),
+            "PARQUET_2_0" | "parquet_2_0" => Ok(WriterVersion::PARQUET_2_0),
             _ => Err(format!("Invalid writer version: {}", s)),
         }
     }
@@ -672,10 +672,10 @@ impl FromStr for EnabledStatistics {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_owned().to_uppercase().as_str() {
-            "NONE" => Ok(EnabledStatistics::None),
-            "CHUNK" => Ok(EnabledStatistics::Chunk),
-            "PAGE" => Ok(EnabledStatistics::Page),
+        match s {
+            "NONE" | "none" => Ok(EnabledStatistics::None),
+            "CHUNK" | "chunk" => Ok(EnabledStatistics::Chunk),
+            "PAGE" | "page" => Ok(EnabledStatistics::Page),
             _ => Err(format!("Invalid statistics arg: {}", s)),
         }
     }
