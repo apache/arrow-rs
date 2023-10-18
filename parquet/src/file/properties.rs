@@ -16,6 +16,7 @@
 // under the License.
 
 //! Configuration via [`WriterProperties`] and [`ReaderProperties`]
+use std::str::FromStr;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::basic::{Compression, Encoding};
@@ -68,6 +69,18 @@ impl WriterVersion {
         match self {
             WriterVersion::PARQUET_1_0 => 1,
             WriterVersion::PARQUET_2_0 => 2,
+        }
+    }
+}
+
+impl FromStr for WriterVersion {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "PARQUET_1_0" | "parquet_1_0" => Ok(WriterVersion::PARQUET_1_0),
+            "PARQUET_2_0" | "parquet_2_0" => Ok(WriterVersion::PARQUET_2_0),
+            _ => Err(format!("Invalid writer version: {}", s)),
         }
     }
 }
@@ -655,6 +668,19 @@ pub enum EnabledStatistics {
     Page,
 }
 
+impl FromStr for EnabledStatistics {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "NONE" | "none" => Ok(EnabledStatistics::None),
+            "CHUNK" | "chunk" => Ok(EnabledStatistics::Chunk),
+            "PAGE" | "page" => Ok(EnabledStatistics::Page),
+            _ => Err(format!("Invalid statistics arg: {}", s)),
+        }
+    }
+}
+
 impl Default for EnabledStatistics {
     fn default() -> Self {
         DEFAULT_STATISTICS_ENABLED
@@ -1181,5 +1207,47 @@ mod tests {
             .build();
 
         assert_eq!(props.codec_options(), &codec_options);
+    }
+
+    #[test]
+    fn test_parse_writerversion() {
+        let mut writer_version = "PARQUET_1_0".parse::<WriterVersion>().unwrap();
+        assert_eq!(writer_version, WriterVersion::PARQUET_1_0);
+        writer_version = "PARQUET_2_0".parse::<WriterVersion>().unwrap();
+        assert_eq!(writer_version, WriterVersion::PARQUET_2_0);
+
+        // test lowercase
+        writer_version = "parquet_1_0".parse::<WriterVersion>().unwrap();
+        assert_eq!(writer_version, WriterVersion::PARQUET_1_0);
+
+        // test invalid version
+        match "PARQUET_-1_0".parse::<WriterVersion>() {
+            Ok(_) => panic!("Should not be able to parse PARQUET_-1_0"),
+            Err(e) => {
+                assert_eq!(e, "Invalid writer version: PARQUET_-1_0");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_enabledstatistics() {
+        let mut enabled_statistics = "NONE".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::None);
+        enabled_statistics = "CHUNK".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::Chunk);
+        enabled_statistics = "PAGE".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::Page);
+
+        // test lowercase
+        enabled_statistics = "none".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::None);
+
+        //test invalid statistics
+        match "ChunkAndPage".parse::<EnabledStatistics>() {
+            Ok(_) => panic!("Should not be able to parse ChunkAndPage"),
+            Err(e) => {
+                assert_eq!(e, "Invalid statistics arg: ChunkAndPage");
+            }
+        }
     }
 }
