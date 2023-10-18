@@ -225,7 +225,7 @@ impl InferredDataType {
 /// The format specification for the CSV file
 #[derive(Debug, Clone, Default)]
 pub struct Format {
-    has_header: bool,
+    header: bool,
     delimiter: Option<u8>,
     escape: Option<u8>,
     quote: Option<u8>,
@@ -235,7 +235,7 @@ pub struct Format {
 
 impl Format {
     pub fn with_header(mut self, has_header: bool) -> Self {
-        self.has_header = has_header;
+        self.header = has_header;
         self
     }
 
@@ -280,7 +280,7 @@ impl Format {
 
         // get or create header names
         // when has_header is false, creates default column names with column_ prefix
-        let headers: Vec<String> = if self.has_header {
+        let headers: Vec<String> = if self.header {
             let headers = &csv_reader.headers().map_err(map_csv_error)?.clone();
             headers.iter().map(|s| s.to_string()).collect()
         } else {
@@ -331,7 +331,7 @@ impl Format {
     /// Build a [`csv::Reader`] for this [`Format`]
     fn build_reader<R: Read>(&self, reader: R) -> csv::Reader<R> {
         let mut builder = csv::ReaderBuilder::new();
-        builder.has_headers(self.has_header);
+        builder.has_headers(self.header);
 
         if let Some(c) = self.delimiter {
             builder.delimiter(c);
@@ -403,7 +403,7 @@ pub fn infer_reader_schema<R: Read>(
 ) -> Result<(Schema, usize), ArrowError> {
     let format = Format {
         delimiter: Some(delimiter),
-        has_header,
+        header: has_header,
         ..Default::default()
     };
     format.infer_schema(reader, max_read_records)
@@ -425,7 +425,7 @@ pub fn infer_schema_from_files(
     let mut records_to_read = max_read_records.unwrap_or(usize::MAX);
     let format = Format {
         delimiter: Some(delimiter),
-        has_header,
+        header: has_header,
         ..Default::default()
     };
 
@@ -1095,8 +1095,16 @@ impl ReaderBuilder {
     }
 
     /// Set whether the CSV file has headers
+    #[deprecated(note = "Use with_header")]
+    #[doc(hidden)]
     pub fn has_header(mut self, has_header: bool) -> Self {
-        self.format.has_header = has_header;
+        self.format.header = has_header;
+        self
+    }
+
+    /// Set whether the CSV file has a header
+    pub fn with_header(mut self, has_header: bool) -> Self {
+        self.format.header = has_header;
         self
     }
 
@@ -1176,7 +1184,7 @@ impl ReaderBuilder {
         let delimiter = self.format.build_parser();
         let record_decoder = RecordDecoder::new(delimiter, self.schema.fields().len());
 
-        let header = self.format.has_header as usize;
+        let header = self.format.header as usize;
 
         let (start, end) = match self.bounds {
             Some((start, end)) => (start + header, end + header),
@@ -1317,7 +1325,7 @@ mod tests {
             .chain(Cursor::new("\n".to_string()))
             .chain(file_without_headers);
         let mut csv = ReaderBuilder::new(Arc::new(schema))
-            .has_header(true)
+            .with_header(true)
             .build(both_files)
             .unwrap();
         let batch = csv.next().unwrap().unwrap();
@@ -1335,7 +1343,7 @@ mod tests {
             .unwrap();
 
         file.rewind().unwrap();
-        let builder = ReaderBuilder::new(Arc::new(schema)).has_header(true);
+        let builder = ReaderBuilder::new(Arc::new(schema)).with_header(true);
 
         let mut csv = builder.build(file).unwrap();
         let expected_schema = Schema::new(vec![
@@ -1505,7 +1513,7 @@ mod tests {
         let file = File::open("test/data/null_test.csv").unwrap();
 
         let mut csv = ReaderBuilder::new(schema)
-            .has_header(true)
+            .with_header(true)
             .build(file)
             .unwrap();
 
@@ -1530,7 +1538,7 @@ mod tests {
         let file = File::open("test/data/init_null_test.csv").unwrap();
 
         let mut csv = ReaderBuilder::new(schema)
-            .has_header(true)
+            .with_header(true)
             .build(file)
             .unwrap();
 
@@ -1588,7 +1596,7 @@ mod tests {
         let null_regex = Regex::new("^nil$").unwrap();
 
         let mut csv = ReaderBuilder::new(schema)
-            .has_header(true)
+            .with_header(true)
             .with_null_regex(null_regex)
             .build(file)
             .unwrap();
@@ -1710,7 +1718,7 @@ mod tests {
         ]);
 
         let builder = ReaderBuilder::new(Arc::new(schema))
-            .has_header(true)
+            .with_header(true)
             .with_delimiter(b'|')
             .with_batch_size(512)
             .with_projection(vec![0, 1, 2, 3]);
@@ -2037,7 +2045,7 @@ mod tests {
             Field::new("text2", DataType::Utf8, false),
         ]);
         let builder = ReaderBuilder::new(Arc::new(schema))
-            .has_header(false)
+            .with_header(false)
             .with_quote(b'~'); // default is ", change to ~
 
         let mut csv_text = Vec::new();
@@ -2069,7 +2077,7 @@ mod tests {
             Field::new("text2", DataType::Utf8, false),
         ]);
         let builder = ReaderBuilder::new(Arc::new(schema))
-            .has_header(false)
+            .with_header(false)
             .with_escape(b'\\'); // default is None, change to \
 
         let mut csv_text = Vec::new();
@@ -2101,7 +2109,7 @@ mod tests {
             Field::new("text2", DataType::Utf8, false),
         ]);
         let builder = ReaderBuilder::new(Arc::new(schema))
-            .has_header(false)
+            .with_header(false)
             .with_terminator(b'\n'); // default is CRLF, change to LF
 
         let mut csv_text = Vec::new();
@@ -2143,7 +2151,7 @@ mod tests {
         ]));
 
         for (idx, (bounds, has_header, expected)) in tests.into_iter().enumerate() {
-            let mut reader = ReaderBuilder::new(schema.clone()).has_header(has_header);
+            let mut reader = ReaderBuilder::new(schema.clone()).with_header(has_header);
             if let Some((start, end)) = bounds {
                 reader = reader.with_bounds(start, end);
             }
@@ -2208,7 +2216,7 @@ mod tests {
                 for capacity in [1, 3, 7, 100] {
                     let reader = ReaderBuilder::new(schema.clone())
                         .with_batch_size(batch_size)
-                        .has_header(has_header)
+                        .with_header(has_header)
                         .build(File::open(path).unwrap())
                         .unwrap();
 
@@ -2226,7 +2234,7 @@ mod tests {
 
                     let reader = ReaderBuilder::new(schema.clone())
                         .with_batch_size(batch_size)
-                        .has_header(has_header)
+                        .with_header(has_header)
                         .build_buffered(buffered)
                         .unwrap();
 

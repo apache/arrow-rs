@@ -33,7 +33,7 @@ fn main() {
         Field::new("c4", DataType::Boolean, true),
     ]);
     let mut reader = ReaderBuilder::new(Arc::new(csv_schema))
-        .has_header(true)
+        .with_header(true)
         .build(file)
         .unwrap();
 

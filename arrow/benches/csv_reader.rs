@@ -45,7 +45,7 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
                 let cursor = Cursor::new(buf.as_slice());
                 let reader = csv::ReaderBuilder::new(batch.schema())
                     .with_batch_size(batch_size)
-                    .has_header(true)
+                    .with_header(true)
                     .build_buffered(cursor)
                     .unwrap();
 

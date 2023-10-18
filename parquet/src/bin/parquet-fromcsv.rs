@@ -321,7 +321,7 @@ fn configure_reader_builder(args: &Args, arrow_schema: Arc<Schema>) -> ReaderBui
 
     let mut builder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(args.batch_size)
-        .has_header(args.has_header)
+        .with_header(args.has_header)
         .with_delimiter(args.get_delimiter());
 
     builder = configure_reader(
@@ -606,7 +606,7 @@ mod tests {
 
         let reader_builder = configure_reader_builder(&args, arrow_schema);
         let builder_debug = format!("{reader_builder:?}");
-        assert_debug_text(&builder_debug, "has_header", "false");
+        assert_debug_text(&builder_debug, "header", "false");
         assert_debug_text(&builder_debug, "delimiter", "Some(44)");
         assert_debug_text(&builder_debug, "quote", "Some(34)");
         assert_debug_text(&builder_debug, "terminator", "None");
@@ -641,7 +641,7 @@ mod tests {
         ]));
         let reader_builder = configure_reader_builder(&args, arrow_schema);
         let builder_debug = format!("{reader_builder:?}");
-        assert_debug_text(&builder_debug, "has_header", "true");
+        assert_debug_text(&builder_debug, "header", "true");
         assert_debug_text(&builder_debug, "delimiter", "Some(9)");
         assert_debug_text(&builder_debug, "quote", "None");
         assert_debug_text(&builder_debug, "terminator", "Some(10)");
