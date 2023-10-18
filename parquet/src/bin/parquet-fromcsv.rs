@@ -321,7 +321,7 @@ fn configure_reader_builder(args: &Args, arrow_schema: Arc<Schema>) -> ReaderBui
 
     let mut builder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(args.batch_size)
-        .has_header(args.has_header)
+        .with_header(args.has_header)
         .with_delimiter(args.get_delimiter());
 
     builder = configure_reader(
