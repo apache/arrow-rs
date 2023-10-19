@@ -30,8 +30,7 @@ use self::client::{BlockId, BlockList};
 use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
     path::Path,
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult,
-    Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult, Result,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -52,8 +51,7 @@ mod client;
 mod credential;
 
 /// [`CredentialProvider`] for [`MicrosoftAzure`]
-pub type AzureCredentialProvider =
-    Arc<dyn CredentialProvider<Credential = AzureCredential>>;
+pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
 use crate::client::header::get_etag;
 pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
 pub use credential::AzureCredential;
@@ -109,11 +107,7 @@ impl ObjectStore for MicrosoftAzure {
         Ok((String::new(), Box::new(WriteMultiPart::new(inner, 8))))
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         // There is no way to drop blocks that have been uploaded. Instead, they simply
         // expire in 7 days.
         Ok(())
@@ -202,8 +196,8 @@ impl PutPart for AzureMultiPartUpload {
 mod tests {
     use super::*;
     use crate::tests::{
-        copy_if_not_exists, get_opts, list_uses_directories_correctly,
-        list_with_delimiter, put_get_delete_list_opts, rename_and_copy, stream_get,
+        copy_if_not_exists, get_opts, list_uses_directories_correctly, list_with_delimiter,
+        put_get_delete_list_opts, rename_and_copy, stream_get,
     };
 
     #[tokio::test]

@@ -73,20 +73,15 @@ pub(super) fn primitive_equal<T>(
             })
         } else {
             let lhs_nulls = lhs.nulls().unwrap();
-            let lhs_slices_iter = BitSliceIterator::new(
-                lhs_nulls.validity(),
-                lhs_start + lhs_nulls.offset(),
-                len,
-            );
+            let lhs_slices_iter =
+                BitSliceIterator::new(lhs_nulls.validity(), lhs_start + lhs_nulls.offset(), len);
             let rhs_nulls = rhs.nulls().unwrap();
-            let rhs_slices_iter = BitSliceIterator::new(
-                rhs_nulls.validity(),
-                rhs_start + rhs_nulls.offset(),
-                len,
-            );
+            let rhs_slices_iter =
+                BitSliceIterator::new(rhs_nulls.validity(), rhs_start + rhs_nulls.offset(), len);
 
-            lhs_slices_iter.zip(rhs_slices_iter).all(
-                |((l_start, l_end), (r_start, r_end))| {
+            lhs_slices_iter
+                .zip(rhs_slices_iter)
+                .all(|((l_start, l_end), (r_start, r_end))| {
                     l_start == r_start
                         && l_end == r_end
                         && equal_len(
@@ -96,8 +91,7 @@ pub(super) fn primitive_equal<T>(
                             (rhs_start + r_start) * byte_width,
                             (l_end - l_start) * byte_width,
                         )
-                },
-            )
+                })
         }
     }
 }

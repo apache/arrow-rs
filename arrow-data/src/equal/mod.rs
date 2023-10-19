@@ -76,24 +76,16 @@ fn equal_values(
         DataType::Int64 => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float32 => primitive_equal::<f32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float64 => primitive_equal::<f64>(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::Decimal128(_, _) => {
-            primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len)
-        }
-        DataType::Decimal256(_, _) => {
-            primitive_equal::<i256>(lhs, rhs, lhs_start, rhs_start, len)
-        }
-        DataType::Date32
-        | DataType::Time32(_)
-        | DataType::Interval(IntervalUnit::YearMonth) => {
+        DataType::Decimal128(_, _) => primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal256(_, _) => primitive_equal::<i256>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Date32 | DataType::Time32(_) | DataType::Interval(IntervalUnit::YearMonth) => {
             primitive_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::Date64
         | DataType::Interval(IntervalUnit::DayTime)
         | DataType::Time64(_)
         | DataType::Timestamp(_, _)
-        | DataType::Duration(_) => {
-            primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len)
-        }
+        | DataType::Duration(_) => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Interval(IntervalUnit::MonthDayNano) => {
             primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len)
         }
@@ -103,39 +95,21 @@ fn equal_values(
         DataType::LargeUtf8 | DataType::LargeBinary => {
             variable_sized_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len)
         }
-        DataType::FixedSizeBinary(_) => {
-            fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len)
-        }
+        DataType::FixedSizeBinary(_) => fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::LargeList(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::FixedSizeList(_, _) => {
-            fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len)
-        }
+        DataType::FixedSizeList(_, _) => fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Struct(_) => struct_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Union(_, _) => union_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Dictionary(data_type, _) => match data_type.as_ref() {
             DataType::Int8 => dictionary_equal::<i8>(lhs, rhs, lhs_start, rhs_start, len),
-            DataType::Int16 => {
-                dictionary_equal::<i16>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::Int32 => {
-                dictionary_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::Int64 => {
-                dictionary_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::UInt8 => {
-                dictionary_equal::<u8>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::UInt16 => {
-                dictionary_equal::<u16>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::UInt32 => {
-                dictionary_equal::<u32>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::UInt64 => {
-                dictionary_equal::<u64>(lhs, rhs, lhs_start, rhs_start, len)
-            }
+            DataType::Int16 => dictionary_equal::<i16>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::Int32 => dictionary_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::Int64 => dictionary_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::UInt8 => dictionary_equal::<u8>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::UInt16 => dictionary_equal::<u16>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::UInt32 => dictionary_equal::<u32>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::UInt64 => dictionary_equal::<u64>(lhs, rhs, lhs_start, rhs_start, len),
             _ => unreachable!(),
         },
         DataType::Float16 => primitive_equal::<f16>(lhs, rhs, lhs_start, rhs_start, len),

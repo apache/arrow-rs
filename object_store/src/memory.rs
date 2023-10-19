@@ -17,8 +17,7 @@
 
 //! An in-memory object store implementation
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
-    PutResult, Result,
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutResult, Result,
 };
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
@@ -145,19 +144,12 @@ impl ObjectStore for InMemory {
         ))
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         // Nothing to clean up
         Ok(())
     }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         Ok(Box::new(InMemoryAppend {
             location: location.clone(),
             data: Vec::<u8>::new(),
@@ -195,11 +187,7 @@ impl ObjectStore for InMemory {
         })
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let entry = self.entry(location).await?;
         ranges
             .iter()

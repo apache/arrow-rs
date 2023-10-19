@@ -388,10 +388,8 @@ impl Codec {
     fn new(sort_field: &SortField) -> Result<Self, ArrowError> {
         match &sort_field.data_type {
             DataType::Dictionary(_, values) => {
-                let sort_field = SortField::new_with_options(
-                    values.as_ref().clone(),
-                    sort_field.options,
-                );
+                let sort_field =
+                    SortField::new_with_options(values.as_ref().clone(), sort_field.options);
 
                 let converter = RowConverter::new(vec![sort_field])?;
                 let null_array = new_null_array(values.as_ref(), 1);
@@ -410,8 +408,7 @@ impl Codec {
                 // it set to true
                 let options = SortOptions {
                     descending: false,
-                    nulls_first: sort_field.options.nulls_first
-                        != sort_field.options.descending,
+                    nulls_first: sort_field.options.nulls_first != sort_field.options.descending,
                 };
 
                 let field = SortField::new_with_options(f.data_type().clone(), options);
@@ -421,17 +418,11 @@ impl Codec {
             DataType::Struct(f) => {
                 let sort_fields = f
                     .iter()
-                    .map(|x| {
-                        SortField::new_with_options(
-                            x.data_type().clone(),
-                            sort_field.options,
-                        )
-                    })
+                    .map(|x| SortField::new_with_options(x.data_type().clone(), sort_field.options))
                     .collect();
 
                 let converter = RowConverter::new(sort_fields)?;
-                let nulls: Vec<_> =
-                    f.iter().map(|x| new_null_array(x.data_type(), 1)).collect();
+                let nulls: Vec<_> = f.iter().map(|x| new_null_array(x.data_type(), 1)).collect();
 
                 let nulls = converter.convert_columns(&nulls)?;
                 let owned = OwnedRow {
@@ -523,8 +514,7 @@ impl SortField {
     ///
     /// Includes the size of `Self`.
     pub fn size(&self) -> usize {
-        self.data_type.size() + std::mem::size_of::<Self>()
-            - std::mem::size_of::<DataType>()
+        self.data_type.size() + std::mem::size_of::<Self>() - std::mem::size_of::<DataType>()
     }
 }
 
@@ -555,9 +545,7 @@ impl RowConverter {
             DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
                 Self::supports_datatype(f.data_type())
             }
-            DataType::Struct(f) => {
-                f.iter().all(|x| Self::supports_datatype(x.data_type()))
-            }
+            DataType::Struct(f) => f.iter().all(|x| Self::supports_datatype(x.data_type())),
             _ => false,
         }
     }
@@ -606,11 +594,7 @@ impl RowConverter {
     /// let values: Vec<_> = back[0].as_string::<i32>().iter().map(Option::unwrap).collect();
     /// assert_eq!(&values, &["hello", "world", "a", "a", "hello"]);
     /// ```
-    pub fn append(
-        &self,
-        rows: &mut Rows,
-        columns: &[ArrayRef],
-    ) -> Result<(), ArrowError> {
+    pub fn append(&self, rows: &mut Rows, columns: &[ArrayRef]) -> Result<(), ArrowError> {
         assert!(
             Arc::ptr_eq(&rows.config.fields, &self.fields),
             "rows were not produced by this RowConverter"
@@ -670,9 +654,7 @@ impl RowConverter {
         // encoders not assuming a zero-initialized buffer
         rows.buffer.resize(cur_offset, 0);
 
-        for ((column, field), encoder) in
-            columns.iter().zip(self.fields.iter()).zip(encoders)
-        {
+        for ((column, field), encoder) in columns.iter().zip(self.fields.iter()).zip(encoders) {
             // We encode a column at a time to minimise dispatch overheads
             encode_column(
                 &mut rows.buffer,
@@ -1225,9 +1207,7 @@ fn encode_column(
                 })
         }
         Encoder::List(rows) => match column.data_type() {
-            DataType::List(_) => {
-                list::encode(data, offsets, rows, opts, as_list_array(column))
-            }
+            DataType::List(_) => list::encode(data, offsets, rows, opts, as_list_array(column)),
             DataType::LargeList(_) => {
                 list::encode(data, offsets, rows, opts, as_large_list_array(column))
             }
@@ -1466,11 +1446,9 @@ mod tests {
 
     #[test]
     fn test_bool() {
-        let converter =
-            RowConverter::new(vec![SortField::new(DataType::Boolean)]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(DataType::Boolean)]).unwrap();
 
-        let col = Arc::new(BooleanArray::from_iter([None, Some(false), Some(true)]))
-            as ArrayRef;
+        let col = Arc::new(BooleanArray::from_iter([None, Some(false), Some(true)])) as ArrayRef;
 
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
         assert!(rows.row(2) > rows.row(1));
@@ -1499,20 +1477,18 @@ mod tests {
 
     #[test]
     fn test_timezone() {
-        let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5])
-            .with_timezone("+01:00".to_string());
+        let a =
+            TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]).with_timezone("+01:00".to_string());
         let d = a.data_type().clone();
 
-        let converter =
-            RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].data_type(), &d);
 
         // Test dictionary
-        let mut a =
-            PrimitiveDictionaryBuilder::<Int32Type, TimestampNanosecondType>::new();
+        let mut a = PrimitiveDictionaryBuilder::<Int32Type, TimestampNanosecondType>::new();
         a.append(34).unwrap();
         a.append_null();
         a.append(345).unwrap();
@@ -1584,8 +1560,7 @@ mod tests {
             Some(vec![0xFF_u8; variable::BLOCK_SIZE + 1]),
         ])) as ArrayRef;
 
-        let converter =
-            RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
 
         for i in 0..rows.num_rows() {
@@ -1794,14 +1769,11 @@ mod tests {
 
     #[test]
     fn test_dictionary_nulls() {
-        let values =
-            Int32Array::from_iter([Some(1), Some(-1), None, Some(4), None]).into_data();
+        let values = Int32Array::from_iter([Some(1), Some(-1), None, Some(4), None]).into_data();
         let keys =
-            Int32Array::from_iter([Some(0), Some(0), Some(1), Some(2), Some(4), None])
-                .into_data();
+            Int32Array::from_iter([Some(0), Some(0), Some(1), Some(2), Some(4), None]).into_data();
 
-        let data_type =
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
+        let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
         let data = keys
             .into_builder()
             .data_type(data_type.clone())
@@ -1823,8 +1795,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Encountered non UTF-8 data")]
     fn test_invalid_utf8() {
-        let converter =
-            RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
         let array = Arc::new(BinaryArray::from_iter_values([&[0xFF]])) as _;
         let rows = converter.convert_columns(&[array]).unwrap();
         let binary_row = rows.row(0);
@@ -1948,9 +1919,8 @@ mod tests {
     }
 
     fn test_nested_list<O: OffsetSizeTrait>() {
-        let mut builder = GenericListBuilder::<O, _>::new(
-            GenericListBuilder::<O, _>::new(Int32Builder::new()),
-        );
+        let mut builder =
+            GenericListBuilder::<O, _>::new(GenericListBuilder::<O, _>::new(Int32Builder::new()));
 
         builder.values().values().append_value(1);
         builder.values().values().append_value(2);
@@ -2106,10 +2076,8 @@ mod tests {
             })
             .collect();
 
-        let data_type = DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(values.data_type().clone()),
-        );
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
 
         let data = keys
             .into_data()
@@ -2122,10 +2090,7 @@ mod tests {
         DictionaryArray::from(data)
     }
 
-    fn generate_fixed_size_binary(
-        len: usize,
-        valid_percent: f64,
-    ) -> FixedSizeBinaryArray {
+    fn generate_fixed_size_binary(len: usize, valid_percent: f64) -> FixedSizeBinaryArray {
         let mut rng = thread_rng();
         let width = rng.gen_range(0..20);
         let mut builder = FixedSizeBinaryBuilder::new(width);

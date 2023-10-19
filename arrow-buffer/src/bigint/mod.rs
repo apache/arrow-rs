@@ -310,9 +310,7 @@ impl i256 {
                 (Self::from_le_bytes(bytes), false)
             }
             Ordering::Equal => (Self::from_le_bytes(v_bytes.try_into().unwrap()), false),
-            Ordering::Greater => {
-                (Self::from_le_bytes(v_bytes[..32].try_into().unwrap()), true)
-            }
+            Ordering::Greater => (Self::from_le_bytes(v_bytes[..32].try_into().unwrap()), true),
         }
     }
 
@@ -357,8 +355,7 @@ impl i256 {
     #[inline]
     pub fn checked_add(self, other: Self) -> Option<Self> {
         let r = self.wrapping_add(other);
-        ((other.is_negative() && r < self) || (!other.is_negative() && r >= self))
-            .then_some(r)
+        ((other.is_negative() && r < self) || (!other.is_negative() && r >= self)).then_some(r)
     }
 
     /// Performs wrapping subtraction
@@ -373,8 +370,7 @@ impl i256 {
     #[inline]
     pub fn checked_sub(self, other: Self) -> Option<Self> {
         let r = self.wrapping_sub(other);
-        ((other.is_negative() && r > self) || (!other.is_negative() && r <= self))
-            .then_some(r)
+        ((other.is_negative() && r > self) || (!other.is_negative() && r <= self)).then_some(r)
     }
 
     /// Performs wrapping multiplication
@@ -591,9 +587,7 @@ impl i256 {
 
 /// Temporary workaround due to lack of stable const array slicing
 /// See <https://github.com/rust-lang/rust/issues/90091>
-const fn split_array<const N: usize, const M: usize>(
-    vals: [u8; N],
-) -> ([u8; M], [u8; M]) {
+const fn split_array<const N: usize, const M: usize>(vals: [u8; N]) -> ([u8; M], [u8; M]) {
     let mut a = [0; M];
     let mut b = [0; M];
     let mut i = 0;
@@ -915,8 +909,7 @@ mod tests {
 
         // Addition
         let actual = il.wrapping_add(ir);
-        let (expected, overflow) =
-            i256::from_bigint_with_overflow(bl.clone() + br.clone());
+        let (expected, overflow) = i256::from_bigint_with_overflow(bl.clone() + br.clone());
         assert_eq!(actual, expected);
 
         let checked = il.checked_add(ir);
@@ -927,8 +920,7 @@ mod tests {
 
         // Subtraction
         let actual = il.wrapping_sub(ir);
-        let (expected, overflow) =
-            i256::from_bigint_with_overflow(bl.clone() - br.clone());
+        let (expected, overflow) = i256::from_bigint_with_overflow(bl.clone() - br.clone());
         assert_eq!(actual.to_string(), expected.to_string());
 
         let checked = il.checked_sub(ir);
@@ -939,8 +931,7 @@ mod tests {
 
         // Multiplication
         let actual = il.wrapping_mul(ir);
-        let (expected, overflow) =
-            i256::from_bigint_with_overflow(bl.clone() * br.clone());
+        let (expected, overflow) = i256::from_bigint_with_overflow(bl.clone() * br.clone());
         assert_eq!(actual.to_string(), expected.to_string());
 
         let checked = il.checked_mul(ir);
@@ -996,8 +987,7 @@ mod tests {
         // Exponentiation
         for exp in vec![0, 1, 2, 3, 8, 100].into_iter() {
             let actual = il.wrapping_pow(exp);
-            let (expected, overflow) =
-                i256::from_bigint_with_overflow(bl.clone().pow(exp));
+            let (expected, overflow) = i256::from_bigint_with_overflow(bl.clone().pow(exp));
             assert_eq!(actual.to_string(), expected.to_string());
 
             let checked = il.checked_pow(exp);
@@ -1212,7 +1202,10 @@ mod tests {
             ("000000000000000000000000000000000000000", Some(i256::ZERO)),
             ("0000000000000000000000000000000000000000-11", None),
             ("11-1111111111111111111111111111111111111", None),
-            ("115792089237316195423570985008687907853269984665640564039457584007913129639936", None)
+            (
+                "115792089237316195423570985008687907853269984665640564039457584007913129639936",
+                None,
+            ),
         ];
         for (case, expected) in cases {
             assert_eq!(i256::from_string(case), expected)

@@ -31,10 +31,5 @@ pub trait Signer: Send + Sync + fmt::Debug + 'static {
     /// the URL should be valid, return a signed [`Url`] created with the object store
     /// implementation's credentials such that the URL can be handed to something that doesn't have
     /// access to the object store's credentials, to allow limited access to the object store.
-    async fn signed_url(
-        &self,
-        method: Method,
-        path: &Path,
-        expires_in: Duration,
-    ) -> Result<Url>;
+    async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url>;
 }

@@ -256,8 +256,8 @@ mod client;
 
 #[cfg(feature = "cloud")]
 pub use client::{
-    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions,
-    CredentialProvider, StaticCredentialProvider,
+    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
+    StaticCredentialProvider,
 };
 
 #[cfg(feature = "cloud")]
@@ -323,11 +323,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// See documentation for individual stores for exact behavior, as capabilities
     /// vary by object store.
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()>;
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()>;
 
     /// Returns an [`AsyncWrite`] that can be used to append to the object at `location`
     ///
@@ -349,10 +345,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Additionally some stores, such as Azure, may only support appending to objects created
     /// with [`ObjectStore::append`], and not with [`ObjectStore::put`], [`ObjectStore::copy`], or
     /// [`ObjectStore::put_multipart`]
-    async fn append(
-        &self,
-        _location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn append(&self, _location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         Err(Error::NotImplemented)
     }
 
@@ -376,11 +369,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte ranges
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         coalesce_ranges(
             ranges,
             |range| self.get_range(location, range),
@@ -547,10 +536,7 @@ macro_rules! as_ref_impl {
                 self.as_ref().abort_multipart(location, multipart_id).await
             }
 
-            async fn append(
-                &self,
-                location: &Path,
-            ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+            async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
                 self.as_ref().append(location).await
             }
 
@@ -558,19 +544,11 @@ macro_rules! as_ref_impl {
                 self.as_ref().get(location).await
             }
 
-            async fn get_opts(
-                &self,
-                location: &Path,
-                options: GetOptions,
-            ) -> Result<GetResult> {
+            async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
                 self.as_ref().get_opts(location, options).await
             }
 
-            async fn get_range(
-                &self,
-                location: &Path,
-                range: Range<usize>,
-            ) -> Result<Bytes> {
+            async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
                 self.as_ref().get_range(location, range).await
             }
 
@@ -609,10 +587,7 @@ macro_rules! as_ref_impl {
                 self.as_ref().list_with_offset(prefix, offset)
             }
 
-            async fn list_with_delimiter(
-                &self,
-                prefix: Option<&Path>,
-            ) -> Result<ListResult> {
+            async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
                 self.as_ref().list_with_delimiter(prefix).await
             }
 
@@ -799,20 +774,16 @@ impl GetResult {
             #[cfg(not(target_arch = "wasm32"))]
             GetResultPayload::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
-                    file.seek(SeekFrom::Start(self.range.start as _)).map_err(
-                        |source| local::Error::Seek {
+                    file.seek(SeekFrom::Start(self.range.start as _))
+                        .map_err(|source| local::Error::Seek {
                             source,
                             path: path.clone(),
-                        },
-                    )?;
+                        })?;
 
                     let mut buffer = Vec::with_capacity(len);
                     file.take(len as _)
                         .read_to_end(&mut buffer)
-                        .map_err(|source| local::Error::UnableToReadBytes {
-                            source,
-                            path,
-                        })?;
+                        .map_err(|source| local::Error::UnableToReadBytes { source, path })?;
 
                     Ok(buffer.into())
                 })
@@ -915,11 +886,7 @@ pub enum Error {
     #[snafu(display("Operation not yet implemented."))]
     NotImplemented,
 
-    #[snafu(display(
-        "Configuration key: '{}' is not valid for store '{}'.",
-        key,
-        store
-    ))]
+    #[snafu(display("Configuration key: '{}' is not valid for store '{}'.", key, store))]
     UnknownConfigurationKey { store: &'static str, key: String },
 }
 
@@ -1245,8 +1212,7 @@ mod tests {
 
         for (prefix, offset) in cases {
             let s = storage.list_with_offset(prefix.as_ref(), &offset);
-            let mut actual: Vec<_> =
-                s.map_ok(|x| x.location).try_collect().await.unwrap();
+            let mut actual: Vec<_> = s.map_ok(|x| x.location).try_collect().await.unwrap();
 
             actual.sort_unstable();
 
@@ -1254,8 +1220,7 @@ mod tests {
                 .iter()
                 .cloned()
                 .filter(|x| {
-                    let prefix_match =
-                        prefix.as_ref().map(|p| x.prefix_matches(p)).unwrap_or(true);
+                    let prefix_match = prefix.as_ref().map(|p| x.prefix_matches(p)).unwrap_or(true);
                     prefix_match && x > &offset
                 })
                 .collect();
@@ -1627,8 +1592,7 @@ mod tests {
         storage: &DynObjectStore,
         location: Option<Path>,
     ) -> crate::Result<Bytes> {
-        let location =
-            location.unwrap_or_else(|| Path::from("this_file_should_not_exist"));
+        let location = location.unwrap_or_else(|| Path::from("this_file_should_not_exist"));
 
         let err = storage.head(&location).await.unwrap_err();
         assert!(matches!(err, crate::Error::NotFound { .. }));

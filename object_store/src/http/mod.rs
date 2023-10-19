@@ -45,8 +45,8 @@ use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, PutResult, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -113,11 +113,7 @@ impl ObjectStore for HttpStore {
         Err(super::Error::NotImplemented)
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         Err(super::Error::NotImplemented)
     }
 

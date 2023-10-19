@@ -210,8 +210,7 @@ fn add_benchmark(c: &mut Criterion) {
     let field = Field::new("c1", data_array.data_type().clone(), true);
     let schema = Schema::new(vec![field]);
 
-    let batch =
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data_array)]).unwrap();
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data_array)]).unwrap();
 
     c.bench_function("filter single record batch", |b| {
         b.iter(|| filter_record_batch(&batch, &filter_array))

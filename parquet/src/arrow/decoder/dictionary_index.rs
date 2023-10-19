@@ -41,11 +41,7 @@ pub struct DictIndexDecoder {
 impl DictIndexDecoder {
     /// Create a new [`DictIndexDecoder`] with the provided data page, the number of levels
     /// associated with this data page, and the number of non-null values (if known)
-    pub fn new(
-        data: ByteBufferPtr,
-        num_levels: usize,
-        num_values: Option<usize>,
-    ) -> Self {
+    pub fn new(data: ByteBufferPtr, num_levels: usize, num_values: Option<usize>) -> Self {
         let bit_width = data[0];
         let mut decoder = RleDecoder::new(bit_width);
         decoder.set_data(data.start_from(1));
@@ -63,11 +59,7 @@ impl DictIndexDecoder {
     /// and calling `f` with each decoded dictionary index
     ///
     /// Will short-circuit and return on error
-    pub fn read<F: FnMut(&[i32]) -> Result<()>>(
-        &mut self,
-        len: usize,
-        mut f: F,
-    ) -> Result<usize> {
+    pub fn read<F: FnMut(&[i32]) -> Result<()>>(&mut self, len: usize, mut f: F) -> Result<usize> {
         let mut values_read = 0;
 
         while values_read != len && self.max_remaining_values != 0 {
@@ -112,8 +104,7 @@ impl DictIndexDecoder {
                 values_skip += skip;
             } else {
                 // We still have indices buffered, so skip within the buffer
-                let skip =
-                    (to_skip - values_skip).min(self.index_buf_len - self.index_offset);
+                let skip = (to_skip - values_skip).min(self.index_buf_len - self.index_offset);
 
                 self.index_offset += skip;
                 self.max_remaining_values -= skip;

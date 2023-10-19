@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
-use crate::arrow::record_reader::buffer::{
-    BufferQueue, ScalarBuffer, ScalarValue, ValuesBuffer,
-};
+use crate::arrow::record_reader::buffer::{BufferQueue, ScalarBuffer, ScalarValue, ValuesBuffer};
 use crate::column::reader::decoder::ValuesBufferSlice;
 use crate::errors::{ParquetError, Result};
 use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
@@ -127,11 +125,7 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
     }
 
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
-    pub fn into_array(
-        self,
-        null_buffer: Option<Buffer>,
-        data_type: ArrowType,
-    ) -> ArrayRef {
+    pub fn into_array(self, null_buffer: Option<Buffer>, data_type: ArrowType) -> ArrayRef {
         let array_data_builder = ArrayDataBuilder::new(data_type)
             .len(self.len())
             .add_buffer(self.offsets.into())

@@ -23,18 +23,16 @@ use arrow_flight::{
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{
         server::{FlightSqlService, PeekableFlightDataStream},
-        ActionBeginSavepointRequest, ActionBeginSavepointResult,
-        ActionBeginTransactionRequest, ActionBeginTransactionResult,
-        ActionCancelQueryRequest, ActionCancelQueryResult,
+        ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
+        ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
         ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
         ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
         ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
         CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
-        CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
-        CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-        CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-        CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate,
-        ProstMessageExt, SqlInfo, TicketStatementQuery,
+        CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes,
+        CommandGetTables, CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
+        CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementSubstraitPlan,
+        CommandStatementUpdate, ProstMessageExt, SqlInfo, TicketStatementQuery,
     },
     utils::batches_to_flight_data,
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
@@ -168,8 +166,7 @@ impl FlightSqlServiceImpl {
         RecordBatch::try_new(Arc::new(schema), cols)
     }
 
-    fn create_fake_prepared_stmt(
-    ) -> Result<ActionCreatePreparedStatementResult, ArrowError> {
+    fn create_fake_prepared_stmt() -> Result<ActionCreatePreparedStatementResult, ArrowError> {
         let handle = PREPARED_STATEMENT_HANDLE.to_string();
         let schema = Schema::new(vec![
             Field::new("field_string", DataType::Utf8, false),

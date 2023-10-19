@@ -18,8 +18,7 @@
 use crate::reader::tape::TapeElement;
 use lexical_core::FormattedSize;
 use serde::ser::{
-    Impossible, SerializeMap, SerializeSeq, SerializeStruct, SerializeTuple,
-    SerializeTupleStruct,
+    Impossible, SerializeMap, SerializeSeq, SerializeStruct, SerializeTuple, SerializeTupleStruct,
 };
 use serde::{Serialize, Serializer};
 
@@ -231,17 +230,11 @@ impl<'a, 'b> Serializer for &'a mut TapeSerializer<'b> {
         Ok(())
     }
 
-    fn serialize_seq(
-        self,
-        _len: Option<usize>,
-    ) -> Result<Self::SerializeSeq, SerializerError> {
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, SerializerError> {
         Ok(ListSerializer::new(self))
     }
 
-    fn serialize_tuple(
-        self,
-        len: usize,
-    ) -> Result<Self::SerializeTuple, SerializerError> {
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, SerializerError> {
         self.serialize_seq(Some(len))
     }
 
@@ -266,10 +259,7 @@ impl<'a, 'b> Serializer for &'a mut TapeSerializer<'b> {
     }
 
     // Maps are represented in JSON as `{ K: V, K: V, ... }`.
-    fn serialize_map(
-        self,
-        _len: Option<usize>,
-    ) -> Result<Self::SerializeMap, SerializerError> {
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, SerializerError> {
         Ok(ObjectSerializer::new(self))
     }
 

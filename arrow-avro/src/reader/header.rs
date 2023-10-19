@@ -133,9 +133,7 @@ impl HeaderDecoder {
                     let remaining = &MAGIC[MAGIC.len() - self.bytes_remaining..];
                     let to_decode = buf.len().min(remaining.len());
                     if !buf.starts_with(&remaining[..to_decode]) {
-                        return Err(ArrowError::ParseError(
-                            "Incorrect avro magic".to_string(),
-                        ));
+                        return Err(ArrowError::ParseError("Incorrect avro magic".to_string()));
                     }
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];

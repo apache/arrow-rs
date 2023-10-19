@@ -103,8 +103,7 @@ impl RowSelection {
             let offset = next_offset;
             next_offset += filter.len();
             assert_eq!(filter.null_count(), 0);
-            SlicesIterator::new(filter)
-                .map(move |(start, end)| start + offset..end + offset)
+            SlicesIterator::new(filter).map(move |(start, end)| start + offset..end + offset)
         });
 
         Self::from_consecutive_ranges(iter, total_rows)
@@ -180,10 +179,7 @@ impl RowSelection {
     /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
     /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
-    pub fn scan_ranges(
-        &self,
-        page_locations: &[crate::format::PageLocation],
-    ) -> Vec<Range<usize>> {
+    pub fn scan_ranges(&self, page_locations: &[crate::format::PageLocation]) -> Vec<Range<usize>> {
         let mut ranges = vec![];
         let mut row_offset = 0;
 
@@ -204,8 +200,7 @@ impl RowSelection {
 
             if let Some(next_page) = pages.peek() {
                 if row_offset + selector.row_count > next_page.first_row_index as usize {
-                    let remaining_in_page =
-                        next_page.first_row_index as usize - row_offset;
+                    let remaining_in_page = next_page.first_row_index as usize - row_offset;
                     selector.row_count -= remaining_in_page;
                     row_offset += remaining_in_page;
                     current_page = pages.next();
@@ -213,9 +208,7 @@ impl RowSelection {
 
                     continue;
                 } else {
-                    if row_offset + selector.row_count
-                        == next_page.first_row_index as usize
-                    {
+                    if row_offset + selector.row_count == next_page.first_row_index as usize {
                         current_page = pages.next();
                         current_page_included = false;
                     }
@@ -472,10 +465,7 @@ impl From<RowSelection> for VecDeque<RowSelector> {
 /// other:     NYNNNNNNY
 ///
 /// returned:  NNNNNNNNYYNYN
-fn intersect_row_selections(
-    left: &[RowSelector],
-    right: &[RowSelector],
-) -> Vec<RowSelector> {
+fn intersect_row_selections(left: &[RowSelector], right: &[RowSelector]) -> Vec<RowSelector> {
     let mut res = Vec::with_capacity(left.len());
     let mut l_iter = left.iter().copied().peekable();
     let mut r_iter = right.iter().copied().peekable();
@@ -942,8 +932,7 @@ mod tests {
                 }
             }
 
-            let expected =
-                RowSelection::from_filters(&[BooleanArray::from(expected_bools)]);
+            let expected = RowSelection::from_filters(&[BooleanArray::from(expected_bools)]);
 
             let total_rows: usize = expected.selectors.iter().map(|s| s.row_count).sum();
             assert_eq!(a_len, total_rows);
@@ -972,8 +961,7 @@ mod tests {
     #[test]
     fn test_limit() {
         // Limit to existing limit should no-op
-        let selection =
-            RowSelection::from(vec![RowSelector::select(10), RowSelector::skip(90)]);
+        let selection = RowSelection::from(vec![RowSelector::select(10), RowSelector::skip(90)]);
         let limited = selection.limit(10);
         assert_eq!(RowSelection::from(vec![RowSelector::select(10)]), limited);
 

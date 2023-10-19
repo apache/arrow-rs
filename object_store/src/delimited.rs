@@ -228,8 +228,7 @@ mod tests {
     #[tokio::test]
     async fn test_delimiter_stream() {
         let input = vec!["hello\nworld\nbin", "go\ncup", "cakes"];
-        let input_stream =
-            futures::stream::iter(input.into_iter().map(|s| Ok(Bytes::from(s))));
+        let input_stream = futures::stream::iter(input.into_iter().map(|s| Ok(Bytes::from(s))));
         let stream = newline_delimited_stream(input_stream);
 
         let results: Vec<_> = stream.try_collect().await.unwrap();

@@ -52,12 +52,8 @@ impl std::fmt::Debug for Column {
 impl Column {
     fn generate(self, size: usize) -> ArrayRef {
         match self {
-            Column::RequiredI32 => {
-                Arc::new(create_primitive_array::<Int32Type>(size, 0.))
-            }
-            Column::OptionalI32 => {
-                Arc::new(create_primitive_array::<Int32Type>(size, 0.2))
-            }
+            Column::RequiredI32 => Arc::new(create_primitive_array::<Int32Type>(size, 0.)),
+            Column::OptionalI32 => Arc::new(create_primitive_array::<Int32Type>(size, 0.2)),
             Column::Required16CharString => {
                 Arc::new(create_string_array_with_len::<i32>(size, 0., 16))
             }

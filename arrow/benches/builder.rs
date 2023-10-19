@@ -131,9 +131,8 @@ fn bench_decimal256(c: &mut Criterion) {
             let mut rng = rand::thread_rng();
             let mut decimal_builder = Decimal256Builder::with_capacity(BATCH_SIZE);
             for _ in 0..BATCH_SIZE {
-                decimal_builder.append_value(i256::from_i128(
-                    rng.gen_range::<i128, _>(0..99999999999),
-                ));
+                decimal_builder
+                    .append_value(i256::from_i128(rng.gen_range::<i128, _>(0..99999999999)));
             }
             black_box(
                 decimal_builder

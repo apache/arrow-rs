@@ -81,8 +81,7 @@ impl ObjectStoreScheme {
             }
             ("http", Some(_)) => (Self::Http, url.path()),
             ("https", Some(host)) => {
-                if host.ends_with("dfs.core.windows.net")
-                    || host.ends_with("blob.core.windows.net")
+                if host.ends_with("dfs.core.windows.net") || host.ends_with("blob.core.windows.net")
                 {
                     (Self::MicrosoftAzure, url.path())
                 } else if host.ends_with("amazonaws.com") {
@@ -166,12 +165,7 @@ where
             let url = &url[..url::Position::BeforePath];
             Box::new(crate::http::HttpBuilder::new().with_url(url).build()?) as _
         }
-        #[cfg(not(all(
-            feature = "aws",
-            feature = "azure",
-            feature = "gcp",
-            feature = "http"
-        )))]
+        #[cfg(not(all(feature = "aws", feature = "azure", feature = "gcp", feature = "http")))]
         s => {
             return Err(super::Error::Generic {
                 store: "parse_url",

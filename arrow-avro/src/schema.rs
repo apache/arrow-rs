@@ -335,9 +335,7 @@ mod tests {
                     Field {
                         name: "value",
                         doc: None,
-                        r#type: Schema::TypeName(TypeName::Primitive(
-                            PrimitiveType::Long
-                        )),
+                        r#type: Schema::TypeName(TypeName::Primitive(PrimitiveType::Long)),
                         default: None,
                     },
                     Field {

@@ -19,8 +19,8 @@
 use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
-    GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, PutResult, Result,
+    GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    PutResult, Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -311,11 +311,7 @@ impl ObjectStore for LocalFileSystem {
         ))
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
         let dest = self.config.path_to_filesystem(location)?;
         let path: PathBuf = staged_upload_path(&dest, multipart_id);
 
@@ -329,10 +325,7 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         // Get the path to the file from the configuration.
         let path = self.config.path_to_filesystem(location)?;
         loop {
@@ -352,11 +345,10 @@ impl ObjectStore for LocalFileSystem {
                 // If the error is that the file was not found, attempt to create the file and any necessary parent directories.
                 Err(source) if source.kind() == ErrorKind::NotFound => {
                     // Get the path to the parent directory of the file.
-                    let parent =
-                        path.parent().ok_or_else(|| Error::UnableToCreateFile {
-                            path: path.to_path_buf(),
-                            source,
-                        })?;
+                    let parent = path.parent().ok_or_else(|| Error::UnableToCreateFile {
+                        path: path.to_path_buf(),
+                        source,
+                    })?;
 
                     // Create the parent directory and any necessary ancestors.
                     tokio::fs::create_dir_all(parent)
@@ -367,9 +359,7 @@ impl ObjectStore for LocalFileSystem {
                     continue;
                 }
                 // If any other error occurs, return a `UnableToOpenFile` error.
-                Err(source) => {
-                    return Err(Error::UnableToOpenFile { source, path }.into())
-                }
+                Err(source) => return Err(Error::UnableToOpenFile { source, path }.into()),
             }
         }
     }
@@ -400,11 +390,7 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let path = self.config.path_to_filesystem(location)?;
         let ranges = ranges.to_vec();
         maybe_spawn_blocking(move || {
@@ -719,9 +705,7 @@ impl AsyncWrite for LocalUpload {
                                 runtime
                                     .spawn_blocking(move || (&*file2).write_all(&data))
                                     .map(move |res| match res {
-                                        Err(err) => {
-                                            Err(io::Error::new(ErrorKind::Other, err))
-                                        }
+                                        Err(err) => Err(io::Error::new(ErrorKind::Other, err)),
                                         Ok(res) => res.map(move |_| data_len),
                                     }),
                             ),
@@ -771,31 +755,24 @@ impl AsyncWrite for LocalUpload {
                         // We are moving file into the future, and it will be dropped on it's completion, closing the file.
                         let file = Arc::clone(file);
                         self.inner_state = LocalUploadState::ShuttingDown(Box::pin(
-                            runtime.spawn_blocking(move || (*file).sync_all()).map(
-                                move |res| match res {
-                                    Err(err) => {
-                                        Err(io::Error::new(io::ErrorKind::Other, err))
-                                    }
+                            runtime
+                                .spawn_blocking(move || (*file).sync_all())
+                                .map(move |res| match res {
+                                    Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
                                     Ok(res) => res,
-                                },
-                            ),
+                                }),
                         ));
                     }
                     LocalUploadState::ShuttingDown(fut) => match fut.poll_unpin(cx) {
                         Poll::Ready(res) => {
                             res?;
-                            let staging_path =
-                                staged_upload_path(&self.dest, &self.multipart_id);
+                            let staging_path = staged_upload_path(&self.dest, &self.multipart_id);
                             let dest = self.dest.clone();
                             self.inner_state = LocalUploadState::Committing(Box::pin(
                                 runtime
-                                    .spawn_blocking(move || {
-                                        std::fs::rename(&staging_path, &dest)
-                                    })
+                                    .spawn_blocking(move || std::fs::rename(&staging_path, &dest))
                                     .map(move |res| match res {
-                                        Err(err) => {
-                                            Err(io::Error::new(io::ErrorKind::Other, err))
-                                        }
+                                        Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
                                         Ok(res) => res,
                                     }),
                             ));
@@ -905,11 +882,7 @@ pub(crate) fn chunked_stream(
     .boxed()
 }
 
-pub(crate) fn read_range(
-    file: &mut File,
-    path: &PathBuf,
-    range: Range<usize>,
-) -> Result<Bytes> {
+pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<Bytes> {
     let to_read = range.end - range.start;
     file.seek(SeekFrom::Start(range.start as u64))
         .context(SeekSnafu { path })?;
@@ -1231,11 +1204,7 @@ mod tests {
         fs.list_with_delimiter(None).await.unwrap();
     }
 
-    async fn check_list(
-        integration: &LocalFileSystem,
-        prefix: Option<&Path>,
-        expected: &[&str],
-    ) {
+    async fn check_list(integration: &LocalFileSystem, prefix: Option<&Path>, expected: &[&str]) {
         let result: Vec<_> = integration.list(prefix).try_collect().await.unwrap();
 
         let mut strings: Vec<_> = result.iter().map(|x| x.location.as_ref()).collect();
@@ -1262,8 +1231,7 @@ mod tests {
 
         // Follow out of tree symlink
         let other = NamedTempFile::new().unwrap();
-        std::os::unix::fs::symlink(other.path(), root.path().join("test.parquet"))
-            .unwrap();
+        std::os::unix::fs::symlink(other.path(), root.path().join("test.parquet")).unwrap();
 
         // Should return test.parquet even though out of tree
         check_list(&integration, None, &["a/file.parquet", "test.parquet"]).await;
@@ -1288,11 +1256,7 @@ mod tests {
             .unwrap();
 
         // Ignore broken symlink
-        std::os::unix::fs::symlink(
-            root.path().join("foo.parquet"),
-            root.path().join("c"),
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(root.path().join("foo.parquet"), root.path().join("c")).unwrap();
 
         check_list(
             &integration,
@@ -1388,7 +1352,9 @@ mod tests {
             .to_string();
 
         assert!(
-            err.contains("Encountered illegal character sequence \"💀\" whilst parsing path segment \"💀\""),
+            err.contains(
+                "Encountered illegal character sequence \"💀\" whilst parsing path segment \"💀\""
+            ),
             "{}",
             err
         );
@@ -1401,12 +1367,10 @@ mod tests {
         let location = Path::from("some_file");
 
         let data = Bytes::from("arbitrary data");
-        let (multipart_id, mut writer) =
-            integration.put_multipart(&location).await.unwrap();
+        let (multipart_id, mut writer) = integration.put_multipart(&location).await.unwrap();
         writer.write_all(&data).await.unwrap();
 
-        let (multipart_id_2, mut writer_2) =
-            integration.put_multipart(&location).await.unwrap();
+        let (multipart_id_2, mut writer_2) = integration.put_multipart(&location).await.unwrap();
         assert_ne!(multipart_id, multipart_id_2);
         writer_2.write_all(&data).await.unwrap();
 
@@ -1588,9 +1552,8 @@ mod unix_test {
         unistd::mkfifo(&path, stat::Mode::S_IRWXU).unwrap();
 
         // Need to open read and write side in parallel
-        let spawned = tokio::task::spawn_blocking(|| {
-            OpenOptions::new().write(true).open(path).unwrap()
-        });
+        let spawned =
+            tokio::task::spawn_blocking(|| OpenOptions::new().write(true).open(path).unwrap());
 
         let location = Path::from(filename);
         integration.head(&location).await.unwrap();

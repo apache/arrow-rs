@@ -403,7 +403,12 @@ mod tests {
         }
 
         let e = do_request().await.unwrap_err().to_string();
-        assert!(e.starts_with("Error after 2 retries: HTTP status server error (502 Bad Gateway) for url"), "{e}");
+        assert!(
+            e.starts_with(
+                "Error after 2 retries: HTTP status server error (502 Bad Gateway) for url"
+            ),
+            "{e}"
+        );
 
         // Panic results in an incomplete message error in the client
         mock.push_fn(|_| panic!());

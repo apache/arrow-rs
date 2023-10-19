@@ -210,18 +210,13 @@ impl GoogleCloudStorageClient {
 
         let data = response.bytes().await.context(PutResponseBodySnafu)?;
         let result: InitiateMultipartUploadResult =
-            quick_xml::de::from_reader(data.as_ref().reader())
-                .context(InvalidPutResponseSnafu)?;
+            quick_xml::de::from_reader(data.as_ref().reader()).context(InvalidPutResponseSnafu)?;
 
         Ok(result.upload_id)
     }
 
     /// Cleanup unused parts <https://cloud.google.com/storage/docs/xml-api/delete-multipart>
-    pub async fn multipart_cleanup(
-        &self,
-        path: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
+    pub async fn multipart_cleanup(&self, path: &Path, multipart_id: &MultipartId) -> Result<()> {
         let credential = self.get_credential().await?;
         let url = self.object_url(path);
 
@@ -300,12 +295,7 @@ impl GoogleCloudStorageClient {
     }
 
     /// Perform a copy request <https://cloud.google.com/storage/docs/xml-api/put-object-copy>
-    pub async fn copy_request(
-        &self,
-        from: &Path,
-        to: &Path,
-        if_not_exists: bool,
-    ) -> Result<()> {
+    pub async fn copy_request(&self, from: &Path, to: &Path, if_not_exists: bool) -> Result<()> {
         let credential = self.get_credential().await?;
         let url = self.object_url(to);
 
@@ -416,8 +406,8 @@ impl ListClient for GoogleCloudStorageClient {
             .await
             .context(ListResponseBodySnafu)?;
 
-        let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
-            .context(InvalidListResponseSnafu)?;
+        let mut response: ListResponse =
+            quick_xml::de::from_reader(response.reader()).context(InvalidListResponseSnafu)?;
 
         let token = response.next_continuation_token.take();
         Ok((response.try_into()?, token))

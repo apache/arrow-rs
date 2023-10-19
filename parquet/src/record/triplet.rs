@@ -58,32 +58,30 @@ impl TripletIter {
     /// Creates new triplet for column reader
     pub fn new(descr: ColumnDescPtr, reader: ColumnReader, batch_size: usize) -> Self {
         match descr.physical_type() {
-            PhysicalType::BOOLEAN => TripletIter::BoolTripletIter(TypedTripletIter::new(
-                descr, batch_size, reader,
-            )),
-            PhysicalType::INT32 => TripletIter::Int32TripletIter(TypedTripletIter::new(
-                descr, batch_size, reader,
-            )),
-            PhysicalType::INT64 => TripletIter::Int64TripletIter(TypedTripletIter::new(
-                descr, batch_size, reader,
-            )),
-            PhysicalType::INT96 => TripletIter::Int96TripletIter(TypedTripletIter::new(
-                descr, batch_size, reader,
-            )),
-            PhysicalType::FLOAT => TripletIter::FloatTripletIter(TypedTripletIter::new(
-                descr, batch_size, reader,
-            )),
-            PhysicalType::DOUBLE => TripletIter::DoubleTripletIter(
-                TypedTripletIter::new(descr, batch_size, reader),
-            ),
-            PhysicalType::BYTE_ARRAY => TripletIter::ByteArrayTripletIter(
-                TypedTripletIter::new(descr, batch_size, reader),
-            ),
-            PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                TripletIter::FixedLenByteArrayTripletIter(TypedTripletIter::new(
-                    descr, batch_size, reader,
-                ))
+            PhysicalType::BOOLEAN => {
+                TripletIter::BoolTripletIter(TypedTripletIter::new(descr, batch_size, reader))
             }
+            PhysicalType::INT32 => {
+                TripletIter::Int32TripletIter(TypedTripletIter::new(descr, batch_size, reader))
+            }
+            PhysicalType::INT64 => {
+                TripletIter::Int64TripletIter(TypedTripletIter::new(descr, batch_size, reader))
+            }
+            PhysicalType::INT96 => {
+                TripletIter::Int96TripletIter(TypedTripletIter::new(descr, batch_size, reader))
+            }
+            PhysicalType::FLOAT => {
+                TripletIter::FloatTripletIter(TypedTripletIter::new(descr, batch_size, reader))
+            }
+            PhysicalType::DOUBLE => {
+                TripletIter::DoubleTripletIter(TypedTripletIter::new(descr, batch_size, reader))
+            }
+            PhysicalType::BYTE_ARRAY => {
+                TripletIter::ByteArrayTripletIter(TypedTripletIter::new(descr, batch_size, reader))
+            }
+            PhysicalType::FIXED_LEN_BYTE_ARRAY => TripletIter::FixedLenByteArrayTripletIter(
+                TypedTripletIter::new(descr, batch_size, reader),
+            ),
         }
     }
 
@@ -159,16 +157,13 @@ impl TripletIter {
             TripletIter::DoubleTripletIter(ref typed) => {
                 Field::convert_double(typed.column_descr(), *typed.current_value())
             }
-            TripletIter::ByteArrayTripletIter(ref typed) => Field::convert_byte_array(
-                typed.column_descr(),
-                typed.current_value().clone(),
-            )?,
-            TripletIter::FixedLenByteArrayTripletIter(ref typed) => {
-                Field::convert_byte_array(
-                    typed.column_descr(),
-                    typed.current_value().clone().into(),
-                )?
+            TripletIter::ByteArrayTripletIter(ref typed) => {
+                Field::convert_byte_array(typed.column_descr(), typed.current_value().clone())?
             }
+            TripletIter::FixedLenByteArrayTripletIter(ref typed) => Field::convert_byte_array(
+                typed.column_descr(),
+                typed.current_value().clone().into(),
+            )?,
         };
         Ok(field)
     }
@@ -371,8 +366,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Expected positive batch size, found: 0")]
     fn test_triplet_zero_batch_size() {
-        let column_path =
-            ColumnPath::from(vec!["b_struct".to_string(), "b_c_int".to_string()]);
+        let column_path = ColumnPath::from(vec!["b_struct".to_string(), "b_c_int".to_string()]);
         test_column_in_file("nulls.snappy.parquet", 0, &column_path, &[], &[], &[]);
     }
 

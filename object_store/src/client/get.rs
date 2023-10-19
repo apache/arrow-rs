@@ -48,13 +48,12 @@ impl<T: GetClient> GetClientExt for T {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let range = options.range.clone();
         let response = self.get_request(location, options).await?;
-        let meta =
-            header_meta(location, response.headers(), T::HEADER_CONFIG).map_err(|e| {
-                Error::Generic {
-                    store: T::STORE,
-                    source: Box::new(e),
-                }
-            })?;
+        let meta = header_meta(location, response.headers(), T::HEADER_CONFIG).map_err(|e| {
+            Error::Generic {
+                store: T::STORE,
+                source: Box::new(e),
+            }
+        })?;
 
         let stream = response
             .bytes_stream()

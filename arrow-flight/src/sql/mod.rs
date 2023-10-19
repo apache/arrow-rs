@@ -295,9 +295,8 @@ impl Any {
         if !self.is::<M>() {
             return Ok(None);
         }
-        let m = Message::decode(&*self.value).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to decode Any value: {err}"))
-        })?;
+        let m = Message::decode(&*self.value)
+            .map_err(|err| ArrowError::ParseError(format!("Unable to decode Any value: {err}")))?;
         Ok(Some(m))
     }
 

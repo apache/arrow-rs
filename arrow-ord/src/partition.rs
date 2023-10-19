@@ -300,9 +300,7 @@ mod tests {
             Arc::new(Int64Array::new(vec![1; 9].into(), None)) as _,
             Arc::new(Int64Array::new(
                 vec![1, 1, 2, 2, 2, 3, 3, 3, 3].into(),
-                Some(
-                    vec![false, true, true, true, true, false, false, true, false].into(),
-                ),
+                Some(vec![false, true, true, true, true, false, false, true, false].into()),
             )) as _,
             Arc::new(Int64Array::new(
                 vec![1, 1, 2, 2, 2, 2, 2, 3, 7].into(),

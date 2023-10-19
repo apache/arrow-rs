@@ -34,9 +34,7 @@
 //! assert_eq!(schema, back);
 //! ```
 
-use crate::{
-    ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionFields, UnionMode,
-};
+use crate::{ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionFields, UnionMode};
 use std::sync::Arc;
 use std::{
     collections::HashMap,
@@ -213,8 +211,7 @@ impl FFI_ArrowSchema {
         };
 
         unsafe {
-            let mut private_data =
-                Box::from_raw(self.private_data as *mut SchemaPrivateData);
+            let mut private_data = Box::from_raw(self.private_data as *mut SchemaPrivateData);
             private_data.metadata = new_metadata;
             self.private_data = Box::into_raw(private_data) as *mut c_void;
         }
@@ -318,9 +315,8 @@ impl FFI_ArrowSchema {
                 ));
             }
 
-            let mut metadata = HashMap::with_capacity(
-                num_entries.try_into().expect("Too many metadata entries"),
-            );
+            let mut metadata =
+                HashMap::with_capacity(num_entries.try_into().expect("Too many metadata entries"));
 
             for _ in 0..num_entries {
                 let key_length = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
@@ -329,18 +325,15 @@ impl FFI_ArrowSchema {
                         "Negative key length in metadata".to_string(),
                     ));
                 }
-                let key = String::from_utf8(
-                    next_n_bytes(buffer, &mut pos, key_length).to_vec(),
-                )?;
+                let key = String::from_utf8(next_n_bytes(buffer, &mut pos, key_length).to_vec())?;
                 let value_length = i32::from_ne_bytes(next_four_bytes(buffer, &mut pos));
                 if value_length < 0 {
                     return Err(ArrowError::CDataInterface(
                         "Negative value length in metadata".to_string(),
                     ));
                 }
-                let value = String::from_utf8(
-                    next_n_bytes(buffer, &mut pos, value_length).to_vec(),
-                )?;
+                let value =
+                    String::from_utf8(next_n_bytes(buffer, &mut pos, value_length).to_vec())?;
                 metadata.insert(key, value);
             }
 
@@ -639,9 +632,7 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
         DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{num_bytes}")),
         DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{num_elems}")),
         DataType::Decimal128(precision, scale) => Ok(format!("d:{precision},{scale}")),
-        DataType::Decimal256(precision, scale) => {
-            Ok(format!("d:{precision},{scale},256"))
-        }
+        DataType::Decimal256(precision, scale) => Ok(format!("d:{precision},{scale},256")),
         DataType::Date32 => Ok("tdD".to_string()),
         DataType::Date64 => Ok("tdm".to_string()),
         DataType::Time32(TimeUnit::Second) => Ok("tts".to_string()),
@@ -715,8 +706,7 @@ impl TryFrom<&Schema> for FFI_ArrowSchema {
 
     fn try_from(schema: &Schema) -> Result<Self, ArrowError> {
         let dtype = DataType::Struct(schema.fields().clone());
-        let c_schema =
-            FFI_ArrowSchema::try_from(&dtype)?.with_metadata(&schema.metadata)?;
+        let c_schema = FFI_ArrowSchema::try_from(&dtype)?.with_metadata(&schema.metadata)?;
         Ok(c_schema)
     }
 }

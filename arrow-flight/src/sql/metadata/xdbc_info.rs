@@ -36,9 +36,7 @@ use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
 use crate::error::*;
-use crate::sql::{
-    CommandGetXdbcTypeInfo, Nullable, Searchable, XdbcDataType, XdbcDatetimeSubcode,
-};
+use crate::sql::{CommandGetXdbcTypeInfo, Nullable, Searchable, XdbcDataType, XdbcDatetimeSubcode};
 
 /// Data structure representing type information for xdbc types.
 #[derive(Debug, Clone, Default)]
@@ -201,8 +199,7 @@ impl XdbcTypeInfoDataBuilder {
             minimum_scale_builder.append_option(info.minimum_scale);
             maximum_scale_builder.append_option(info.maximum_scale);
             sql_data_type_builder.append_value(info.sql_data_type as i32);
-            datetime_subcode_builder
-                .append_option(info.datetime_subcode.map(|code| code as i32));
+            datetime_subcode_builder.append_option(info.datetime_subcode.map(|code| code as i32));
             num_prec_radix_builder.append_option(info.num_prec_radix);
             interval_precision_builder.append_option(info.interval_precision);
         });
@@ -215,8 +212,7 @@ impl XdbcTypeInfoDataBuilder {
         let (field, offsets, values, nulls) = create_params_builder.finish().into_parts();
         // Re-defined the field to be non-nullable
         let new_field = Arc::new(field.as_ref().clone().with_nullable(false));
-        let create_params =
-            Arc::new(ListArray::new(new_field, offsets, values, nulls)) as ArrayRef;
+        let create_params = Arc::new(ListArray::new(new_field, offsets, values, nulls)) as ArrayRef;
         let nullable = Arc::new(nullable_builder.finish());
         let case_sensitive = Arc::new(case_sensitive_builder.finish());
         let searchable = Arc::new(searchable_builder.finish());

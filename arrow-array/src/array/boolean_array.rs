@@ -238,11 +238,7 @@ impl BooleanArray {
     ///
     /// This function panics if left and right are not the same length
     ///
-    pub fn from_binary<T: ArrayAccessor, S: ArrayAccessor, F>(
-        left: T,
-        right: S,
-        mut op: F,
-    ) -> Self
+    pub fn from_binary<T: ArrayAccessor, S: ArrayAccessor, F>(left: T, right: S, mut op: F) -> Self
     where
         F: FnMut(T::Item, S::Item) -> bool,
     {
@@ -362,8 +358,7 @@ impl From<ArrayData> for BooleanArray {
             1,
             "BooleanArray data should contain a single buffer only (values buffer)"
         );
-        let values =
-            BooleanBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
+        let values = BooleanBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
 
         Self {
             values,
@@ -591,9 +586,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "BooleanArray expected ArrayData with type Boolean got Int32"
-    )]
+    #[should_panic(expected = "BooleanArray expected ArrayData with type Boolean got Int32")]
     fn test_from_array_data_validation() {
         let _ = BooleanArray::from(ArrayData::new_empty(&DataType::Int32));
     }

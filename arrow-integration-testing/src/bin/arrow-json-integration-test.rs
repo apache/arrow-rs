@@ -121,11 +121,8 @@ fn canonicalize_schema(schema: &Schema) -> Schema {
             DataType::Map(child_field, sorted) => match child_field.data_type() {
                 DataType::Struct(fields) if fields.len() == 2 => {
                     let first_field = fields.get(0).unwrap();
-                    let key_field = Arc::new(Field::new(
-                        "key",
-                        first_field.data_type().clone(),
-                        false,
-                    ));
+                    let key_field =
+                        Arc::new(Field::new("key", first_field.data_type().clone(), false));
                     let second_field = fields.get(1).unwrap();
                     let value_field = Arc::new(Field::new(
                         "value",
@@ -143,9 +140,7 @@ fn canonicalize_schema(schema: &Schema) -> Schema {
                         field.is_nullable(),
                     ))
                 }
-                _ => panic!(
-                    "The child field of Map type should be Struct type with 2 fields."
-                ),
+                _ => panic!("The child field of Map type should be Struct type with 2 fields."),
             },
             _ => field.clone(),
         })

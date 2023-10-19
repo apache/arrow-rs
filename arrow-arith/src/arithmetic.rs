@@ -48,8 +48,7 @@ fn get_fixed_point_info(
         )));
     }
 
-    let divisor =
-        i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
+    let divisor = i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
 
     Ok((precision, product_scale, divisor))
 }
@@ -78,8 +77,7 @@ pub fn multiply_fixed_point_dyn(
             let left = left.as_any().downcast_ref::<Decimal128Array>().unwrap();
             let right = right.as_any().downcast_ref::<Decimal128Array>().unwrap();
 
-            multiply_fixed_point(left, right, required_scale)
-                .map(|a| Arc::new(a) as ArrayRef)
+            multiply_fixed_point(left, right, required_scale).map(|a| Arc::new(a) as ArrayRef)
         }
         (_, _) => Err(ArrowError::CastError(format!(
             "Unsupported data type {}, {}",
@@ -113,10 +111,8 @@ pub fn multiply_fixed_point_checked(
     )?;
 
     if required_scale == product_scale {
-        return try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
-            a.mul_checked(b)
-        })?
-        .with_precision_and_scale(precision, required_scale);
+        return try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| a.mul_checked(b))?
+            .with_precision_and_scale(precision, required_scale);
     }
 
     try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
@@ -213,17 +209,16 @@ mod tests {
             .unwrap();
 
         let err = mul(&a, &b).unwrap_err();
-        assert!(err.to_string().contains(
-            "Overflow happened on: 123456789000000000000000000 * 10000000000000000000"
-        ));
+        assert!(err
+            .to_string()
+            .contains("Overflow happened on: 123456789000000000000000000 * 10000000000000000000"));
 
         // Allow precision loss.
         let result = multiply_fixed_point_checked(&a, &b, 28).unwrap();
         // [1234567890]
-        let expected =
-            Decimal128Array::from(vec![12345678900000000000000000000000000000])
-                .with_precision_and_scale(38, 28)
-                .unwrap();
+        let expected = Decimal128Array::from(vec![12345678900000000000000000000000000000])
+            .with_precision_and_scale(38, 28)
+            .unwrap();
 
         assert_eq!(&expected, &result);
         assert_eq!(
@@ -233,13 +228,9 @@ mod tests {
 
         // Rounding case
         // [0.000000000000000001, 123456789.555555555555555555, 1.555555555555555555]
-        let a = Decimal128Array::from(vec![
-            1,
-            123456789555555555555555555,
-            1555555555555555555,
-        ])
-        .with_precision_and_scale(38, 18)
-        .unwrap();
+        let a = Decimal128Array::from(vec![1, 123456789555555555555555555, 1555555555555555555])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
 
         // [1.555555555555555555, 11.222222222222222222, 0.000000000000000001]
         let b = Decimal128Array::from(vec![1555555555555555555, 11222222222222222222, 1])
@@ -311,10 +302,9 @@ mod tests {
         ));
 
         let result = multiply_fixed_point(&a, &b, 28).unwrap();
-        let expected =
-            Decimal128Array::from(vec![62946009661555981610246871926660136960])
-                .with_precision_and_scale(38, 28)
-                .unwrap();
+        let expected = Decimal128Array::from(vec![62946009661555981610246871926660136960])
+            .with_precision_and_scale(38, 28)
+            .unwrap();
 
         assert_eq!(&expected, &result);
     }
@@ -338,10 +328,9 @@ mod tests {
         // Avoid overflow by reducing the scale.
         let result = multiply_fixed_point(&a, &b, 28).unwrap();
         // [1234567890]
-        let expected =
-            Decimal128Array::from(vec![12345678900000000000000000000000000000])
-                .with_precision_and_scale(38, 28)
-                .unwrap();
+        let expected = Decimal128Array::from(vec![12345678900000000000000000000000000000])
+            .with_precision_and_scale(38, 28)
+            .unwrap();
 
         assert_eq!(&expected, &result);
         assert_eq!(

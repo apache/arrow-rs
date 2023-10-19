@@ -24,9 +24,7 @@ use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
 use crate::path::DELIMITER;
 use crate::util::deserialize_rfc1123;
-use crate::{
-    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, Result, RetryConfig,
-};
+use crate::{ClientOptions, GetOptions, ListResult, ObjectMeta, Path, Result, RetryConfig};
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -215,12 +213,7 @@ impl AzureClient {
     }
 
     /// Make an Azure Copy request <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob>
-    pub async fn copy_request(
-        &self,
-        from: &Path,
-        to: &Path,
-        overwrite: bool,
-    ) -> Result<()> {
+    pub async fn copy_request(&self, from: &Path, to: &Path, overwrite: bool) -> Result<()> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(to);
         let mut source = self.config.path_url(from);
@@ -288,16 +281,14 @@ impl GetClient for AzureClient {
             })?;
 
         match response.headers().get("x-ms-resource-type") {
-            Some(resource) if resource.as_ref() != b"file" => {
-                Err(crate::Error::NotFound {
-                    path: path.to_string(),
-                    source: format!(
-                        "Not a file, got x-ms-resource-type: {}",
-                        String::from_utf8_lossy(resource.as_ref())
-                    )
-                    .into(),
-                })
-            }
+            Some(resource) if resource.as_ref() != b"file" => Err(crate::Error::NotFound {
+                path: path.to_string(),
+                source: format!(
+                    "Not a file, got x-ms-resource-type: {}",
+                    String::from_utf8_lossy(resource.as_ref())
+                )
+                .into(),
+            }),
             _ => Ok(response),
         }
     }
@@ -347,8 +338,7 @@ impl ListClient for AzureClient {
             .context(ListResponseBodySnafu)?;
 
         let mut response: ListResultInternal =
-            quick_xml::de::from_reader(response.reader())
-                .context(InvalidListResponseSnafu)?;
+            quick_xml::de::from_reader(response.reader()).context(InvalidListResponseSnafu)?;
         let token = response.next_marker.take();
 
         Ok((to_list_result(response, prefix)?, token))

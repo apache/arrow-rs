@@ -35,8 +35,7 @@ use crate::client::CredentialProvider;
 use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
     path::Path,
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult,
-    Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult, Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -137,11 +136,7 @@ impl ObjectStore for GoogleCloudStorage {
         Ok((upload_id, Box::new(WriteMultiPart::new(inner, 8))))
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
         self.client
             .multipart_cleanup(location, multipart_id)
             .await?;

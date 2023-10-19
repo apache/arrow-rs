@@ -175,10 +175,7 @@ impl ProjectionMask {
     /// Note: repeated or out of order indices will not impact the final mask
     ///
     /// i.e. `[0, 1, 2]` will construct the same mask as `[1, 0, 0, 2]`
-    pub fn leaves(
-        schema: &SchemaDescriptor,
-        indices: impl IntoIterator<Item = usize>,
-    ) -> Self {
+    pub fn leaves(schema: &SchemaDescriptor, indices: impl IntoIterator<Item = usize>) -> Self {
         let mut mask = vec![false; schema.num_columns()];
         for leaf_idx in indices {
             mask[leaf_idx] = true;
@@ -191,10 +188,7 @@ impl ProjectionMask {
     /// Note: repeated or out of order indices will not impact the final mask
     ///
     /// i.e. `[0, 1, 2]` will construct the same mask as `[1, 0, 0, 2]`
-    pub fn roots(
-        schema: &SchemaDescriptor,
-        indices: impl IntoIterator<Item = usize>,
-    ) -> Self {
+    pub fn roots(schema: &SchemaDescriptor, indices: impl IntoIterator<Item = usize>) -> Self {
         let num_root_columns = schema.root_schema().get_fields().len();
         let mut root_mask = vec![false; num_root_columns];
         for root_idx in indices {

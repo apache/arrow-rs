@@ -44,8 +44,7 @@ pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 /// Default value for [`WriterProperties::max_row_group_size`]
 pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
 /// Default value for [`WriterProperties::created_by`]
-pub const DEFAULT_CREATED_BY: &str =
-    concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
+pub const DEFAULT_CREATED_BY: &str = concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
 /// Default value for [`WriterProperties::column_index_truncate_length`]
 pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`BloomFilterProperties::fpp`]
@@ -312,10 +311,7 @@ impl WriterProperties {
     /// Returns the [`BloomFilterProperties`] for the given column
     ///
     /// Returns `None` if bloom filter is disabled
-    pub fn bloom_filter_properties(
-        &self,
-        col: &ColumnPath,
-    ) -> Option<&BloomFilterProperties> {
+    pub fn bloom_filter_properties(&self, col: &ColumnPath) -> Option<&BloomFilterProperties> {
         self.column_properties
             .get(col)
             .and_then(|c| c.bloom_filter_properties())
@@ -608,11 +604,7 @@ impl WriterPropertiesBuilder {
 
     /// Sets max size for statistics for a column.
     /// Takes precedence over globally defined settings.
-    pub fn set_column_max_statistics_size(
-        mut self,
-        col: ColumnPath,
-        value: usize,
-    ) -> Self {
+    pub fn set_column_max_statistics_size(mut self, col: ColumnPath, value: usize) -> Self {
         self.get_mut_props(col).set_max_statistics_size(value);
         self
     }
@@ -620,11 +612,7 @@ impl WriterPropertiesBuilder {
     /// Sets whether a bloom filter should be created for a specific column.
     /// The behavior is similar to [`set_bloom_filter_enabled`](Self::set_bloom_filter_enabled).
     /// Takes precedence over globally defined settings.
-    pub fn set_column_bloom_filter_enabled(
-        mut self,
-        col: ColumnPath,
-        value: bool,
-    ) -> Self {
+    pub fn set_column_bloom_filter_enabled(mut self, col: ColumnPath, value: bool) -> Self {
         self.get_mut_props(col).set_bloom_filter_enabled(value);
         self
     }
@@ -912,9 +900,7 @@ impl ReaderPropertiesBuilder {
     pub fn build(self) -> ReaderProperties {
         ReaderProperties {
             codec_options: self.codec_options_builder.build(),
-            read_bloom_filter: self
-                .read_bloom_filter
-                .unwrap_or(DEFAULT_READ_BLOOM_FILTER),
+            read_bloom_filter: self.read_bloom_filter.unwrap_or(DEFAULT_READ_BLOOM_FILTER),
         }
     }
 
@@ -1066,10 +1052,7 @@ mod tests {
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .set_column_compression(ColumnPath::from("col"), Compression::SNAPPY)
             .set_column_dictionary_enabled(ColumnPath::from("col"), true)
-            .set_column_statistics_enabled(
-                ColumnPath::from("col"),
-                EnabledStatistics::Chunk,
-            )
+            .set_column_statistics_enabled(ColumnPath::from("col"), EnabledStatistics::Chunk)
             .set_column_max_statistics_size(ColumnPath::from("col"), 123)
             .set_column_bloom_filter_enabled(ColumnPath::from("col"), true)
             .set_column_bloom_filter_ndv(ColumnPath::from("col"), 100_u64)

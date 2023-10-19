@@ -96,9 +96,8 @@ impl DeltaByteArrayDecoder {
             }
 
             self.last_value.truncate(prefix_length);
-            self.last_value.extend_from_slice(
-                &data[self.data_offset..self.data_offset + suffix_length],
-            );
+            self.last_value
+                .extend_from_slice(&data[self.data_offset..self.data_offset + suffix_length]);
             f(&self.last_value)?;
 
             self.data_offset += suffix_length;
@@ -128,9 +127,8 @@ impl DeltaByteArrayDecoder {
             }
 
             self.last_value.truncate(prefix_length);
-            self.last_value.extend_from_slice(
-                &data[self.data_offset..self.data_offset + suffix_length],
-            );
+            self.last_value
+                .extend_from_slice(&data[self.data_offset..self.data_offset + suffix_length]);
             self.data_offset += suffix_length;
         }
         self.length_offset += to_skip;

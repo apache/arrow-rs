@@ -18,8 +18,8 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, Path, PutResult, Result, StreamExt,
+    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Path, PutResult, Result, StreamExt,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -86,19 +86,12 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         Ok((id, Box::new(PermitWrapper::new(write, permit))))
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.abort_multipart(location, multipart_id).await
     }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
         let write = self.inner.append(location).await?;
         Ok(Box::new(PermitWrapper::new(write, permit)))
@@ -121,11 +114,7 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.get_range(location, range).await
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.get_ranges(location, ranges).await
     }
@@ -226,10 +215,7 @@ impl<T> PermitWrapper<T> {
 impl<T: Stream + Unpin> Stream for PermitWrapper<T> {
     type Item = T::Item;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.inner).poll_next(cx)
     }
 

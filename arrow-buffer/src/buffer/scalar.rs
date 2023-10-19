@@ -221,9 +221,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Memory pointer is not aligned with the specified scalar type"
-    )]
+    #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
     fn test_unaligned() {
         let expected = [0_i32, 1, 2];
         let buffer = Buffer::from_iter(expected.iter().cloned());
@@ -232,18 +230,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn test_length_out_of_bounds() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 1, 3);
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn test_offset_out_of_bounds() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 4, 0);

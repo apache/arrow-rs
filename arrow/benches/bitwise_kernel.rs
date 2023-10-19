@@ -19,8 +19,8 @@
 extern crate criterion;
 
 use arrow::compute::kernels::bitwise::{
-    bitwise_and, bitwise_and_scalar, bitwise_not, bitwise_or, bitwise_or_scalar,
-    bitwise_xor, bitwise_xor_scalar,
+    bitwise_and, bitwise_and_scalar, bitwise_not, bitwise_or, bitwise_or_scalar, bitwise_xor,
+    bitwise_xor_scalar,
 };
 use arrow::datatypes::Int64Type;
 use criterion::{black_box, Criterion};
@@ -40,9 +40,7 @@ fn bitwise_array_benchmark(c: &mut Criterion) {
     // array and
     let mut group = c.benchmark_group("bench bitwise array: and");
     group.bench_function("bitwise array and, no nulls", |b| {
-        b.iter(|| {
-            black_box(bitwise_and(&left_without_null, &right_without_null).unwrap())
-        })
+        b.iter(|| black_box(bitwise_and(&left_without_null, &right_without_null).unwrap()))
     });
     group.bench_function("bitwise array and, 20% nulls", |b| {
         b.iter(|| black_box(bitwise_and(&left_with_null, &right_with_null).unwrap()))
@@ -60,9 +58,7 @@ fn bitwise_array_benchmark(c: &mut Criterion) {
     // xor
     let mut group = c.benchmark_group("bench bitwise: xor");
     group.bench_function("bitwise array xor, no nulls", |b| {
-        b.iter(|| {
-            black_box(bitwise_xor(&left_without_null, &right_without_null).unwrap())
-        })
+        b.iter(|| black_box(bitwise_xor(&left_without_null, &right_without_null).unwrap()))
     });
     group.bench_function("bitwise array xor, 20% nulls", |b| {
         b.iter(|| black_box(bitwise_xor(&left_with_null, &right_with_null).unwrap()))

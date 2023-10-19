@@ -369,8 +369,7 @@ impl TapeDecoder {
                         b'}' => {
                             let start_idx = *start_idx;
                             let end_idx = self.elements.len() as u32;
-                            self.elements[start_idx as usize] =
-                                TapeElement::StartObject(end_idx);
+                            self.elements[start_idx as usize] = TapeElement::StartObject(end_idx);
                             self.elements.push(TapeElement::EndObject(start_idx));
                             self.stack.pop();
                         }
@@ -385,8 +384,7 @@ impl TapeDecoder {
                             iter.next();
                             let start_idx = *start_idx;
                             let end_idx = self.elements.len() as u32;
-                            self.elements[start_idx as usize] =
-                                TapeElement::StartList(end_idx);
+                            self.elements[start_idx as usize] = TapeElement::StartList(end_idx);
                             self.elements.push(TapeElement::EndList(start_idx));
                             self.stack.pop();
                         }
@@ -561,7 +559,10 @@ impl TapeDecoder {
         }
 
         if self.offsets.len() >= u32::MAX as usize {
-            return Err(ArrowError::JsonError(format!("Encountered more than {} JSON elements, consider using a smaller batch size", u32::MAX)));
+            return Err(ArrowError::JsonError(format!(
+                "Encountered more than {} JSON elements, consider using a smaller batch size",
+                u32::MAX
+            )));
         }
 
         // Sanity check
@@ -570,9 +571,8 @@ impl TapeDecoder {
             self.bytes.len()
         );
 
-        let strings = std::str::from_utf8(&self.bytes).map_err(|_| {
-            ArrowError::JsonError("Encountered non-UTF-8 data".to_string())
-        })?;
+        let strings = std::str::from_utf8(&self.bytes)
+            .map_err(|_| ArrowError::JsonError("Encountered non-UTF-8 data".to_string()))?;
 
         for offset in self.offsets.iter().copied() {
             if !strings.is_char_boundary(offset) {
@@ -673,9 +673,8 @@ fn err(b: u8, ctx: &str) -> ArrowError {
 /// Creates a character from an UTF-16 surrogate pair
 fn char_from_surrogate_pair(low: u16, high: u16) -> Result<char, ArrowError> {
     let n = (((high - 0xD800) as u32) << 10 | (low - 0xDC00) as u32) + 0x1_0000;
-    char::from_u32(n).ok_or_else(|| {
-        ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}"))
-    })
+    char::from_u32(n)
+        .ok_or_else(|| ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}")))
 }
 
 /// Writes `c` as UTF-8 to `out`
@@ -818,9 +817,8 @@ mod tests {
         assert_eq!(
             &finished.string_offsets,
             &[
-                0, 5, 10, 13, 14, 17, 19, 22, 25, 28, 29, 30, 31, 32, 32, 32, 33, 34, 35,
-                41, 47, 52, 55, 57, 58, 59, 62, 63, 63, 66, 69, 70, 71, 72, 73, 74, 75,
-                76, 77
+                0, 5, 10, 13, 14, 17, 19, 22, 25, 28, 29, 30, 31, 32, 32, 32, 33, 34, 35, 41, 47,
+                52, 55, 57, 58, 59, 62, 63, 63, 66, 69, 70, 71, 72, 73, 74, 75, 76, 77
             ]
         )
     }

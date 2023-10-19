@@ -219,8 +219,7 @@ mod tests {
         assert_eq!(buffer.as_ref(), &[0, 2, 8, 11, 18, 20]);
 
         let half_max = i32::MAX / 2;
-        let buffer =
-            OffsetBuffer::<i32>::from_lengths([half_max as usize, half_max as usize]);
+        let buffer = OffsetBuffer::<i32>::from_lengths([half_max as usize, half_max as usize]);
         assert_eq!(buffer.as_ref(), &[0, half_max, half_max * 2]);
     }
 

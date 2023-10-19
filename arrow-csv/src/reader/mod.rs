@@ -292,8 +292,7 @@ impl Format {
 
         let header_length = headers.len();
         // keep track of inferred field types
-        let mut column_types: Vec<InferredDataType> =
-            vec![Default::default(); header_length];
+        let mut column_types: Vec<InferredDataType> = vec![Default::default(); header_length];
 
         let mut records_count = 0;
 
@@ -307,9 +306,7 @@ impl Format {
 
             // Note since we may be looking at a sample of the data, we make the safe assumption that
             // they could be nullable
-            for (i, column_type) in
-                column_types.iter_mut().enumerate().take(header_length)
-            {
+            for (i, column_type) in column_types.iter_mut().enumerate().take(header_length) {
                 if let Some(string) = record.get(i) {
                     if !self.null_regex.is_null(string) {
                         column_type.update(string)
@@ -606,8 +603,7 @@ impl Decoder {
             return Ok(bytes);
         }
 
-        let to_read =
-            self.batch_size.min(self.end - self.line_number) - self.record_decoder.len();
+        let to_read = self.batch_size.min(self.end - self.line_number) - self.record_decoder.len();
         let (_, bytes) = self.record_decoder.decode(buf, to_read)?;
         Ok(bytes)
     }
@@ -662,29 +658,23 @@ fn parse(
             let i = *i;
             let field = &fields[i];
             match field.data_type() {
-                DataType::Boolean => {
-                    build_boolean_array(line_number, rows, i, null_regex)
-                }
-                DataType::Decimal128(precision, scale) => {
-                    build_decimal_array::<Decimal128Type>(
-                        line_number,
-                        rows,
-                        i,
-                        *precision,
-                        *scale,
-                        null_regex,
-                    )
-                }
-                DataType::Decimal256(precision, scale) => {
-                    build_decimal_array::<Decimal256Type>(
-                        line_number,
-                        rows,
-                        i,
-                        *precision,
-                        *scale,
-                        null_regex,
-                    )
-                }
+                DataType::Boolean => build_boolean_array(line_number, rows, i, null_regex),
+                DataType::Decimal128(precision, scale) => build_decimal_array::<Decimal128Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
+                DataType::Decimal256(precision, scale) => build_decimal_array::<Decimal256Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
                 DataType::Int8 => {
                     build_primitive_array::<Int8Type>(line_number, rows, i, null_regex)
                 }
@@ -721,34 +711,17 @@ fn parse(
                 DataType::Date64 => {
                     build_primitive_array::<Date64Type>(line_number, rows, i, null_regex)
                 }
-                DataType::Time32(TimeUnit::Second) => build_primitive_array::<
-                    Time32SecondType,
-                >(
-                    line_number, rows, i, null_regex
-                ),
+                DataType::Time32(TimeUnit::Second) => {
+                    build_primitive_array::<Time32SecondType>(line_number, rows, i, null_regex)
+                }
                 DataType::Time32(TimeUnit::Millisecond) => {
-                    build_primitive_array::<Time32MillisecondType>(
-                        line_number,
-                        rows,
-                        i,
-                        null_regex,
-                    )
+                    build_primitive_array::<Time32MillisecondType>(line_number, rows, i, null_regex)
                 }
                 DataType::Time64(TimeUnit::Microsecond) => {
-                    build_primitive_array::<Time64MicrosecondType>(
-                        line_number,
-                        rows,
-                        i,
-                        null_regex,
-                    )
+                    build_primitive_array::<Time64MicrosecondType>(line_number, rows, i, null_regex)
                 }
                 DataType::Time64(TimeUnit::Nanosecond) => {
-                    build_primitive_array::<Time64NanosecondType>(
-                        line_number,
-                        rows,
-                        i,
-                        null_regex,
-                    )
+                    build_primitive_array::<Time64NanosecondType>(line_number, rows, i, null_regex)
                 }
                 DataType::Timestamp(TimeUnit::Second, tz) => {
                     build_timestamp_array::<TimestampSecondType>(
@@ -786,9 +759,7 @@ fn parse(
                         null_regex,
                     )
                 }
-                DataType::Null => {
-                    Ok(Arc::new(NullArray::builder(rows.len()).finish()) as ArrayRef)
-                }
+                DataType::Null => Ok(Arc::new(NullArray::builder(rows.len()).finish()) as ArrayRef),
                 DataType::Utf8 => Ok(Arc::new(
                     rows.iter()
                         .map(|row| {
@@ -853,8 +824,7 @@ fn parse(
         })
         .collect();
 
-    let projected_fields: Fields =
-        projection.iter().map(|i| fields[*i].clone()).collect();
+    let projected_fields: Fields = projection.iter().map(|i| fields[*i].clone()).collect();
 
     let projected_schema = Arc::new(match metadata {
         None => Schema::new(projected_fields),
@@ -898,8 +868,7 @@ fn build_decimal_array<T: DecimalType>(
             // append null
             decimal_builder.append_null();
         } else {
-            let decimal_value: Result<T::Native, _> =
-                parse_decimal::<T>(s, precision, scale);
+            let decimal_value: Result<T::Native, _> = parse_decimal::<T>(s, precision, scale);
             match decimal_value {
                 Ok(v) => {
                     decimal_builder.append_value(v);
@@ -957,22 +926,10 @@ fn build_timestamp_array<T: ArrowTimestampType>(
     Ok(Arc::new(match timezone {
         Some(timezone) => {
             let tz: Tz = timezone.parse()?;
-            build_timestamp_array_impl::<T, _>(
-                line_number,
-                rows,
-                col_idx,
-                &tz,
-                null_regex,
-            )?
-            .with_timezone(timezone)
+            build_timestamp_array_impl::<T, _>(line_number, rows, col_idx, &tz, null_regex)?
+                .with_timezone(timezone)
         }
-        None => build_timestamp_array_impl::<T, _>(
-            line_number,
-            rows,
-            col_idx,
-            &Utc,
-            null_regex,
-        )?,
+        None => build_timestamp_array_impl::<T, _>(line_number, rows, col_idx, &Utc, null_regex)?,
     }))
 }
 
@@ -1169,10 +1126,7 @@ impl ReaderBuilder {
     }
 
     /// Create a new `BufReader` from a buffered reader
-    pub fn build_buffered<R: BufRead>(
-        self,
-        reader: R,
-    ) -> Result<BufReader<R>, ArrowError> {
+    pub fn build_buffered<R: BufRead>(self, reader: R) -> Result<BufReader<R>, ArrowError> {
         Ok(BufReader {
             reader,
             decoder: self.build_decoder(),
@@ -1318,8 +1272,7 @@ mod tests {
             Field::new("lng", DataType::Float64, false),
         ]);
 
-        let file_with_headers =
-            File::open("test/data/uk_cities_with_headers.csv").unwrap();
+        let file_with_headers = File::open("test/data/uk_cities_with_headers.csv").unwrap();
         let file_without_headers = File::open("test/data/uk_cities.csv").unwrap();
         let both_files = file_with_headers
             .chain(Cursor::new("\n".to_string()))
@@ -1642,8 +1595,7 @@ mod tests {
             schema.field(5).data_type()
         );
 
-        let names: Vec<&str> =
-            schema.fields().iter().map(|x| x.name().as_str()).collect();
+        let names: Vec<&str> = schema.fields().iter().map(|x| x.name().as_str()).collect();
         assert_eq!(
             names,
             vec![
@@ -1819,16 +1771,11 @@ mod tests {
             -2203932304000
         );
         assert_eq!(
-            Date64Type::parse_formatted("1900-02-28 12:34:56", "%Y-%m-%d %H:%M:%S")
-                .unwrap(),
+            Date64Type::parse_formatted("1900-02-28 12:34:56", "%Y-%m-%d %H:%M:%S").unwrap(),
             -2203932304000
         );
         assert_eq!(
-            Date64Type::parse_formatted(
-                "1900-02-28 12:34:56+0030",
-                "%Y-%m-%d %H:%M:%S%z"
-            )
-            .unwrap(),
+            Date64Type::parse_formatted("1900-02-28 12:34:56+0030", "%Y-%m-%d %H:%M:%S%z").unwrap(),
             -2203932304000 - (30 * 60 * 1000)
         );
     }
@@ -1865,10 +1812,7 @@ mod tests {
 
     #[test]
     fn test_parse_timestamp() {
-        test_parse_timestamp_impl::<TimestampNanosecondType>(
-            None,
-            &[0, 0, -7_200_000_000_000],
-        );
+        test_parse_timestamp_impl::<TimestampNanosecondType>(None, &[0, 0, -7_200_000_000_000]);
         test_parse_timestamp_impl::<TimestampNanosecondType>(
             Some("+00:00".into()),
             &[0, 0, -7_200_000_000_000],
@@ -1885,10 +1829,7 @@ mod tests {
             Some("-03".into()),
             &[10_800_000, 0, -7_200_000],
         );
-        test_parse_timestamp_impl::<TimestampSecondType>(
-            Some("-03".into()),
-            &[10_800, 0, -7_200],
-        );
+        test_parse_timestamp_impl::<TimestampSecondType>(Some("-03".into()), &[10_800, 0, -7_200]);
     }
 
     #[test]
@@ -2227,10 +2168,8 @@ mod tests {
                         expected_rows
                     );
 
-                    let buffered = std::io::BufReader::with_capacity(
-                        capacity,
-                        File::open(path).unwrap(),
-                    );
+                    let buffered =
+                        std::io::BufReader::with_capacity(capacity, File::open(path).unwrap());
 
                     let reader = ReaderBuilder::new(schema.clone())
                         .with_batch_size(batch_size)

@@ -220,8 +220,7 @@ mod tests {
         let schema = SchemaType::group_type_builder("schema").build().unwrap();
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
 
-        let t_column_orders =
-            Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
+        let t_column_orders = Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
 
         parse_column_orders(t_column_orders, &schema_descr);
     }

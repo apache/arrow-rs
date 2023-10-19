@@ -17,9 +17,7 @@
 
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
-use crate::aws::{
-    AwsCredentialProvider, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET,
-};
+use crate::aws::{AwsCredentialProvider, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET};
 use crate::client::get::GetClient;
 use crate::client::header::get_etag;
 use crate::client::list::ListClient;
@@ -28,9 +26,7 @@ use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
-use crate::{
-    ClientOptions, GetOptions, ListResult, MultipartId, Path, Result, RetryConfig,
-};
+use crate::{ClientOptions, GetOptions, ListResult, MultipartId, Path, Result, RetryConfig};
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -264,8 +260,7 @@ impl S3Client {
 
         if let Some(checksum) = self.config().checksum {
             let digest = checksum.digest(&bytes);
-            builder =
-                builder.header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
+            builder = builder.header(checksum.header_name(), BASE64_STANDARD.encode(&digest));
             if checksum == Checksum::SHA256 {
                 payload_sha256 = Some(digest);
             }
@@ -333,10 +328,7 @@ impl S3Client {
     /// there was an error for a certain path, the error will be returned in the
     /// vector. If there was an issue with making the overall request, an error
     /// will be returned at the top level.
-    pub async fn bulk_delete_request(
-        &self,
-        paths: Vec<Path>,
-    ) -> Result<Vec<Result<Path>>> {
+    pub async fn bulk_delete_request(&self, paths: Vec<Path>) -> Result<Vec<Result<Path>>> {
         if paths.is_empty() {
             return Ok(Vec::new());
         }
@@ -348,10 +340,8 @@ impl S3Client {
         let mut writer = quick_xml::Writer::new(&mut buffer);
         writer
             .write_event(xml_events::Event::Start(
-                xml_events::BytesStart::new("Delete").with_attributes([(
-                    "xmlns",
-                    "http://s3.amazonaws.com/doc/2006-03-01/",
-                )]),
+                xml_events::BytesStart::new("Delete")
+                    .with_attributes([("xmlns", "http://s3.amazonaws.com/doc/2006-03-01/")]),
             ))
             .unwrap();
         for path in &paths {
@@ -415,9 +405,11 @@ impl S3Client {
             .await
             .context(DeleteObjectsResponseSnafu {})?;
 
-        let response: BatchDeleteResponse = quick_xml::de::from_reader(response.reader())
-            .map_err(|err| Error::InvalidDeleteObjectsResponse {
-                source: Box::new(err),
+        let response: BatchDeleteResponse =
+            quick_xml::de::from_reader(response.reader()).map_err(|err| {
+                Error::InvalidDeleteObjectsResponse {
+                    source: Box::new(err),
+                }
             })?;
 
         // Assume all were ok, then fill in errors. This guarantees output order
@@ -425,11 +417,10 @@ impl S3Client {
         let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
         for content in response.content.into_iter() {
             if let DeleteObjectResult::Error(error) = content {
-                let path = Path::parse(&error.key).map_err(|err| {
-                    Error::InvalidDeleteObjectsResponse {
+                let path =
+                    Path::parse(&error.key).map_err(|err| Error::InvalidDeleteObjectsResponse {
                         source: Box::new(err),
-                    }
-                })?;
+                    })?;
                 let i = paths.iter().find_position(|&p| p == &path).unwrap().0;
                 results[i] = Err(Error::from(error).into());
             }
@@ -439,12 +430,7 @@ impl S3Client {
     }
 
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>
-    pub async fn copy_request(
-        &self,
-        from: &Path,
-        to: &Path,
-        overwrite: bool,
-    ) -> Result<()> {
+    pub async fn copy_request(&self, from: &Path, to: &Path, overwrite: bool) -> Result<()> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(to);
         let source = format!("{}/{}", self.config.bucket, encode_path(from));
@@ -461,9 +447,7 @@ impl S3Client {
                 }
                 None => {
                     return Err(crate::Error::NotSupported {
-                        source: "S3 does not support copy-if-not-exists"
-                            .to_string()
-                            .into(),
+                        source: "S3 does not support copy-if-not-exists".to_string().into(),
                     })
                 }
             }
@@ -515,8 +499,8 @@ impl S3Client {
             .await
             .context(CreateMultipartResponseBodySnafu)?;
 
-        let response: InitiateMultipart = quick_xml::de::from_reader(response.reader())
-            .context(InvalidMultipartResponseSnafu)?;
+        let response: InitiateMultipart =
+            quick_xml::de::from_reader(response.reader()).context(InvalidMultipartResponseSnafu)?;
 
         Ok(response.upload_id)
     }
@@ -646,8 +630,8 @@ impl ListClient for S3Client {
             .await
             .context(ListResponseBodySnafu)?;
 
-        let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
-            .context(InvalidListResponseSnafu)?;
+        let mut response: ListResponse =
+            quick_xml::de::from_reader(response.reader()).context(InvalidListResponseSnafu)?;
         let token = response.next_continuation_token.take();
 
         Ok((response.try_into()?, token))

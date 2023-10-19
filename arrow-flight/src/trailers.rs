@@ -28,9 +28,7 @@ use tonic::{metadata::MetadataMap, Status, Streaming};
 ///
 /// Note that [`LazyTrailers`] has inner mutability and will only hold actual data after [`ExtractTrailersStream`] is
 /// fully consumed (dropping it is not required though).
-pub fn extract_lazy_trailers<T>(
-    s: Streaming<T>,
-) -> (ExtractTrailersStream<T>, LazyTrailers) {
+pub fn extract_lazy_trailers<T>(s: Streaming<T>) -> (ExtractTrailersStream<T>, LazyTrailers) {
     let trailers: SharedTrailers = Default::default();
     let stream = ExtractTrailersStream {
         inner: s,
@@ -54,10 +52,7 @@ pub struct ExtractTrailersStream<T> {
 impl<T> Stream for ExtractTrailersStream<T> {
     type Item = Result<T, Status>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let res = ready!(self.inner.poll_next_unpin(cx));
 
         if res.is_none() {

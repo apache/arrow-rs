@@ -173,11 +173,7 @@ impl Field {
     /// - `name`: the name of the [`DataType::Struct`] field
     /// - `fields`: the description of each struct element
     /// - `nullable`: if the [`DataType::Struct`] array is nullable
-    pub fn new_struct(
-        name: impl Into<String>,
-        fields: impl Into<Fields>,
-        nullable: bool,
-    ) -> Self {
+    pub fn new_struct(name: impl Into<String>, fields: impl Into<Fields>, nullable: bool) -> Self {
         Self::new(name, DataType::Struct(fields.into()), nullable)
     }
 
@@ -186,11 +182,7 @@ impl Field {
     /// - `name`: the name of the [`DataType::List`] field
     /// - `value`: the description of each list element
     /// - `nullable`: if the [`DataType::List`] array is nullable
-    pub fn new_list(
-        name: impl Into<String>,
-        value: impl Into<FieldRef>,
-        nullable: bool,
-    ) -> Self {
+    pub fn new_list(name: impl Into<String>, value: impl Into<FieldRef>, nullable: bool) -> Self {
         Self::new(name, DataType::List(value.into()), nullable)
     }
 
@@ -344,9 +336,7 @@ impl Field {
     fn _fields(dt: &DataType) -> Vec<&Field> {
         match dt {
             DataType::Struct(fields) => fields.iter().flat_map(|f| f.fields()).collect(),
-            DataType::Union(fields, _) => {
-                fields.iter().flat_map(|(_, f)| f.fields()).collect()
-            }
+            DataType::Union(fields, _) => fields.iter().flat_map(|(_, f)| f.fields()).collect(),
             DataType::List(field)
             | DataType::LargeList(field)
             | DataType::FixedSizeList(field, _)
@@ -363,8 +353,7 @@ impl Field {
         self.fields()
             .into_iter()
             .filter(|&field| {
-                matches!(field.data_type(), DataType::Dictionary(_, _))
-                    && field.dict_id == id
+                matches!(field.data_type(), DataType::Dictionary(_, _)) && field.dict_id == id
             })
             .collect()
     }
@@ -857,8 +846,7 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_field_with_empty_metadata_serde() {
-        let field =
-            Field::new("name", DataType::Boolean, false).with_metadata(HashMap::new());
+        let field = Field::new("name", DataType::Boolean, false).with_metadata(HashMap::new());
 
         assert_binary_serde_round_trip(field)
     }

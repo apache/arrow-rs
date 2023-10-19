@@ -50,9 +50,7 @@ fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
 }
 
 /// Return an iterator of [`Block`] from the provided [`BufRead`]
-fn read_blocks<R: BufRead>(
-    mut reader: R,
-) -> impl Iterator<Item = Result<Block, ArrowError>> {
+fn read_blocks<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<Block, ArrowError>> {
     let mut decoder = BlockDecoder::default();
 
     let mut try_next = move || {

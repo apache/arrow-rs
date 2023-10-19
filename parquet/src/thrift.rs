@@ -18,8 +18,8 @@
 //! Custom thrift definitions
 
 use thrift::protocol::{
-    TFieldIdentifier, TInputProtocol, TListIdentifier, TMapIdentifier,
-    TMessageIdentifier, TOutputProtocol, TSetIdentifier, TStructIdentifier, TType,
+    TFieldIdentifier, TInputProtocol, TListIdentifier, TMapIdentifier, TMessageIdentifier,
+    TOutputProtocol, TSetIdentifier, TStructIdentifier, TType,
 };
 
 /// Reads and writes the struct to Thrift protocols.
@@ -27,10 +27,7 @@ use thrift::protocol::{
 /// Unlike [`thrift::protocol::TSerializable`] this uses generics instead of trait objects
 pub trait TSerializable: Sized {
     fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<Self>;
-    fn write_to_out_protocol<T: TOutputProtocol>(
-        &self,
-        o_prot: &mut T,
-    ) -> thrift::Result<()>;
+    fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()>;
 }
 
 /// A more performant implementation of [`TCompactInputProtocol`] that reads a slice
