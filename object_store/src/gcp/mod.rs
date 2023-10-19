@@ -33,100 +33,43 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use futures::stream::BoxStream;
-use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
-use reqwest::{header, Client, Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
-use crate::client::get::{GetClient, GetClientExt};
-use crate::client::list::{ListClient, ListClientExt};
-use crate::client::list_response::ListResponse;
-use crate::client::retry::RetryExt;
+use client::GoogleCloudStorageClient;
+use credential::{InstanceCredentialProvider, ServiceAccountCredentials};
+
 use crate::client::{
-    ClientConfigKey, CredentialProvider, GetOptionsExt, StaticCredentialProvider,
+    ClientConfigKey, CredentialProvider, StaticCredentialProvider,
     TokenCredentialProvider,
 };
+use crate::gcp::client::GoogleCloudStorageConfig;
+use crate::gcp::credential::{ApplicationDefaultCredentials, DEFAULT_GCS_BASE_URL};
 use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
-    path::{Path, DELIMITER},
+    path::Path,
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, PutResult, Result, RetryConfig,
 };
 
-use credential::{InstanceCredentialProvider, ServiceAccountCredentials};
+use crate::client::get::GetClientExt;
+use crate::client::list::ListClientExt;
+pub use credential::GcpCredential;
 
+mod client;
 mod credential;
 
 const STORE: &str = "GCS";
 
 /// [`CredentialProvider`] for [`GoogleCloudStorage`]
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
-use crate::client::header::get_etag;
-use crate::gcp::credential::{ApplicationDefaultCredentials, DEFAULT_GCS_BASE_URL};
-pub use credential::GcpCredential;
 
 #[derive(Debug, Snafu)]
 enum Error {
-    #[snafu(display("Got invalid XML response for {} {}: {}", method, url, source))]
-    InvalidXMLResponse {
-        source: quick_xml::de::DeError,
-        method: String,
-        url: String,
-        data: Bytes,
-    },
-
-    #[snafu(display("Error performing list request: {}", source))]
-    ListRequest { source: crate::client::retry::Error },
-
-    #[snafu(display("Error getting list response body: {}", source))]
-    ListResponseBody { source: reqwest::Error },
-
-    #[snafu(display("Got invalid list response: {}", source))]
-    InvalidListResponse { source: quick_xml::de::DeError },
-
-    #[snafu(display("Error performing get request {}: {}", path, source))]
-    GetRequest {
-        source: crate::client::retry::Error,
-        path: String,
-    },
-
-    #[snafu(display("Error getting get response body {}: {}", path, source))]
-    GetResponseBody {
-        source: reqwest::Error,
-        path: String,
-    },
-
-    #[snafu(display("Error performing delete request {}: {}", path, source))]
-    DeleteRequest {
-        source: crate::client::retry::Error,
-        path: String,
-    },
-
-    #[snafu(display("Error performing put request {}: {}", path, source))]
-    PutRequest {
-        source: crate::client::retry::Error,
-        path: String,
-    },
-
-    #[snafu(display("Error getting put response body: {}", source))]
-    PutResponseBody { source: reqwest::Error },
-
-    #[snafu(display("Got invalid put response: {}", source))]
-    InvalidPutResponse { source: quick_xml::de::DeError },
-
-    #[snafu(display("Error performing post request {}: {}", path, source))]
-    PostRequest {
-        source: crate::client::retry::Error,
-        path: String,
-    },
-
-    #[snafu(display("Error decoding object size: {}", source))]
-    InvalidSize { source: std::num::ParseIntError },
-
     #[snafu(display("Missing bucket name"))]
     MissingBucketName {},
 
@@ -134,9 +77,6 @@ enum Error {
         "One of service account path or service account key may be provided."
     ))]
     ServiceAccountPathAndKeyProvided,
-
-    #[snafu(display("GCP credential error: {}", source))]
-    Credential { source: credential::Error },
 
     #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
     UnableToParseUrl {
@@ -160,14 +100,14 @@ enum Error {
     Metadata {
         source: crate::client::header::Error,
     },
+
+    #[snafu(display("GCP credential error: {}", source))]
+    Credential { source: credential::Error },
 }
 
 impl From<Error> for super::Error {
     fn from(err: Error) -> Self {
         match err {
-            Error::GetRequest { source, path }
-            | Error::DeleteRequest { source, path }
-            | Error::PutRequest { source, path } => source.error(STORE, path),
             Error::UnknownConfigurationKey { key } => {
                 Self::UnknownConfigurationKey { store: STORE, key }
             }
@@ -179,27 +119,6 @@ impl From<Error> for super::Error {
     }
 }
 
-#[derive(serde::Deserialize, Debug)]
-#[serde(rename_all = "PascalCase")]
-struct InitiateMultipartUploadResult {
-    upload_id: String,
-}
-
-#[derive(serde::Serialize, Debug)]
-#[serde(rename_all = "PascalCase", rename(serialize = "Part"))]
-struct MultipartPart {
-    #[serde(rename = "PartNumber")]
-    part_number: usize,
-    e_tag: String,
-}
-
-#[derive(serde::Serialize, Debug)]
-#[serde(rename_all = "PascalCase")]
-struct CompleteMultipartUpload {
-    #[serde(rename = "Part", default)]
-    parts: Vec<MultipartPart>,
-}
-
 /// Interface for [Google Cloud Storage](https://cloud.google.com/storage/).
 #[derive(Debug)]
 pub struct GoogleCloudStorage {
@@ -208,271 +127,18 @@ pub struct GoogleCloudStorage {
 
 impl std::fmt::Display for GoogleCloudStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GoogleCloudStorage({})", self.client.bucket_name)
+        write!(
+            f,
+            "GoogleCloudStorage({})",
+            self.client.config().bucket_name
+        )
     }
 }
 
 impl GoogleCloudStorage {
     /// Returns the [`GcpCredentialProvider`] used by [`GoogleCloudStorage`]
     pub fn credentials(&self) -> &GcpCredentialProvider {
-        &self.client.credentials
-    }
-}
-
-#[derive(Debug)]
-struct GoogleCloudStorageClient {
-    client: Client,
-    base_url: String,
-
-    credentials: GcpCredentialProvider,
-
-    bucket_name: String,
-    bucket_name_encoded: String,
-
-    retry_config: RetryConfig,
-    client_options: ClientOptions,
-
-    // TODO: Hook this up in tests
-    max_list_results: Option<String>,
-}
-
-impl GoogleCloudStorageClient {
-    async fn get_credential(&self) -> Result<Arc<GcpCredential>> {
-        self.credentials.get_credential().await
-    }
-
-    fn object_url(&self, path: &Path) -> String {
-        let encoded = utf8_percent_encode(path.as_ref(), NON_ALPHANUMERIC);
-        format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, encoded)
-    }
-
-    /// Perform a put request <https://cloud.google.com/storage/docs/xml-api/put-object-upload>
-    ///
-    /// Returns the new ETag
-    async fn put_request<T: Serialize + ?Sized + Sync>(
-        &self,
-        path: &Path,
-        payload: Bytes,
-        query: &T,
-    ) -> Result<String> {
-        let credential = self.get_credential().await?;
-        let url = self.object_url(path);
-
-        let content_type = self
-            .client_options
-            .get_content_type(path)
-            .unwrap_or("application/octet-stream");
-
-        let response = self
-            .client
-            .request(Method::PUT, url)
-            .query(query)
-            .bearer_auth(&credential.bearer)
-            .header(header::CONTENT_TYPE, content_type)
-            .header(header::CONTENT_LENGTH, payload.len())
-            .body(payload)
-            .send_retry(&self.retry_config)
-            .await
-            .context(PutRequestSnafu {
-                path: path.as_ref(),
-            })?;
-
-        Ok(get_etag(response.headers()).context(MetadataSnafu)?)
-    }
-
-    /// Initiate a multi-part upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
-    async fn multipart_initiate(&self, path: &Path) -> Result<MultipartId> {
-        let credential = self.get_credential().await?;
-        let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
-
-        let content_type = self
-            .client_options
-            .get_content_type(path)
-            .unwrap_or("application/octet-stream");
-
-        let response = self
-            .client
-            .request(Method::POST, &url)
-            .bearer_auth(&credential.bearer)
-            .header(header::CONTENT_TYPE, content_type)
-            .header(header::CONTENT_LENGTH, "0")
-            .query(&[("uploads", "")])
-            .send_retry(&self.retry_config)
-            .await
-            .context(PutRequestSnafu {
-                path: path.as_ref(),
-            })?;
-
-        let data = response.bytes().await.context(PutResponseBodySnafu)?;
-        let result: InitiateMultipartUploadResult =
-            quick_xml::de::from_reader(data.as_ref().reader())
-                .context(InvalidPutResponseSnafu)?;
-
-        Ok(result.upload_id)
-    }
-
-    /// Cleanup unused parts <https://cloud.google.com/storage/docs/xml-api/delete-multipart>
-    async fn multipart_cleanup(
-        &self,
-        path: &str,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
-        let credential = self.get_credential().await?;
-        let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
-
-        self.client
-            .request(Method::DELETE, &url)
-            .bearer_auth(&credential.bearer)
-            .header(header::CONTENT_TYPE, "application/octet-stream")
-            .header(header::CONTENT_LENGTH, "0")
-            .query(&[("uploadId", multipart_id)])
-            .send_retry(&self.retry_config)
-            .await
-            .context(PutRequestSnafu { path })?;
-
-        Ok(())
-    }
-
-    /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
-    async fn delete_request(&self, path: &Path) -> Result<()> {
-        let credential = self.get_credential().await?;
-        let url = self.object_url(path);
-
-        let builder = self.client.request(Method::DELETE, url);
-        builder
-            .bearer_auth(&credential.bearer)
-            .send_retry(&self.retry_config)
-            .await
-            .context(DeleteRequestSnafu {
-                path: path.as_ref(),
-            })?;
-
-        Ok(())
-    }
-
-    /// Perform a copy request <https://cloud.google.com/storage/docs/xml-api/put-object-copy>
-    async fn copy_request(
-        &self,
-        from: &Path,
-        to: &Path,
-        if_not_exists: bool,
-    ) -> Result<()> {
-        let credential = self.get_credential().await?;
-        let url = self.object_url(to);
-
-        let from = utf8_percent_encode(from.as_ref(), NON_ALPHANUMERIC);
-        let source = format!("{}/{}", self.bucket_name_encoded, from);
-
-        let mut builder = self
-            .client
-            .request(Method::PUT, url)
-            .header("x-goog-copy-source", source);
-
-        if if_not_exists {
-            builder = builder.header("x-goog-if-generation-match", 0);
-        }
-
-        builder
-            .bearer_auth(&credential.bearer)
-            // Needed if reqwest is compiled with native-tls instead of rustls-tls
-            // See https://github.com/apache/arrow-rs/pull/3921
-            .header(header::CONTENT_LENGTH, 0)
-            .send_retry(&self.retry_config)
-            .await
-            .map_err(|err| match err.status() {
-                Some(StatusCode::PRECONDITION_FAILED) => crate::Error::AlreadyExists {
-                    source: Box::new(err),
-                    path: to.to_string(),
-                },
-                _ => err.error(STORE, from.to_string()),
-            })?;
-
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl GetClient for GoogleCloudStorageClient {
-    const STORE: &'static str = STORE;
-
-    /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
-        let credential = self.get_credential().await?;
-        let url = self.object_url(path);
-
-        let method = match options.head {
-            true => Method::HEAD,
-            false => Method::GET,
-        };
-
-        let mut request = self.client.request(method, url).with_get_options(options);
-
-        if !credential.bearer.is_empty() {
-            request = request.bearer_auth(&credential.bearer);
-        }
-
-        let response =
-            request
-                .send_retry(&self.retry_config)
-                .await
-                .context(GetRequestSnafu {
-                    path: path.as_ref(),
-                })?;
-
-        Ok(response)
-    }
-}
-
-#[async_trait]
-impl ListClient for GoogleCloudStorageClient {
-    /// Perform a list request <https://cloud.google.com/storage/docs/xml-api/get-bucket-list>
-    async fn list_request(
-        &self,
-        prefix: Option<&str>,
-        delimiter: bool,
-        page_token: Option<&str>,
-        offset: Option<&str>,
-    ) -> Result<(ListResult, Option<String>)> {
-        assert!(offset.is_none()); // Not yet supported
-
-        let credential = self.get_credential().await?;
-        let url = format!("{}/{}", self.base_url, self.bucket_name_encoded);
-
-        let mut query = Vec::with_capacity(5);
-        query.push(("list-type", "2"));
-        if delimiter {
-            query.push(("delimiter", DELIMITER))
-        }
-
-        if let Some(prefix) = &prefix {
-            query.push(("prefix", prefix))
-        }
-
-        if let Some(page_token) = page_token {
-            query.push(("continuation-token", page_token))
-        }
-
-        if let Some(max_results) = &self.max_list_results {
-            query.push(("max-keys", max_results))
-        }
-
-        let response = self
-            .client
-            .request(Method::GET, url)
-            .query(&query)
-            .bearer_auth(&credential.bearer)
-            .send_retry(&self.retry_config)
-            .await
-            .context(ListRequestSnafu)?
-            .bytes()
-            .await
-            .context(ListResponseBodySnafu)?;
-
-        let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
-            .context(InvalidListResponseSnafu)?;
-
-        let token = response.next_continuation_token.take();
-        Ok((response.try_into()?, token))
+        &self.client.config().credentials
     }
 }
 
@@ -504,41 +170,9 @@ impl PutPart for GCSMultipartUpload {
 
     /// Complete a multipart upload <https://cloud.google.com/storage/docs/xml-api/post-object-complete>
     async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
-        let upload_id = self.multipart_id.clone();
-        let url = self.client.object_url(&self.path);
-
-        let parts = completed_parts
-            .into_iter()
-            .enumerate()
-            .map(|(part_number, part)| MultipartPart {
-                e_tag: part.content_id,
-                part_number: part_number + 1,
-            })
-            .collect();
-
-        let credential = self.client.get_credential().await?;
-        let upload_info = CompleteMultipartUpload { parts };
-
-        let data = quick_xml::se::to_string(&upload_info)
-            .context(InvalidPutResponseSnafu)?
-            // We cannot disable the escaping that transforms "/" to "&quote;" :(
-            // https://github.com/tafia/quick-xml/issues/362
-            // https://github.com/tafia/quick-xml/issues/350
-            .replace("&quot;", "\"");
-
         self.client
-            .client
-            .request(Method::POST, &url)
-            .bearer_auth(&credential.bearer)
-            .query(&[("uploadId", upload_id)])
-            .body(data)
-            .send_retry(&self.client.retry_config)
+            .multipart_complete(&self.path, &self.multipart_id, completed_parts)
             .await
-            .context(PostRequestSnafu {
-                path: self.path.as_ref(),
-            })?;
-
-        Ok(())
     }
 }
 
@@ -570,7 +204,7 @@ impl ObjectStore for GoogleCloudStorage {
         multipart_id: &MultipartId,
     ) -> Result<()> {
         self.client
-            .multipart_cleanup(location.as_ref(), multipart_id)
+            .multipart_cleanup(location, multipart_id)
             .await?;
 
         Ok(())
@@ -993,8 +627,6 @@ impl GoogleCloudStorageBuilder {
 
         let bucket_name = self.bucket_name.ok_or(Error::MissingBucketName {})?;
 
-        let client = self.client_options.client()?;
-
         // First try to initialize from the service account information.
         let service_account_credentials =
             match (self.service_account_path, self.service_account_key) {
@@ -1063,29 +695,26 @@ impl GoogleCloudStorageBuilder {
             )) as _
         };
 
-        let encoded_bucket_name =
-            percent_encode(bucket_name.as_bytes(), NON_ALPHANUMERIC).to_string();
+        let config = GoogleCloudStorageConfig {
+            base_url: gcs_base_url,
+            credentials,
+            bucket_name,
+            retry_config: self.retry_config,
+            client_options: self.client_options,
+        };
 
         Ok(GoogleCloudStorage {
-            client: Arc::new(GoogleCloudStorageClient {
-                client,
-                base_url: gcs_base_url,
-                credentials,
-                bucket_name,
-                bucket_name_encoded: encoded_bucket_name,
-                retry_config: self.retry_config,
-                client_options: self.client_options,
-                max_list_results: None,
-            }),
+            client: Arc::new(GoogleCloudStorageClient::new(config)?),
         })
     }
 }
 
 #[cfg(test)]
 mod test {
-    use bytes::Bytes;
     use std::collections::HashMap;
     use std::io::Write;
+
+    use bytes::Bytes;
     use tempfile::NamedTempFile;
 
     use crate::tests::*;
@@ -1104,7 +733,7 @@ mod test {
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
-        if integration.client.base_url == DEFAULT_GCS_BASE_URL {
+        if integration.client.config().base_url == DEFAULT_GCS_BASE_URL {
             // Fake GCS server doesn't currently honor ifGenerationMatch
             // https://github.com/fsouza/fake-gcs-server/issues/994
             copy_if_not_exists(&integration).await;
