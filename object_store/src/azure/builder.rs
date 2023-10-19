@@ -34,17 +34,19 @@ use std::sync::Arc;
 use url::Url;
 
 /// The well-known account used by Azurite and the legacy Azure Storage Emulator.
+///
 /// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
 const EMULATOR_ACCOUNT: &str = "devstoreaccount1";
 
 /// The well-known account key used by Azurite and the legacy Azure Storage Emulator.
+///
 /// <https://docs.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key>
 const EMULATOR_ACCOUNT_KEY: &str =
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
 
 const MSI_ENDPOINT_ENV_KEY: &str = "IDENTITY_ENDPOINT";
 
-/// A specialized `Error` for Azure object store-related errors
+/// A specialized `Error` for Azure builder-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
 enum Error {
@@ -724,6 +726,7 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set if Microsoft Fabric url scheme should be used (defaults to false)
+    ///
     /// When disabled the url scheme used is `https://{account}.blob.core.windows.net`
     /// When enabled the url scheme used is `https://{account}.dfs.fabric.microsoft.com`
     ///
@@ -733,7 +736,9 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Sets what protocol is allowed. If `allow_http` is :
+    /// Sets what protocol is allowed
+    ///
+    /// If `allow_http` is :
     /// * false (default):  Only HTTPS are allowed
     /// * true:  HTTP and HTTPS are allowed
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
@@ -742,7 +747,9 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Sets an alternative authority host for OAuth based authorization
-    /// common hosts for azure clouds are defined in [authority_hosts].
+    ///
+    /// Common hosts for azure clouds are defined in [authority_hosts](crate::azure::authority_hosts).
+    ///
     /// Defaults to <https://login.microsoftonline.com>
     pub fn with_authority_host(mut self, authority_host: impl Into<String>) -> Self {
         self.authority_host = Some(authority_host.into());
@@ -802,14 +809,14 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set if the Azure Cli should be used for acquiring access token
+    ///
     /// <https://learn.microsoft.com/en-us/cli/azure/account?view=azure-cli-latest#az-account-get-access-token>
     pub fn with_use_azure_cli(mut self, use_azure_cli: bool) -> Self {
         self.use_azure_cli = use_azure_cli.into();
         self
     }
 
-    /// Configure a connection to container with given name on Microsoft Azure
-    /// Blob store.
+    /// Configure a connection to container with given name on Microsoft Azure Blob store.
     pub fn build(mut self) -> Result<MicrosoftAzure> {
         if let Some(url) = self.url.take() {
             self.parse_url(&url)?;
