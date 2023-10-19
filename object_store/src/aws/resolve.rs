@@ -38,11 +38,9 @@ enum Error {
 
 impl From<Error> for crate::Error {
     fn from(source: Error) -> Self {
-        match source {
-            _ => Self::Generic {
-                store: STORE,
-                source: Box::new(source),
-            },
+        Self::Generic {
+            store: STORE,
+            source: Box::new(source),
         }
     }
 }
@@ -83,9 +81,6 @@ pub async fn resolve_bucket_region(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aws::AmazonS3Builder;
-    use crate::path::Path;
-    use crate::ObjectStore;
 
     #[tokio::test]
     async fn test_private_bucket() {
