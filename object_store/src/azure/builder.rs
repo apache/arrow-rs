@@ -959,8 +959,8 @@ fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn azure_blob_test_urls() {
