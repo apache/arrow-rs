@@ -98,6 +98,29 @@ impl Fields {
                 .zip(other.iter())
                 .all(|(a, b)| Arc::ptr_eq(a, b) || a.contains(b))
     }
+
+    /// Remove a field by index and reture it.
+    /// ```
+    /// use arrow_schema::{DataType, Field, Fields};
+    /// let mut fields = Fields::from(vec![
+    ///   Field::new("a", DataType::Boolean, false),
+    ///   Field::new("b", DataType::Int8, false),
+    ///   Field::new("c", DataType::Utf8, false),
+    /// ]);
+    /// assert_eq!(fields.len(), 3);
+    /// assert_eq!(fields.remove(1).unwrap(), Field::new("b", DataType::Int8, false).into());
+    /// assert_eq!(fields.len(), 2);
+    /// ```
+    pub fn remove(&mut self, index: usize) -> Option<FieldRef> {
+        if index >= self.len() {
+            return None;
+        }
+
+        let mut new_fields = self.0.iter().cloned().collect::<Vec<_>>();
+        let field = new_fields.remove(index);
+        self.0 = Arc::from(new_fields);
+        Some(field)
+    }
 }
 
 impl Default for Fields {

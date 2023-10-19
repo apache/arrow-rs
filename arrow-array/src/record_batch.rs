@@ -20,6 +20,7 @@
 
 use crate::{new_empty_array, Array, ArrayRef, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaBuilder, SchemaRef};
+use std::mem;
 use std::ops::Index;
 use std::sync::Arc;
 
@@ -325,6 +326,46 @@ impl RecordBatch {
     /// Get a reference to all columns in the record batch.
     pub fn columns(&self) -> &[ArrayRef] {
         &self.columns[..]
+    }
+
+    /// Remove column by index and return it.
+    ///
+    /// Return `Some(ArrayRef)` if the column is removed, otherwise return `None.
+    /// - Return `None` if the `index` is out of bounds
+    /// - Return `None` if the `index` is in bounds but the schema is shared (i.e. ref count > 1)
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow_array::{BooleanArray, Int32Array, RecordBatch};
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let bool_array = BooleanArray::from(vec![true, false, false, true, true]);
+    /// let schema = Schema::new(vec![
+    ///     Field::new("id", DataType::Int32, false),
+    ///     Field::new("bool", DataType::Boolean, false),
+    /// ]);
+    ///
+    /// let mut batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array), Arc::new(bool_array)]).unwrap();
+    ///
+    /// let removed_column = batch.remove_column(0).unwrap();
+    /// assert_eq!(removed_column.as_any().downcast_ref::<Int32Array>().unwrap(), &Int32Array::from(vec![1, 2, 3, 4, 5]));
+    /// assert_eq!(batch.num_columns(), 1);
+    /// ```
+    pub fn remove_column(&mut self, index: usize) -> Option<ArrayRef> {
+        if index < self.num_columns() {
+            let new_schema = mem::replace(&mut self.schema, Arc::new(Schema::empty()));
+            if Arc::strong_count(&new_schema) == 1 {
+                let mut schema = Arc::<Schema>::into_inner(new_schema).unwrap();
+                schema.fields.remove(index);
+                self.schema = Arc::new(schema);
+                return Some(self.columns.remove(index));
+            } else {
+                self.schema = new_schema;
+                return None;
+            }
+        }
+
+        None
     }
 
     /// Return a new RecordBatch where each column is sliced

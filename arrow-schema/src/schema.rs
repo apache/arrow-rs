@@ -332,6 +332,27 @@ impl Schema {
                 .iter()
                 .all(|(k, v1)| self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default())
     }
+
+    /// Remove field by name and return it.
+    ///
+    /// ```
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// let mut schema = Schema::new(vec![
+    ///   Field::new("a", DataType::Boolean, false),
+    ///   Field::new("b", DataType::Int8, false),
+    ///   Field::new("c", DataType::Utf8, false),
+    /// ]);
+    /// assert_eq!(schema.fields.len(), 3);
+    /// assert_eq!(schema.remove_field("b").unwrap(), Field::new("b", DataType::Int8, false).into());
+    /// assert_eq!(schema.fields.len(), 2);
+    /// ```
+    pub fn remove_field(&mut self, name: &str) -> Option<FieldRef> {
+        if let Some((idx, _)) = self.fields.find(name) {
+            self.fields.remove(idx)
+        } else {
+            None
+        }
+    }
 }
 
 impl fmt::Display for Schema {
