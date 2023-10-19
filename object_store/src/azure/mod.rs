@@ -31,7 +31,7 @@ use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
     path::Path,
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Result, RetryConfig,
+    ObjectStore, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -62,6 +62,7 @@ mod credential;
 /// [`CredentialProvider`] for [`MicrosoftAzure`]
 pub type AzureCredentialProvider =
     Arc<dyn CredentialProvider<Credential = AzureCredential>>;
+use crate::client::header::get_etag;
 pub use credential::AzureCredential;
 
 const STORE: &str = "MicrosoftAzure";
@@ -81,9 +82,6 @@ const MSI_ENDPOINT_ENV_KEY: &str = "IDENTITY_ENDPOINT";
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
 enum Error {
-    #[snafu(display("Received header containing non-ASCII data"))]
-    BadHeader { source: reqwest::header::ToStrError },
-
     #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
     UnableToParseUrl {
         source: url::ParseError,
@@ -126,8 +124,10 @@ enum Error {
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
 
-    #[snafu(display("ETag Header missing from response"))]
-    MissingEtag,
+    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    Metadata {
+        source: crate::client::header::Error,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -170,11 +170,13 @@ impl std::fmt::Display for MicrosoftAzure {
 
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.client
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+        let response = self
+            .client
             .put_request(location, Some(bytes), false, &())
             .await?;
-        Ok(())
+        let e_tag = Some(get_etag(response.headers()).context(MetadataSnafu)?);
+        Ok(PutResult { e_tag })
     }
 
     async fn put_multipart(

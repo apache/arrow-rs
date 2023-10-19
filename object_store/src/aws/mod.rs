@@ -59,7 +59,7 @@ use crate::multipart::{PartId, PutPart, WriteMultiPart};
 use crate::signer::Signer;
 use crate::{
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Path, Result, RetryConfig,
+    ObjectStore, Path, PutResult, Result, RetryConfig,
 };
 
 mod checksum;
@@ -108,12 +108,6 @@ enum Error {
 
     #[snafu(display("Missing SecretAccessKey"))]
     MissingSecretAccessKey,
-
-    #[snafu(display("ETag Header missing from response"))]
-    MissingEtag,
-
-    #[snafu(display("Received header containing non-ASCII data"))]
-    BadHeader { source: reqwest::header::ToStrError },
 
     #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
     UnableToParseUrl {
@@ -273,9 +267,9 @@ impl Signer for AmazonS3 {
 
 #[async_trait]
 impl ObjectStore for AmazonS3 {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.client.put_request(location, bytes, &()).await?;
-        Ok(())
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+        let e_tag = self.client.put_request(location, bytes, &()).await?;
+        Ok(PutResult { e_tag: Some(e_tag) })
     }
 
     async fn put_multipart(
@@ -365,10 +359,9 @@ struct S3MultiPartUpload {
 #[async_trait]
 impl PutPart for S3MultiPartUpload {
     async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
-        use reqwest::header::ETAG;
         let part = (part_idx + 1).to_string();
 
-        let response = self
+        let content_id = self
             .client
             .put_request(
                 &self.location,
@@ -377,13 +370,7 @@ impl PutPart for S3MultiPartUpload {
             )
             .await?;
 
-        let etag = response.headers().get(ETAG).context(MissingEtagSnafu)?;
-
-        let etag = etag.to_str().context(BadHeaderSnafu)?;
-
-        Ok(PartId {
-            content_id: etag.to_string(),
-        })
+        Ok(PartId { content_id })
     }
 
     async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {

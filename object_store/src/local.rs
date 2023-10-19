@@ -20,7 +20,7 @@ use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Result,
+    ObjectStore, PutResult, Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -36,6 +36,7 @@ use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::SystemTime;
 use std::{collections::BTreeSet, convert::TryFrom, io};
 use std::{collections::VecDeque, path::PathBuf};
 use tokio::io::AsyncWrite;
@@ -270,7 +271,7 @@ impl Config {
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         let path = self.config.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
             let (mut file, suffix) = new_staged_upload(&path)?;
@@ -282,8 +283,17 @@ impl ObjectStore for LocalFileSystem {
                 })
                 .map_err(|e| {
                     let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
-                    e.into()
-                })
+                    e
+                })?;
+
+            let metadata = file.metadata().map_err(|e| Error::Metadata {
+                source: e.into(),
+                path: path.to_string_lossy().to_string(),
+            })?;
+
+            Ok(PutResult {
+                e_tag: Some(get_etag(&metadata)),
+            })
         })
         .await
     }
@@ -959,24 +969,33 @@ fn last_modified(metadata: &Metadata) -> DateTime<Utc> {
         .into()
 }
 
+fn get_etag(metadata: &Metadata) -> String {
+    let inode = get_inode(metadata);
+    let size = metadata.len();
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|mtime| mtime.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .unwrap_or_default()
+        .as_micros();
+
+    // Use an ETag scheme based on that used by many popular HTTP servers
+    // <https://httpd.apache.org/docs/2.2/mod/core.html#fileetag>
+    // <https://stackoverflow.com/questions/47512043/how-etags-are-generated-and-configured>
+    format!("{inode:x}-{mtime:x}-{size:x}")
+}
+
 fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
     let last_modified = last_modified(&metadata);
     let size = usize::try_from(metadata.len()).context(FileSizeOverflowedUsizeSnafu {
         path: location.as_ref(),
     })?;
-    let inode = get_inode(&metadata);
-    let mtime = last_modified.timestamp_micros();
-
-    // Use an ETag scheme based on that used by many popular HTTP servers
-    // <https://httpd.apache.org/docs/2.2/mod/core.html#fileetag>
-    // <https://stackoverflow.com/questions/47512043/how-etags-are-generated-and-configured>
-    let etag = format!("{inode:x}-{mtime:x}-{size:x}");
 
     Ok(ObjectMeta {
         location,
         last_modified,
         size,
-        e_tag: Some(etag),
+        e_tag: Some(get_etag(&metadata)),
     })
 }
 

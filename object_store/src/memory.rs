@@ -17,7 +17,8 @@
 
 //! An in-memory object store implementation
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, Result,
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+    PutResult, Result,
 };
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
@@ -106,11 +107,12 @@ struct Storage {
 type SharedStorage = Arc<RwLock<Storage>>;
 
 impl Storage {
-    fn insert(&mut self, location: &Path, bytes: Bytes) {
+    fn insert(&mut self, location: &Path, bytes: Bytes) -> usize {
         let etag = self.next_etag;
         self.next_etag += 1;
         let entry = Entry::new(bytes, Utc::now(), etag);
         self.map.insert(location.clone(), entry);
+        etag
     }
 }
 
@@ -122,9 +124,11 @@ impl std::fmt::Display for InMemory {
 
 #[async_trait]
 impl ObjectStore for InMemory {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.storage.write().insert(location, bytes);
-        Ok(())
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+        let etag = self.storage.write().insert(location, bytes);
+        Ok(PutResult {
+            e_tag: Some(etag.to_string()),
+        })
     }
 
     async fn put_multipart(

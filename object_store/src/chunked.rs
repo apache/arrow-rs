@@ -30,6 +30,7 @@ use tokio::io::AsyncWrite;
 use crate::path::Path;
 use crate::{
     GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+    PutResult,
 };
 use crate::{MultipartId, Result};
 
@@ -62,7 +63,7 @@ impl Display for ChunkedStore {
 
 #[async_trait]
 impl ObjectStore for ChunkedStore {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         self.inner.put(location, bytes).await
     }
 

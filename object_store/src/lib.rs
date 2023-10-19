@@ -300,7 +300,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// The operation is guaranteed to be atomic, it will either successfully
     /// write the entirety of `bytes` to `location`, or fail. No clients
     /// should be able to observe a partially written object
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()>;
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult>;
 
     /// Get a multi-part upload that allows writing data in chunks
     ///
@@ -528,7 +528,7 @@ macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
         impl ObjectStore for $type {
-            async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+            async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
                 self.as_ref().put(location, bytes).await
             }
 
@@ -659,6 +659,8 @@ pub struct ObjectMeta {
     /// The size in bytes of the object
     pub size: usize,
     /// The unique identifier for the object
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
     pub e_tag: Option<String>,
 }
 
@@ -848,6 +850,15 @@ impl GetResult {
             _ => unimplemented!("File IO not implemented on wasm32."),
         }
     }
+}
+
+/// Result for a put request
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PutResult {
+    /// The unique identifier for the object
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
+    pub e_tag: Option<String>,
 }
 
 /// A specialized `Result` for object store-related errors
@@ -1383,6 +1394,26 @@ mod tests {
             ..GetOptions::default()
         };
         storage.get_opts(&path, options).await.unwrap();
+
+        let result = storage.put(&path, "test".into()).await.unwrap();
+        let new_tag = result.e_tag.unwrap();
+        assert_ne!(tag, new_tag);
+
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.e_tag.unwrap(), new_tag);
+
+        let options = GetOptions {
+            if_match: Some(new_tag),
+            ..GetOptions::default()
+        };
+        storage.get_opts(&path, options).await.unwrap();
+
+        let options = GetOptions {
+            if_match: Some(tag),
+            ..GetOptions::default()
+        };
+        let err = storage.get_opts(&path, options).await.unwrap_err();
+        assert!(matches!(err, Error::Precondition { .. }), "{err}");
     }
 
     /// Returns a chunk of length `chunk_length`

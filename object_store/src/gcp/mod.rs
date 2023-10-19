@@ -54,7 +54,7 @@ use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
     path::{Path, DELIMITER},
     ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Result, RetryConfig,
+    ObjectStore, PutResult, Result, RetryConfig,
 };
 
 use credential::{InstanceCredentialProvider, ServiceAccountCredentials};
@@ -65,6 +65,7 @@ const STORE: &str = "GCS";
 
 /// [`CredentialProvider`] for [`GoogleCloudStorage`]
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
+use crate::client::header::get_etag;
 use crate::gcp::credential::{ApplicationDefaultCredentials, DEFAULT_GCS_BASE_URL};
 pub use credential::GcpCredential;
 
@@ -155,11 +156,10 @@ enum Error {
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
 
-    #[snafu(display("ETag Header missing from response"))]
-    MissingEtag,
-
-    #[snafu(display("Received header containing non-ASCII data"))]
-    BadHeader { source: header::ToStrError },
+    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    Metadata {
+        source: crate::client::header::Error,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -247,7 +247,14 @@ impl GoogleCloudStorageClient {
     }
 
     /// Perform a put request <https://cloud.google.com/storage/docs/xml-api/put-object-upload>
-    async fn put_request(&self, path: &Path, payload: Bytes) -> Result<()> {
+    ///
+    /// Returns the new ETag
+    async fn put_request<T: Serialize + ?Sized + Sync>(
+        &self,
+        path: &Path,
+        payload: Bytes,
+        query: &T,
+    ) -> Result<String> {
         let credential = self.get_credential().await?;
         let url = self.object_url(path);
 
@@ -256,8 +263,10 @@ impl GoogleCloudStorageClient {
             .get_content_type(path)
             .unwrap_or("application/octet-stream");
 
-        self.client
+        let response = self
+            .client
             .request(Method::PUT, url)
+            .query(query)
             .bearer_auth(&credential.bearer)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, payload.len())
@@ -268,7 +277,7 @@ impl GoogleCloudStorageClient {
                 path: path.as_ref(),
             })?;
 
-        Ok(())
+        Ok(get_etag(response.headers()).context(MetadataSnafu)?)
     }
 
     /// Initiate a multi-part upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
@@ -469,7 +478,7 @@ impl ListClient for GoogleCloudStorageClient {
 
 struct GCSMultipartUpload {
     client: Arc<GoogleCloudStorageClient>,
-    encoded_path: String,
+    path: Path,
     multipart_id: MultipartId,
 }
 
@@ -478,38 +487,17 @@ impl PutPart for GCSMultipartUpload {
     /// Upload an object part <https://cloud.google.com/storage/docs/xml-api/put-object-multipart>
     async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
         let upload_id = self.multipart_id.clone();
-        let url = format!(
-            "{}/{}/{}",
-            self.client.base_url, self.client.bucket_name_encoded, self.encoded_path
-        );
-
-        let credential = self.client.get_credential().await?;
-
-        let response = self
+        let content_id = self
             .client
-            .client
-            .request(Method::PUT, &url)
-            .bearer_auth(&credential.bearer)
-            .query(&[
-                ("partNumber", format!("{}", part_idx + 1)),
-                ("uploadId", upload_id),
-            ])
-            .header(header::CONTENT_TYPE, "application/octet-stream")
-            .header(header::CONTENT_LENGTH, format!("{}", buf.len()))
-            .body(buf)
-            .send_retry(&self.client.retry_config)
-            .await
-            .context(PutRequestSnafu {
-                path: &self.encoded_path,
-            })?;
-
-        let content_id = response
-            .headers()
-            .get("ETag")
-            .context(MissingEtagSnafu)?
-            .to_str()
-            .context(BadHeaderSnafu)?
-            .to_string();
+            .put_request(
+                &self.path,
+                buf.into(),
+                &[
+                    ("partNumber", format!("{}", part_idx + 1)),
+                    ("uploadId", upload_id),
+                ],
+            )
+            .await?;
 
         Ok(PartId { content_id })
     }
@@ -517,10 +505,7 @@ impl PutPart for GCSMultipartUpload {
     /// Complete a multipart upload <https://cloud.google.com/storage/docs/xml-api/post-object-complete>
     async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
         let upload_id = self.multipart_id.clone();
-        let url = format!(
-            "{}/{}/{}",
-            self.client.base_url, self.client.bucket_name_encoded, self.encoded_path
-        );
+        let url = self.client.object_url(&self.path);
 
         let parts = completed_parts
             .into_iter()
@@ -550,7 +535,7 @@ impl PutPart for GCSMultipartUpload {
             .send_retry(&self.client.retry_config)
             .await
             .context(PostRequestSnafu {
-                path: &self.encoded_path,
+                path: self.path.as_ref(),
             })?;
 
         Ok(())
@@ -559,8 +544,9 @@ impl PutPart for GCSMultipartUpload {
 
 #[async_trait]
 impl ObjectStore for GoogleCloudStorage {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.client.put_request(location, bytes).await
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+        let e_tag = self.client.put_request(location, bytes, &()).await?;
+        Ok(PutResult { e_tag: Some(e_tag) })
     }
 
     async fn put_multipart(
@@ -569,12 +555,9 @@ impl ObjectStore for GoogleCloudStorage {
     ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
         let upload_id = self.client.multipart_initiate(location).await?;
 
-        let encoded_path =
-            percent_encode(location.to_string().as_bytes(), NON_ALPHANUMERIC).to_string();
-
         let inner = GCSMultipartUpload {
             client: Arc::clone(&self.client),
-            encoded_path,
+            path: location.clone(),
             multipart_id: upload_id.clone(),
         };
 
