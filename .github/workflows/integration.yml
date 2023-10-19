@@ -88,8 +88,8 @@ jobs:
         with:
           path: rust
           fetch-depth: 0
-      - name: Install pythonnet
-        run: conda run --no-capture-output pip install pythonnet
+      - name: Install pythonnet and jpype
+        run: conda run --no-capture-output pip install pythonnet jpype1
       - name: Install archery
         run: conda run --no-capture-output pip install -e dev/archery[integration]
       - name: Make build directory
