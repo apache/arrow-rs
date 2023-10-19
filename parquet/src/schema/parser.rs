@@ -431,10 +431,12 @@ impl<'a> Parser<'a> {
                                             ));
                                         }
                                     }
-                                    _ => return Err(general_err!(
+                                    _ => {
+                                        return Err(general_err!(
                                         "Logical type Integer cannot be used with physical type {}",
                                         physical_type
-                                    )),
+                                    ))
+                                    }
                                 }
                                 if let Some(",") = self.tokenizer.next() {
                                     let is_signed = parse_bool(

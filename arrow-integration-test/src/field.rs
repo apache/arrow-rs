@@ -175,9 +175,11 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                                 DataType::Struct(map_fields) if map_fields.len() == 2 => {
                                     DataType::Map(Arc::new(child), keys_sorted)
                                 }
-                                t => return Err(ArrowError::ParseError(format!(
+                                t => {
+                                    return Err(ArrowError::ParseError(format!(
                                     "Map children should be a struct with 2 fields, found {t:?}"
-                                ))),
+                                )))
+                                }
                             }
                         }
                         Some(_) => {
