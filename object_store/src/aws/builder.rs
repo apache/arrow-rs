@@ -285,7 +285,7 @@ pub enum AmazonS3ConfigKey {
     /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     ContainerCredentialsRelativeUri,
 
-    /// Configure how to provide [`ObjectStore::copy_if_not_exists`]
+    /// Configure how to provide `copy_if_not_exists`
     ///
     /// See [`S3CopyIfNotExists`]
     CopyIfNotExists,
@@ -744,7 +744,7 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Configure how to provide [`ObjectStore::copy_if_not_exists`]
+    /// Configure how to provide `copy_if_not_exists`
     pub fn with_copy_if_not_exists(mut self, config: S3CopyIfNotExists) -> Self {
         self.copy_if_not_exists = Some(config.into());
         self
