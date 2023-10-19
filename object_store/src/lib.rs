@@ -659,6 +659,8 @@ pub struct ObjectMeta {
     /// The size in bytes of the object
     pub size: usize,
     /// The unique identifier for the object
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
     pub e_tag: Option<String>,
 }
 
@@ -851,9 +853,11 @@ impl GetResult {
 }
 
 /// Result for a put request
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PutResult {
     /// The unique identifier for the object
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
     pub e_tag: Option<String>,
 }
 
