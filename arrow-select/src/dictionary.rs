@@ -20,8 +20,7 @@ use ahash::RandomState;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type,
-    Utf8Type,
+    ArrowDictionaryKeyType, BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, Utf8Type,
 };
 use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, ScalarBuffer};
@@ -55,11 +54,7 @@ impl<'a, V> Interner<'a, V> {
         }
     }
 
-    fn intern<F: FnOnce() -> Result<V, E>, E>(
-        &mut self,
-        new: &'a [u8],
-        f: F,
-    ) -> Result<&V, E> {
+    fn intern<F: FnOnce() -> Result<V, E>, E>(&mut self, new: &'a [u8], f: F) -> Result<&V, E> {
         let hash = self.state.hash_one(new);
         let bucket_idx = hash >> self.shift;
         Ok(match &mut self.buckets[bucket_idx as usize] {
@@ -88,8 +83,7 @@ pub struct MergedDictionaries<K: ArrowDictionaryKeyType> {
 fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
     match (a.as_bytes_opt::<T>(), b.as_bytes_opt::<T>()) {
         (Some(a), Some(b)) => {
-            let values_eq =
-                a.values().ptr_eq(b.values()) && a.offsets().ptr_eq(b.offsets());
+            let values_eq = a.values().ptr_eq(b.values()) && a.offsets().ptr_eq(b.offsets());
             match (a.nulls(), b.nulls()) {
                 (Some(a), Some(b)) => values_eq && a.inner().ptr_eq(b.inner()),
                 (None, None) => values_eq,
@@ -188,15 +182,14 @@ pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
             let mut mapping = vec![zero; dictionary.values().len()];
 
             for (value_idx, value) in values {
-                mapping[value_idx] = *interner.intern(value, || {
-                    match K::Native::from_usize(indices.len()) {
+                mapping[value_idx] =
+                    *interner.intern(value, || match K::Native::from_usize(indices.len()) {
                         Some(idx) => {
                             indices.push((dictionary_idx, value_idx));
                             Ok(idx)
                         }
                         None => Err(ArrowError::DictionaryKeyOverflowError),
-                    }
-                })?;
+                    })?;
             }
             Ok(mapping)
         })
@@ -230,10 +223,7 @@ fn compute_values_mask<K: ArrowNativeType>(
 }
 
 /// Return a Vec containing for each set index in `mask`, the index and byte value of that index
-fn get_masked_values<'a>(
-    array: &'a dyn Array,
-    mask: &BooleanBuffer,
-) -> Vec<(usize, &'a [u8])> {
+fn get_masked_values<'a>(array: &'a dyn Array, mask: &BooleanBuffer) -> Vec<(usize, &'a [u8])> {
     match array.data_type() {
         DataType::Utf8 => masked_bytes(array.as_string::<i32>(), mask),
         DataType::LargeUtf8 => masked_bytes(array.as_string::<i64>(), mask),
@@ -268,8 +258,7 @@ mod tests {
 
     #[test]
     fn test_merge_strings() {
-        let a =
-            DictionaryArray::<Int32Type>::from_iter(["a", "b", "a", "b", "d", "c", "e"]);
+        let a = DictionaryArray::<Int32Type>::from_iter(["a", "b", "a", "b", "d", "c", "e"]);
         let b = DictionaryArray::<Int32Type>::from_iter(["c", "f", "c", "d", "a", "d"]);
         let merged = merge_dictionary_values(&[&a, &b], None).unwrap();
 
@@ -293,8 +282,7 @@ mod tests {
         assert_eq!(&merged.key_mappings[1], &[3, 4, 2, 0]);
 
         // Mask out only ["b", "b", "d"] from a
-        let a_mask =
-            BooleanBuffer::from_iter([false, true, false, true, true, false, false]);
+        let a_mask = BooleanBuffer::from_iter([false, true, false, true, true, false, false]);
         let b_mask = BooleanBuffer::new_set(b.len());
         let merged = merge_dictionary_values(&[&a, &b], Some(&[a_mask, b_mask])).unwrap();
 
@@ -315,16 +303,12 @@ mod tests {
         let values = StringArray::new(offsets, buffer, Some(nulls));
 
         let key_values = vec![1, 2, 3, 1, 8, 2, 3];
-        let key_nulls =
-            NullBuffer::from(vec![true, true, false, true, false, true, true]);
+        let key_nulls = NullBuffer::from(vec![true, true, false, true, false, true, true]);
         let keys = Int32Array::new(key_values.into(), Some(key_nulls));
         let a = DictionaryArray::new(keys, Arc::new(values));
         // [NULL, "bingo", NULL, NULL, NULL, "bingo", "hello"]
 
-        let b = DictionaryArray::new(
-            Int32Array::new_null(10),
-            Arc::new(StringArray::new_null(0)),
-        );
+        let b = DictionaryArray::new(Int32Array::new_null(10), Arc::new(StringArray::new_null(0)));
 
         let merged = merge_dictionary_values(&[&a, &b], None).unwrap();
         let expected = StringArray::from(vec!["bingo", "hello"]);

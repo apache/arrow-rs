@@ -50,10 +50,7 @@ use std::sync::Arc;
 
 /// Performs a depth-first scan of the children of `array`, constructing [`ArrayLevels`]
 /// for each leaf column encountered
-pub(crate) fn calculate_array_levels(
-    array: &ArrayRef,
-    field: &Field,
-) -> Result<Vec<ArrayLevels>> {
+pub(crate) fn calculate_array_levels(array: &ArrayRef, field: &Field) -> Result<Vec<ArrayLevels>> {
     let mut builder = LevelInfoBuilder::try_new(field, Default::default(), array)?;
     builder.write(0..array.len());
     Ok(builder.finish())
@@ -134,11 +131,7 @@ enum LevelInfoBuilder {
 
 impl LevelInfoBuilder {
     /// Create a new [`LevelInfoBuilder`] for the given [`Field`] and parent [`LevelContext`]
-    fn try_new(
-        field: &Field,
-        parent_ctx: LevelContext,
-        array: &ArrayRef,
-    ) -> Result<Self> {
+    fn try_new(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
         assert_eq!(field.data_type(), array.data_type());
         let is_nullable = field.is_nullable();
 
@@ -227,9 +220,7 @@ impl LevelInfoBuilder {
             LevelInfoBuilder::List(v, _, _, _)
             | LevelInfoBuilder::LargeList(v, _, _, _)
             | LevelInfoBuilder::FixedSizeList(v, _, _, _) => v.finish(),
-            LevelInfoBuilder::Struct(v, _, _) => {
-                v.into_iter().flat_map(|l| l.finish()).collect()
-            }
+            LevelInfoBuilder::Struct(v, _, _) => v.into_iter().flat_map(|l| l.finish()).collect(),
         }
     }
 
@@ -408,55 +399,52 @@ impl LevelInfoBuilder {
         nulls: Option<&NullBuffer>,
         range: Range<usize>,
     ) {
-        let write_non_null =
-            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
-                let values_start = start_idx * fixed_size;
-                let values_end = end_idx * fixed_size;
-                child.write(values_start..values_end);
+        let write_non_null = |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+            let values_start = start_idx * fixed_size;
+            let values_end = end_idx * fixed_size;
+            child.write(values_start..values_end);
 
-                child.visit_leaves(|leaf| {
-                    let rep_levels = leaf.rep_levels.as_mut().unwrap();
+            child.visit_leaves(|leaf| {
+                let rep_levels = leaf.rep_levels.as_mut().unwrap();
 
-                    let row_indices = (0..fixed_size)
-                        .rev()
-                        .cycle()
-                        .take(values_end - values_start);
+                let row_indices = (0..fixed_size)
+                    .rev()
+                    .cycle()
+                    .take(values_end - values_start);
 
-                    // Step backward over the child rep levels and mark the start of each list
-                    rep_levels
-                        .iter_mut()
-                        .rev()
-                        // Filter out reps from nested children
-                        .filter(|&&mut r| r == ctx.rep_level)
-                        .zip(row_indices)
-                        .for_each(|(r, idx)| {
-                            if idx == 0 {
-                                *r = ctx.rep_level - 1;
-                            }
-                        });
-                })
-            };
+                // Step backward over the child rep levels and mark the start of each list
+                rep_levels
+                    .iter_mut()
+                    .rev()
+                    // Filter out reps from nested children
+                    .filter(|&&mut r| r == ctx.rep_level)
+                    .zip(row_indices)
+                    .for_each(|(r, idx)| {
+                        if idx == 0 {
+                            *r = ctx.rep_level - 1;
+                        }
+                    });
+            })
+        };
 
         // If list size is 0, ignore values and just write rep/def levels.
-        let write_empty =
-            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
-                let len = end_idx - start_idx;
-                child.visit_leaves(|leaf| {
-                    let rep_levels = leaf.rep_levels.as_mut().unwrap();
-                    rep_levels.extend(std::iter::repeat(ctx.rep_level - 1).take(len));
-                    let def_levels = leaf.def_levels.as_mut().unwrap();
-                    def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
-                })
-            };
+        let write_empty = |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+            let len = end_idx - start_idx;
+            child.visit_leaves(|leaf| {
+                let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                rep_levels.extend(std::iter::repeat(ctx.rep_level - 1).take(len));
+                let def_levels = leaf.def_levels.as_mut().unwrap();
+                def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
+            })
+        };
 
-        let write_rows =
-            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
-                if fixed_size > 0 {
-                    write_non_null(child, start_idx, end_idx)
-                } else {
-                    write_empty(child, start_idx, end_idx)
-                }
-            };
+        let write_rows = |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+            if fixed_size > 0 {
+                write_non_null(child, start_idx, end_idx)
+            } else {
+                write_empty(child, start_idx, end_idx)
+            }
+        };
 
         match nulls {
             Some(nulls) => {
@@ -1019,10 +1007,7 @@ mod tests {
         let c = Int32Array::from_iter([Some(1), None, Some(3), None, Some(5), Some(6)]);
         let leaf = Arc::new(c) as ArrayRef;
         let c_field = Arc::new(Field::new("c", DataType::Int32, true));
-        let b = StructArray::from((
-            (vec![(c_field, leaf.clone())]),
-            Buffer::from([0b00110111]),
-        ));
+        let b = StructArray::from(((vec![(c_field, leaf.clone())]), Buffer::from([0b00110111])));
 
         let b_field = Arc::new(Field::new("b", b.data_type().clone(), true));
         let a = StructArray::from((
@@ -1053,8 +1038,7 @@ mod tests {
 
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets = arrow::buffer::Buffer::from_iter([0_i32, 1, 3, 3, 6, 10]);
-        let a_list_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let a_list_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         let a_list_data = ArrayData::builder(a_list_type.clone())
             .len(5)
             .add_buffer(a_value_offsets)
@@ -1109,9 +1093,7 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new(
                 "c",
-                DataType::Struct(
-                    vec![struct_field_d.clone(), struct_field_e.clone()].into(),
-                ),
+                DataType::Struct(vec![struct_field_d.clone(), struct_field_e.clone()].into()),
                 true, // https://github.com/apache/arrow-rs/issues/245
             ),
         ]);
@@ -1126,8 +1108,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
-        let g_value_offsets =
-            arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let g_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let g_list_data = ArrayData::builder(struct_field_g.data_type().clone())
@@ -1239,8 +1220,7 @@ mod tests {
 
         // build a record batch
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(some_nested_object)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(some_nested_object)]).unwrap();
 
         let struct_null_level =
             calculate_array_levels(batch.column(0), batch.schema().field(0)).unwrap();
@@ -1262,8 +1242,7 @@ mod tests {
 
         // build a record batch
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(some_nested_object)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(some_nested_object)]).unwrap();
 
         let struct_non_null_level =
             calculate_array_levels(batch.column(0), batch.schema().field(0)).unwrap();
@@ -1498,9 +1477,9 @@ mod tests {
         let field_a2 = Arc::new(Field::new("integers", a2.data_type().clone(), true));
 
         let nulls = Buffer::from([0b00110111]);
-        let struct_a = Arc::new(
-            StructArray::try_from((vec![(field_a1, a1), (field_a2, a2)], nulls)).unwrap(),
-        ) as ArrayRef;
+        let struct_a =
+            Arc::new(StructArray::try_from((vec![(field_a1, a1), (field_a2, a2)], nulls)).unwrap())
+                as ArrayRef;
 
         let offsets = Buffer::from_iter([0_i32, 0, 2, 2, 3, 5, 5]);
         let nulls = Buffer::from([0b00111100]);
@@ -1793,8 +1772,7 @@ mod tests {
     #[test]
     fn test_fixed_size_list_of_var_lists() {
         // [[[1, null, 3], null], [[4], []], [[5, 6], [null, null]], null]
-        let mut builder =
-            FixedSizeListBuilder::new(ListBuilder::new(Int32Builder::new()), 2);
+        let mut builder = FixedSizeListBuilder::new(ListBuilder::new(Int32Builder::new()), 2);
         builder.values().append_value([Some(1), None, Some(3)]);
         builder.values().append_null();
         builder.append(true);

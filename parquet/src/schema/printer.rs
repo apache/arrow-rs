@@ -46,9 +46,7 @@
 use std::{fmt, io};
 
 use crate::basic::{ConvertedType, LogicalType, TimeUnit, Type as PhysicalType};
-use crate::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
-};
+use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::schema::types::Type;
 
 /// Prints Parquet metadata [`ParquetMetaData`] information.
@@ -119,10 +117,7 @@ fn print_row_group_metadata(out: &mut dyn io::Write, rg_metadata: &RowGroupMetaD
 }
 
 #[allow(unused_must_use)]
-fn print_column_chunk_metadata(
-    out: &mut dyn io::Write,
-    cc_metadata: &ColumnChunkMetaData,
-) {
+fn print_column_chunk_metadata(out: &mut dyn io::Write, cc_metadata: &ColumnChunkMetaData) {
     writeln!(out, "column type: {}", cc_metadata.column_type());
     writeln!(out, "column path: {}", cc_metadata.column_path());
     let encoding_strs: Vec<_> = cc_metadata
@@ -648,34 +643,28 @@ mod tests {
                 "REQUIRED FIXED_LEN_BYTE_ARRAY (16) field (UUID);",
             ),
             (
-                Type::primitive_type_builder(
-                    "decimal",
-                    PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                )
-                .with_logical_type(Some(LogicalType::Decimal {
-                    precision: 32,
-                    scale: 20,
-                }))
-                .with_precision(32)
-                .with_scale(20)
-                .with_length(decimal_length_from_precision(32))
-                .with_repetition(Repetition::REPEATED)
-                .build()
-                .unwrap(),
+                Type::primitive_type_builder("decimal", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                    .with_logical_type(Some(LogicalType::Decimal {
+                        precision: 32,
+                        scale: 20,
+                    }))
+                    .with_precision(32)
+                    .with_scale(20)
+                    .with_length(decimal_length_from_precision(32))
+                    .with_repetition(Repetition::REPEATED)
+                    .build()
+                    .unwrap(),
                 "REPEATED FIXED_LEN_BYTE_ARRAY (14) decimal (DECIMAL(32,20));",
             ),
             (
-                Type::primitive_type_builder(
-                    "decimal",
-                    PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                )
-                .with_converted_type(ConvertedType::DECIMAL)
-                .with_precision(19)
-                .with_scale(4)
-                .with_length(decimal_length_from_precision(19))
-                .with_repetition(Repetition::OPTIONAL)
-                .build()
-                .unwrap(),
+                Type::primitive_type_builder("decimal", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                    .with_converted_type(ConvertedType::DECIMAL)
+                    .with_precision(19)
+                    .with_scale(4)
+                    .with_length(decimal_length_from_precision(19))
+                    .with_repetition(Repetition::OPTIONAL)
+                    .build()
+                    .unwrap(),
                 "OPTIONAL FIXED_LEN_BYTE_ARRAY (9) decimal (DECIMAL(19,4));",
             ),
         ];
@@ -708,13 +697,12 @@ mod tests {
                 .with_logical_type(Some(LogicalType::String))
                 .with_id(Some(1))
                 .build();
-            let f4 =
-                Type::primitive_type_builder("f4", PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                    .with_repetition(Repetition::REPEATED)
-                    .with_converted_type(ConvertedType::INTERVAL)
-                    .with_length(12)
-                    .with_id(Some(2))
-                    .build();
+            let f4 = Type::primitive_type_builder("f4", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                .with_repetition(Repetition::REPEATED)
+                .with_converted_type(ConvertedType::INTERVAL)
+                .with_length(12)
+                .with_id(Some(2))
+                .build();
 
             let struct_fields = vec![
                 Arc::new(f1.unwrap()),

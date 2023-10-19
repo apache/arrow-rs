@@ -303,8 +303,7 @@ impl<'a> ArrowArray<'a> {
             .map(|index| {
                 let len = self.buffer_len(index, dt)?;
 
-                match unsafe { create_buffer(self.owner.clone(), self.array, index, len) }
-                {
+                match unsafe { create_buffer(self.owner.clone(), self.array, index, len) } {
                     Some(buf) => Ok(buf),
                     None if len == 0 => {
                         // Null data buffer, which Rust doesn't allow. So create
@@ -405,7 +404,9 @@ impl<'a> ArrowArray<'a> {
                 owner: self.owner,
             }),
             (None, None) => None,
-            _ => panic!("Dictionary should both be set or not set in FFI_ArrowArray and FFI_ArrowSchema")
+            _ => panic!(
+                "Dictionary should both be set or not set in FFI_ArrowArray and FFI_ArrowSchema"
+            ),
         }
     }
 }
@@ -424,9 +425,9 @@ mod tests {
 
     use crate::array::{
         make_array, Array, ArrayData, BooleanArray, Decimal128Array, DictionaryArray,
-        DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray,
-        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array, MapArray,
-        OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray, UInt32Array,
+        DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray,
+        GenericListArray, GenericStringArray, Int32Array, MapArray, OffsetSizeTrait,
+        Time32MillisecondArray, TimestampMillisecondArray, UInt32Array,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -468,9 +469,8 @@ mod tests {
         // We can read them back to memory
         // SAFETY:
         // Pointers are aligned and valid
-        let data = unsafe {
-            from_ffi(std::ptr::read(array_ptr), &std::ptr::read(schema_ptr)).unwrap()
-        };
+        let data =
+            unsafe { from_ffi(std::ptr::read(array_ptr), &std::ptr::read(schema_ptr)).unwrap() };
 
         let array = Int32Array::from(data);
         assert_eq!(array, Int32Array::from(vec![1, 2, 3]));
@@ -533,8 +533,7 @@ mod tests {
 
     fn test_generic_string<Offset: OffsetSizeTrait>() -> Result<()> {
         // create an array natively
-        let array =
-            GenericStringArray::<Offset>::from(vec![Some("a"), None, Some("aaa")]);
+        let array = GenericStringArray::<Offset>::from(vec![Some("a"), None, Some("aaa")]);
 
         // export it
         let (array, schema) = to_ffi(&array.to_data())?;
@@ -733,14 +732,7 @@ mod tests {
         // verify
         assert_eq!(
             array,
-            &Time32MillisecondArray::from(vec![
-                None,
-                Some(1),
-                Some(2),
-                None,
-                Some(1),
-                Some(2)
-            ])
+            &Time32MillisecondArray::from(vec![None, Some(1), Some(2), None, Some(1), Some(2)])
         );
 
         // (drop/release)
@@ -769,14 +761,7 @@ mod tests {
         // verify
         assert_eq!(
             array,
-            &TimestampMillisecondArray::from(vec![
-                None,
-                Some(1),
-                Some(2),
-                None,
-                Some(1),
-                Some(2)
-            ])
+            &TimestampMillisecondArray::from(vec![None, Some(1), Some(2), None, Some(1), Some(2)])
         );
 
         // (drop/release)
@@ -793,8 +778,7 @@ mod tests {
             Some(vec![30, 30, 30]),
             None,
         ];
-        let array =
-            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
+        let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
 
         // export it
         let (array, schema) = to_ffi(&array.to_data())?;
@@ -978,14 +962,7 @@ mod tests {
         // verify
         assert_eq!(
             array,
-            &DurationSecondArray::from(vec![
-                None,
-                Some(1),
-                Some(2),
-                None,
-                Some(1),
-                Some(2)
-            ])
+            &DurationSecondArray::from(vec![None, Some(1), Some(2), None, Some(1), Some(2)])
         );
 
         // (drop/release)
@@ -1001,12 +978,9 @@ mod tests {
         //  [[a, b, c], [d, e, f], [g, h]]
         let entry_offsets = [0, 3, 6, 8];
 
-        let map_array = MapArray::new_from_strings(
-            keys.clone().into_iter(),
-            &values_data,
-            &entry_offsets,
-        )
-        .unwrap();
+        let map_array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
 
         // export it
         let (array, schema) = to_ffi(&map_array.to_data())?;

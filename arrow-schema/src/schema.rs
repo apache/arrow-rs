@@ -168,10 +168,7 @@ impl Schema {
     /// let schema = Schema::new_with_metadata(vec![field_a, field_b], metadata);
     /// ```
     #[inline]
-    pub fn new_with_metadata(
-        fields: impl Into<Fields>,
-        metadata: HashMap<String, String>,
-    ) -> Self {
+    pub fn new_with_metadata(fields: impl Into<Fields>, metadata: HashMap<String, String>) -> Self {
         Self {
             fields: fields.into(),
             metadata,
@@ -230,9 +227,7 @@ impl Schema {
     ///     ]),
     /// );
     /// ```
-    pub fn try_merge(
-        schemas: impl IntoIterator<Item = Self>,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_merge(schemas: impl IntoIterator<Item = Self>) -> Result<Self, ArrowError> {
         let mut out_meta = HashMap::new();
         let mut out_fields = SchemaBuilder::new();
         for schema in schemas {
@@ -323,9 +318,10 @@ impl Schema {
     pub fn contains(&self, other: &Schema) -> bool {
         // make sure self.metadata is a superset of other.metadata
         self.fields.contains(&other.fields)
-            && other.metadata.iter().all(|(k, v1)| {
-                self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default()
-            })
+            && other
+                .metadata
+                .iter()
+                .all(|(k, v1)| self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default())
     }
 }
 
@@ -381,8 +377,8 @@ mod tests {
         assert_eq!(schema, de_schema);
 
         // ser/de with non-empty metadata
-        let schema = schema
-            .with_metadata([("key".to_owned(), "val".to_owned())].into_iter().collect());
+        let schema =
+            schema.with_metadata([("key".to_owned(), "val".to_owned())].into_iter().collect());
         let json = serde_json::to_string(&schema).unwrap();
         let de_schema = serde_json::from_str(&json).unwrap();
 
@@ -636,18 +632,14 @@ mod tests {
             .collect();
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
-        assert!(
-            Schema::try_merge(vec![Schema::new(vec![f1]), Schema::new(vec![f2])])
-                .is_err()
-        );
+        assert!(Schema::try_merge(vec![Schema::new(vec![f1]), Schema::new(vec![f2])]).is_err());
 
         // 2. None + Some
         let mut f1 = Field::new("first_name", DataType::Utf8, false);
-        let metadata2: HashMap<String, String> =
-            [("missing".to_string(), "value".to_string())]
-                .iter()
-                .cloned()
-                .collect();
+        let metadata2: HashMap<String, String> = [("missing".to_string(), "value".to_string())]
+            .iter()
+            .cloned()
+            .collect();
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
         assert!(f1.try_merge(&f2).is_ok());
@@ -714,9 +706,7 @@ mod tests {
                 Field::new("last_name", DataType::Utf8, false),
                 Field::new(
                     "address",
-                    DataType::Struct(
-                        vec![Field::new("zip", DataType::UInt16, false)].into(),
-                    ),
+                    DataType::Struct(vec![Field::new("zip", DataType::UInt16, false)].into()),
                     false,
                 ),
             ]),

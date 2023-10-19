@@ -73,11 +73,9 @@ pub(super) fn base_equal(lhs: &ArrayData, rhs: &ArrayData) -> bool {
                     let r_value_field = r_fields.get(1).unwrap();
 
                     // We don't enforce the equality of field names
-                    let data_type_equal = l_key_field.data_type()
-                        == r_key_field.data_type()
+                    let data_type_equal = l_key_field.data_type() == r_key_field.data_type()
                         && l_value_field.data_type() == r_value_field.data_type();
-                    let nullability_equal = l_key_field.is_nullable()
-                        == r_key_field.is_nullable()
+                    let nullability_equal = l_key_field.is_nullable() == r_key_field.is_nullable()
                         && l_value_field.is_nullable() == r_value_field.is_nullable();
                     let metadata_equal = l_key_field.metadata() == r_key_field.metadata()
                         && l_value_field.metadata() == r_value_field.metadata();

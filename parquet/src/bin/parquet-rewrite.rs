@@ -205,10 +205,9 @@ fn main() {
     let args = Args::parse();
 
     // read key-value metadata
-    let parquet_reader = SerializedFileReader::new(
-        File::open(&args.input).expect("Unable to open input file"),
-    )
-    .expect("Failed to create reader");
+    let parquet_reader =
+        SerializedFileReader::new(File::open(&args.input).expect("Unable to open input file"))
+            .expect("Failed to create reader");
     let kv_md = parquet_reader
         .metadata()
         .file_metadata()
@@ -223,58 +222,45 @@ fn main() {
     .build()
     .expect("parquet open");
 
-    let mut writer_properties_builder =
-        WriterProperties::builder().set_key_value_metadata(kv_md);
+    let mut writer_properties_builder = WriterProperties::builder().set_key_value_metadata(kv_md);
     if let Some(value) = args.compression {
-        writer_properties_builder =
-            writer_properties_builder.set_compression(value.into());
+        writer_properties_builder = writer_properties_builder.set_compression(value.into());
     }
     if let Some(value) = args.max_row_group_size {
-        writer_properties_builder =
-            writer_properties_builder.set_max_row_group_size(value);
+        writer_properties_builder = writer_properties_builder.set_max_row_group_size(value);
     }
     if let Some(value) = args.data_page_row_count_limit {
-        writer_properties_builder =
-            writer_properties_builder.set_data_page_row_count_limit(value);
+        writer_properties_builder = writer_properties_builder.set_data_page_row_count_limit(value);
     }
     if let Some(value) = args.data_page_size_limit {
-        writer_properties_builder =
-            writer_properties_builder.set_data_page_size_limit(value);
+        writer_properties_builder = writer_properties_builder.set_data_page_size_limit(value);
     }
     if let Some(value) = args.dictionary_page_size_limit {
-        writer_properties_builder =
-            writer_properties_builder.set_dictionary_page_size_limit(value);
+        writer_properties_builder = writer_properties_builder.set_dictionary_page_size_limit(value);
     }
     if let Some(value) = args.max_statistics_size {
-        writer_properties_builder =
-            writer_properties_builder.set_max_statistics_size(value);
+        writer_properties_builder = writer_properties_builder.set_max_statistics_size(value);
     }
     if let Some(value) = args.bloom_filter_enabled {
-        writer_properties_builder =
-            writer_properties_builder.set_bloom_filter_enabled(value);
+        writer_properties_builder = writer_properties_builder.set_bloom_filter_enabled(value);
 
         if value {
             if let Some(value) = args.bloom_filter_fpp {
-                writer_properties_builder =
-                    writer_properties_builder.set_bloom_filter_fpp(value);
+                writer_properties_builder = writer_properties_builder.set_bloom_filter_fpp(value);
             }
             if let Some(value) = args.bloom_filter_ndv {
-                writer_properties_builder =
-                    writer_properties_builder.set_bloom_filter_ndv(value);
+                writer_properties_builder = writer_properties_builder.set_bloom_filter_ndv(value);
             }
         }
     }
     if let Some(value) = args.dictionary_enabled {
-        writer_properties_builder =
-            writer_properties_builder.set_dictionary_enabled(value);
+        writer_properties_builder = writer_properties_builder.set_dictionary_enabled(value);
     }
     if let Some(value) = args.statistics_enabled {
-        writer_properties_builder =
-            writer_properties_builder.set_statistics_enabled(value.into());
+        writer_properties_builder = writer_properties_builder.set_statistics_enabled(value.into());
     }
     if let Some(value) = args.writer_version {
-        writer_properties_builder =
-            writer_properties_builder.set_writer_version(value.into());
+        writer_properties_builder = writer_properties_builder.set_writer_version(value.into());
     }
     let writer_properties = writer_properties_builder.build();
     let mut parquet_writer = ArrowWriter::try_new(

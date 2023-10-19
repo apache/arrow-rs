@@ -28,9 +28,9 @@ use chrono::{DateTime, Utc};
 use reqwest::header::ACCEPT;
 use reqwest::{
     header::{
-        HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_ENCODING,
-        CONTENT_LANGUAGE, CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH,
-        IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_UNMODIFIED_SINCE, RANGE,
+        HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE,
+        CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
+        IF_UNMODIFIED_SINCE, RANGE,
     },
     Client, Method, RequestBuilder,
 };
@@ -46,8 +46,7 @@ use url::Url;
 static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2021-08-06");
 static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
 pub(crate) static BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-type");
-pub(crate) static DELETE_SNAPSHOTS: HeaderName =
-    HeaderName::from_static("x-ms-delete-snapshots");
+pub(crate) static DELETE_SNAPSHOTS: HeaderName = HeaderName::from_static("x-ms-delete-snapshots");
 pub(crate) static COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
 static CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
 pub(crate) const RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
@@ -126,19 +125,11 @@ pub mod authority_hosts {
 pub(crate) trait CredentialExt {
     /// Apply authorization to requests against azure storage accounts
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
-    fn with_azure_authorization(
-        self,
-        credential: &AzureCredential,
-        account: &str,
-    ) -> Self;
+    fn with_azure_authorization(self, credential: &AzureCredential, account: &str) -> Self;
 }
 
 impl CredentialExt for RequestBuilder {
-    fn with_azure_authorization(
-        mut self,
-        credential: &AzureCredential,
-        account: &str,
-    ) -> Self {
+    fn with_azure_authorization(mut self, credential: &AzureCredential, account: &str) -> Self {
         // rfc2822 string should never contain illegal characters
         let date = Utc::now();
         let date_str = date.format(RFC1123_FMT).to_string();
@@ -324,8 +315,8 @@ impl ClientSecretOAuthProvider {
         tenant_id: impl AsRef<str>,
         authority_host: Option<String>,
     ) -> Self {
-        let authority_host = authority_host
-            .unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
+        let authority_host =
+            authority_host.unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
 
         Self {
             token_url: format!(
@@ -409,9 +400,8 @@ impl ImdsManagedIdentityProvider {
         msi_res_id: Option<String>,
         msi_endpoint: Option<String>,
     ) -> Self {
-        let msi_endpoint = msi_endpoint.unwrap_or_else(|| {
-            "http://169.254.169.254/metadata/identity/oauth2/token".to_owned()
-        });
+        let msi_endpoint = msi_endpoint
+            .unwrap_or_else(|| "http://169.254.169.254/metadata/identity/oauth2/token".to_owned());
 
         Self {
             msi_endpoint,
@@ -493,8 +483,8 @@ impl WorkloadIdentityOAuthProvider {
         tenant_id: impl AsRef<str>,
         authority_host: Option<String>,
     ) -> Self {
-        let authority_host = authority_host
-            .unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
+        let authority_host =
+            authority_host.unwrap_or_else(|| authority_hosts::AZURE_PUBLIC_CLOUD.to_owned());
 
         Self {
             token_url: format!(
@@ -553,9 +543,7 @@ mod az_cli_date_format {
     use chrono::{DateTime, TimeZone};
     use serde::{self, Deserialize, Deserializer};
 
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<DateTime<chrono::Local>, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<chrono::Local>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -614,14 +602,12 @@ impl AzureCliCredential {
 
         match Command::new(program).args(args).output() {
             Ok(az_output) if az_output.status.success() => {
-                let output =
-                    str::from_utf8(&az_output.stdout).map_err(|_| Error::AzureCli {
-                        message: "az response is not a valid utf-8 string".to_string(),
-                    })?;
+                let output = str::from_utf8(&az_output.stdout).map_err(|_| Error::AzureCli {
+                    message: "az response is not a valid utf-8 string".to_string(),
+                })?;
 
-                let token_response =
-                    serde_json::from_str::<AzureCliTokenResponse>(output)
-                        .context(AzureCliResponseSnafu)?;
+                let token_response = serde_json::from_str::<AzureCliTokenResponse>(output)
+                    .context(AzureCliResponseSnafu)?;
                 if !token_response.token_type.eq_ignore_ascii_case("bearer") {
                     return Err(Error::AzureCli {
                         message: format!(
@@ -630,12 +616,10 @@ impl AzureCliCredential {
                         ),
                     });
                 }
-                let duration = token_response.expires_on.naive_local()
-                    - chrono::Local::now().naive_local();
+                let duration =
+                    token_response.expires_on.naive_local() - chrono::Local::now().naive_local();
                 Ok(TemporaryToken {
-                    token: Arc::new(AzureCredential::BearerToken(
-                        token_response.access_token,
-                    )),
+                    token: Arc::new(AzureCredential::BearerToken(token_response.access_token)),
                     expiry: Some(
                         Instant::now()
                             + duration.to_std().map_err(|_| Error::AzureCli {

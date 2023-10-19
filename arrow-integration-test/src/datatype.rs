@@ -124,26 +124,16 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             }
             Some(s) if s == "duration" => match map.get("unit") {
                 Some(p) if p == "SECOND" => Ok(DataType::Duration(TimeUnit::Second)),
-                Some(p) if p == "MILLISECOND" => {
-                    Ok(DataType::Duration(TimeUnit::Millisecond))
-                }
-                Some(p) if p == "MICROSECOND" => {
-                    Ok(DataType::Duration(TimeUnit::Microsecond))
-                }
-                Some(p) if p == "NANOSECOND" => {
-                    Ok(DataType::Duration(TimeUnit::Nanosecond))
-                }
+                Some(p) if p == "MILLISECOND" => Ok(DataType::Duration(TimeUnit::Millisecond)),
+                Some(p) if p == "MICROSECOND" => Ok(DataType::Duration(TimeUnit::Microsecond)),
+                Some(p) if p == "NANOSECOND" => Ok(DataType::Duration(TimeUnit::Nanosecond)),
                 _ => Err(ArrowError::ParseError(
                     "time unit missing or invalid".to_string(),
                 )),
             },
             Some(s) if s == "interval" => match map.get("unit") {
-                Some(p) if p == "DAY_TIME" => {
-                    Ok(DataType::Interval(IntervalUnit::DayTime))
-                }
-                Some(p) if p == "YEAR_MONTH" => {
-                    Ok(DataType::Interval(IntervalUnit::YearMonth))
-                }
+                Some(p) if p == "DAY_TIME" => Ok(DataType::Interval(IntervalUnit::DayTime)),
+                Some(p) if p == "YEAR_MONTH" => Ok(DataType::Interval(IntervalUnit::YearMonth)),
                 Some(p) if p == "MONTH_DAY_NANO" => {
                     Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                 }

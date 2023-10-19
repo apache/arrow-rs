@@ -286,10 +286,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// # Errors
     ///
     /// Returns an error if any `keys[i] >= values.len() || keys[i] < 0`
-    pub fn try_new(
-        keys: PrimitiveArray<K>,
-        values: ArrayRef,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_new(keys: PrimitiveArray<K>, values: ArrayRef) -> Result<Self, ArrowError> {
         let data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
             Box::new(values.data_type().clone()),
@@ -298,9 +295,11 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
         let zero = K::Native::usize_as(0);
         let values_len = values.len();
 
-        if let Some((idx, v)) = keys.values().iter().enumerate().find(|(idx, v)| {
-            (v.is_lt(zero) || v.as_usize() >= values_len) && keys.is_valid(*idx)
-        }) {
+        if let Some((idx, v)) =
+            keys.values().iter().enumerate().find(|(idx, v)| {
+                (v.is_lt(zero) || v.as_usize() >= values_len) && keys.is_valid(*idx)
+            })
+        {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid dictionary key {v:?} at index {idx}, expected 0 <= key < {values_len}",
             )));
@@ -349,8 +348,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     ///
     /// Panics if `values` is not a [`StringArray`].
     pub fn lookup_key(&self, value: &str) -> Option<K::Native> {
-        let rd_buf: &StringArray =
-            self.values.as_any().downcast_ref::<StringArray>().unwrap();
+        let rd_buf: &StringArray = self.values.as_any().downcast_ref::<StringArray>().unwrap();
 
         (0..rd_buf.len())
             .position(|i| rd_buf.value(i) == value)
@@ -463,10 +461,8 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     ///
     pub fn with_values(&self, values: ArrayRef) -> Self {
         assert!(values.len() >= self.values.len());
-        let data_type = DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(values.data_type().clone()),
-        );
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
         Self {
             data_type,
             keys: self.keys.clone(),
@@ -477,9 +473,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
 
     /// Returns `PrimitiveDictionaryBuilder` of this dictionary array for mutating
     /// its keys and values if the underlying data buffer is not shared by others.
-    pub fn into_primitive_dict_builder<V>(
-        self,
-    ) -> Result<PrimitiveDictionaryBuilder<K, V>, Self>
+    pub fn into_primitive_dict_builder<V>(self) -> Result<PrimitiveDictionaryBuilder<K, V>, Self>
     where
         V: ArrowPrimitiveType,
     {
@@ -540,8 +534,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
         V: ArrowPrimitiveType,
         F: Fn(V::Native) -> V::Native,
     {
-        let mut builder: PrimitiveDictionaryBuilder<K, V> =
-            self.into_primitive_dict_builder()?;
+        let mut builder: PrimitiveDictionaryBuilder<K, V> = self.into_primitive_dict_builder()?;
         builder
             .values_slice_mut()
             .iter_mut()
@@ -806,9 +799,7 @@ impl<'a, K: ArrowDictionaryKeyType, V> Clone for TypedDictionaryArray<'a, K, V> 
 
 impl<'a, K: ArrowDictionaryKeyType, V> Copy for TypedDictionaryArray<'a, K, V> {}
 
-impl<'a, K: ArrowDictionaryKeyType, V> std::fmt::Debug
-    for TypedDictionaryArray<'a, K, V>
-{
+impl<'a, K: ArrowDictionaryKeyType, V> std::fmt::Debug for TypedDictionaryArray<'a, K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "TypedDictionaryArray({:?})", self.dictionary)
     }
@@ -1040,8 +1031,7 @@ mod tests {
         // Construct a dictionary array from the above two
         let key_type = DataType::Int16;
         let value_type = DataType::Int8;
-        let dict_data_type =
-            DataType::Dictionary(Box::new(key_type), Box::new(value_type));
+        let dict_data_type = DataType::Dictionary(Box::new(key_type), Box::new(value_type));
         let dict_data = ArrayData::builder(dict_data_type.clone())
             .len(3)
             .add_buffer(keys.clone())
@@ -1079,8 +1069,7 @@ mod tests {
 
     #[test]
     fn test_dictionary_array_fmt_debug() {
-        let mut builder =
-            PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(3, 2);
+        let mut builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(3, 2);
         builder.append(12345678).unwrap();
         builder.append_null();
         builder.append(22345678).unwrap();
@@ -1090,8 +1079,7 @@ mod tests {
             format!("{array:?}")
         );
 
-        let mut builder =
-            PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(20, 2);
+        let mut builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(20, 2);
         for _ in 0..20 {
             builder.append(1).unwrap();
         }
@@ -1267,9 +1255,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Invalid dictionary key 3 at index 1, expected 0 <= key < 2"
-    )]
+    #[should_panic(expected = "Invalid dictionary key 3 at index 1, expected 0 <= key < 2")]
     fn test_try_new_index_too_large() {
         let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
         // dictionary only has 2 values, so offset 3 is out of bounds
@@ -1278,9 +1264,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Invalid dictionary key -100 at index 0, expected 0 <= key < 2"
-    )]
+    #[should_panic(expected = "Invalid dictionary key -100 at index 0, expected 0 <= key < 2")]
     fn test_try_new_index_too_small() {
         let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
         let keys: Int32Array = [Some(-100)].into_iter().collect();
@@ -1288,9 +1272,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "DictionaryArray's data type must match, expected Int64 got Int32"
-    )]
+    #[should_panic(expected = "DictionaryArray's data type must match, expected Int64 got Int32")]
     fn test_from_array_data_validation() {
         let a = DictionaryArray::<Int32Type>::from_iter(["32"]);
         let _ = DictionaryArray::<Int64Type>::from(a.into_data());
@@ -1335,8 +1317,7 @@ mod tests {
 
         let boxed: ArrayRef = Arc::new(dict_array);
 
-        let col: DictionaryArray<Int8Type> =
-            DictionaryArray::<Int8Type>::from(boxed.to_data());
+        let col: DictionaryArray<Int8Type> = DictionaryArray::<Int8Type>::from(boxed.to_data());
         let err = col.into_primitive_dict_builder::<Int32Type>();
 
         let returned = err.unwrap_err();

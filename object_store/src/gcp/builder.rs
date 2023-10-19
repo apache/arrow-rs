@@ -21,12 +21,8 @@ use crate::gcp::credential::{
     ApplicationDefaultCredentials, InstanceCredentialProvider, ServiceAccountCredentials,
     DEFAULT_GCS_BASE_URL,
 };
-use crate::gcp::{
-    credential, GcpCredential, GcpCredentialProvider, GoogleCloudStorage, STORE,
-};
-use crate::{
-    ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider,
-};
+use crate::gcp::{credential, GcpCredential, GcpCredentialProvider, GoogleCloudStorage, STORE};
+use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
@@ -38,9 +34,7 @@ enum Error {
     #[snafu(display("Missing bucket name"))]
     MissingBucketName {},
 
-    #[snafu(display(
-        "One of service account path or service account key may be provided."
-    ))]
+    #[snafu(display("One of service account path or service account key may be provided."))]
     ServiceAccountPathAndKeyProvided,
 
     #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
@@ -188,12 +182,8 @@ impl FromStr for GoogleConfigKey {
             | "service_account"
             | "google_service_account_path"
             | "service_account_path" => Ok(Self::ServiceAccount),
-            "google_service_account_key" | "service_account_key" => {
-                Ok(Self::ServiceAccountKey)
-            }
-            "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => {
-                Ok(Self::Bucket)
-            }
+            "google_service_account_key" | "service_account_key" => Ok(Self::ServiceAccountKey),
+            "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => Ok(Self::Bucket),
             "google_application_credentials" => Ok(Self::ApplicationCredentials),
             _ => match s.parse() {
                 Ok(key) => Ok(Self::Client(key)),
@@ -286,12 +276,8 @@ impl GoogleCloudStorageBuilder {
     /// Set an option on the builder via a key - value pair.
     pub fn with_config(mut self, key: GoogleConfigKey, value: impl Into<String>) -> Self {
         match key {
-            GoogleConfigKey::ServiceAccount => {
-                self.service_account_path = Some(value.into())
-            }
-            GoogleConfigKey::ServiceAccountKey => {
-                self.service_account_key = Some(value.into())
-            }
+            GoogleConfigKey::ServiceAccount => self.service_account_path = Some(value.into()),
+            GoogleConfigKey::ServiceAccountKey => self.service_account_key = Some(value.into()),
             GoogleConfigKey::Bucket => self.bucket_name = Some(value.into()),
             GoogleConfigKey::ApplicationCredentials => {
                 self.application_credentials_path = Some(value.into())
@@ -305,20 +291,14 @@ impl GoogleCloudStorageBuilder {
 
     /// Set an option on the builder via a key - value pair.
     #[deprecated(note = "Use with_config")]
-    pub fn try_with_option(
-        self,
-        key: impl AsRef<str>,
-        value: impl Into<String>,
-    ) -> Result<Self> {
+    pub fn try_with_option(self, key: impl AsRef<str>, value: impl Into<String>) -> Result<Self> {
         Ok(self.with_config(key.as_ref().parse()?, value))
     }
 
     /// Hydrate builder from key value pairs
     #[deprecated(note = "Use with_config")]
     #[allow(deprecated)]
-    pub fn try_with_options<
-        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
-    >(
+    pub fn try_with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
         mut self,
         options: I,
     ) -> Result<Self> {
@@ -344,9 +324,7 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::ServiceAccount => self.service_account_path.clone(),
             GoogleConfigKey::ServiceAccountKey => self.service_account_key.clone(),
             GoogleConfigKey::Bucket => self.bucket_name.clone(),
-            GoogleConfigKey::ApplicationCredentials => {
-                self.application_credentials_path.clone()
-            }
+            GoogleConfigKey::ApplicationCredentials => self.application_credentials_path.clone(),
             GoogleConfigKey::Client(key) => self.client_options.get_config_value(key),
         }
     }
@@ -394,10 +372,7 @@ impl GoogleCloudStorageBuilder {
     ///    "private_key": ""
     /// }
     /// ```
-    pub fn with_service_account_path(
-        mut self,
-        service_account_path: impl Into<String>,
-    ) -> Self {
+    pub fn with_service_account_path(mut self, service_account_path: impl Into<String>) -> Self {
         self.service_account_path = Some(service_account_path.into());
         self
     }
@@ -407,10 +382,7 @@ impl GoogleCloudStorageBuilder {
     ///
     /// This or [`GoogleCloudStorageBuilder::with_service_account_path`] must be
     /// set.
-    pub fn with_service_account_key(
-        mut self,
-        service_account: impl Into<String>,
-    ) -> Self {
+    pub fn with_service_account_key(mut self, service_account: impl Into<String>) -> Self {
         self.service_account_key = Some(service_account.into());
         self
     }
@@ -445,10 +417,7 @@ impl GoogleCloudStorageBuilder {
     }
 
     /// Set a trusted proxy CA certificate
-    pub fn with_proxy_ca_certificate(
-        mut self,
-        proxy_ca_certificate: impl Into<String>,
-    ) -> Self {
+    pub fn with_proxy_ca_certificate(mut self, proxy_ca_certificate: impl Into<String>) -> Self {
         self.client_options = self
             .client_options
             .with_proxy_ca_certificate(proxy_ca_certificate);
@@ -479,23 +448,19 @@ impl GoogleCloudStorageBuilder {
         // First try to initialize from the service account information.
         let service_account_credentials =
             match (self.service_account_path, self.service_account_key) {
-                (Some(path), None) => Some(
-                    ServiceAccountCredentials::from_file(path)
-                        .context(CredentialSnafu)?,
-                ),
-                (None, Some(key)) => Some(
-                    ServiceAccountCredentials::from_key(&key).context(CredentialSnafu)?,
-                ),
-                (None, None) => None,
-                (Some(_), Some(_)) => {
-                    return Err(Error::ServiceAccountPathAndKeyProvided.into())
+                (Some(path), None) => {
+                    Some(ServiceAccountCredentials::from_file(path).context(CredentialSnafu)?)
                 }
+                (None, Some(key)) => {
+                    Some(ServiceAccountCredentials::from_key(&key).context(CredentialSnafu)?)
+                }
+                (None, None) => None,
+                (Some(_), Some(_)) => return Err(Error::ServiceAccountPathAndKeyProvided.into()),
             };
 
         // Then try to initialize from the application credentials file, or the environment.
-        let application_default_credentials = ApplicationDefaultCredentials::read(
-            self.application_credentials_path.as_deref(),
-        )?;
+        let application_default_credentials =
+            ApplicationDefaultCredentials::read(self.application_credentials_path.as_deref())?;
 
         let disable_oauth = service_account_credentials
             .as_ref()
@@ -617,8 +582,8 @@ mod tests {
 
         // Service account key
         for alias in ["google_service_account_key", "service_account_key"] {
-            let builder = GoogleCloudStorageBuilder::new()
-                .with_config(alias.parse().unwrap(), FAKE_KEY);
+            let builder =
+                GoogleCloudStorageBuilder::new().with_config(alias.parse().unwrap(), FAKE_KEY);
             assert_eq!(FAKE_KEY, builder.service_account_key.unwrap());
         }
 
@@ -629,8 +594,8 @@ mod tests {
             "bucket",
             "bucket_name",
         ] {
-            let builder = GoogleCloudStorageBuilder::new()
-                .with_config(alias.parse().unwrap(), "fake_bucket");
+            let builder =
+                GoogleCloudStorageBuilder::new().with_config(alias.parse().unwrap(), "fake_bucket");
             assert_eq!("fake_bucket", builder.bucket_name.unwrap());
         }
     }

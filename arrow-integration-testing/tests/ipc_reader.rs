@@ -63,9 +63,7 @@ fn read_1_0_0_bigendian_decimal_should_panic() {
 }
 
 #[test]
-#[should_panic(
-    expected = "Last offset 687865856 of Utf8 is larger than values length 41"
-)]
+#[should_panic(expected = "Last offset 687865856 of Utf8 is larger than values length 41")]
 fn read_1_0_0_bigendian_dictionary_should_panic() {
     // The offsets are not translated for big-endian files
     // https://github.com/apache/arrow-rs/issues/859
@@ -160,8 +158,7 @@ fn read_2_0_0_compression() {
 /// Verification json file
 /// `arrow-ipc-stream/integration/<version>/<path>.json.gz
 fn verify_arrow_file(testdata: &str, version: &str, path: &str) {
-    let filename =
-        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.arrow_file");
+    let filename = format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.arrow_file");
     println!("Verifying {filename}");
 
     // Compare contents to the expected output format in JSON
@@ -197,8 +194,7 @@ fn verify_arrow_file(testdata: &str, version: &str, path: &str) {
 /// Verification json file
 /// `arrow-ipc-stream/integration/<version>/<path>.json.gz
 fn verify_arrow_stream(testdata: &str, version: &str, path: &str) {
-    let filename =
-        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
+    let filename = format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
     println!("Verifying {filename}");
 
     // Compare contents to the expected output format in JSON

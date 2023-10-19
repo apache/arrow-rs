@@ -48,10 +48,7 @@ impl From<Error> for crate::Error {
 /// Get the bucket region using the [HeadBucket API]. This will fail if the bucket does not exist.
 ///
 /// [HeadBucket API]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
-pub async fn resolve_bucket_region(
-    bucket: &str,
-    client_options: &ClientOptions,
-) -> Result<String> {
+pub async fn resolve_bucket_region(bucket: &str, client_options: &ClientOptions) -> Result<String> {
     use reqwest::StatusCode;
 
     let endpoint = format!("https://{}.s3.amazonaws.com", bucket);

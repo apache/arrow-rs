@@ -20,9 +20,8 @@
 use super::page::{Page, PageReader};
 use crate::basic::*;
 use crate::column::reader::decoder::{
-    ColumnValueDecoder, ColumnValueDecoderImpl, DefinitionLevelDecoder,
-    DefinitionLevelDecoderImpl, LevelsBufferSlice, RepetitionLevelDecoder,
-    RepetitionLevelDecoderImpl, ValuesBufferSlice,
+    ColumnValueDecoder, ColumnValueDecoderImpl, DefinitionLevelDecoder, DefinitionLevelDecoderImpl,
+    LevelsBufferSlice, RepetitionLevelDecoder, RepetitionLevelDecoderImpl, ValuesBufferSlice,
 };
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
@@ -51,34 +50,27 @@ pub fn get_column_reader(
     col_page_reader: Box<dyn PageReader>,
 ) -> ColumnReader {
     match col_descr.physical_type() {
-        Type::BOOLEAN => ColumnReader::BoolColumnReader(ColumnReaderImpl::new(
-            col_descr,
-            col_page_reader,
-        )),
-        Type::INT32 => ColumnReader::Int32ColumnReader(ColumnReaderImpl::new(
-            col_descr,
-            col_page_reader,
-        )),
-        Type::INT64 => ColumnReader::Int64ColumnReader(ColumnReaderImpl::new(
-            col_descr,
-            col_page_reader,
-        )),
-        Type::INT96 => ColumnReader::Int96ColumnReader(ColumnReaderImpl::new(
-            col_descr,
-            col_page_reader,
-        )),
-        Type::FLOAT => ColumnReader::FloatColumnReader(ColumnReaderImpl::new(
-            col_descr,
-            col_page_reader,
-        )),
-        Type::DOUBLE => ColumnReader::DoubleColumnReader(ColumnReaderImpl::new(
-            col_descr,
-            col_page_reader,
-        )),
-        Type::BYTE_ARRAY => ColumnReader::ByteArrayColumnReader(ColumnReaderImpl::new(
-            col_descr,
-            col_page_reader,
-        )),
+        Type::BOOLEAN => {
+            ColumnReader::BoolColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+        }
+        Type::INT32 => {
+            ColumnReader::Int32ColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+        }
+        Type::INT64 => {
+            ColumnReader::Int64ColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+        }
+        Type::INT96 => {
+            ColumnReader::Int96ColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+        }
+        Type::FLOAT => {
+            ColumnReader::FloatColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+        }
+        Type::DOUBLE => {
+            ColumnReader::DoubleColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+        }
+        Type::BYTE_ARRAY => {
+            ColumnReader::ByteArrayColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+        }
         Type::FIXED_LEN_BYTE_ARRAY => ColumnReader::FixedLenByteArrayColumnReader(
             ColumnReaderImpl::new(col_descr, col_page_reader),
         ),
@@ -89,9 +81,7 @@ pub fn get_column_reader(
 /// non-generic type to a generic column reader type `ColumnReaderImpl`.
 ///
 /// Panics if actual enum value for `col_reader` does not match the type `T`.
-pub fn get_typed_column_reader<T: DataType>(
-    col_reader: ColumnReader,
-) -> ColumnReaderImpl<T> {
+pub fn get_typed_column_reader<T: DataType>(col_reader: ColumnReader) -> ColumnReaderImpl<T> {
     T::get_column_reader(col_reader).unwrap_or_else(|| {
         panic!(
             "Failed to convert column reader into a typed column reader for `{}` type",
@@ -206,8 +196,7 @@ where
         rep_levels: Option<&mut R::Slice>,
         values: &mut V::Slice,
     ) -> Result<(usize, usize)> {
-        let (_, values, levels) =
-            self.read_records(batch_size, def_levels, rep_levels, values)?;
+        let (_, values, levels) = self.read_records(batch_size, def_levels, rep_levels, values)?;
 
         Ok((values, levels))
     }
@@ -285,10 +274,8 @@ where
                         .as_mut()
                         .ok_or_else(|| general_err!("must specify definition levels"))?;
 
-                    let read = reader.read_def_levels(
-                        out,
-                        total_levels_read..total_levels_read + levels_read,
-                    )?;
+                    let read = reader
+                        .read_def_levels(out, total_levels_read..total_levels_read + levels_read)?;
 
                     if read != levels_read {
                         return Err(general_err!("insufficient definition levels read from column - expected {rep_levels}, got {read}"));
@@ -401,8 +388,9 @@ where
             }
 
             let (values_read, def_levels_read) = match self.def_level_decoder.as_mut() {
-                Some(decoder) => decoder
-                    .skip_def_levels(rep_levels_read, self.descr.max_def_level())?,
+                Some(decoder) => {
+                    decoder.skip_def_levels(rep_levels_read, self.descr.max_def_level())?
+                }
                 None => (rep_levels_read, rep_levels_read),
             };
 
@@ -589,9 +577,7 @@ where
     /// (if it exists) into the buffer
     #[inline]
     pub(crate) fn has_next(&mut self) -> Result<bool> {
-        if self.num_buffered_values == 0
-            || self.num_buffered_values == self.num_decoded_values
-        {
+        if self.num_buffered_values == 0 || self.num_buffered_values == self.num_decoded_values {
             // TODO: should we return false if read_new_page() = true and
             // num_buffered_values = 0?
             if !self.read_new_page()? {
@@ -1058,12 +1044,7 @@ mod tests {
 
     #[test]
     fn test_read_batch_values_def_rep_levels() {
-        test_read_batch_int32(
-            128,
-            &mut [0; 128],
-            Some(&mut [0; 128]),
-            Some(&mut [0; 128]),
-        );
+        test_read_batch_int32(128, &mut [0; 128], Some(&mut [0; 128]), Some(&mut [0; 128]));
     }
 
     #[test]
@@ -1389,17 +1370,14 @@ mod tests {
             let max_def_level = desc.max_def_level();
             let max_rep_level = desc.max_rep_level();
             let page_reader = InMemoryPageReader::new(pages);
-            let column_reader: ColumnReader =
-                get_column_reader(desc, Box::new(page_reader));
+            let column_reader: ColumnReader = get_column_reader(desc, Box::new(page_reader));
             let mut typed_column_reader = get_typed_column_reader::<T>(column_reader);
 
             let mut curr_values_read = 0;
             let mut curr_levels_read = 0;
             loop {
-                let actual_def_levels =
-                    def_levels.as_mut().map(|vec| &mut vec[curr_levels_read..]);
-                let actual_rep_levels =
-                    rep_levels.as_mut().map(|vec| &mut vec[curr_levels_read..]);
+                let actual_def_levels = def_levels.as_mut().map(|vec| &mut vec[curr_levels_read..]);
+                let actual_rep_levels = rep_levels.as_mut().map(|vec| &mut vec[curr_levels_read..]);
 
                 let (_, values_read, levels_read) = typed_column_reader
                     .read_records(

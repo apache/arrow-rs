@@ -296,12 +296,10 @@ fn configure_writer_properties(args: &Args) -> WriterProperties {
         properties_builder = properties_builder.set_writer_version(writer_version);
     }
     if let Some(max_row_group_size) = args.max_row_group_size {
-        properties_builder =
-            properties_builder.set_max_row_group_size(max_row_group_size);
+        properties_builder = properties_builder.set_max_row_group_size(max_row_group_size);
     }
     if let Some(enable_bloom_filter) = args.enable_bloom_filter {
-        properties_builder =
-            properties_builder.set_bloom_filter_enabled(enable_bloom_filter);
+        properties_builder = properties_builder.set_bloom_filter_enabled(enable_bloom_filter);
     }
     properties_builder.build()
 }
@@ -362,9 +360,7 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
     let writer_properties = Some(configure_writer_properties(args));
     let mut arrow_writer =
         ArrowWriter::try_new(parquet_file, arrow_schema.clone(), writer_properties)
-            .map_err(|e| {
-                ParquetFromCsvError::with_context(e, "Failed to create ArrowWriter")
-            })?;
+            .map_err(|e| ParquetFromCsvError::with_context(e, "Failed to create ArrowWriter"))?;
 
     // open input file
     let input_file = File::open(&args.input_file).map_err(|e| {
@@ -377,9 +373,7 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
     // open input file decoder
     let input_file_decoder = match args.csv_compression {
         Compression::UNCOMPRESSED => Box::new(input_file) as Box<dyn Read>,
-        Compression::SNAPPY => {
-            Box::new(snap::read::FrameDecoder::new(input_file)) as Box<dyn Read>
-        }
+        Compression::SNAPPY => Box::new(snap::read::FrameDecoder::new(input_file)) as Box<dyn Read>,
         Compression::GZIP(_) => {
             Box::new(flate2::read::MultiGzDecoder::new(input_file)) as Box<dyn Read>
         }
@@ -389,9 +383,11 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
         Compression::LZ4 => {
             Box::new(lz4_flex::frame::FrameDecoder::new(input_file)) as Box<dyn Read>
         }
-        Compression::ZSTD(_) => Box::new(zstd::Decoder::new(input_file).map_err(|e| {
-            ParquetFromCsvError::with_context(e, "Failed to create zstd::Decoder")
-        })?) as Box<dyn Read>,
+        Compression::ZSTD(_) => {
+            Box::new(zstd::Decoder::new(input_file).map_err(|e| {
+                ParquetFromCsvError::with_context(e, "Failed to create zstd::Decoder")
+            })?) as Box<dyn Read>
+        }
         d => unimplemented!("compression type {d}"),
     };
 
@@ -698,15 +694,11 @@ mod tests {
             }
 
             Compression::ZSTD(level) => {
-                let mut encoder =
-                    zstd::Encoder::new(input_file, level.compression_level())
-                        .map_err(|e| {
-                            ParquetFromCsvError::with_context(
-                                e,
-                                "Failed to create zstd::Encoder",
-                            )
-                        })
-                        .unwrap();
+                let mut encoder = zstd::Encoder::new(input_file, level.compression_level())
+                    .map_err(|e| {
+                        ParquetFromCsvError::with_context(e, "Failed to create zstd::Encoder")
+                    })
+                    .unwrap();
                 write_tmp_file(&mut encoder);
                 encoder.finish().unwrap()
             }
@@ -742,15 +734,11 @@ mod tests {
     fn test_convert_csv_to_parquet() {
         test_convert_compressed_csv_to_parquet(Compression::UNCOMPRESSED);
         test_convert_compressed_csv_to_parquet(Compression::SNAPPY);
-        test_convert_compressed_csv_to_parquet(Compression::GZIP(
-            GzipLevel::try_new(1).unwrap(),
-        ));
+        test_convert_compressed_csv_to_parquet(Compression::GZIP(GzipLevel::try_new(1).unwrap()));
         test_convert_compressed_csv_to_parquet(Compression::BROTLI(
             BrotliLevel::try_new(2).unwrap(),
         ));
         test_convert_compressed_csv_to_parquet(Compression::LZ4);
-        test_convert_compressed_csv_to_parquet(Compression::ZSTD(
-            ZstdLevel::try_new(1).unwrap(),
-        ));
+        test_convert_compressed_csv_to_parquet(Compression::ZSTD(ZstdLevel::try_new(1).unwrap()));
     }
 }

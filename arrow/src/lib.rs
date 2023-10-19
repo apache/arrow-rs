@@ -375,8 +375,7 @@ pub mod pyarrow;
 
 pub mod record_batch {
     pub use arrow_array::{
-        RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader,
-        RecordBatchWriter,
+        RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
     };
 }
 pub use arrow_array::temporal_conversions;

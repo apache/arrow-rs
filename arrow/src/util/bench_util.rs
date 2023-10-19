@@ -73,11 +73,7 @@ where
 }
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
-pub fn create_boolean_array(
-    size: usize,
-    null_density: f32,
-    true_density: f32,
-) -> BooleanArray
+pub fn create_boolean_array(size: usize, null_density: f32, true_density: f32) -> BooleanArray
 where
     Standard: Distribution<bool>,
 {
@@ -238,11 +234,7 @@ pub fn create_binary_array<Offset: OffsetSizeTrait>(
 }
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
-pub fn create_fsb_array(
-    size: usize,
-    null_density: f32,
-    value_len: usize,
-) -> FixedSizeBinaryArray {
+pub fn create_fsb_array(size: usize, null_density: f32, value_len: usize) -> FixedSizeBinaryArray {
     let rng = &mut seedable_rng();
 
     FixedSizeBinaryArray::try_from_sparse_iter_with_size(
@@ -293,17 +285,15 @@ where
     K::Native: SampleUniform,
 {
     let mut rng = seedable_rng();
-    let data_type = DataType::Dictionary(
-        Box::new(K::DATA_TYPE),
-        Box::new(values.data_type().clone()),
-    );
+    let data_type =
+        DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
 
     let keys: Buffer = (0..size)
         .map(|_| rng.gen_range(key_range.clone()))
         .collect();
 
-    let nulls: Option<Buffer> = (null_density != 0.)
-        .then(|| (0..size).map(|_| rng.gen_bool(null_density as _)).collect());
+    let nulls: Option<Buffer> =
+        (null_density != 0.).then(|| (0..size).map(|_| rng.gen_bool(null_density as _)).collect());
 
     let data = ArrayDataBuilder::new(data_type)
         .len(size)

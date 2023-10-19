@@ -23,9 +23,7 @@ use crate::azure::credential::{
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
 use crate::client::TokenCredentialProvider;
 use crate::config::ConfigValue;
-use crate::{
-    ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider,
-};
+use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
@@ -363,9 +361,7 @@ impl FromStr for AzureConfigKey {
             | "account_key"
             | "access_key" => Ok(Self::AccessKey),
             "azure_storage_account_name" | "account_name" => Ok(Self::AccountName),
-            "azure_storage_client_id" | "azure_client_id" | "client_id" => {
-                Ok(Self::ClientId)
-            }
+            "azure_storage_client_id" | "azure_client_id" | "client_id" => Ok(Self::ClientId),
             "azure_storage_client_secret" | "azure_client_secret" | "client_secret" => {
                 Ok(Self::ClientSecret)
             }
@@ -375,27 +371,20 @@ impl FromStr for AzureConfigKey {
             | "azure_authority_id"
             | "tenant_id"
             | "authority_id" => Ok(Self::AuthorityId),
-            "azure_storage_sas_key"
-            | "azure_storage_sas_token"
-            | "sas_key"
-            | "sas_token" => Ok(Self::SasKey),
+            "azure_storage_sas_key" | "azure_storage_sas_token" | "sas_key" | "sas_token" => {
+                Ok(Self::SasKey)
+            }
             "azure_storage_token" | "bearer_token" | "token" => Ok(Self::Token),
             "azure_storage_use_emulator" | "use_emulator" => Ok(Self::UseEmulator),
-            "azure_storage_endpoint" | "azure_endpoint" | "endpoint" => {
-                Ok(Self::Endpoint)
-            }
+            "azure_storage_endpoint" | "azure_endpoint" | "endpoint" => Ok(Self::Endpoint),
             "azure_msi_endpoint"
             | "azure_identity_endpoint"
             | "identity_endpoint"
             | "msi_endpoint" => Ok(Self::MsiEndpoint),
             "azure_object_id" | "object_id" => Ok(Self::ObjectId),
             "azure_msi_resource_id" | "msi_resource_id" => Ok(Self::MsiResourceId),
-            "azure_federated_token_file" | "federated_token_file" => {
-                Ok(Self::FederatedTokenFile)
-            }
-            "azure_use_fabric_endpoint" | "use_fabric_endpoint" => {
-                Ok(Self::UseFabricEndpoint)
-            }
+            "azure_federated_token_file" | "federated_token_file" => Ok(Self::FederatedTokenFile),
+            "azure_use_fabric_endpoint" | "use_fabric_endpoint" => Ok(Self::UseFabricEndpoint),
             "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
             "azure_container_name" | "container_name" => Ok(Self::ContainerName),
             // Backwards compatibility
@@ -505,9 +494,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::MsiEndpoint => self.msi_endpoint = Some(value.into()),
             AzureConfigKey::ObjectId => self.object_id = Some(value.into()),
             AzureConfigKey::MsiResourceId => self.msi_resource_id = Some(value.into()),
-            AzureConfigKey::FederatedTokenFile => {
-                self.federated_token_file = Some(value.into())
-            }
+            AzureConfigKey::FederatedTokenFile => self.federated_token_file = Some(value.into()),
             AzureConfigKey::UseAzureCli => self.use_azure_cli.parse(value),
             AzureConfigKey::UseEmulator => self.use_emulator.parse(value),
             AzureConfigKey::Endpoint => self.endpoint = Some(value.into()),
@@ -522,20 +509,14 @@ impl MicrosoftAzureBuilder {
 
     /// Set an option on the builder via a key - value pair.
     #[deprecated(note = "Use with_config")]
-    pub fn try_with_option(
-        self,
-        key: impl AsRef<str>,
-        value: impl Into<String>,
-    ) -> Result<Self> {
+    pub fn try_with_option(self, key: impl AsRef<str>, value: impl Into<String>) -> Result<Self> {
         Ok(self.with_config(key.as_ref().parse()?, value))
     }
 
     /// Hydrate builder from key value pairs
     #[deprecated(note = "Use with_config")]
     #[allow(deprecated)]
-    pub fn try_with_options<
-        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
-    >(
+    pub fn try_with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
         mut self,
         options: I,
     ) -> Result<Self> {
@@ -566,9 +547,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::SasKey => self.sas_key.clone(),
             AzureConfigKey::Token => self.bearer_token.clone(),
             AzureConfigKey::UseEmulator => Some(self.use_emulator.to_string()),
-            AzureConfigKey::UseFabricEndpoint => {
-                Some(self.use_fabric_endpoint.to_string())
-            }
+            AzureConfigKey::UseFabricEndpoint => Some(self.use_fabric_endpoint.to_string()),
             AzureConfigKey::Endpoint => self.endpoint.clone(),
             AzureConfigKey::MsiEndpoint => self.msi_endpoint.clone(),
             AzureConfigKey::ObjectId => self.object_id.clone(),
@@ -612,12 +591,10 @@ impl MicrosoftAzureBuilder {
                 }
             }
             "https" => match host.split_once('.') {
-                Some((a, "dfs.core.windows.net"))
-                | Some((a, "blob.core.windows.net")) => {
+                Some((a, "dfs.core.windows.net")) | Some((a, "blob.core.windows.net")) => {
                     self.account_name = Some(validate(a)?);
                 }
-                Some((a, "dfs.fabric.microsoft.com"))
-                | Some((a, "blob.fabric.microsoft.com")) => {
+                Some((a, "dfs.fabric.microsoft.com")) | Some((a, "blob.fabric.microsoft.com")) => {
                     self.account_name = Some(validate(a)?);
                     // Attempt to infer the container name from the URL
                     // - https://onelake.dfs.fabric.microsoft.com/<workspaceGUID>/<itemGUID>/Files/test.csv
@@ -657,10 +634,7 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set a static bearer token to be used for authorizing requests
-    pub fn with_bearer_token_authorization(
-        mut self,
-        bearer_token: impl Into<String>,
-    ) -> Self {
+    pub fn with_bearer_token_authorization(mut self, bearer_token: impl Into<String>) -> Self {
         self.bearer_token = Some(bearer_token.into());
         self
     }
@@ -697,10 +671,7 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set query pairs appended to the url for shared access signature authorization
-    pub fn with_sas_authorization(
-        mut self,
-        query_pairs: impl Into<Vec<(String, String)>>,
-    ) -> Self {
+    pub fn with_sas_authorization(mut self, query_pairs: impl Into<Vec<(String, String)>>) -> Self {
         self.sas_query_pairs = Some(query_pairs.into());
         self
     }
@@ -769,10 +740,7 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Set a trusted proxy CA certificate
-    pub fn with_proxy_ca_certificate(
-        mut self,
-        proxy_ca_certificate: impl Into<String>,
-    ) -> Self {
+    pub fn with_proxy_ca_certificate(mut self, proxy_ca_certificate: impl Into<String>) -> Self {
         self.client_options = self
             .client_options
             .with_proxy_ca_certificate(proxy_ca_certificate);
@@ -800,10 +768,7 @@ impl MicrosoftAzureBuilder {
     /// Sets a file path for acquiring azure federated identity token in k8s
     ///
     /// requires `client_id` and `tenant_id` to be set
-    pub fn with_federated_token_file(
-        mut self,
-        federated_token_file: impl Into<String>,
-    ) -> Self {
+    pub fn with_federated_token_file(mut self, federated_token_file: impl Into<String>) -> Self {
         self.federated_token_file = Some(federated_token_file.into());
         self
     }
@@ -855,8 +820,8 @@ impl MicrosoftAzureBuilder {
                 },
             };
 
-            let url = Url::parse(&account_url)
-                .context(UnableToParseUrlSnafu { url: account_url })?;
+            let url =
+                Url::parse(&account_url).context(UnableToParseUrlSnafu { url: account_url })?;
 
             let credential = if let Some(credential) = self.credentials {
                 credential
@@ -934,12 +899,10 @@ impl MicrosoftAzureBuilder {
 /// if present, otherwise falls back to default_url
 fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
     let url = match std::env::var(env_name) {
-        Ok(env_value) => {
-            Url::parse(&env_value).context(UnableToParseEmulatorUrlSnafu {
-                env_name,
-                env_value,
-            })?
-        }
+        Ok(env_value) => Url::parse(&env_value).context(UnableToParseEmulatorUrlSnafu {
+            env_name,
+            env_value,
+        })?,
         Err(_) => Url::parse(default_url).expect("Failed to parse default URL"),
     };
     Ok(url)

@@ -51,11 +51,7 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    async fn abort_multipart(
-        &self,
-        _: &Path,
-        _: &MultipartId,
-    ) -> object_store::Result<()> {
+    async fn abort_multipart(&self, _: &Path, _: &MultipartId) -> object_store::Result<()> {
         todo!()
     }
 
@@ -79,10 +75,7 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    async fn list_with_delimiter(
-        &self,
-        _: Option<&Path>,
-    ) -> object_store::Result<ListResult> {
+    async fn list_with_delimiter(&self, _: Option<&Path>) -> object_store::Result<ListResult> {
         todo!()
     }
 

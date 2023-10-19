@@ -578,9 +578,7 @@ macro_rules! downcast_run_array {
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
 /// [`GenericListArray<T>`], panicking on failure.
-pub fn as_generic_list_array<S: OffsetSizeTrait>(
-    arr: &dyn Array,
-) -> &GenericListArray<S> {
+pub fn as_generic_list_array<S: OffsetSizeTrait>(arr: &dyn Array) -> &GenericListArray<S> {
     arr.as_any()
         .downcast_ref::<GenericListArray<S>>()
         .expect("Unable to downcast to list array")
@@ -612,9 +610,7 @@ pub fn as_large_list_array(arr: &dyn Array) -> &LargeListArray {
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
 /// [`GenericBinaryArray<S>`], panicking on failure.
 #[inline]
-pub fn as_generic_binary_array<S: OffsetSizeTrait>(
-    arr: &dyn Array,
-) -> &GenericBinaryArray<S> {
+pub fn as_generic_binary_array<S: OffsetSizeTrait>(arr: &dyn Array) -> &GenericBinaryArray<S> {
     arr.as_any()
         .downcast_ref::<GenericBinaryArray<S>>()
         .expect("Unable to downcast to binary array")
@@ -826,8 +822,7 @@ pub trait AsArray: private::Sealed {
     }
 
     /// Downcast this to a [`DictionaryArray`] returning `None` if not possible
-    fn as_dictionary_opt<K: ArrowDictionaryKeyType>(&self)
-        -> Option<&DictionaryArray<K>>;
+    fn as_dictionary_opt<K: ArrowDictionaryKeyType>(&self) -> Option<&DictionaryArray<K>>;
 
     /// Downcast this to a [`DictionaryArray`] panicking if not possible
     fn as_dictionary<K: ArrowDictionaryKeyType>(&self) -> &DictionaryArray<K> {
@@ -877,9 +872,7 @@ impl AsArray for dyn Array + '_ {
         self.as_any().downcast_ref()
     }
 
-    fn as_dictionary_opt<K: ArrowDictionaryKeyType>(
-        &self,
-    ) -> Option<&DictionaryArray<K>> {
+    fn as_dictionary_opt<K: ArrowDictionaryKeyType>(&self) -> Option<&DictionaryArray<K>> {
         self.as_any().downcast_ref()
     }
 
@@ -926,9 +919,7 @@ impl AsArray for ArrayRef {
         self.as_any().downcast_ref()
     }
 
-    fn as_dictionary_opt<K: ArrowDictionaryKeyType>(
-        &self,
-    ) -> Option<&DictionaryArray<K>> {
+    fn as_dictionary_opt<K: ArrowDictionaryKeyType>(&self) -> Option<&DictionaryArray<K>> {
         self.as_ref().as_dictionary_opt()
     }
 
@@ -972,9 +963,7 @@ mod tests {
 
     #[test]
     fn test_decimal256array() {
-        let a = Decimal256Array::from_iter_values(
-            [1, 2, 4, 5].into_iter().map(i256::from_i128),
-        );
+        let a = Decimal256Array::from_iter_values([1, 2, 4, 5].into_iter().map(i256::from_i128));
         assert!(!as_primitive_array::<Decimal256Type>(&a).is_empty());
     }
 }

@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::types::{ByteArrayType, GenericBinaryType};
-use crate::{
-    Array, GenericByteArray, GenericListArray, GenericStringArray, OffsetSizeTrait,
-};
+use crate::{Array, GenericByteArray, GenericListArray, GenericStringArray, OffsetSizeTrait};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 
@@ -102,9 +100,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<&[u8]>>>
-    for GenericBinaryArray<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<&[u8]>>> for GenericBinaryArray<OffsetSize> {
     fn from(v: Vec<Option<&[u8]>>) -> Self {
         Self::from_opt_vec(v)
     }
@@ -376,9 +372,11 @@ mod tests {
             .unwrap();
         let binary_array1 = GenericBinaryArray::<O>::from(array_data1);
 
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
-            Field::new("item", DataType::UInt8, false),
-        ));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
+            "item",
+            DataType::UInt8,
+            false,
+        )));
 
         let array_data2 = ArrayData::builder(data_type)
             .len(3)
@@ -423,9 +421,11 @@ mod tests {
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
         let null_buffer = Buffer::from_slice_ref([0b101]);
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
-            Field::new("item", DataType::UInt8, false),
-        ));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
+            "item",
+            DataType::UInt8,
+            false,
+        )));
 
         // [None, Some(b"Parquet")]
         let array_data = ArrayData::builder(data_type)
@@ -456,9 +456,7 @@ mod tests {
         _test_generic_binary_array_from_list_array_with_offset::<i64>();
     }
 
-    fn _test_generic_binary_array_from_list_array_with_child_nulls_failed<
-        O: OffsetSizeTrait,
-    >() {
+    fn _test_generic_binary_array_from_list_array_with_child_nulls_failed<O: OffsetSizeTrait>() {
         let values = b"HelloArrow";
         let child_data = ArrayData::builder(DataType::UInt8)
             .len(10)
@@ -468,9 +466,11 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
-            Field::new("item", DataType::UInt8, true),
-        ));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
+            "item",
+            DataType::UInt8,
+            true,
+        )));
 
         // [None, Some(b"Parquet")]
         let array_data = ArrayData::builder(data_type)
@@ -558,8 +558,7 @@ mod tests {
             .unwrap();
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
-        let data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::UInt32, false)));
+        let data_type = DataType::List(Arc::new(Field::new("item", DataType::UInt32, false)));
         let array_data = ArrayData::builder(data_type)
             .len(3)
             .add_buffer(Buffer::from_slice_ref(offsets))
@@ -575,8 +574,7 @@ mod tests {
         expected = "Trying to access an element at index 4 from a BinaryArray of length 3"
     )]
     fn test_binary_array_get_value_index_out_of_bound() {
-        let values: [u8; 12] =
-            [104, 101, 108, 108, 111, 112, 97, 114, 113, 117, 101, 116];
+        let values: [u8; 12] = [104, 101, 108, 108, 111, 112, 97, 114, 113, 117, 101, 116];
         let offsets: [i32; 4] = [0, 5, 5, 12];
         let array_data = ArrayData::builder(DataType::Binary)
             .len(3)

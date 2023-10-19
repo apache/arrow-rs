@@ -141,19 +141,13 @@ fn create_array(reader: &mut ArrayReader, field: &Field) -> Result<ArrayRef, Arr
                 ArrowError::ParseError(format!("Field {field} does not have dict id"))
             })?;
 
-            let value_array =
-                reader.dictionaries_by_id.get(&dict_id).ok_or_else(|| {
-                    ArrowError::ParseError(format!(
-                        "Cannot find a dictionary batch with dict id: {dict_id}"
-                    ))
-                })?;
+            let value_array = reader.dictionaries_by_id.get(&dict_id).ok_or_else(|| {
+                ArrowError::ParseError(format!(
+                    "Cannot find a dictionary batch with dict id: {dict_id}"
+                ))
+            })?;
 
-            create_dictionary_array(
-                index_node,
-                data_type,
-                &index_buffers,
-                value_array.clone(),
-            )
+            create_dictionary_array(index_node, data_type, &index_buffers, value_array.clone())
         }
         Union(fields, mode) => {
             let union_node = reader.next_node(field)?;
@@ -232,9 +226,7 @@ fn create_primitive_array(
                 .null_bit_buffer(null_buffer)
                 .build_aligned()?
         }
-        _ if data_type.is_primitive()
-            || matches!(data_type, Boolean | FixedSizeBinary(_)) =>
-        {
+        _ if data_type.is_primitive() || matches!(data_type, Boolean | FixedSizeBinary(_)) => {
             // read 2 buffers: null buffer (optional) and data buffer
             ArrayData::builder(data_type.clone())
                 .len(length)
@@ -560,10 +552,7 @@ impl<R: Read + Seek> FileReader<R> {
     ///
     /// Returns errors if the file does not meet the Arrow Format header and footer
     /// requirements
-    pub fn try_new(
-        reader: R,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
         let mut reader = BufReader::new(reader);
         // check if header and footer contain correct magic bytes
         let mut magic_buffer: [u8; 6] = [0; 6];
@@ -596,9 +585,7 @@ impl<R: Read + Seek> FileReader<R> {
         })?;
 
         let blocks = footer.recordBatches().ok_or_else(|| {
-            ArrowError::ParseError(
-                "Unable to get record batches from IPC Footer".to_string(),
-            )
+            ArrowError::ParseError("Unable to get record batches from IPC Footer".to_string())
         })?;
 
         let total_blocks = blocks.len();
@@ -633,9 +620,7 @@ impl<R: Read + Seek> FileReader<R> {
                 reader.read_exact(&mut block_data)?;
 
                 let message = crate::root_as_message(&block_data[..]).map_err(|err| {
-                    ArrowError::ParseError(format!(
-                        "Unable to get root as message: {err:?}"
-                    ))
+                    ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
                 })?;
 
                 match message.header_type() {
@@ -643,8 +628,7 @@ impl<R: Read + Seek> FileReader<R> {
                         let batch = message.header_as_dictionary_batch().unwrap();
 
                         // read the block that makes up the dictionary batch into a buffer
-                        let mut buf =
-                            MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
+                        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                         reader.seek(SeekFrom::Start(
                             block.offset() as u64 + block.metaDataLength() as u64,
                         ))?;
@@ -752,9 +736,7 @@ impl<R: Read + Seek> FileReader<R> {
             )),
             crate::MessageHeader::RecordBatch => {
                 let batch = message.header_as_record_batch().ok_or_else(|| {
-                    ArrowError::IpcError(
-                        "Unable to read IPC message as record batch".to_string(),
-                    )
+                    ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
                 // read the block that makes up the record batch into a buffer
                 let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
@@ -769,13 +751,11 @@ impl<R: Read + Seek> FileReader<R> {
                     self.schema(),
                     &self.dictionaries_by_id,
                     self.projection.as_ref().map(|x| x.0.as_ref()),
-                    &message.version()
-
-                ).map(Some)
+                    &message.version(),
+                )
+                .map(Some)
             }
-            crate::MessageHeader::NONE => {
-                Ok(None)
-            }
+            crate::MessageHeader::NONE => Ok(None),
             t => Err(ArrowError::InvalidArgumentError(format!(
                 "Reading types other than record batches not yet supported, unable to read {t:?}"
             ))),
@@ -856,10 +836,7 @@ impl<R: Read> StreamReader<BufReader<R>> {
     /// The first message in the stream is the schema, the reader will fail if it does not
     /// encounter a schema.
     /// To check if the reader is done, use `is_finished(self)`
-    pub fn try_new(
-        reader: R,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_new(reader: R, projection: Option<Vec<usize>>) -> Result<Self, ArrowError> {
         Self::try_new_unbuffered(BufReader::new(reader), projection)
     }
 }
@@ -976,15 +953,21 @@ impl<R: Read> StreamReader<R> {
             )),
             crate::MessageHeader::RecordBatch => {
                 let batch = message.header_as_record_batch().ok_or_else(|| {
-                    ArrowError::IpcError(
-                        "Unable to read IPC message as record batch".to_string(),
-                    )
+                    ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
                 // read the block that makes up the record batch into a buffer
                 let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
-                read_record_batch(&buf.into(), batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref()), &message.version()).map(Some)
+                read_record_batch(
+                    &buf.into(),
+                    batch,
+                    self.schema(),
+                    &self.dictionaries_by_id,
+                    self.projection.as_ref().map(|x| x.0.as_ref()),
+                    &message.version(),
+                )
+                .map(Some)
             }
             crate::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().ok_or_else(|| {
@@ -997,18 +980,20 @@ impl<R: Read> StreamReader<R> {
                 self.reader.read_exact(&mut buf)?;
 
                 read_dictionary(
-                    &buf.into(), batch, &self.schema, &mut self.dictionaries_by_id, &message.version()
+                    &buf.into(),
+                    batch,
+                    &self.schema,
+                    &mut self.dictionaries_by_id,
+                    &message.version(),
                 )?;
 
                 // read the next message until we encounter a RecordBatch
                 self.maybe_next()
             }
-            crate::MessageHeader::NONE => {
-                Ok(None)
-            }
-            t => Err(ArrowError::InvalidArgumentError(
-                format!("Reading types other than record batches not yet supported, unable to read {t:?} ")
-            )),
+            crate::MessageHeader::NONE => Ok(None),
+            t => Err(ArrowError::InvalidArgumentError(format!(
+                "Reading types other than record batches not yet supported, unable to read {t:?} "
+            ))),
         }
     }
 
@@ -1055,13 +1040,10 @@ mod tests {
 
     fn create_test_projection_schema() -> Schema {
         // define field types
-        let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
 
-        let fixed_size_list_data_type = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Int32, false)),
-            3,
-        );
+        let fixed_size_list_data_type =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 3);
 
         let union_fields = UnionFields::new(
             vec![0, 1],
@@ -1124,8 +1106,7 @@ mod tests {
         ];
         let array6 = ListArray::from_iter_primitive::<Int32Type, _, _>(array6_values);
         let array7_values = vec![vec![11, 12, 13], vec![22, 23, 24], vec![33, 34, 35]];
-        let array7 =
-            FixedSizeBinaryArray::try_from_iter(array7_values.into_iter()).unwrap();
+        let array7 = FixedSizeBinaryArray::try_from_iter(array7_values.into_iter()).unwrap();
 
         let array8_values = ArrayData::builder(DataType::Int32)
             .len(9)
@@ -1201,8 +1182,7 @@ mod tests {
         // write record batch in IPC format
         let mut buf = Vec::new();
         {
-            let mut writer =
-                crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            let mut writer = crate::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
             writer.write(&batch).unwrap();
             writer.finish().unwrap();
         }
@@ -1210,8 +1190,7 @@ mod tests {
         // read record batch with projection
         for index in 0..12 {
             let projection = vec![index];
-            let reader =
-                FileReader::try_new(std::io::Cursor::new(buf.clone()), Some(projection));
+            let reader = FileReader::try_new(std::io::Cursor::new(buf.clone()), Some(projection));
             let read_batch = reader.unwrap().next().unwrap().unwrap();
             let projected_column = read_batch.column(0);
             let expected_column = batch.column(index);
@@ -1222,10 +1201,8 @@ mod tests {
 
         {
             // read record batch with reversed projection
-            let reader = FileReader::try_new(
-                std::io::Cursor::new(buf.clone()),
-                Some(vec![3, 2, 1]),
-            );
+            let reader =
+                FileReader::try_new(std::io::Cursor::new(buf.clone()), Some(vec![3, 2, 1]));
             let read_batch = reader.unwrap().next().unwrap().unwrap();
             let expected_batch = batch.project(&[3, 2, 1]).unwrap();
             assert_eq!(read_batch, expected_batch);
@@ -1249,8 +1226,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), arrays).unwrap();
         // create stream writer
         let mut file = tempfile::tempfile().unwrap();
-        let mut stream_writer =
-            crate::writer::StreamWriter::try_new(&mut file, &schema).unwrap();
+        let mut stream_writer = crate::writer::StreamWriter::try_new(&mut file, &schema).unwrap();
         stream_writer.write(&batch).unwrap();
         stream_writer.finish().unwrap();
 
@@ -1298,8 +1274,7 @@ mod tests {
 
     fn roundtrip_ipc(rb: &RecordBatch) -> RecordBatch {
         let mut buf = Vec::new();
-        let mut writer =
-            crate::writer::FileWriter::try_new(&mut buf, &rb.schema()).unwrap();
+        let mut writer = crate::writer::FileWriter::try_new(&mut buf, &rb.schema()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
         drop(writer);
@@ -1310,15 +1285,13 @@ mod tests {
 
     fn roundtrip_ipc_stream(rb: &RecordBatch) -> RecordBatch {
         let mut buf = Vec::new();
-        let mut writer =
-            crate::writer::StreamWriter::try_new(&mut buf, &rb.schema()).unwrap();
+        let mut writer = crate::writer::StreamWriter::try_new(&mut buf, &rb.schema()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
         drop(writer);
 
         let mut reader =
-            crate::reader::StreamReader::try_new(std::io::Cursor::new(buf), None)
-                .unwrap();
+            crate::reader::StreamReader::try_new(std::io::Cursor::new(buf), None).unwrap();
         reader.next().unwrap().unwrap()
     }
 
@@ -1336,8 +1309,7 @@ mod tests {
         writer.finish().unwrap();
         drop(writer);
 
-        let reader =
-            crate::reader::FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
+        let reader = crate::reader::FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
         assert_eq!(reader.custom_metadata(), &test_metadata);
     }
 
@@ -1434,8 +1406,7 @@ mod tests {
         // can be compared as such.
         assert_eq!(input_batch.column(1), output_batch.column(1));
 
-        let run_array_1_unsliced =
-            unslice_run_array(run_array_1_sliced.into_data()).unwrap();
+        let run_array_1_unsliced = unslice_run_array(run_array_1_sliced.into_data()).unwrap();
         assert_eq!(run_array_1_unsliced, output_batch.column(0).into_data());
     }
 
@@ -1528,8 +1499,7 @@ mod tests {
             dict_dict_array.data_type().clone(),
             false,
         )]));
-        let input_batch =
-            RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
+        let input_batch = RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
         assert_eq!(input_batch, output_batch);
     }
@@ -1564,8 +1534,7 @@ mod tests {
             dict_dict_array.data_type().clone(),
             false,
         )]));
-        let input_batch =
-            RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
+        let input_batch = RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
         assert_eq!(input_batch, output_batch);
     }
@@ -1581,10 +1550,7 @@ mod tests {
             false,
         )));
         let offsets: &[i32; 5] = &[0, 2, 4, 4, 6];
-        test_roundtrip_stream_dict_of_list_of_dict_impl::<i32, i32>(
-            list_data_type,
-            offsets,
-        );
+        test_roundtrip_stream_dict_of_list_of_dict_impl::<i32, i32>(list_data_type, offsets);
 
         // large list
         let list_data_type = DataType::LargeList(Arc::new(Field::new_dict(
@@ -1595,10 +1561,7 @@ mod tests {
             false,
         )));
         let offsets: &[i64; 5] = &[0, 2, 4, 4, 7];
-        test_roundtrip_stream_dict_of_list_of_dict_impl::<i64, i64>(
-            list_data_type,
-            offsets,
-        );
+        test_roundtrip_stream_dict_of_list_of_dict_impl::<i64, i64>(list_data_type, offsets);
     }
 
     #[test]
@@ -1633,8 +1596,7 @@ mod tests {
             dict_dict_array.data_type().clone(),
             false,
         )]));
-        let input_batch =
-            RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
+        let input_batch = RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
         assert_eq!(input_batch, output_batch);
     }
@@ -1645,8 +1607,7 @@ mod tests {
         let options = RecordBatchOptions::new()
             .with_match_field_names(true)
             .with_row_count(Some(10));
-        let input_batch =
-            RecordBatch::try_new_with_options(schema, vec![], &options).unwrap();
+        let input_batch = RecordBatch::try_new_with_options(schema, vec![], &options).unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
         assert_eq!(input_batch, output_batch);
     }

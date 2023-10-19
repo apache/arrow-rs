@@ -63,36 +63,28 @@ fn row_bench(c: &mut Criterion) {
     let cols = vec![Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 i64(0)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
     do_bench(c, "4096 string(10, 0)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 30)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 30)) as ArrayRef];
     do_bench(c, "4096 string(30, 0)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 100)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 100)) as ArrayRef];
     do_bench(c, "4096 string(100, 0)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 100)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 100)) as ArrayRef];
     do_bench(c, "4096 string(100, 0.5)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 10)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 10)) as ArrayRef];
     do_bench(c, "4096 string_dictionary(10, 0)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 30)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 30)) as ArrayRef];
     do_bench(c, "4096 string_dictionary(30, 0)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 100)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 100)) as ArrayRef];
     do_bench(c, "4096 string_dictionary(100, 0)", cols.clone());
 
-    let cols =
-        vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0.5, 100)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_dict_array::<Int32Type>(4096, 0.5, 100)) as ArrayRef];
     do_bench(c, "4096 string_dictionary(100, 0.5)", cols.clone());
 
     let values = create_string_array_with_len::<i32>(10, 0., 10);

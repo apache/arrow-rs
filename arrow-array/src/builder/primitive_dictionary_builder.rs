@@ -221,8 +221,7 @@ where
                 let key = self.values_builder.len();
                 self.values_builder.append_value(value);
                 vacant.insert(key);
-                K::Native::from_usize(key)
-                    .ok_or(ArrowError::DictionaryKeyOverflowError)?
+                K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?
             }
             Entry::Occupied(o) => K::Native::usize_as(*o.get()),
         };
@@ -266,10 +265,8 @@ where
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
-        let data_type = DataType::Dictionary(
-            Box::new(K::DATA_TYPE),
-            Box::new(values.data_type().clone()),
-        );
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
 
         let builder = keys
             .into_data()
@@ -285,8 +282,7 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
 
-        let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
 
         let builder = keys
             .into_data()
@@ -331,8 +327,7 @@ mod tests {
 
     #[test]
     fn test_primitive_dictionary_builder() {
-        let mut builder =
-            PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(3, 2);
+        let mut builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(3, 2);
         builder.append(12345678).unwrap();
         builder.append_null();
         builder.append(22345678).unwrap();
@@ -384,8 +379,7 @@ mod tests {
     #[test]
     fn test_primitive_dictionary_with_builders() {
         let keys_builder = PrimitiveBuilder::<Int32Type>::new();
-        let values_builder =
-            Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
+        let values_builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
         let mut builder =
             PrimitiveDictionaryBuilder::<Int32Type, Decimal128Type>::new_from_empty_builders(
                 keys_builder,

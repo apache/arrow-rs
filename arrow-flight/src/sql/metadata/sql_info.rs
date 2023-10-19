@@ -30,8 +30,8 @@ use std::sync::Arc;
 use arrow_arith::boolean::or;
 use arrow_array::array::{Array, UInt32Array, UnionArray};
 use arrow_array::builder::{
-    ArrayBuilder, BooleanBuilder, Int32Builder, Int64Builder, Int8Builder, ListBuilder,
-    MapBuilder, StringBuilder, UInt32Builder,
+    ArrayBuilder, BooleanBuilder, Int32Builder, Int64Builder, Int8Builder, ListBuilder, MapBuilder,
+    StringBuilder, UInt32Builder,
 };
 use arrow_array::{RecordBatch, Scalar};
 use arrow_data::ArrayData;
@@ -184,11 +184,7 @@ static UNION_TYPE: Lazy<DataType> = Lazy::new(|| {
                         Field::new("keys", DataType::Int32, false),
                         Field::new(
                             "values",
-                            DataType::List(Arc::new(Field::new(
-                                "item",
-                                DataType::Int32,
-                                true,
-                            ))),
+                            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
                             true,
                         ),
                     ])),
@@ -420,10 +416,7 @@ pub struct SqlInfoData {
 impl SqlInfoData {
     /// Return a  [`RecordBatch`] containing only the requested `u32`, if any
     /// from [`CommandGetSqlInfo`]
-    pub fn record_batch(
-        &self,
-        info: impl IntoIterator<Item = u32>,
-    ) -> Result<RecordBatch> {
+    pub fn record_batch(&self, info: impl IntoIterator<Item = u32>) -> Result<RecordBatch> {
         let arr = self.batch.column(0);
         let type_filter = info
             .into_iter()
@@ -493,9 +486,7 @@ mod tests {
 
     use super::SqlInfoDataBuilder;
     use crate::sql::metadata::tests::assert_batches_eq;
-    use crate::sql::{
-        SqlInfo, SqlNullOrdering, SqlSupportedTransaction, SqlSupportsConvert,
-    };
+    use crate::sql::{SqlInfo, SqlNullOrdering, SqlSupportedTransaction, SqlSupportsConvert};
 
     #[test]
     fn test_sql_infos() {

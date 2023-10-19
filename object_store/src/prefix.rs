@@ -23,8 +23,7 @@ use tokio::io::AsyncWrite;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult,
-    Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult, Result,
 };
 
 #[doc(hidden)]
@@ -93,19 +92,12 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.put_multipart(&full_path).await
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
         let full_path = self.full_path(location);
         self.inner.abort_multipart(&full_path, multipart_id).await
     }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         let full_path = self.full_path(location);
         self.inner.append(&full_path).await
     }
@@ -125,11 +117,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get_opts(&full_path, options).await
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let full_path = self.full_path(location);
         self.inner.get_ranges(&full_path, ranges).await
     }

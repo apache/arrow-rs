@@ -27,8 +27,7 @@ use arrow::{
 };
 use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
-    utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, Location,
-    SchemaAsIpc, Ticket,
+    utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, Location, SchemaAsIpc, Ticket,
 };
 use futures::{channel::mpsc, sink::SinkExt, stream, StreamExt};
 use tonic::{Request, Streaming};
@@ -203,19 +202,16 @@ async fn consume_flight_location(
     let mut dictionaries_by_id = HashMap::new();
 
     for (counter, expected_batch) in expected_data.iter().enumerate() {
-        let data = receive_batch_flight_data(
-            &mut resp,
-            actual_schema.clone(),
-            &mut dictionaries_by_id,
-        )
-        .await
-        .unwrap_or_else(|| {
-            panic!(
-                "Got fewer batches than expected, received so far: {} expected: {}",
-                counter,
-                expected_data.len(),
-            )
-        });
+        let data =
+            receive_batch_flight_data(&mut resp, actual_schema.clone(), &mut dictionaries_by_id)
+                .await
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Got fewer batches than expected, received so far: {} expected: {}",
+                        counter,
+                        expected_data.len(),
+                    )
+                });
 
         let metadata = counter.to_string().into_bytes();
         assert_eq!(metadata, data.app_metadata);
@@ -250,8 +246,8 @@ async fn consume_flight_location(
 
 async fn receive_schema_flight_data(resp: &mut Streaming<FlightData>) -> Option<Schema> {
     let data = resp.next().await?.ok()?;
-    let message = arrow::ipc::root_as_message(&data.data_header[..])
-        .expect("Error parsing message");
+    let message =
+        arrow::ipc::root_as_message(&data.data_header[..]).expect("Error parsing message");
 
     // message header is a Schema, so read it
     let ipc_schema: ipc::Schema = message
@@ -268,8 +264,8 @@ async fn receive_batch_flight_data(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
 ) -> Option<FlightData> {
     let mut data = resp.next().await?.ok()?;
-    let mut message = arrow::ipc::root_as_message(&data.data_header[..])
-        .expect("Error parsing first message");
+    let mut message =
+        arrow::ipc::root_as_message(&data.data_header[..]).expect("Error parsing first message");
 
     while message.header_type() == ipc::MessageHeader::DictionaryBatch {
         reader::read_dictionary(
@@ -284,8 +280,8 @@ async fn receive_batch_flight_data(
         .expect("Error reading dictionary");
 
         data = resp.next().await?.ok()?;
-        message = arrow::ipc::root_as_message(&data.data_header[..])
-            .expect("Error parsing message");
+        message =
+            arrow::ipc::root_as_message(&data.data_header[..]).expect("Error parsing message");
     }
 
     Some(data)

@@ -127,11 +127,7 @@ impl BooleanBuilder {
     ///
     /// Returns an error if the slices are of different lengths
     #[inline]
-    pub fn append_values(
-        &mut self,
-        values: &[bool],
-        is_valid: &[bool],
-    ) -> Result<(), ArrowError> {
+    pub fn append_values(&mut self, values: &[bool], is_valid: &[bool]) -> Result<(), ArrowError> {
         if values.len() != is_valid.len() {
             Err(ArrowError::InvalidArgumentError(
                 "Value and validity lengths must be equal".to_string(),
@@ -250,8 +246,7 @@ mod tests {
 
     #[test]
     fn test_boolean_array_builder_append_slice() {
-        let arr1 =
-            BooleanArray::from(vec![Some(true), Some(false), None, None, Some(false)]);
+        let arr1 = BooleanArray::from(vec![Some(true), Some(false), None, None, Some(false)]);
 
         let mut builder = BooleanArray::builder(0);
         builder.append_slice(&[true, false]);

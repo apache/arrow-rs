@@ -29,8 +29,7 @@ use tokio::io::AsyncWrite;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
-    PutResult,
+    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutResult,
 };
 use crate::{MultipartId, Result};
 
@@ -74,11 +73,7 @@ impl ObjectStore for ChunkedStore {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
         self.inner.abort_multipart(location, multipart_id).await
     }
 

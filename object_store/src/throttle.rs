@@ -21,8 +21,7 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
-    PutResult, Result,
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutResult, Result,
 };
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
@@ -161,18 +160,11 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         Err(super::Error::NotImplemented)
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         Err(super::Error::NotImplemented)
     }
 
-    async fn append(
-        &self,
-        _location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn append(&self, _location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         Err(super::Error::NotImplemented)
     }
 
@@ -199,19 +191,15 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let config = self.config();
 
-        let sleep_duration = config.wait_get_per_call
-            + config.wait_get_per_byte * (range.end - range.start) as u32;
+        let sleep_duration =
+            config.wait_get_per_call + config.wait_get_per_byte * (range.end - range.start) as u32;
 
         sleep(sleep_duration).await;
 
         self.inner.get_range(location, range).await
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let config = self.config();
 
         let total_bytes: usize = ranges.iter().map(|range| range.end - range.start).sum();
@@ -266,8 +254,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         match self.inner.list_with_delimiter(prefix).await {
             Ok(list_result) => {
                 let entries_len = usize_to_u32_saturate(list_result.objects.len());
-                sleep(self.config().wait_list_with_delimiter_per_entry * entries_len)
-                    .await;
+                sleep(self.config().wait_list_with_delimiter_per_entry * entries_len).await;
                 Ok(list_result)
             }
             Err(err) => Err(err),
@@ -487,10 +474,7 @@ mod tests {
         assert_bounds!(measure_put(&store, 0).await, 0);
     }
 
-    async fn place_test_object(
-        store: &ThrottledStore<InMemory>,
-        n_bytes: Option<usize>,
-    ) -> Path {
+    async fn place_test_object(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Path {
         let path = Path::from("foo");
 
         if let Some(n_bytes) = n_bytes {
@@ -506,10 +490,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    async fn place_test_objects(
-        store: &ThrottledStore<InMemory>,
-        n_entries: usize,
-    ) -> Path {
+    async fn place_test_objects(store: &ThrottledStore<InMemory>, n_entries: usize) -> Path {
         let prefix = Path::from("foo");
 
         // clean up store
@@ -530,10 +511,7 @@ mod tests {
         prefix
     }
 
-    async fn measure_delete(
-        store: &ThrottledStore<InMemory>,
-        n_bytes: Option<usize>,
-    ) -> Duration {
+    async fn measure_delete(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Duration {
         let path = place_test_object(store, n_bytes).await;
 
         let t0 = Instant::now();
@@ -543,10 +521,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    async fn measure_get(
-        store: &ThrottledStore<InMemory>,
-        n_bytes: Option<usize>,
-    ) -> Duration {
+    async fn measure_get(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Duration {
         let path = place_test_object(store, n_bytes).await;
 
         let t0 = Instant::now();
@@ -570,10 +545,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    async fn measure_list(
-        store: &ThrottledStore<InMemory>,
-        n_entries: usize,
-    ) -> Duration {
+    async fn measure_list(store: &ThrottledStore<InMemory>, n_entries: usize) -> Duration {
         let prefix = place_test_objects(store, n_entries).await;
 
         let t0 = Instant::now();

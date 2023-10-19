@@ -173,9 +173,7 @@ mod tests {
     macro_rules! length_list_helper {
         ($offset_ty: ty, $result_ty: ty, $element_ty: ty, $value: expr, $expected: expr) => {{
             let array =
-                GenericListArray::<$offset_ty>::from_iter_primitive::<$element_ty, _, _>(
-                    $value,
-                );
+                GenericListArray::<$offset_ty>::from_iter_primitive::<$element_ty, _, _>($value);
             let result = length(&array).unwrap();
             let result = result.as_any().downcast_ref::<$result_ty>().unwrap();
             let expected: $result_ty = $expected.into();
@@ -356,8 +354,7 @@ mod tests {
 
     #[test]
     fn length_offsets_binary() {
-        let value: Vec<Option<&[u8]>> =
-            vec![Some(b"hello"), Some(b" "), Some(&[0xff, 0xf8]), None];
+        let value: Vec<Option<&[u8]>> = vec![Some(b"hello"), Some(b" "), Some(&[0xff, 0xf8]), None];
         let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
         let result = length(&b).unwrap();
@@ -506,8 +503,7 @@ mod tests {
 
     #[test]
     fn bit_length_offsets_binary() {
-        let value: Vec<Option<&[u8]>> =
-            vec![Some(b"hello"), Some(&[]), Some(b"world"), None];
+        let value: Vec<Option<&[u8]>> = vec![Some(b"hello"), Some(&[]), Some(b"world"), None];
         let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
         let result = bit_length(&b).unwrap();
@@ -621,10 +617,8 @@ mod tests {
             .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8]))
             .build()
             .unwrap();
-        let list_data_type = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Int32, false)),
-            3,
-        );
+        let list_data_type =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 3);
         let nulls = NullBuffer::from(vec![true, false, true]);
         let list_data = ArrayData::builder(list_data_type)
             .len(3)

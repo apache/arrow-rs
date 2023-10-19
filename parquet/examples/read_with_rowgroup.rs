@@ -116,13 +116,12 @@ impl RowGroups for InMemoryRowGroup {
                 "Invalid column index {i}, column was not fetched"
             ))),
             Some(data) => {
-                let page_reader: Box<dyn PageReader> =
-                    Box::new(SerializedPageReader::new(
-                        data.clone(),
-                        self.metadata.column(i),
-                        self.num_rows(),
-                        None,
-                    )?);
+                let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
+                    data.clone(),
+                    self.metadata.column(i),
+                    self.num_rows(),
+                    None,
+                )?);
 
                 Ok(Box::new(ColumnChunkIterator {
                     reader: Some(Ok(page_reader)),
@@ -154,9 +153,7 @@ impl InMemoryRowGroup {
             None,
         )?;
 
-        ParquetRecordBatchReader::try_new_with_row_groups(
-            &levels, self, batch_size, selection,
-        )
+        ParquetRecordBatchReader::try_new_with_row_groups(&levels, self, batch_size, selection)
     }
 
     /// fetch data from a reader in sync mode

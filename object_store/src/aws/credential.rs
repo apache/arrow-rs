@@ -37,8 +37,7 @@ use url::Url;
 type StdError = Box<dyn std::error::Error + Send + Sync>;
 
 /// SHA256 hash of empty string
-static EMPTY_SHA256_HASH: &str =
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+static EMPTY_SHA256_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 static UNSIGNED_PAYLOAD: &str = "UNSIGNED-PAYLOAD";
 static STREAMING_PAYLOAD: &str = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
 
@@ -57,13 +56,7 @@ impl AwsCredential {
     /// Signs a string
     ///
     /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html>
-    fn sign(
-        &self,
-        to_sign: &str,
-        date: DateTime<Utc>,
-        region: &str,
-        service: &str,
-    ) -> String {
+    fn sign(&self, to_sign: &str, date: DateTime<Utc>, region: &str, service: &str) -> String {
         let date_string = date.format("%Y%m%d").to_string();
         let date_hmac = hmac_sha256(format!("AWS4{}", self.secret_key), date_string);
         let region_hmac = hmac_sha256(date_hmac, region);
@@ -170,9 +163,9 @@ impl<'a> AwsAuthorizer<'a> {
         );
 
         // sign the string
-        let signature =
-            self.credential
-                .sign(&string_to_sign, date, self.region, self.service);
+        let signature = self
+            .credential
+            .sign(&string_to_sign, date, self.region, self.service);
 
         // build the actual auth header
         let authorisation = format!(
@@ -226,9 +219,9 @@ impl<'a> AwsAuthorizer<'a> {
             digest,
         );
 
-        let signature =
-            self.credential
-                .sign(&string_to_sign, date, self.region, self.service);
+        let signature = self
+            .credential
+            .sign(&string_to_sign, date, self.region, self.service);
 
         url.query_pairs_mut()
             .append_pair("X-Amz-Signature", &signature);
@@ -521,9 +514,7 @@ async fn instance_creds(
 
     let token = match token_result {
         Ok(t) => Some(t.text().await?),
-        Err(e)
-            if imdsv1_fallback && matches!(e.status(), Some(StatusCode::FORBIDDEN)) =>
-        {
+        Err(e) if imdsv1_fallback && matches!(e.status(), Some(StatusCode::FORBIDDEN)) => {
             warn!("received 403 from metadata endpoint, falling back to IMDSv1");
             None
         }
@@ -545,8 +536,7 @@ async fn instance_creds(
         creds_request = creds_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
     }
 
-    let creds: InstanceCredentials =
-        creds_request.send_retry(retry_config).await?.json().await?;
+    let creds: InstanceCredentials = creds_request.send_retry(retry_config).await?.json().await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
@@ -659,8 +649,7 @@ async fn task_credential(
     retry: &RetryConfig,
     url: &str,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
-    let creds: InstanceCredentials =
-        client.get(url).send_retry(retry).await?.json().await?;
+    let creds: InstanceCredentials = client.get(url).send_retry(retry).await?.json().await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
@@ -776,8 +765,7 @@ mod tests {
             sign_payload: false,
         };
 
-        let mut url =
-            Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
+        let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
         authorizer.sign(Method::GET, &mut url, Duration::from_secs(86400));
 
         assert_eq!(
@@ -790,7 +778,8 @@ mod tests {
                 X-Amz-Expires=86400&\
                 X-Amz-SignedHeaders=host&\
                 X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
-            ).unwrap()
+            )
+            .unwrap()
         );
     }
 

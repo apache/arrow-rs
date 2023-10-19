@@ -90,11 +90,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(
-        url: Url,
-        client_options: ClientOptions,
-        retry_config: RetryConfig,
-    ) -> Result<Self> {
+    pub fn new(url: Url, client_options: ClientOptions, retry_config: RetryConfig) -> Result<Self> {
         let client = client_options.client()?;
         Ok(Self {
             url,
@@ -183,11 +179,7 @@ impl Client {
         }
     }
 
-    pub async fn list(
-        &self,
-        location: Option<&Path>,
-        depth: &str,
-    ) -> Result<MultiStatus> {
+    pub async fn list(&self, location: Option<&Path>, depth: &str) -> Result<MultiStatus> {
         let url = location
             .map(|path| self.path_url(path))
             .unwrap_or_else(|| self.url.clone());
@@ -220,8 +212,7 @@ impl Client {
             Err(source) => return Err(Error::Request { source }.into()),
         };
 
-        let status = quick_xml::de::from_reader(response.reader())
-            .context(InvalidPropFindSnafu)?;
+        let status = quick_xml::de::from_reader(response.reader()).context(InvalidPropFindSnafu)?;
         Ok(status)
     }
 

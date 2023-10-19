@@ -24,9 +24,7 @@ use crate::aws::{
 };
 use crate::client::TokenCredentialProvider;
 use crate::config::ConfigValue;
-use crate::{
-    ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider,
-};
+use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
@@ -312,9 +310,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::MetadataEndpoint => "aws_metadata_endpoint",
             Self::UnsignedPayload => "aws_unsigned_payload",
             Self::Checksum => "aws_checksum_algorithm",
-            Self::ContainerCredentialsRelativeUri => {
-                "aws_container_credentials_relative_uri"
-            }
+            Self::ContainerCredentialsRelativeUri => "aws_container_credentials_relative_uri",
             Self::SkipSignature => "aws_skip_signature",
             Self::CopyIfNotExists => "copy_if_not_exists",
             Self::Client(opt) => opt.as_ref(),
@@ -331,15 +327,9 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_secret_access_key" | "secret_access_key" => Ok(Self::SecretAccessKey),
             "aws_default_region" | "default_region" => Ok(Self::DefaultRegion),
             "aws_region" | "region" => Ok(Self::Region),
-            "aws_bucket" | "aws_bucket_name" | "bucket_name" | "bucket" => {
-                Ok(Self::Bucket)
-            }
-            "aws_endpoint_url" | "aws_endpoint" | "endpoint_url" | "endpoint" => {
-                Ok(Self::Endpoint)
-            }
-            "aws_session_token" | "aws_token" | "session_token" | "token" => {
-                Ok(Self::Token)
-            }
+            "aws_bucket" | "aws_bucket_name" | "bucket_name" | "bucket" => Ok(Self::Bucket),
+            "aws_endpoint_url" | "aws_endpoint" | "endpoint_url" | "endpoint" => Ok(Self::Endpoint),
+            "aws_session_token" | "aws_token" | "session_token" | "token" => Ok(Self::Token),
             "aws_virtual_hosted_style_request" | "virtual_hosted_style_request" => {
                 Ok(Self::VirtualHostedStyleRequest)
             }
@@ -347,9 +337,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
             "aws_checksum_algorithm" | "checksum_algorithm" => Ok(Self::Checksum),
-            "aws_container_credentials_relative_uri" => {
-                Ok(Self::ContainerCredentialsRelativeUri)
-            }
+            "aws_container_credentials_relative_uri" => Ok(Self::ContainerCredentialsRelativeUri),
             "aws_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             // Backwards compatibility
@@ -428,16 +416,10 @@ impl AmazonS3Builder {
     }
 
     /// Set an option on the builder via a key - value pair.
-    pub fn with_config(
-        mut self,
-        key: AmazonS3ConfigKey,
-        value: impl Into<String>,
-    ) -> Self {
+    pub fn with_config(mut self, key: AmazonS3ConfigKey, value: impl Into<String>) -> Self {
         match key {
             AmazonS3ConfigKey::AccessKeyId => self.access_key_id = Some(value.into()),
-            AmazonS3ConfigKey::SecretAccessKey => {
-                self.secret_access_key = Some(value.into())
-            }
+            AmazonS3ConfigKey::SecretAccessKey => self.secret_access_key = Some(value.into()),
             AmazonS3ConfigKey::Region => self.region = Some(value.into()),
             AmazonS3ConfigKey::Bucket => self.bucket_name = Some(value.into()),
             AmazonS3ConfigKey::Endpoint => self.endpoint = Some(value.into()),
@@ -449,9 +431,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::DefaultRegion => {
                 self.region = self.region.or_else(|| Some(value.into()))
             }
-            AmazonS3ConfigKey::MetadataEndpoint => {
-                self.metadata_endpoint = Some(value.into())
-            }
+            AmazonS3ConfigKey::MetadataEndpoint => self.metadata_endpoint = Some(value.into()),
             AmazonS3ConfigKey::UnsignedPayload => self.unsigned_payload.parse(value),
             AmazonS3ConfigKey::Checksum => {
                 self.checksum_algorithm = Some(ConfigValue::Deferred(value.into()))
@@ -474,11 +454,7 @@ impl AmazonS3Builder {
     ///
     /// This method will return an `UnknownConfigKey` error if key cannot be parsed into [`AmazonS3ConfigKey`].
     #[deprecated(note = "Use with_config")]
-    pub fn try_with_option(
-        self,
-        key: impl AsRef<str>,
-        value: impl Into<String>,
-    ) -> Result<Self> {
+    pub fn try_with_option(self, key: impl AsRef<str>, value: impl Into<String>) -> Result<Self> {
         Ok(self.with_config(key.as_ref().parse()?, value))
     }
 
@@ -487,9 +463,7 @@ impl AmazonS3Builder {
     /// This method will return an `UnknownConfigKey` error if any key cannot be parsed into [`AmazonS3ConfigKey`].
     #[deprecated(note = "Use with_config")]
     #[allow(deprecated)]
-    pub fn try_with_options<
-        I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
-    >(
+    pub fn try_with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
         mut self,
         options: I,
     ) -> Result<Self> {
@@ -514,9 +488,7 @@ impl AmazonS3Builder {
         match key {
             AmazonS3ConfigKey::AccessKeyId => self.access_key_id.clone(),
             AmazonS3ConfigKey::SecretAccessKey => self.secret_access_key.clone(),
-            AmazonS3ConfigKey::Region | AmazonS3ConfigKey::DefaultRegion => {
-                self.region.clone()
-            }
+            AmazonS3ConfigKey::Region | AmazonS3ConfigKey::DefaultRegion => self.region.clone(),
             AmazonS3ConfigKey::Bucket => self.bucket_name.clone(),
             AmazonS3ConfigKey::Endpoint => self.endpoint.clone(),
             AmazonS3ConfigKey::Token => self.token.clone(),
@@ -586,10 +558,7 @@ impl AmazonS3Builder {
     }
 
     /// Set the AWS Secret Access Key (required)
-    pub fn with_secret_access_key(
-        mut self,
-        secret_access_key: impl Into<String>,
-    ) -> Self {
+    pub fn with_secret_access_key(mut self, secret_access_key: impl Into<String>) -> Self {
         self.secret_access_key = Some(secret_access_key.into());
         self
     }
@@ -648,10 +617,7 @@ impl AmazonS3Builder {
     /// consistent with `virtual_hosted_style_request`.
     /// i.e. if `virtual_hosted_style_request` is set to true
     /// then `endpoint` should have bucket name included.
-    pub fn with_virtual_hosted_style_request(
-        mut self,
-        virtual_hosted_style_request: bool,
-    ) -> Self {
+    pub fn with_virtual_hosted_style_request(mut self, virtual_hosted_style_request: bool) -> Self {
         self.virtual_hosted_style_request = virtual_hosted_style_request.into();
         self
     }
@@ -722,10 +688,7 @@ impl AmazonS3Builder {
     }
 
     /// Set a trusted proxy CA certificate
-    pub fn with_proxy_ca_certificate(
-        mut self,
-        proxy_ca_certificate: impl Into<String>,
-    ) -> Self {
+    pub fn with_proxy_ca_certificate(mut self, proxy_ca_certificate: impl Into<String>) -> Self {
         self.client_options = self
             .client_options
             .with_proxy_ca_certificate(proxy_ca_certificate);

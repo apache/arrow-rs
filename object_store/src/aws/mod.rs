@@ -47,8 +47,8 @@ use crate::client::CredentialProvider;
 use crate::multipart::{PartId, PutPart, WriteMultiPart};
 use crate::signer::Signer;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path,
-    PutResult, Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutResult,
+    Result,
 };
 
 mod builder;
@@ -67,12 +67,11 @@ pub use resolve::resolve_bucket_region;
 //
 // Do not URI-encode any of the unreserved characters that RFC 3986 defines:
 // A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
-pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet =
-    percent_encoding::NON_ALPHANUMERIC
-        .remove(b'-')
-        .remove(b'.')
-        .remove(b'_')
-        .remove(b'~');
+pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 
 /// This struct is used to maintain the URI path encoding
 const STRICT_PATH_ENCODE_SET: percent_encoding::AsciiSet = STRICT_ENCODE_SET.remove(b'/');
@@ -141,15 +140,9 @@ impl Signer for AmazonS3 {
     /// #     Ok(())
     /// # }
     /// ```
-    async fn signed_url(
-        &self,
-        method: Method,
-        path: &Path,
-        expires_in: Duration,
-    ) -> Result<Url> {
+    async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
         let credential = self.credentials().get_credential().await?;
-        let authorizer =
-            AwsAuthorizer::new(&credential, "s3", &self.client.config().region);
+        let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config().region);
 
         let path_url = self.path_url(path);
         let mut url = Url::parse(&path_url).map_err(|e| crate::Error::Generic {
@@ -185,11 +178,7 @@ impl ObjectStore for AmazonS3 {
         Ok((id, Box::new(WriteMultiPart::new(upload, 8))))
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
         self.client
             .delete_request(location, &[("uploadId", multipart_id)])
             .await
@@ -314,8 +303,7 @@ mod tests {
         put_get_delete_list_opts(&integration, is_local).await;
 
         // run integration test with checksum set to sha256
-        let builder =
-            AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
+        let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
         let integration = builder.build().unwrap();
         put_get_delete_list_opts(&integration, is_local).await;
     }

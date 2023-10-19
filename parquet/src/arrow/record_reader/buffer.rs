@@ -136,8 +136,7 @@ impl<T: ScalarValue> ScalarBuffer<T> {
 
     #[inline]
     pub fn as_slice_mut(&mut self) -> &mut [T] {
-        let (prefix, buf, suffix) =
-            unsafe { self.buffer.as_slice_mut().align_to_mut::<T>() };
+        let (prefix, buf, suffix) = unsafe { self.buffer.as_slice_mut().align_to_mut::<T>() };
         assert!(prefix.is_empty() && suffix.is_empty());
         buf
     }
@@ -225,9 +224,7 @@ impl<T: ScalarValue> ValuesBuffer for ScalarBuffer<T> {
         assert!(slice.len() >= read_offset + levels_read);
 
         let values_range = read_offset..read_offset + values_read;
-        for (value_pos, level_pos) in
-            values_range.rev().zip(iter_set_bits_rev(valid_mask))
-        {
+        for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
             debug_assert!(level_pos >= value_pos);
             if level_pos <= value_pos {
                 break;

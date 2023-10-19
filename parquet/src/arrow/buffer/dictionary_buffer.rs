@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
-use crate::arrow::record_reader::buffer::{
-    BufferQueue, ScalarBuffer, ScalarValue, ValuesBuffer,
-};
+use crate::arrow::record_reader::buffer::{BufferQueue, ScalarBuffer, ScalarValue, ValuesBuffer};
 use crate::column::reader::decoder::ValuesBufferSlice;
 use crate::errors::{ParquetError, Result};
 use arrow_array::{make_array, Array, ArrayRef, OffsetSizeTrait};
@@ -121,11 +119,7 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                     // likely sub-optimal, as we would prefer zero length null "slots", but
                     // spilling is already a degenerate case and so it is unclear if this is
                     // worth optimising for, e.g. by keeping a null mask around
-                    spilled.extend_from_dictionary(
-                        keys.as_slice(),
-                        dict_offsets,
-                        dict_values,
-                    )?;
+                    spilled.extend_from_dictionary(keys.as_slice(), dict_offsets, dict_values)?;
                 }
 
                 *self = Self::Values { values: spilled };
@@ -188,11 +182,9 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                 };
 
                 // This will compute a new dictionary
-                let array = arrow_cast::cast(
-                    &values.into_array(null_buffer, value_type),
-                    data_type,
-                )
-                .expect("cast should be infallible");
+                let array =
+                    arrow_cast::cast(&values.into_array(null_buffer, value_type), data_type)
+                        .expect("cast should be infallible");
 
                 Ok(array)
             }
@@ -206,9 +198,7 @@ impl<K: ScalarValue, V: ScalarValue> ValuesBufferSlice for DictionaryBuffer<K, V
     }
 }
 
-impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> ValuesBuffer
-    for DictionaryBuffer<K, V>
-{
+impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K, V> {
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -228,9 +218,7 @@ impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> ValuesBuffer
     }
 }
 
-impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> BufferQueue
-    for DictionaryBuffer<K, V>
-{
+impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> BufferQueue for DictionaryBuffer<K, V> {
     type Output = Self;
     type Slice = Self;
 
@@ -269,8 +257,7 @@ mod tests {
         let dict_type =
             ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
 
-        let d1: ArrayRef =
-            Arc::new(StringArray::from(vec!["hello", "world", "", "a", "b"]));
+        let d1: ArrayRef = Arc::new(StringArray::from(vec!["hello", "world", "", "a", "b"]));
 
         let mut buffer = DictionaryBuffer::<i32, i32>::default();
 

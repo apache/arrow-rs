@@ -37,8 +37,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::format::{
-    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation,
-    RowGroup, SortingColumn,
+    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
+    SortingColumn,
 };
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
@@ -348,10 +348,7 @@ impl RowGroupMetaData {
     }
 
     /// Method to convert from Thrift.
-    pub fn from_thrift(
-        schema_descr: SchemaDescPtr,
-        mut rg: RowGroup,
-    ) -> Result<RowGroupMetaData> {
+    pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup) -> Result<RowGroupMetaData> {
         assert_eq!(schema_descr.num_columns(), rg.columns.len());
         let total_byte_size = rg.total_byte_size;
         let num_rows = rg.num_rows;
@@ -988,9 +985,7 @@ impl OffsetIndexBuilder {
             .iter()
             .zip(self.compressed_page_size_array.iter())
             .zip(self.first_row_index_array.iter())
-            .map(|((offset, size), row_index)| {
-                PageLocation::new(*offset, *size, *row_index)
-            })
+            .map(|((offset, size), row_index)| PageLocation::new(*offset, *size, *row_index))
             .collect::<Vec<_>>();
         OffsetIndex::new(locations)
     }
@@ -1019,10 +1014,9 @@ mod tests {
             .unwrap();
 
         let row_group_exp = row_group_meta.to_thrift();
-        let row_group_res =
-            RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
-                .unwrap()
-                .to_thrift();
+        let row_group_res = RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
+            .unwrap()
+            .to_thrift();
 
         assert_eq!(row_group_res, row_group_exp);
     }
@@ -1078,8 +1072,7 @@ mod tests {
             .unwrap();
 
         let col_chunk_res =
-            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift())
-                .unwrap();
+            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift()).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -1093,10 +1086,9 @@ mod tests {
             .unwrap();
 
         let col_chunk_exp = col_metadata.to_thrift();
-        let col_chunk_res =
-            ColumnChunkMetaData::from_thrift(column_descr, col_chunk_exp.clone())
-                .unwrap()
-                .to_thrift();
+        let col_chunk_res = ColumnChunkMetaData::from_thrift(column_descr, col_chunk_exp.clone())
+            .unwrap()
+            .to_thrift();
 
         assert_eq!(col_chunk_res, col_chunk_exp);
     }

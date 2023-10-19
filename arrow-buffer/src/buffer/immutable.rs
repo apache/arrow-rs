@@ -523,9 +523,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn test_slice_offset_out_of_bound() {
         let buf = Buffer::from(&[2, 4, 6, 8, 10]);
         buf.slice(6);
@@ -688,9 +686,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn slice_overflow() {
         let buffer = Buffer::from(MutableBuffer::from_len_zeroed(12));
         buffer.slice_with_length(2, usize::MAX);

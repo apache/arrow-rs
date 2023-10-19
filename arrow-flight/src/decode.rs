@@ -21,9 +21,7 @@ use arrow_buffer::Buffer;
 use arrow_schema::{Schema, SchemaRef};
 use bytes::Bytes;
 use futures::{ready, stream::BoxStream, Stream, StreamExt};
-use std::{
-    collections::HashMap, convert::TryFrom, fmt::Debug, pin::Pin, sync::Arc, task::Poll,
-};
+use std::{collections::HashMap, convert::TryFrom, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 use tonic::metadata::MetadataMap;
 
 use crate::error::{FlightError, Result};
@@ -270,16 +268,14 @@ impl FlightDataDecoder {
     /// state as necessary.
     fn extract_message(&mut self, data: FlightData) -> Result<Option<DecodedFlightData>> {
         use arrow_ipc::MessageHeader;
-        let message = arrow_ipc::root_as_message(&data.data_header[..]).map_err(|e| {
-            FlightError::DecodeError(format!("Error decoding root message: {e}"))
-        })?;
+        let message = arrow_ipc::root_as_message(&data.data_header[..])
+            .map_err(|e| FlightError::DecodeError(format!("Error decoding root message: {e}")))?;
 
         match message.header_type() {
             MessageHeader::NONE => Ok(Some(DecodedFlightData::new_none(data))),
             MessageHeader::Schema => {
-                let schema = Schema::try_from(&data).map_err(|e| {
-                    FlightError::DecodeError(format!("Error decoding schema: {e}"))
-                })?;
+                let schema = Schema::try_from(&data)
+                    .map_err(|e| FlightError::DecodeError(format!("Error decoding schema: {e}")))?;
 
                 let schema = Arc::new(schema);
                 let dictionaries_by_field = HashMap::new();
@@ -300,12 +296,11 @@ impl FlightDataDecoder {
                 };
 
                 let buffer = Buffer::from_bytes(data.data_body.into());
-                let dictionary_batch =
-                    message.header_as_dictionary_batch().ok_or_else(|| {
-                        FlightError::protocol(
-                            "Could not get dictionary batch from DictionaryBatch message",
-                        )
-                    })?;
+                let dictionary_batch = message.header_as_dictionary_batch().ok_or_else(|| {
+                    FlightError::protocol(
+                        "Could not get dictionary batch from DictionaryBatch message",
+                    )
+                })?;
 
                 arrow_ipc::reader::read_dictionary(
                     &buffer,
@@ -315,9 +310,7 @@ impl FlightDataDecoder {
                     &message.version(),
                 )
                 .map_err(|e| {
-                    FlightError::DecodeError(format!(
-                        "Error decoding ipc dictionary: {e}"
-                    ))
+                    FlightError::DecodeError(format!("Error decoding ipc dictionary: {e}"))
                 })?;
 
                 // Updated internal state, but no decoded message
@@ -338,9 +331,7 @@ impl FlightDataDecoder {
                     &state.dictionaries_by_field,
                 )
                 .map_err(|e| {
-                    FlightError::DecodeError(format!(
-                        "Error decoding ipc RecordBatch: {e}"
-                    ))
+                    FlightError::DecodeError(format!("Error decoding ipc RecordBatch: {e}"))
                 })?;
 
                 Ok(Some(DecodedFlightData::new_record_batch(data, batch)))

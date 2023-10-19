@@ -133,10 +133,7 @@ pub struct IpcMessage(pub Bytes);
 
 // Useful conversion functions
 
-fn flight_schema_as_encoded_data(
-    arrow_schema: &Schema,
-    options: &IpcWriteOptions,
-) -> EncodedData {
+fn flight_schema_as_encoded_data(arrow_schema: &Schema, options: &IpcWriteOptions) -> EncodedData {
     let data_gen = writer::IpcDataGenerator::default();
     data_gen.schema_to_bytes(arrow_schema, options)
 }

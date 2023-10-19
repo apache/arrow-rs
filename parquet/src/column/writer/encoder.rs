@@ -18,8 +18,7 @@
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
-    compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max,
-    update_min,
+    compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
 };
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::DataType;
@@ -168,9 +167,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         value_indices: Option<&[usize]>,
     ) -> Option<(Self::T, Self::T)> {
         match value_indices {
-            Some(indices) => {
-                get_min_max(&self.descr, indices.iter().map(|x| &values[*x]))
-            }
+            Some(indices) => get_min_max(&self.descr, indices.iter().map(|x| &values[*x])),
             None => get_min_max(&self.descr, values.iter()),
         }
     }
