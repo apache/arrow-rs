@@ -20,6 +20,7 @@ use crate::aws::credential::{AwsCredential, CredentialExt};
 use crate::aws::{AwsCredentialProvider, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET};
 use crate::client::get::GetClient;
 use crate::client::header::get_etag;
+use crate::client::header::HeaderConfig;
 use crate::client::list::ListClient;
 use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
@@ -549,6 +550,12 @@ impl S3Client {
 impl GetClient for S3Client {
     const STORE: &'static str = STORE;
 
+    const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+        etag_required: false,
+        last_modified_required: false,
+        version_header: Some("x-amz-version-id"),
+    };
+
     /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>
     async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
         let credential = self.get_credential().await?;
@@ -558,7 +565,11 @@ impl GetClient for S3Client {
             false => Method::GET,
         };
 
-        let builder = self.client.request(method, url);
+        let mut builder = self.client.request(method, url);
+
+        if let Some(v) = &options.version {
+            builder = builder.query(&[("versionId", v)])
+        }
 
         let response = builder
             .with_get_options(options)

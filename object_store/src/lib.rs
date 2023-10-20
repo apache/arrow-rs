@@ -637,6 +637,8 @@ pub struct ObjectMeta {
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
     pub e_tag: Option<String>,
+    /// A version indicator for this object
+    pub version: Option<String>,
 }
 
 /// Options for a get request, such as range
@@ -685,6 +687,8 @@ pub struct GetOptions {
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
     pub range: Option<Range<usize>>,
+    /// Request a particular object version
+    pub version: Option<String>,
     /// Request transfer of no content
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-head>
@@ -1379,6 +1383,24 @@ mod tests {
         };
         let err = storage.get_opts(&path, options).await.unwrap_err();
         assert!(matches!(err, Error::Precondition { .. }), "{err}");
+
+        if let Some(version) = meta.version {
+            storage.put(&path, "bar".into()).await.unwrap();
+
+            let options = GetOptions {
+                version: Some(version),
+                ..GetOptions::default()
+            };
+
+            // Can retrieve previous version
+            let get_opts = storage.get_opts(&path, options).await.unwrap();
+            let old = get_opts.bytes().await.unwrap();
+            assert_eq!(old, b"foo".as_slice());
+
+            // Current version contains the updated data
+            let current = storage.get(&path).await.unwrap().bytes().await.unwrap();
+            assert_eq!(&current, b"bar".as_slice());
+        }
     }
 
     /// Returns a chunk of length `chunk_length`
@@ -1691,6 +1713,7 @@ mod tests {
             last_modified: Utc.timestamp_nanos(100),
             size: 100,
             e_tag: Some("123".to_string()),
+            version: None,
         };
 
         let mut options = GetOptions::default();

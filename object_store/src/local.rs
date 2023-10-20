@@ -969,6 +969,7 @@ fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
         last_modified,
         size,
         e_tag: Some(get_etag(&metadata)),
+        version: None,
     })
 }
 

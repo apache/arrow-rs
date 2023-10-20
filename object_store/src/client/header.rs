@@ -35,6 +35,9 @@ pub struct HeaderConfig {
     ///
     /// Defaults to `true`
     pub last_modified_required: bool,
+
+    /// The version header name if any
+    pub version_header: Option<&'static str>,
 }
 
 #[derive(Debug, Snafu)]
@@ -98,14 +101,20 @@ pub fn header_meta(
         .context(MissingContentLengthSnafu)?;
 
     let content_length = content_length.to_str().context(BadHeaderSnafu)?;
-    let content_length = content_length
+    let size = content_length
         .parse()
         .context(InvalidContentLengthSnafu { content_length })?;
+
+    let version = match cfg.version_header.and_then(|h| headers.get(h)) {
+        Some(v) => Some(v.to_str().context(BadHeaderSnafu)?.to_string()),
+        None => None,
+    };
 
     Ok(ObjectMeta {
         location: location.clone(),
         last_modified,
-        size: content_length,
+        version,
+        size,
         e_tag,
     })
 }

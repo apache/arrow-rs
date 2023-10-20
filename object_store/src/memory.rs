@@ -166,6 +166,7 @@ impl ObjectStore for InMemory {
             last_modified: entry.last_modified,
             size: entry.data.len(),
             e_tag: Some(e_tag),
+            version: None,
         };
         options.check_preconditions(&meta)?;
 
@@ -212,6 +213,7 @@ impl ObjectStore for InMemory {
             last_modified: entry.last_modified,
             size: entry.data.len(),
             e_tag: Some(entry.e_tag.to_string()),
+            version: None,
         })
     }
 
@@ -241,6 +243,7 @@ impl ObjectStore for InMemory {
                     last_modified: value.last_modified,
                     size: value.data.len(),
                     e_tag: Some(value.e_tag.to_string()),
+                    version: None,
                 })
             })
             .collect();
@@ -285,6 +288,7 @@ impl ObjectStore for InMemory {
                     last_modified: v.last_modified,
                     size: v.data.len(),
                     e_tag: Some(v.e_tag.to_string()),
+                    version: None,
                 };
                 objects.push(object);
             }

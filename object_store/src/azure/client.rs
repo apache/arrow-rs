@@ -19,6 +19,7 @@ use super::credential::AzureCredential;
 use crate::azure::credential::*;
 use crate::azure::{AzureCredentialProvider, STORE};
 use crate::client::get::GetClient;
+use crate::client::header::HeaderConfig;
 use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
@@ -254,6 +255,12 @@ impl AzureClient {
 impl GetClient for AzureClient {
     const STORE: &'static str = STORE;
 
+    const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+        etag_required: true,
+        last_modified_required: true,
+        version_header: Some("x-ms-version-id"),
+    };
+
     /// Make an Azure GET request
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob>
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties>
@@ -265,11 +272,15 @@ impl GetClient for AzureClient {
             false => Method::GET,
         };
 
-        let builder = self
+        let mut builder = self
             .client
             .request(method, url)
             .header(CONTENT_LENGTH, HeaderValue::from_static("0"))
             .body(Bytes::new());
+
+        if let Some(v) = &options.version {
+            builder = builder.query(&[("versionid", v)])
+        }
 
         let response = builder
             .with_get_options(options)
@@ -427,6 +438,7 @@ impl TryFrom<Blob> for ObjectMeta {
             last_modified: value.properties.last_modified,
             size: value.properties.content_length as usize,
             e_tag: value.properties.e_tag,
+            version: None, // For consistency with S3 and GCP which don't include this
         })
     }
 }

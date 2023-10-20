@@ -73,6 +73,7 @@ impl<T: ObjectStore> PrefixStore<T> {
             size: meta.size,
             location: self.strip_prefix(meta.location),
             e_tag: meta.e_tag,
+            version: None,
         }
     }
 }

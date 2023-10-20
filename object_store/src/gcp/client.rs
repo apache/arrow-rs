@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::client::get::GetClient;
-use crate::client::header::get_etag;
+use crate::client::header::{get_etag, HeaderConfig};
 use crate::client::list::ListClient;
 use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
@@ -333,6 +333,11 @@ impl GoogleCloudStorageClient {
 #[async_trait]
 impl GetClient for GoogleCloudStorageClient {
     const STORE: &'static str = STORE;
+    const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+        etag_required: true,
+        last_modified_required: true,
+        version_header: Some("x-goog-generation"),
+    };
 
     /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
     async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {

@@ -29,10 +29,7 @@ pub trait GetClient: Send + Sync + 'static {
     const STORE: &'static str;
 
     /// Configure the [`HeaderConfig`] for this client
-    const HEADER_CONFIG: HeaderConfig = HeaderConfig {
-        etag_required: true,
-        last_modified_required: true,
-    };
+    const HEADER_CONFIG: HeaderConfig;
 
     async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response>;
 }

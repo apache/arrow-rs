@@ -277,6 +277,7 @@ impl GetClient for Client {
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: false,
         last_modified_required: false,
+        version_header: None,
     };
 
     async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
@@ -375,6 +376,7 @@ impl MultiStatusResponse {
             last_modified,
             size: self.size()?,
             e_tag: self.prop_stat.prop.e_tag.clone(),
+            version: None,
         })
     }
 
