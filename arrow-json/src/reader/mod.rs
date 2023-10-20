@@ -671,7 +671,8 @@ macro_rules! primitive_decoder {
 
 /// Type alias for a function that accepts a [`DataType`] and a bool indicating whether it is nullable
 /// and returns a [`BinaryArrayDecoder`]
-pub type BinaryDecoderProvider = fn(DataType, bool) -> Box<dyn BinaryArrayDecoder>;
+pub type BinaryDecoderProvider =
+    fn(dt: DataType, nullable: bool) -> Box<dyn BinaryArrayDecoder>;
 
 fn make_decoder(
     data_type: DataType,
