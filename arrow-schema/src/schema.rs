@@ -48,6 +48,15 @@ impl SchemaBuilder {
         self.fields.push(field.into())
     }
 
+    /// Removes and returns the [`FieldRef`] as index `idx`
+    ///
+    /// # Panics
+    ///
+    /// Panics if index out of bounds
+    pub fn remove(&mut self, idx: usize) -> FieldRef {
+        self.fields.remove(idx)
+    }
+
     /// Appends a [`FieldRef`] to this [`SchemaBuilder`] checking for collision
     ///
     /// If an existing field exists with the same name, calls [`Field::try_merge`]
