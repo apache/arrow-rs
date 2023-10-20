@@ -99,7 +99,7 @@ impl Fields {
                 .all(|(a, b)| Arc::ptr_eq(a, b) || a.contains(b))
     }
 
-    /// Remove a field by index and reture it.
+    /// Remove a field by index and return it.
     /// ```
     /// use arrow_schema::{DataType, Field, Fields};
     /// let mut fields = Fields::from(vec![
