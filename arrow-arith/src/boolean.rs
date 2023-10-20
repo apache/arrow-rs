@@ -57,10 +57,7 @@ use arrow_schema::ArrowError;
 /// # Fails
 ///
 /// If the operands have different lengths
-pub fn and_kleene(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform bitwise operation on arrays of different length".to_string(),
@@ -155,10 +152,7 @@ pub fn and_kleene(
 /// # Fails
 ///
 /// If the operands have different lengths
-pub fn or_kleene(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn or_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform bitwise operation on arrays of different length".to_string(),
@@ -257,10 +251,7 @@ where
 /// let and_ab = and(&a, &b).unwrap();
 /// assert_eq!(and_ab, BooleanArray::from(vec![Some(false), Some(true), None]));
 /// ```
-pub fn and(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn and(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, |a, b| a & b)
 }
 
@@ -581,8 +572,7 @@ mod tests {
         let a = a.as_any().downcast_ref::<BooleanArray>().unwrap();
         let c = not(a).unwrap();
 
-        let expected =
-            BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]);
+        let expected = BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]);
 
         assert_eq!(c, expected);
     }
@@ -631,12 +621,10 @@ mod tests {
     #[test]
     fn test_bool_array_and_sliced_same_offset() {
         let a = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, false, true,
-            true,
+            false, false, false, false, false, false, false, false, false, false, true, true,
         ]);
         let b = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, true, false,
-            true,
+            false, false, false, false, false, false, false, false, false, true, false, true,
         ]);
 
         let a = a.slice(8, 4);
@@ -654,12 +642,10 @@ mod tests {
     #[test]
     fn test_bool_array_and_sliced_same_offset_mod8() {
         let a = BooleanArray::from(vec![
-            false, false, true, true, false, false, false, false, false, false, false,
-            false,
+            false, false, true, true, false, false, false, false, false, false, false, false,
         ]);
         let b = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, true, false,
-            true,
+            false, false, false, false, false, false, false, false, false, true, false, true,
         ]);
 
         let a = a.slice(0, 4);
@@ -677,8 +663,7 @@ mod tests {
     #[test]
     fn test_bool_array_and_sliced_offset1() {
         let a = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, false, true,
-            true,
+            false, false, false, false, false, false, false, false, false, false, true, true,
         ]);
         let b = BooleanArray::from(vec![false, true, false, true]);
 
@@ -696,8 +681,7 @@ mod tests {
     fn test_bool_array_and_sliced_offset2() {
         let a = BooleanArray::from(vec![false, false, true, true]);
         let b = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, true, false,
-            true,
+            false, false, false, false, false, false, false, false, false, true, false, true,
         ]);
 
         let b = b.slice(8, 4);
@@ -730,8 +714,7 @@ mod tests {
 
         let c = and(a, b).unwrap();
 
-        let expected =
-            BooleanArray::from(vec![Some(false), Some(false), None, Some(true)]);
+        let expected = BooleanArray::from(vec![Some(false), Some(false), None, Some(true)]);
 
         assert_eq!(expected, c);
     }

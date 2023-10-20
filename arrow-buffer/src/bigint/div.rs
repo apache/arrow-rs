@@ -26,10 +26,7 @@
 /// # Panics
 ///
 /// Panics if divisor is zero
-pub fn div_rem<const N: usize>(
-    numerator: &[u64; N],
-    divisor: &[u64; N],
-) -> ([u64; N], [u64; N]) {
+pub fn div_rem<const N: usize>(numerator: &[u64; N], divisor: &[u64; N]) -> ([u64; N], [u64; N]) {
     let numerator_bits = bits(numerator);
     let divisor_bits = bits(divisor);
     assert_ne!(divisor_bits, 0, "division by zero");
@@ -61,10 +58,7 @@ fn bits(arr: &[u64]) -> usize {
 }
 
 /// Division of numerator by a u64 divisor
-fn div_rem_small<const N: usize>(
-    numerator: &[u64; N],
-    divisor: u64,
-) -> ([u64; N], [u64; N]) {
+fn div_rem_small<const N: usize>(numerator: &[u64; N], divisor: u64) -> ([u64; N], [u64; N]) {
     let mut rem = 0u64;
     let mut numerator = *numerator;
     numerator.iter_mut().rev().for_each(|d| {
@@ -227,11 +221,7 @@ fn sub_assign(a: &mut [u64], b: &[u64]) -> bool {
 }
 
 /// Converts an overflowing binary operation on scalars to one on slices
-fn binop_slice(
-    a: &mut [u64],
-    b: &[u64],
-    binop: impl Fn(u64, u64) -> (u64, bool) + Copy,
-) -> bool {
+fn binop_slice(a: &mut [u64], b: &[u64], binop: impl Fn(u64, u64) -> (u64, bool) + Copy) -> bool {
     let mut c = false;
     a.iter_mut().zip(b.iter()).for_each(|(x, y)| {
         let (res1, overflow1) = y.overflowing_add(u64::from(c));

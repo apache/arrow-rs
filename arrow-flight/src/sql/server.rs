@@ -24,23 +24,21 @@ use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
 use super::{
-    ActionBeginSavepointRequest, ActionBeginSavepointResult,
-    ActionBeginTransactionRequest, ActionBeginTransactionResult,
-    ActionCancelQueryRequest, ActionCancelQueryResult,
+    ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
+    ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
     ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
-    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, Command,
-    CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas,
-    CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
-    CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementSubstraitPlan, CommandStatementUpdate, DoPutUpdateResult,
-    ProstMessageExt, SqlInfo, TicketStatementQuery,
+    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, Command, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate,
+    DoPutUpdateResult, ProstMessageExt, SqlInfo, TicketStatementQuery,
 };
 use crate::{
-    flight_service_server::FlightService, Action, ActionType, Criteria, Empty,
-    FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
-    PutResult, SchemaResult, Ticket,
+    flight_service_server::FlightService, Action, ActionType, Criteria, Empty, FlightData,
+    FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult, SchemaResult,
+    Ticket,
 };
 
 pub(crate) static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
@@ -549,13 +547,10 @@ where
         Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + 'static>>;
     type ListFlightsStream =
         Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + 'static>>;
-    type DoGetStream =
-        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
-    type DoPutStream =
-        Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>;
-    type DoActionStream = Pin<
-        Box<dyn Stream<Item = Result<super::super::Result, Status>> + Send + 'static>,
-    >;
+    type DoGetStream = Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
+    type DoPutStream = Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>;
+    type DoActionStream =
+        Pin<Box<dyn Stream<Item = Result<super::super::Result, Status>> + Send + 'static>>;
     type ListActionsStream =
         Pin<Box<dyn Stream<Item = Result<ActionType, Status>> + Send + 'static>>;
     type DoExchangeStream =
@@ -580,8 +575,7 @@ where
         &self,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let message =
-            Any::decode(&*request.get_ref().cmd).map_err(decode_error_to_status)?;
+        let message = Any::decode(&*request.get_ref().cmd).map_err(decode_error_to_status)?;
 
         match Command::try_from(message).map_err(arrow_error_to_status)? {
             Command::CommandStatementQuery(token) => {
@@ -600,9 +594,7 @@ where
             Command::CommandGetDbSchemas(token) => {
                 return self.get_flight_info_schemas(token, request).await
             }
-            Command::CommandGetTables(token) => {
-                self.get_flight_info_tables(token, request).await
-            }
+            Command::CommandGetTables(token) => self.get_flight_info_tables(token, request).await,
             Command::CommandGetTableTypes(token) => {
                 self.get_flight_info_table_types(token, request).await
             }
@@ -642,31 +634,21 @@ where
         &self,
         request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
-        let msg: Any = Message::decode(&*request.get_ref().ticket)
-            .map_err(decode_error_to_status)?;
+        let msg: Any =
+            Message::decode(&*request.get_ref().ticket).map_err(decode_error_to_status)?;
 
         match Command::try_from(msg).map_err(arrow_error_to_status)? {
-            Command::TicketStatementQuery(command) => {
-                self.do_get_statement(command, request).await
-            }
+            Command::TicketStatementQuery(command) => self.do_get_statement(command, request).await,
             Command::CommandPreparedStatementQuery(command) => {
                 self.do_get_prepared_statement(command, request).await
             }
-            Command::CommandGetCatalogs(command) => {
-                self.do_get_catalogs(command, request).await
-            }
-            Command::CommandGetDbSchemas(command) => {
-                self.do_get_schemas(command, request).await
-            }
-            Command::CommandGetTables(command) => {
-                self.do_get_tables(command, request).await
-            }
+            Command::CommandGetCatalogs(command) => self.do_get_catalogs(command, request).await,
+            Command::CommandGetDbSchemas(command) => self.do_get_schemas(command, request).await,
+            Command::CommandGetTables(command) => self.do_get_tables(command, request).await,
             Command::CommandGetTableTypes(command) => {
                 self.do_get_table_types(command, request).await
             }
-            Command::CommandGetSqlInfo(command) => {
-                self.do_get_sql_info(command, request).await
-            }
+            Command::CommandGetSqlInfo(command) => self.do_get_sql_info(command, request).await,
             Command::CommandGetPrimaryKeys(command) => {
                 self.do_get_primary_keys(command, request).await
             }
@@ -699,8 +681,8 @@ where
         let mut request = request.map(PeekableFlightDataStream::new);
         let cmd = Pin::new(request.get_mut()).peek().await.unwrap().clone()?;
 
-        let message = Any::decode(&*cmd.flight_descriptor.unwrap().cmd)
-            .map_err(decode_error_to_status)?;
+        let message =
+            Any::decode(&*cmd.flight_descriptor.unwrap().cmd).map_err(decode_error_to_status)?;
         match Command::try_from(message).map_err(arrow_error_to_status)? {
             Command::CommandStatementUpdate(command) => {
                 let record_count = self.do_put_statement_update(command, request).await?;
@@ -755,11 +737,10 @@ where
         };
         let create_prepared_substrait_plan_action_type = ActionType {
             r#type: CREATE_PREPARED_SUBSTRAIT_PLAN.to_string(),
-            description:
-                "Creates a reusable prepared substrait plan resource on the server.\n
+            description: "Creates a reusable prepared substrait plan resource on the server.\n
                 Request Message: ActionCreatePreparedSubstraitPlanRequest\n
                 Response Message: ActionCreatePreparedStatementResult"
-                    .into(),
+                .into(),
         };
         let begin_transaction_action_type = ActionType {
             r#type: BEGIN_TRANSACTION.to_string(),
@@ -820,8 +801,7 @@ where
         request: Request<Action>,
     ) -> Result<Response<Self::DoActionStream>, Status> {
         if request.get_ref().r#type == CREATE_PREPARED_STATEMENT {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionCreatePreparedStatementRequest = any
                 .unpack()
@@ -839,8 +819,7 @@ where
             })]);
             return Ok(Response::new(Box::pin(output)));
         } else if request.get_ref().r#type == CLOSE_PREPARED_STATEMENT {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionClosePreparedStatementRequest = any
                 .unpack()
@@ -854,8 +833,7 @@ where
                 .await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
         } else if request.get_ref().r#type == CREATE_PREPARED_SUBSTRAIT_PLAN {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionCreatePreparedSubstraitPlanRequest = any
                 .unpack()
@@ -869,47 +847,38 @@ where
                 .await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
         } else if request.get_ref().r#type == BEGIN_TRANSACTION {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionBeginTransactionRequest = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
-                    Status::invalid_argument(
-                        "Unable to unpack ActionBeginTransactionRequest.",
-                    )
-                })?;
+                Status::invalid_argument("Unable to unpack ActionBeginTransactionRequest.")
+            })?;
             let stmt = self.do_action_begin_transaction(cmd, request).await?;
             let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
         } else if request.get_ref().r#type == END_TRANSACTION {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionEndTransactionRequest = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
-                    Status::invalid_argument(
-                        "Unable to unpack ActionEndTransactionRequest.",
-                    )
+                    Status::invalid_argument("Unable to unpack ActionEndTransactionRequest.")
                 })?;
             self.do_action_end_transaction(cmd, request).await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
         } else if request.get_ref().r#type == BEGIN_SAVEPOINT {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionBeginSavepointRequest = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
-                    Status::invalid_argument(
-                        "Unable to unpack ActionBeginSavepointRequest.",
-                    )
+                    Status::invalid_argument("Unable to unpack ActionBeginSavepointRequest.")
                 })?;
             let stmt = self.do_action_begin_savepoint(cmd, request).await?;
             let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
@@ -917,22 +886,18 @@ where
             })]);
             return Ok(Response::new(Box::pin(output)));
         } else if request.get_ref().r#type == END_SAVEPOINT {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionEndSavepointRequest = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
-                    Status::invalid_argument(
-                        "Unable to unpack ActionEndSavepointRequest.",
-                    )
+                    Status::invalid_argument("Unable to unpack ActionEndSavepointRequest.")
                 })?;
             self.do_action_end_savepoint(cmd, request).await?;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
         } else if request.get_ref().r#type == CANCEL_QUERY {
-            let any =
-                Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
+            let any = Any::decode(&*request.get_ref().body).map_err(decode_error_to_status)?;
 
             let cmd: ActionCancelQueryRequest = any
                 .unpack()

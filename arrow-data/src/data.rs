@@ -42,9 +42,7 @@ pub(crate) fn contains_nulls(
 ) -> bool {
     match null_bit_buffer {
         Some(buffer) => {
-            match BitSliceIterator::new(buffer.validity(), buffer.offset() + offset, len)
-                .next()
-            {
+            match BitSliceIterator::new(buffer.validity(), buffer.offset() + offset, len).next() {
                 Some((start, end)) => start != 0 || end != len,
                 None => len != 0, // No non-null values
             }
@@ -130,9 +128,9 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * k.primitive_width().unwrap()),
             empty_buffer,
         ],
-        DataType::FixedSizeList(_, _)
-        | DataType::Struct(_)
-        | DataType::RunEndEncoded(_, _) => [empty_buffer, MutableBuffer::new(0)],
+        DataType::FixedSizeList(_, _) | DataType::Struct(_) | DataType::RunEndEncoded(_, _) => {
+            [empty_buffer, MutableBuffer::new(0)]
+        }
         DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => [
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
@@ -159,10 +157,9 @@ pub(crate) fn into_buffers(
 ) -> Vec<Buffer> {
     match data_type {
         DataType::Null | DataType::Struct(_) | DataType::FixedSizeList(_, _) => vec![],
-        DataType::Utf8
-        | DataType::Binary
-        | DataType::LargeUtf8
-        | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
+        DataType::Utf8 | DataType::Binary | DataType::LargeUtf8 | DataType::LargeBinary => {
+            vec![buffer1.into(), buffer2.into()]
+        }
         DataType::Union(_, mode) => {
             match mode {
                 // Based on Union's DataTypeLayout
@@ -452,12 +449,11 @@ impl ArrayData {
         for spec in layout.buffers.iter() {
             match spec {
                 BufferSpec::FixedWidth { byte_width, .. } => {
-                    let buffer_size =
-                        self.len.checked_mul(*byte_width).ok_or_else(|| {
-                            ArrowError::ComputeError(
-                                "Integer overflow computing buffer size".to_string(),
-                            )
-                        })?;
+                    let buffer_size = self.len.checked_mul(*byte_width).ok_or_else(|| {
+                        ArrowError::ComputeError(
+                            "Integer overflow computing buffer size".to_string(),
+                        )
+                    })?;
                     result += buffer_size;
                 }
                 BufferSpec::VariableWidth => {
@@ -590,9 +586,7 @@ impl ArrayData {
                 DataType::LargeBinary | DataType::LargeUtf8 => {
                     (vec![zeroed((len + 1) * 8), zeroed(0)], vec![], true)
                 }
-                DataType::FixedSizeBinary(i) => {
-                    (vec![zeroed(*i as usize * len)], vec![], true)
-                }
+                DataType::FixedSizeBinary(i) => (vec![zeroed(*i as usize * len)], vec![], true),
                 DataType::List(f) | DataType::Map(f, _) => (
                     vec![zeroed((len + 1) * 4)],
                     vec![ArrayData::new_empty(f.data_type())],
@@ -749,9 +743,7 @@ impl ArrayData {
             )));
         }
 
-        for (i, (buffer, spec)) in
-            self.buffers.iter().zip(layout.buffers.iter()).enumerate()
-        {
+        for (i, (buffer, spec)) in self.buffers.iter().zip(layout.buffers.iter()).enumerate() {
             match spec {
                 BufferSpec::FixedWidth {
                     byte_width,
@@ -999,10 +991,8 @@ impl ArrayData {
             }
             DataType::RunEndEncoded(run_ends_field, values_field) => {
                 self.validate_num_child_data(2)?;
-                let run_ends_data =
-                    self.get_valid_child_data(0, run_ends_field.data_type())?;
-                let values_data =
-                    self.get_valid_child_data(1, values_field.data_type())?;
+                let run_ends_data = self.get_valid_child_data(0, run_ends_field.data_type())?;
+                let values_data = self.get_valid_child_data(1, values_field.data_type())?;
                 if run_ends_data.len != values_data.len {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "The run_ends array length should be the same as values array length. Run_ends array length is {}, values array length is {}",
@@ -1022,9 +1012,7 @@ impl ArrayData {
                 for (i, (_, field)) in fields.iter().enumerate() {
                     let field_data = self.get_valid_child_data(i, field.data_type())?;
 
-                    if mode == &UnionMode::Sparse
-                        && field_data.len < (self.len + self.offset)
-                    {
+                    if mode == &UnionMode::Sparse && field_data.len < (self.len + self.offset) {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Sparse union child array #{} has length smaller than expected for union array ({} < {})",
                             i, field_data.len, self.len + self.offset
@@ -1083,14 +1071,14 @@ impl ArrayData {
         i: usize,
         expected_type: &DataType,
     ) -> Result<&ArrayData, ArrowError> {
-        let values_data = self.child_data
-            .get(i)
-            .ok_or_else(|| {
-                ArrowError::InvalidArgumentError(format!(
-                    "{} did not have enough child arrays. Expected at least {} but had only {}",
-                    self.data_type, i+1, self.child_data.len()
-                ))
-            })?;
+        let values_data = self.child_data.get(i).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "{} did not have enough child arrays. Expected at least {} but had only {}",
+                self.data_type,
+                i + 1,
+                self.child_data.len()
+            ))
+        })?;
 
         if expected_type != &values_data.data_type {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -1160,7 +1148,8 @@ impl ArrayData {
             if actual != nulls.null_count() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "null_count value ({}) doesn't match actual number of nulls in array ({})",
-                    nulls.null_count(), actual
+                    nulls.null_count(),
+                    actual
                 )));
             }
         }
@@ -1209,23 +1198,22 @@ impl ArrayData {
     ) -> Result<(), ArrowError> {
         let mask = match mask {
             Some(mask) => mask,
-            None => return match child.null_count() {
-                0 => Ok(()),
-                _ => Err(ArrowError::InvalidArgumentError(format!(
-                    "non-nullable child of type {} contains nulls not present in parent {}",
-                    child.data_type,
-                    self.data_type
-                ))),
-            },
+            None => {
+                return match child.null_count() {
+                    0 => Ok(()),
+                    _ => Err(ArrowError::InvalidArgumentError(format!(
+                        "non-nullable child of type {} contains nulls not present in parent {}",
+                        child.data_type, self.data_type
+                    ))),
+                }
+            }
         };
 
         match child.nulls() {
-            Some(nulls) if !mask.contains(nulls) => {
-                Err(ArrowError::InvalidArgumentError(format!(
-                    "non-nullable child of type {} contains nulls not present in parent",
-                    child.data_type
-                )))
-            }
+            Some(nulls) if !mask.contains(nulls) => Err(ArrowError::InvalidArgumentError(format!(
+                "non-nullable child of type {} contains nulls not present in parent",
+                child.data_type
+            ))),
             _ => Ok(()),
         }
     }
@@ -1240,9 +1228,7 @@ impl ArrayData {
             DataType::Utf8 => self.validate_utf8::<i32>(),
             DataType::LargeUtf8 => self.validate_utf8::<i64>(),
             DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
-            DataType::LargeBinary => {
-                self.validate_offsets_full::<i64>(self.buffers[1].len())
-            }
+            DataType::LargeBinary => self.validate_offsets_full::<i64>(self.buffers[1].len()),
             DataType::List(_) | DataType::Map(_, _) => {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i32>(child.len)
@@ -1300,11 +1286,7 @@ impl ArrayData {
     ///
     /// For example, the offsets buffer contained `[1, 2, 4]`, this
     /// function would call `validate([1,2])`, and `validate([2,4])`
-    fn validate_each_offset<T, V>(
-        &self,
-        offset_limit: usize,
-        validate: V,
-    ) -> Result<(), ArrowError>
+    fn validate_each_offset<T, V>(&self, offset_limit: usize, validate: V) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
         V: Fn(usize, Range<usize>) -> Result<(), ArrowError>,
@@ -1358,32 +1340,26 @@ impl ArrayData {
         let values_buffer = &self.buffers[1].as_slice();
         if let Ok(values_str) = std::str::from_utf8(values_buffer) {
             // Validate Offsets are correct
-            self.validate_each_offset::<T, _>(
-                values_buffer.len(),
-                |string_index, range| {
-                    if !values_str.is_char_boundary(range.start)
-                        || !values_str.is_char_boundary(range.end)
-                    {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "incomplete utf-8 byte sequence from index {string_index}"
-                        )));
-                    }
-                    Ok(())
-                },
-            )
+            self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
+                if !values_str.is_char_boundary(range.start)
+                    || !values_str.is_char_boundary(range.end)
+                {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "incomplete utf-8 byte sequence from index {string_index}"
+                    )));
+                }
+                Ok(())
+            })
         } else {
             // find specific offset that failed utf8 validation
-            self.validate_each_offset::<T, _>(
-                values_buffer.len(),
-                |string_index, range| {
-                    std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "Invalid UTF8 sequence at string index {string_index} ({range:?}): {e}"
-                        ))
-                    })?;
-                    Ok(())
-                },
-            )
+            self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
+                std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Invalid UTF8 sequence at string index {string_index} ({range:?}): {e}"
+                    ))
+                })?;
+                Ok(())
+            })
         }
     }
 
@@ -1414,8 +1390,7 @@ impl ArrayData {
         assert!(buffer.len() / mem::size_of::<T>() >= required_len);
 
         // Justification: buffer size was validated above
-        let indexes: &[T] =
-            &buffer.typed_data::<T>()[self.offset..self.offset + self.len];
+        let indexes: &[T] = &buffer.typed_data::<T>()[self.offset..self.offset + self.len];
 
         indexes.iter().enumerate().try_for_each(|(i, &dict_index)| {
             // Do not check the value is null (value can be arbitrary)

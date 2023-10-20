@@ -25,16 +25,13 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let mut do_bench = |physical_array_len: usize, logical_array_len: usize| {
         group.bench_function(
-            format!(
-                "(run_array_len:{logical_array_len}, physical_array_len:{physical_array_len})"),
+            format!("(run_array_len:{logical_array_len}, physical_array_len:{physical_array_len})"),
             |b| {
                 let run_array = create_primitive_run_array::<Int32Type, Int32Type>(
                     logical_array_len,
                     physical_array_len,
                 );
-                let typed = run_array
-                    .downcast::<PrimitiveArray<Int32Type>>()
-                    .unwrap();
+                let typed = run_array.downcast::<PrimitiveArray<Int32Type>>().unwrap();
                 b.iter(|| {
                     for i in 0..logical_array_len {
                         let _ = unsafe { typed.value_unchecked(i) };

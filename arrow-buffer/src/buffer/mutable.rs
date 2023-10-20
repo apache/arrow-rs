@@ -334,9 +334,7 @@ impl MutableBuffer {
 
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
-        let bytes = unsafe {
-            Bytes::new(self.data, self.len, Deallocation::Standard(self.layout))
-        };
+        let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
         std::mem::forget(self);
         Buffer::from_bytes(bytes)
     }
@@ -351,8 +349,7 @@ impl MutableBuffer {
         // SAFETY
         // ArrowNativeType is trivially transmutable, is sealed to prevent potentially incorrect
         // implementation outside this crate, and this method checks alignment
-        let (prefix, offsets, suffix) =
-            unsafe { self.as_slice_mut().align_to_mut::<T>() };
+        let (prefix, offsets, suffix) = unsafe { self.as_slice_mut().align_to_mut::<T>() };
         assert!(prefix.is_empty() && suffix.is_empty());
         offsets
     }
@@ -604,9 +601,7 @@ impl MutableBuffer {
     //    we can't specialize `extend` for `TrustedLen` like `Vec` does.
     // 2. `from_trusted_len_iter_bool` is faster.
     #[inline]
-    pub unsafe fn from_trusted_len_iter_bool<I: Iterator<Item = bool>>(
-        mut iterator: I,
-    ) -> Self {
+    pub unsafe fn from_trusted_len_iter_bool<I: Iterator<Item = bool>>(mut iterator: I) -> Self {
         let (_, upper) = iterator.size_hint();
         let len = upper.expect("from_trusted_len_iter requires an upper limit");
 

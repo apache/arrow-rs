@@ -110,11 +110,7 @@ where
     ///
     /// - `buffer` must contain strictly increasing values greater than zero
     /// - The last value of `buffer` must be greater than or equal to `offset + len`
-    pub unsafe fn new_unchecked(
-        run_ends: ScalarBuffer<E>,
-        offset: usize,
-        len: usize,
-    ) -> Self {
+    pub unsafe fn new_unchecked(run_ends: ScalarBuffer<E>, offset: usize, len: usize) -> Self {
         Self {
             run_ends,
             offset,

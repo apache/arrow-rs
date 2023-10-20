@@ -133,9 +133,7 @@ impl HeaderDecoder {
                     let remaining = &MAGIC[MAGIC.len() - self.bytes_remaining..];
                     let to_decode = buf.len().min(remaining.len());
                     if !buf.starts_with(&remaining[..to_decode]) {
-                        return Err(ArrowError::ParseError(
-                            "Incorrect avro magic".to_string(),
-                        ));
+                        return Err(ArrowError::ParseError("Incorrect avro magic".to_string()));
                     }
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];
@@ -240,6 +238,7 @@ mod test {
     use super::*;
     use crate::reader::read_header;
     use crate::schema::SCHEMA_METADATA_KEY;
+    use crate::test_util::arrow_test_data;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 
@@ -266,7 +265,7 @@ mod test {
 
     #[test]
     fn test_header() {
-        let header = decode_file("../testing/data/avro/alltypes_plain.avro");
+        let header = decode_file(&arrow_test_data("avro/alltypes_plain.avro"));
         let schema_json = header.get(SCHEMA_METADATA_KEY).unwrap();
         let expected = br#"{"type":"record","name":"topLevelRecord","fields":[{"name":"id","type":["int","null"]},{"name":"bool_col","type":["boolean","null"]},{"name":"tinyint_col","type":["int","null"]},{"name":"smallint_col","type":["int","null"]},{"name":"int_col","type":["int","null"]},{"name":"bigint_col","type":["long","null"]},{"name":"float_col","type":["float","null"]},{"name":"double_col","type":["double","null"]},{"name":"date_string_col","type":["bytes","null"]},{"name":"string_col","type":["bytes","null"]},{"name":"timestamp_col","type":[{"type":"long","logicalType":"timestamp-micros"},"null"]}]}"#;
         assert_eq!(schema_json, expected);
@@ -276,7 +275,7 @@ mod test {
             226966037233754408753420635932530907102
         );
 
-        let header = decode_file("../testing/data/avro/fixed_length_decimal.avro");
+        let header = decode_file(&arrow_test_data("avro/fixed_length_decimal.avro"));
         let schema_json = header.get(SCHEMA_METADATA_KEY).unwrap();
         let expected = br#"{"type":"record","name":"topLevelRecord","fields":[{"name":"value","type":[{"type":"fixed","name":"fixed","namespace":"topLevelRecord.value","size":11,"logicalType":"decimal","precision":25,"scale":2},"null"]}]}"#;
         assert_eq!(schema_json, expected);

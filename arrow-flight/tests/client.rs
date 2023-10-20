@@ -23,9 +23,9 @@ mod common {
 }
 use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{
-    decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder,
-    error::FlightError, Action, ActionType, Criteria, Empty, FlightClient, FlightData,
-    FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult, Ticket,
+    decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder, error::FlightError, Action,
+    ActionType, Criteria, Empty, FlightClient, FlightData, FlightDescriptor, FlightInfo,
+    HandshakeRequest, HandshakeResponse, PutResult, Ticket,
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
@@ -271,8 +271,7 @@ async fn test_do_put() {
             },
         ];
 
-        test_server
-            .set_do_put_response(expected_response.clone().into_iter().map(Ok).collect());
+        test_server.set_do_put_response(expected_response.clone().into_iter().map(Ok).collect());
 
         let input_stream = futures::stream::iter(input_flight_data.clone()).map(Ok);
 
@@ -446,9 +445,8 @@ async fn test_do_exchange() {
         let input_flight_data = test_flight_data().await;
         let output_flight_data = test_flight_data2().await;
 
-        test_server.set_do_exchange_response(
-            output_flight_data.clone().into_iter().map(Ok).collect(),
-        );
+        test_server
+            .set_do_exchange_response(output_flight_data.clone().into_iter().map(Ok).collect());
 
         let response_stream = client
             .do_exchange(futures::stream::iter(input_flight_data.clone()))

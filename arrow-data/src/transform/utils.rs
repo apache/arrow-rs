@@ -45,9 +45,7 @@ pub(super) fn extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
 }
 
 #[inline]
-pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(
-    offset_buffer: &MutableBuffer,
-) -> T {
+pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &MutableBuffer) -> T {
     // JUSTIFICATION
     //  Benefit
     //      20% performance improvement extend of variable sized arrays (see bench `mutable_array`)

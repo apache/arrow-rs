@@ -86,11 +86,7 @@ impl Default for MapFieldNames {
 
 impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// Creates a new `MapBuilder`
-    pub fn new(
-        field_names: Option<MapFieldNames>,
-        key_builder: K,
-        value_builder: V,
-    ) -> Self {
+    pub fn new(field_names: Option<MapFieldNames>, key_builder: K, value_builder: V) -> Self {
         let capacity = key_builder.len();
         Self::with_capacity(field_names, key_builder, value_builder, capacity)
     }
@@ -243,12 +239,9 @@ mod tests {
     use super::*;
 
     #[test]
-    #[should_panic(
-        expected = "Keys array must have no null values, found 1 null value(s)"
-    )]
+    #[should_panic(expected = "Keys array must have no null values, found 1 null value(s)")]
     fn test_map_builder_with_null_keys_panics() {
-        let mut builder =
-            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
         builder.keys().append_null();
         builder.values().append_value(42);
         builder.append(true).unwrap();

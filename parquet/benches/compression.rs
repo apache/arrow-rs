@@ -57,11 +57,7 @@ fn do_bench(c: &mut Criterion, name: &str, uncompressed: &[u8]) {
             b.iter(|| {
                 let mut out = Vec::new();
                 codec
-                    .decompress(
-                        black_box(&compressed),
-                        &mut out,
-                        Some(uncompressed.len()),
-                    )
+                    .decompress(black_box(&compressed), &mut out, Some(uncompressed.len()))
                     .unwrap();
                 out
             });
@@ -89,8 +85,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut uncompressed = Vec::with_capacity(DATA_SIZE);
     while uncompressed.len() < DATA_SIZE {
         let word = &words[rng.gen_range(0..words.len())];
-        uncompressed
-            .extend_from_slice(&word[..word.len().min(DATA_SIZE - uncompressed.len())])
+        uncompressed.extend_from_slice(&word[..word.len().min(DATA_SIZE - uncompressed.len())])
     }
     assert_eq!(uncompressed.len(), DATA_SIZE);
 

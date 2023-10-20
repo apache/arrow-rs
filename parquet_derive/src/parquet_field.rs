@@ -165,9 +165,7 @@ impl Field {
                         | Type::Slice(ref third_type) => match **third_type {
                             Type::TypePath(_) => Some(self.optional_definition_levels()),
                             Type::Reference(_, ref fourth_type) => match **fourth_type {
-                                Type::TypePath(_) => {
-                                    Some(self.optional_definition_levels())
-                                }
+                                Type::TypePath(_) => Some(self.optional_definition_levels()),
                                 _ => unimplemented!("Unsupported definition encountered"),
                             },
                             _ => unimplemented!("Unsupported definition encountered"),
@@ -175,9 +173,7 @@ impl Field {
                         Type::Reference(_, ref third_type) => match **third_type {
                             Type::TypePath(_) => Some(self.optional_definition_levels()),
                             Type::Slice(ref fourth_type) => match **fourth_type {
-                                Type::TypePath(_) => {
-                                    Some(self.optional_definition_levels())
-                                }
+                                Type::TypePath(_) => Some(self.optional_definition_levels()),
                                 _ => unimplemented!("Unsupported definition encountered"),
                             },
                             _ => unimplemented!("Unsupported definition encountered"),
@@ -347,8 +343,7 @@ impl Field {
     fn option_into_vals(&self) -> proc_macro2::TokenStream {
         let field_name = &self.ident;
         let is_a_byte_buf = self.is_a_byte_buf;
-        let is_a_timestamp =
-            self.third_party_type == Some(ThirdPartyType::ChronoNaiveDateTime);
+        let is_a_timestamp = self.third_party_type == Some(ThirdPartyType::ChronoNaiveDateTime);
         let is_a_date = self.third_party_type == Some(ThirdPartyType::ChronoNaiveDate);
         let is_a_uuid = self.third_party_type == Some(ThirdPartyType::Uuid);
         let copy_to_vec = !matches!(
@@ -547,10 +542,7 @@ impl Type {
         Type::leaf_type_recursive_helper(self, None)
     }
 
-    fn leaf_type_recursive_helper<'a>(
-        ty: &'a Type,
-        parent_ty: Option<&'a Type>,
-    ) -> &'a Type {
+    fn leaf_type_recursive_helper<'a>(ty: &'a Type, parent_ty: Option<&'a Type>) -> &'a Type {
         match ty {
             Type::TypePath(_) => parent_ty.unwrap_or(ty),
             Type::Option(ref first_type)
@@ -747,9 +739,7 @@ impl Type {
         let last_part = self.last_part();
 
         match last_part.trim() {
-            "NaiveDateTime" => {
-                Some(quote! { ::parquet::basic::ConvertedType::TIMESTAMP_MILLIS })
-            }
+            "NaiveDateTime" => Some(quote! { ::parquet::basic::ConvertedType::TIMESTAMP_MILLIS }),
             _ => None,
         }
     }
@@ -785,10 +775,9 @@ impl Type {
     fn from_type_path(f: &syn::Field, p: &syn::TypePath) -> Self {
         let last_segment = p.path.segments.last().unwrap();
 
-        let is_vec =
-            last_segment.ident == syn::Ident::new("Vec", proc_macro2::Span::call_site());
-        let is_option = last_segment.ident
-            == syn::Ident::new("Option", proc_macro2::Span::call_site());
+        let is_vec = last_segment.ident == syn::Ident::new("Vec", proc_macro2::Span::call_site());
+        let is_option =
+            last_segment.ident == syn::Ident::new("Option", proc_macro2::Span::call_site());
 
         if is_vec || is_option {
             let generic_type = match &last_segment.arguments {

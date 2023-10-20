@@ -26,3 +26,13 @@ pub mod reader;
 mod schema;
 
 mod compression;
+
+#[cfg(test)]
+mod test_util {
+    pub fn arrow_test_data(path: &str) -> String {
+        match std::env::var("ARROW_TEST_DATA") {
+            Ok(dir) => format!("{dir}/{path}"),
+            Err(_) => format!("../testing/data/{path}"),
+        }
+    }
+}

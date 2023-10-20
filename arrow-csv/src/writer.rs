@@ -389,18 +389,12 @@ mod tests {
             "consectetur adipiscing elit",
             "sed do eiusmod tempor",
         ]);
-        let c2 = PrimitiveArray::<Float64Type>::from(vec![
-            Some(123.564532),
-            None,
-            Some(-556132.25),
-        ]);
+        let c2 =
+            PrimitiveArray::<Float64Type>::from(vec![Some(123.564532), None, Some(-556132.25)]);
         let c3 = PrimitiveArray::<UInt32Type>::from(vec![3, 2, 1]);
         let c4 = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let c5 = TimestampMillisecondArray::from(vec![
-            None,
-            Some(1555584887378),
-            Some(1555555555555),
-        ]);
+        let c5 =
+            TimestampMillisecondArray::from(vec![None, Some(1555584887378), Some(1555555555555)]);
         let c6 = Time32SecondArray::from(vec![1234, 24680, 85563]);
         let c7: DictionaryArray<Int32Type> =
             vec!["cupcakes", "cupcakes", "foo"].into_iter().collect();
@@ -451,13 +445,11 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             Field::new("c2", DataType::Decimal256(76, 6), true),
         ]);
 
-        let mut c1_builder =
-            Decimal128Builder::new().with_data_type(DataType::Decimal128(38, 6));
+        let mut c1_builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(38, 6));
         c1_builder.extend(vec![Some(-3335724), Some(2179404), None, Some(290472)]);
         let c1 = c1_builder.finish();
 
-        let mut c2_builder =
-            Decimal256Builder::new().with_data_type(DataType::Decimal256(76, 6));
+        let mut c2_builder = Decimal256Builder::new().with_data_type(DataType::Decimal256(76, 6));
         c2_builder.extend(vec![
             Some(i256::from_i128(-3335724)),
             Some(i256::from_i128(2179404)),
@@ -467,8 +459,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         let c2 = c2_builder.finish();
 
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
 
@@ -512,11 +503,8 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             "consectetur adipiscing elit",
             "sed do eiusmod tempor",
         ]);
-        let c2 = PrimitiveArray::<Float64Type>::from(vec![
-            Some(123.564532),
-            None,
-            Some(-556132.25),
-        ]);
+        let c2 =
+            PrimitiveArray::<Float64Type>::from(vec![Some(123.564532), None, Some(-556132.25)]);
         let c3 = PrimitiveArray::<UInt32Type>::from(vec![3, 2, 1]);
         let c4 = BooleanArray::from(vec![Some(true), Some(false), None]);
         let c6 = Time32SecondArray::from(vec![1234, 24680, 85563]);
@@ -629,8 +617,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         let c0 = UInt32Array::from(vec![Some(123), Some(234)]);
         let c1 = Date64Array::from(vec![Some(1926632005177), Some(1926632005177685347)]);
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c0), Arc::new(c1)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c0), Arc::new(c1)]).unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
         let mut writer = Writer::new(&mut file);
@@ -656,15 +643,9 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             Field::new("c4", DataType::Time32(TimeUnit::Second), false),
         ]);
 
-        let c1 = TimestampMillisecondArray::from(vec![
-            Some(1555584887378),
-            Some(1635577147000),
-        ])
-        .with_timezone("+00:00".to_string());
-        let c2 = TimestampMillisecondArray::from(vec![
-            Some(1555584887378),
-            Some(1635577147000),
-        ]);
+        let c1 = TimestampMillisecondArray::from(vec![Some(1555584887378), Some(1635577147000)])
+            .with_timezone("+00:00".to_string());
+        let c2 = TimestampMillisecondArray::from(vec![Some(1555584887378), Some(1635577147000)]);
         let c3 = Date32Array::from(vec![3, 2]);
         let c4 = Time32SecondArray::from(vec![1234, 24680]);
 

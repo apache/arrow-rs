@@ -27,7 +27,7 @@ use std::sync::Arc;
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::{DataType, Field, Fields};
+/// # use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
 /// // Can be constructed from Vec<Field>
 /// Fields::from(vec![Field::new("a", DataType::Boolean, false)]);
 /// // Can be constructed from Vec<FieldRef>
@@ -38,6 +38,21 @@ use std::sync::Arc;
 /// std::iter::once(Arc::new(Field::new("a", DataType::Boolean, false))).collect::<Fields>();
 /// ```
 ///
+/// See [`SchemaBuilder`] for mutating or updating [`Fields`]
+///
+/// ```
+/// # use arrow_schema::{DataType, Field, SchemaBuilder};
+/// let mut builder = SchemaBuilder::new();
+/// builder.push(Field::new("a", DataType::Boolean, false));
+/// builder.push(Field::new("b", DataType::Boolean, false));
+/// let fields = builder.finish().fields;
+///
+/// let mut builder = SchemaBuilder::from(&fields);
+/// builder.remove(0);
+/// let new = builder.finish().fields;
+/// ```
+///
+/// [`SchemaBuilder`]: crate::SchemaBuilder
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]

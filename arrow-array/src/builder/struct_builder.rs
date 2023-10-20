@@ -106,24 +106,18 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Float32 => Box::new(Float32Builder::with_capacity(capacity)),
         DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
         DataType::Binary => Box::new(BinaryBuilder::with_capacity(capacity, 1024)),
-        DataType::LargeBinary => {
-            Box::new(LargeBinaryBuilder::with_capacity(capacity, 1024))
-        }
+        DataType::LargeBinary => Box::new(LargeBinaryBuilder::with_capacity(capacity, 1024)),
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
         DataType::Decimal128(p, s) => Box::new(
-            Decimal128Builder::with_capacity(capacity)
-                .with_data_type(DataType::Decimal128(*p, *s)),
+            Decimal128Builder::with_capacity(capacity).with_data_type(DataType::Decimal128(*p, *s)),
         ),
         DataType::Decimal256(p, s) => Box::new(
-            Decimal256Builder::with_capacity(capacity)
-                .with_data_type(DataType::Decimal256(*p, *s)),
+            Decimal256Builder::with_capacity(capacity).with_data_type(DataType::Decimal256(*p, *s)),
         ),
         DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, 1024)),
-        DataType::LargeUtf8 => {
-            Box::new(LargeStringBuilder::with_capacity(capacity, 1024))
-        }
+        DataType::LargeUtf8 => Box::new(LargeStringBuilder::with_capacity(capacity, 1024)),
         DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
         DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),
         DataType::Time32(TimeUnit::Second) => {
@@ -175,19 +169,14 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Duration(TimeUnit::Nanosecond) => {
             Box::new(DurationNanosecondBuilder::with_capacity(capacity))
         }
-        DataType::Struct(fields) => {
-            Box::new(StructBuilder::from_fields(fields.clone(), capacity))
-        }
+        DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
         t => panic!("Data type {t:?} is not currently supported"),
     }
 }
 
 impl StructBuilder {
     /// Creates a new `StructBuilder`
-    pub fn new(
-        fields: impl Into<Fields>,
-        field_builders: Vec<Box<dyn ArrayBuilder>>,
-    ) -> Self {
+    pub fn new(fields: impl Into<Fields>, field_builders: Vec<Box<dyn ArrayBuilder>>) -> Self {
         Self {
             field_builders,
             fields: fields.into(),
@@ -234,10 +223,7 @@ impl StructBuilder {
     pub fn finish(&mut self) -> StructArray {
         self.validate_content();
         if self.fields.is_empty() {
-            return StructArray::new_empty_fields(
-                self.len(),
-                self.null_buffer_builder.finish(),
-            );
+            return StructArray::new_empty_fields(self.len(), self.null_buffer_builder.finish());
         }
 
         let arrays = self.field_builders.iter_mut().map(|f| f.finish()).collect();
@@ -524,8 +510,7 @@ mod tests {
         expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) is not currently supported"
     )]
     fn test_struct_array_builder_from_schema_unsupported_type() {
-        let list_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+        let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
         let fields = vec![
             Field::new("f1", DataType::Int16, false),
             Field::new("f2", list_type, false),
@@ -571,9 +556,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Number of fields is not equal to the number of field_builders."
-    )]
+    #[should_panic(expected = "Number of fields is not equal to the number of field_builders.")]
     fn test_struct_array_builder_unequal_field_field_builders() {
         let int_builder = Int32Builder::with_capacity(10);
 

@@ -32,25 +32,19 @@ where
     D: serde::Deserializer<'de>,
 {
     let s: String = serde::Deserialize::deserialize(deserializer)?;
-    let naive = chrono::NaiveDateTime::parse_from_str(&s, RFC1123_FMT)
-        .map_err(serde::de::Error::custom)?;
+    let naive =
+        chrono::NaiveDateTime::parse_from_str(&s, RFC1123_FMT).map_err(serde::de::Error::custom)?;
     Ok(chrono::TimeZone::from_utc_datetime(&chrono::Utc, &naive))
 }
 
 #[cfg(any(feature = "aws", feature = "azure"))]
-pub(crate) fn hmac_sha256(
-    secret: impl AsRef<[u8]>,
-    bytes: impl AsRef<[u8]>,
-) -> ring::hmac::Tag {
+pub(crate) fn hmac_sha256(secret: impl AsRef<[u8]>, bytes: impl AsRef<[u8]>) -> ring::hmac::Tag {
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_ref());
     ring::hmac::sign(&key, bytes.as_ref())
 }
 
 /// Collect a stream into [`Bytes`] avoiding copying in the event of a single chunk
-pub async fn collect_bytes<S, E>(
-    mut stream: S,
-    size_hint: Option<usize>,
-) -> Result<Bytes, E>
+pub async fn collect_bytes<S, E>(mut stream: S, size_hint: Option<usize>) -> Result<Bytes, E>
 where
     E: Send,
     S: Stream<Item = Result<Bytes, E>> + Send + Unpin,
@@ -136,10 +130,7 @@ where
 }
 
 /// Returns a sorted list of ranges that cover `ranges`
-fn merge_ranges(
-    ranges: &[std::ops::Range<usize>],
-    coalesce: usize,
-) -> Vec<std::ops::Range<usize>> {
+fn merge_ranges(ranges: &[std::ops::Range<usize>], coalesce: usize) -> Vec<std::ops::Range<usize>> {
     if ranges.is_empty() {
         return vec![];
     }

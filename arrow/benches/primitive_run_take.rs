@@ -41,9 +41,7 @@ fn create_random_index(size: usize, null_density: f32, max_value: usize) -> UInt
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("primitive_run_take");
 
-    let mut do_bench = |physical_array_len: usize,
-                        logical_array_len: usize,
-                        take_len: usize| {
+    let mut do_bench = |physical_array_len: usize, logical_array_len: usize, take_len: usize| {
         let run_array = create_primitive_run_array::<Int32Type, Int64Type>(
             logical_array_len,
             physical_array_len,

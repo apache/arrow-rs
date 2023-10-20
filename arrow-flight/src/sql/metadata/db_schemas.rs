@@ -95,11 +95,7 @@ impl GetDbSchemasBuilder {
     /// Append a row
     ///
     /// In case the catalog should be considered as empty, pass in an empty string '""'.
-    pub fn append(
-        &mut self,
-        catalog_name: impl AsRef<str>,
-        schema_name: impl AsRef<str>,
-    ) {
+    pub fn append(&mut self, catalog_name: impl AsRef<str>, schema_name: impl AsRef<str>) {
         self.catalog_name.append_value(catalog_name);
         self.db_schema_name.append_value(schema_name);
     }

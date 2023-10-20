@@ -20,9 +20,7 @@ use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{
-    ArrowNativeType, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer,
-};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::sync::Arc;
@@ -79,10 +77,11 @@ pub fn interleave(
 
     for array in values.iter().skip(1) {
         if array.data_type() != data_type {
-            return Err(ArrowError::InvalidArgumentError(
-                format!("It is not possible to interleave arrays of different data types ({} and {})",
-              data_type, array.data_type()),
-            ));
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "It is not possible to interleave arrays of different data types ({} and {})",
+                data_type,
+                array.data_type()
+            )));
         }
     }
 
@@ -278,8 +277,7 @@ mod tests {
         let a = Int32Array::from_iter_values([1, 2, 3, 4]);
         let b = Int32Array::from_iter_values([5, 6, 7]);
         let c = Int32Array::from_iter_values([8, 9, 10]);
-        let values =
-            interleave(&[&a, &b, &c], &[(0, 3), (0, 3), (2, 2), (2, 0), (1, 1)]).unwrap();
+        let values = interleave(&[&a, &b, &c], &[(0, 3), (0, 3), (2, 2), (2, 0), (1, 1)]).unwrap();
         let v = values.as_primitive::<Int32Type>();
         assert_eq!(v.values(), &[4, 4, 10, 8, 6]);
     }
@@ -288,8 +286,7 @@ mod tests {
     fn test_primitive_nulls() {
         let a = Int32Array::from_iter_values([1, 2, 3, 4]);
         let b = Int32Array::from_iter([Some(1), Some(4), None]);
-        let values =
-            interleave(&[&a, &b], &[(0, 1), (1, 2), (1, 2), (0, 3), (0, 2)]).unwrap();
+        let values = interleave(&[&a, &b], &[(0, 1), (1, 2), (1, 2), (0, 3), (0, 2)]).unwrap();
         let v: Vec<_> = values.as_primitive::<Int32Type>().into_iter().collect();
         assert_eq!(&v, &[Some(2), None, None, Some(4), Some(3)])
     }
@@ -306,8 +303,7 @@ mod tests {
     fn test_strings() {
         let a = StringArray::from_iter_values(["a", "b", "c"]);
         let b = StringArray::from_iter_values(["hello", "world", "foo"]);
-        let values =
-            interleave(&[&a, &b], &[(0, 2), (0, 2), (1, 0), (1, 1), (0, 1)]).unwrap();
+        let values = interleave(&[&a, &b], &[(0, 2), (0, 2), (1, 0), (1, 1), (0, 1)]).unwrap();
         let v = values.as_string::<i32>();
         let values: Vec<_> = v.into_iter().collect();
         assert_eq!(
@@ -329,8 +325,7 @@ mod tests {
 
         // Should not recompute dictionary
         let values =
-            interleave(&[&a, &b], &[(0, 2), (0, 2), (0, 2), (1, 0), (1, 1), (0, 1)])
-                .unwrap();
+            interleave(&[&a, &b], &[(0, 2), (0, 2), (0, 2), (1, 0), (1, 1), (0, 1)]).unwrap();
         let v = values.as_dictionary::<Int32Type>();
         assert_eq!(v.values().len(), 5);
 
@@ -371,8 +366,7 @@ mod tests {
         b.append(true);
         let b = b.finish();
 
-        let values =
-            interleave(&[&a, &b], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
+        let values = interleave(&[&a, &b], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
         let v = values.as_any().downcast_ref::<ListArray>().unwrap();
 
         // [[3], null, [4], [5, 6, null], null]
@@ -404,12 +398,8 @@ mod tests {
         let indices = &[(0, 0), (0, 1), (0, 2), (1, 0)];
         let array = interleave(&[&dict_a, &dict_b], indices).unwrap();
 
-        let expected = DictionaryArray::<Int32Type>::from_iter(vec![
-            Some("0"),
-            Some("1"),
-            Some("2"),
-            None,
-        ]);
+        let expected =
+            DictionaryArray::<Int32Type>::from_iter(vec![Some("0"), Some("1"), Some("2"), None]);
         assert_eq!(array.as_ref(), &expected)
     }
 }

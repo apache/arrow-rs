@@ -24,8 +24,7 @@ use arrow_buffer::Buffer;
 use crate::arrow::buffer::bit_util::count_set_bits;
 use crate::basic::Encoding;
 use crate::column::reader::decoder::{
-    ColumnLevelDecoder, DefinitionLevelDecoder, DefinitionLevelDecoderImpl,
-    LevelsBufferSlice,
+    ColumnLevelDecoder, DefinitionLevelDecoder, DefinitionLevelDecoderImpl, LevelsBufferSlice,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
@@ -162,11 +161,7 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
 }
 
 impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
-    fn read_def_levels(
-        &mut self,
-        writer: &mut Self::Slice,
-        range: Range<usize>,
-    ) -> Result<usize> {
+    fn read_def_levels(&mut self, writer: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
         match (&mut writer.inner, &mut self.decoder) {
             (
                 BufferInner::Full {
@@ -201,15 +196,9 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
         }
     }
 
-    fn skip_def_levels(
-        &mut self,
-        num_levels: usize,
-        max_def_level: i16,
-    ) -> Result<(usize, usize)> {
+    fn skip_def_levels(&mut self, num_levels: usize, max_def_level: i16) -> Result<(usize, usize)> {
         match &mut self.decoder {
-            MaybePacked::Fallback(decoder) => {
-                decoder.skip_def_levels(num_levels, max_def_level)
-            }
+            MaybePacked::Fallback(decoder) => decoder.skip_def_levels(num_levels, max_def_level),
             MaybePacked::Packed(decoder) => decoder.skip(num_levels),
         }
     }
@@ -249,8 +238,7 @@ impl PackedDecoder {
             self.rle_left = (indicator_value >> 1) as usize;
             let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
                 ParquetError::EOF(
-                    "unexpected end of file whilst decoding definition levels rle value"
-                        .into(),
+                    "unexpected end of file whilst decoding definition levels rle value".into(),
                 )
             })?;
 
@@ -354,11 +342,10 @@ impl PackedDecoder {
                     skipped_value += to_skip;
                 }
             } else if self.packed_count != self.packed_offset {
-                let to_skip = (self.packed_count - self.packed_offset)
-                    .min(level_num - skipped_level);
+                let to_skip =
+                    (self.packed_count - self.packed_offset).min(level_num - skipped_level);
                 let offset = self.data_offset * 8 + self.packed_offset;
-                let bit_chunk =
-                    UnalignedBitChunk::new(self.data.as_ref(), offset, to_skip);
+                let bit_chunk = UnalignedBitChunk::new(self.data.as_ref(), offset, to_skip);
                 skipped_value += bit_chunk.count_ones();
                 self.packed_offset += to_skip;
                 skipped_level += to_skip;
@@ -452,14 +439,12 @@ mod tests {
             }
             let to_read_or_skip_level = rng.gen_range(1..=remaining_levels);
             if rng.gen_bool(0.5) {
-                let (skip_val_num, skip_level_num) =
-                    decoder.skip(to_read_or_skip_level).unwrap();
+                let (skip_val_num, skip_level_num) = decoder.skip(to_read_or_skip_level).unwrap();
                 skip_value += skip_val_num;
                 skip_level += skip_level_num
             } else {
                 let mut decoded = BooleanBufferBuilder::new(to_read_or_skip_level);
-                let read_level_num =
-                    decoder.read(&mut decoded, to_read_or_skip_level).unwrap();
+                let read_level_num = decoder.read(&mut decoded, to_read_or_skip_level).unwrap();
                 read_level += read_level_num;
                 for i in 0..read_level_num {
                     assert!(!decoded.is_empty());

@@ -168,9 +168,7 @@ impl Path {
     /// as defined on the docstring for [`Path`] or does not exist
     ///
     /// Note: this will canonicalize the provided path, resolving any symlinks
-    pub fn from_filesystem_path(
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<Self, Error> {
+    pub fn from_filesystem_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
         let absolute = std::fs::canonicalize(&path).context(CanonicalizeSnafu {
             path: path.as_ref(),
         })?;
@@ -199,12 +197,14 @@ impl Path {
     ) -> Result<Self, Error> {
         let url = absolute_path_to_url(path)?;
         let path = match base {
-            Some(prefix) => url.path().strip_prefix(prefix.path()).ok_or_else(|| {
-                Error::PrefixMismatch {
-                    path: url.path().to_string(),
-                    prefix: prefix.to_string(),
-                }
-            })?,
+            Some(prefix) => {
+                url.path()
+                    .strip_prefix(prefix.path())
+                    .ok_or_else(|| Error::PrefixMismatch {
+                        path: url.path().to_string(),
+                        prefix: prefix.to_string(),
+                    })?
+            }
             None => url.path(),
         };
 
@@ -256,10 +256,7 @@ impl Path {
     /// Returns an iterator of the [`PathPart`] of this [`Path`] after `prefix`
     ///
     /// Returns `None` if the prefix does not match
-    pub fn prefix_match(
-        &self,
-        prefix: &Self,
-    ) -> Option<impl Iterator<Item = PathPart<'_>> + '_> {
+    pub fn prefix_match(&self, prefix: &Self) -> Option<impl Iterator<Item = PathPart<'_>> + '_> {
         let mut stripped = self.raw.strip_prefix(&prefix.raw)?;
         if !stripped.is_empty() && !prefix.raw.is_empty() {
             stripped = stripped.strip_prefix(DELIMITER)?;
@@ -333,9 +330,7 @@ where
 
 #[cfg(not(target_arch = "wasm32"))]
 /// Given an absolute filesystem path convert it to a URL representation without canonicalization
-pub(crate) fn absolute_path_to_url(
-    path: impl AsRef<std::path::Path>,
-) -> Result<Url, Error> {
+pub(crate) fn absolute_path_to_url(path: impl AsRef<std::path::Path>) -> Result<Url, Error> {
     Url::from_file_path(&path).map_err(|_| Error::InvalidPath {
         path: path.as_ref().into(),
     })
@@ -498,8 +493,7 @@ mod tests {
 
     #[test]
     fn prefix_matches_with_file_name() {
-        let haystack =
-            Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo.segment"]);
+        let haystack = Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo.segment"]);
 
         // All directories match and file name is a prefix
         let needle = Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo"]);

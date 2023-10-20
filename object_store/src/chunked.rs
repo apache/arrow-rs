@@ -29,7 +29,7 @@ use tokio::io::AsyncWrite;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutResult,
 };
 use crate::{MultipartId, Result};
 
@@ -62,7 +62,7 @@ impl Display for ChunkedStore {
 
 #[async_trait]
 impl ObjectStore for ChunkedStore {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         self.inner.put(location, bytes).await
     }
 
@@ -73,11 +73,7 @@ impl ObjectStore for ChunkedStore {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
         self.inner.abort_multipart(location, multipart_id).await
     }
 
@@ -147,19 +143,16 @@ impl ObjectStore for ChunkedStore {
         self.inner.delete(location).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        self.inner.list(prefix).await
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+        self.inner.list(prefix)
     }
 
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        self.inner.list_with_offset(prefix, offset).await
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
+        self.inner.list_with_offset(prefix, offset)
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {

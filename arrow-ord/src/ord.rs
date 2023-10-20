@@ -27,10 +27,7 @@ use std::cmp::Ordering;
 /// Compare the values at two arbitrary indices in two arrays.
 pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
 
-fn compare_primitive<T: ArrowPrimitiveType>(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> DynComparator
+fn compare_primitive<T: ArrowPrimitiveType>(left: &dyn Array, right: &dyn Array) -> DynComparator
 where
     T::Native: ArrowNativeTypeOp,
 {
@@ -94,10 +91,7 @@ fn compare_dict<K: ArrowDictionaryKeyType>(
 /// ```
 // This is a factory of comparisons.
 // The lifetime 'a enforces that we cannot use the closure beyond any of the array's lifetime.
-pub fn build_compare(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> Result<DynComparator, ArrowError> {
+pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator, ArrowError> {
     use arrow_schema::DataType::*;
     macro_rules! primitive_helper {
         ($t:ty, $left:expr, $right:expr) => {

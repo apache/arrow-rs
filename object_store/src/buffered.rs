@@ -87,11 +87,7 @@ impl BufReader {
     }
 
     /// Create a new [`BufReader`] from the provided [`ObjectMeta`], [`ObjectStore`], and `capacity`
-    pub fn with_capacity(
-        store: Arc<dyn ObjectStore>,
-        meta: &ObjectMeta,
-        capacity: usize,
-    ) -> Self {
+    pub fn with_capacity(store: Arc<dyn ObjectStore>, meta: &ObjectMeta, capacity: usize) -> Self {
         Self {
             path: meta.location.clone(),
             size: meta.size as _,
@@ -138,21 +134,32 @@ impl AsyncSeek for BufReader {
     fn start_seek(mut self: Pin<&mut Self>, position: SeekFrom) -> std::io::Result<()> {
         self.cursor = match position {
             SeekFrom::Start(offset) => offset,
-            SeekFrom::End(offset) => {
-                checked_add_signed(self.size,offset).ok_or_else(|| Error::new(ErrorKind::InvalidInput, format!("Seeking {offset} from end of {} byte file would result in overflow", self.size)))?
-            }
+            SeekFrom::End(offset) => checked_add_signed(self.size, offset).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "Seeking {offset} from end of {} byte file would result in overflow",
+                        self.size
+                    ),
+                )
+            })?,
             SeekFrom::Current(offset) => {
-                checked_add_signed(self.cursor, offset).ok_or_else(|| Error::new(ErrorKind::InvalidInput, format!("Seeking {offset} from current offset of {} would result in overflow", self.cursor)))?
+                checked_add_signed(self.cursor, offset).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::InvalidInput,
+                        format!(
+                            "Seeking {offset} from current offset of {} would result in overflow",
+                            self.cursor
+                        ),
+                    )
+                })?
             }
         };
         self.buffer = Buffer::Empty;
         Ok(())
     }
 
-    fn poll_complete(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<u64>> {
+    fn poll_complete(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
         Poll::Ready(Ok(self.cursor))
     }
 }
@@ -179,10 +186,7 @@ impl AsyncRead for BufReader {
 }
 
 impl AsyncBufRead for BufReader {
-    fn poll_fill_buf(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<&[u8]>> {
+    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<&[u8]>> {
         let capacity = self.capacity;
         self.get_mut().poll_fill_buf_impl(cx, capacity)
     }
@@ -238,7 +242,10 @@ mod tests {
         assert_eq!(&out, &data);
 
         let err = reader.seek(SeekFrom::Current(i64::MIN)).await.unwrap_err();
-        assert_eq!(err.to_string(), "Seeking -9223372036854775808 from current offset of 4096 would result in overflow");
+        assert_eq!(
+            err.to_string(),
+            "Seeking -9223372036854775808 from current offset of 4096 would result in overflow"
+        );
 
         reader.rewind().await.unwrap();
 
@@ -254,7 +261,10 @@ mod tests {
         assert!(buf.is_empty());
 
         let err = reader.seek(SeekFrom::Current(1)).await.unwrap_err();
-        assert_eq!(err.to_string(), "Seeking 1 from current offset of 18446744073709551615 would result in overflow");
+        assert_eq!(
+            err.to_string(),
+            "Seeking 1 from current offset of 18446744073709551615 would result in overflow"
+        );
 
         for capacity in [200, 1024, 4096, DEFAULT_BUFFER_SIZE] {
             let store = Arc::clone(&store);

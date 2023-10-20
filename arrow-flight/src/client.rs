@@ -249,10 +249,7 @@ impl FlightClient {
     ///   .expect("error fetching data");
     /// # }
     /// ```
-    pub async fn get_flight_info(
-        &mut self,
-        descriptor: FlightDescriptor,
-    ) -> Result<FlightInfo> {
+    pub async fn get_flight_info(&mut self, descriptor: FlightDescriptor) -> Result<FlightInfo> {
         let request = self.make_request(descriptor);
 
         let response = self.inner.get_flight_info(request).await?.into_inner();
@@ -452,10 +449,7 @@ impl FlightClient {
     ///   .expect("error making request");
     /// # }
     /// ```
-    pub async fn get_schema(
-        &mut self,
-        flight_descriptor: FlightDescriptor,
-    ) -> Result<Schema> {
+    pub async fn get_schema(&mut self, flight_descriptor: FlightDescriptor) -> Result<Schema> {
         let request = self.make_request(flight_descriptor);
 
         let schema_result = self.inner.get_schema(request).await?.into_inner();
@@ -488,9 +482,7 @@ impl FlightClient {
     ///   .expect("error gathering actions");
     /// # }
     /// ```
-    pub async fn list_actions(
-        &mut self,
-    ) -> Result<BoxStream<'static, Result<ActionType>>> {
+    pub async fn list_actions(&mut self) -> Result<BoxStream<'static, Result<ActionType>>> {
         let request = self.make_request(Empty {});
 
         let action_stream = self
@@ -528,10 +520,7 @@ impl FlightClient {
     ///   .expect("error gathering action results");
     /// # }
     /// ```
-    pub async fn do_action(
-        &mut self,
-        action: Action,
-    ) -> Result<BoxStream<'static, Result<Bytes>>> {
+    pub async fn do_action(&mut self, action: Action) -> Result<BoxStream<'static, Result<Bytes>>> {
         let request = self.make_request(action);
 
         let result_stream = self

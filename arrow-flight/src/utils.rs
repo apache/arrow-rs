@@ -52,26 +52,23 @@ pub fn flight_data_from_arrow_batch(
 }
 
 /// Convert a slice of wire protocol `FlightData`s into a vector of `RecordBatch`es
-pub fn flight_data_to_batches(
-    flight_data: &[FlightData],
-) -> Result<Vec<RecordBatch>, ArrowError> {
+pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBatch>, ArrowError> {
     let schema = flight_data.get(0).ok_or_else(|| {
         ArrowError::CastError("Need at least one FlightData for schema".to_string())
     })?;
     let message = root_as_message(&schema.data_header[..])
         .map_err(|_| ArrowError::CastError("Cannot get root as message".to_string()))?;
 
-    let ipc_schema: arrow_ipc::Schema = message.header_as_schema().ok_or_else(|| {
-        ArrowError::CastError("Cannot get header as Schema".to_string())
-    })?;
+    let ipc_schema: arrow_ipc::Schema = message
+        .header_as_schema()
+        .ok_or_else(|| ArrowError::CastError("Cannot get header as Schema".to_string()))?;
     let schema = fb_to_schema(ipc_schema);
     let schema = Arc::new(schema);
 
     let mut batches = vec![];
     let dictionaries_by_id = HashMap::new();
     for datum in flight_data[1..].iter() {
-        let batch =
-            flight_data_to_arrow_batch(datum, schema.clone(), &dictionaries_by_id)?;
+        let batch = flight_data_to_arrow_batch(datum, schema.clone(), &dictionaries_by_id)?;
         batches.push(batch);
     }
     Ok(batches)
@@ -84,9 +81,8 @@ pub fn flight_data_to_arrow_batch(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
 ) -> Result<RecordBatch, ArrowError> {
     // check that the data_header is a record batch message
-    let message = arrow_ipc::root_as_message(&data.data_header[..]).map_err(|err| {
-        ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
-    })?;
+    let message = arrow_ipc::root_as_message(&data.data_header[..])
+        .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))?;
 
     message
         .header_as_record_batch()
@@ -124,10 +120,7 @@ pub fn flight_schema_from_arrow_schema(
     since = "4.4.0",
     note = "Use From trait, e.g.: SchemaAsIpc::new(schema, options).into()"
 )]
-pub fn flight_data_from_arrow_schema(
-    schema: &Schema,
-    options: &IpcWriteOptions,
-) -> FlightData {
+pub fn flight_data_from_arrow_schema(schema: &Schema, options: &IpcWriteOptions) -> FlightData {
     SchemaAsIpc::new(schema, options).into()
 }
 

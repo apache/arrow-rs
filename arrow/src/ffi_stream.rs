@@ -83,16 +83,10 @@ const ENOSYS: i32 = 78;
 #[derive(Debug)]
 pub struct FFI_ArrowArrayStream {
     pub get_schema: Option<
-        unsafe extern "C" fn(
-            arg1: *mut FFI_ArrowArrayStream,
-            out: *mut FFI_ArrowSchema,
-        ) -> c_int,
+        unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream, out: *mut FFI_ArrowSchema) -> c_int,
     >,
     pub get_next: Option<
-        unsafe extern "C" fn(
-            arg1: *mut FFI_ArrowArrayStream,
-            out: *mut FFI_ArrowArray,
-        ) -> c_int,
+        unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream, out: *mut FFI_ArrowArray) -> c_int,
     >,
     pub get_last_error:
         Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream) -> *const c_char>,
@@ -212,8 +206,7 @@ impl ExportedArrayStream {
             }
             Err(ref err) => {
                 private_data.last_error = Some(
-                    CString::new(err.to_string())
-                        .expect("Error string has a null byte in it."),
+                    CString::new(err.to_string()).expect("Error string has a null byte in it."),
                 );
                 get_error_code(err)
             }
@@ -240,8 +233,7 @@ impl ExportedArrayStream {
                 } else {
                     let err = &next_batch.unwrap_err();
                     private_data.last_error = Some(
-                        CString::new(err.to_string())
-                            .expect("Error string has a null byte in it."),
+                        CString::new(err.to_string()).expect("Error string has a null byte in it."),
                     );
                     get_error_code(err)
                 }
@@ -341,8 +333,7 @@ impl Iterator for ArrowArrayStreamReader {
     fn next(&mut self) -> Option<Self::Item> {
         let mut array = FFI_ArrowArray::empty();
 
-        let ret_code =
-            unsafe { self.stream.get_next.unwrap()(&mut self.stream, &mut array) };
+        let ret_code = unsafe { self.stream.get_next.unwrap()(&mut self.stream, &mut array) };
 
         if ret_code == 0 {
             // The end of stream has been reached
@@ -517,8 +508,7 @@ mod tests {
     fn test_error_import() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
 
-        let iter =
-            Box::new(vec![Err(ArrowError::MemoryError("".to_string()))].into_iter());
+        let iter = Box::new(vec![Err(ArrowError::MemoryError("".to_string()))].into_iter());
 
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
 

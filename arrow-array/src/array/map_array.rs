@@ -17,9 +17,7 @@
 
 use crate::array::{get_offsets, print_long_array};
 use crate::iterator::MapArrayIter;
-use crate::{
-    make_array, Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray,
-};
+use crate::{make_array, Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
@@ -264,9 +262,10 @@ impl MapArray {
         }
 
         if data.buffers().len() != 1 {
-            return Err(ArrowError::InvalidArgumentError(
-                format!("MapArray data should contain a single buffer only (value offsets), had {}",
-                        data.len())));
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "MapArray data should contain a single buffer only (value offsets), had {}",
+                data.len()
+            )));
         }
 
         if data.child_data().len() != 1 {
@@ -281,9 +280,9 @@ impl MapArray {
         if let DataType::Struct(fields) = entries.data_type() {
             if fields.len() != 2 {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                "MapArray should contain a struct array with 2 fields, have {} fields",
-                fields.len()
-            )));
+                    "MapArray should contain a struct array with 2 fields, have {} fields",
+                    fields.len()
+                )));
             }
         } else {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -576,8 +575,7 @@ mod tests {
         assert_eq!(2, map_array.value_length(1));
 
         let key_array = Arc::new(Int32Array::from(vec![3, 4, 5])) as ArrayRef;
-        let value_array =
-            Arc::new(UInt32Array::from(vec![None, Some(40), None])) as ArrayRef;
+        let value_array = Arc::new(UInt32Array::from(vec![None, Some(40), None])) as ArrayRef;
         let struct_array =
             StructArray::from(vec![(keys_field, key_array), (values_field, value_array)]);
         assert_eq!(
@@ -669,9 +667,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "MapArray expected ArrayData with DataType::Map got Dictionary"
-    )]
+    #[should_panic(expected = "MapArray expected ArrayData with DataType::Map got Dictionary")]
     fn test_from_array_data_validation() {
         // A DictionaryArray has similar buffer layout to a MapArray
         // but the meaning of the values differs
@@ -692,12 +688,9 @@ mod tests {
         //  [[a, b, c], [d, e, f], [g, h]]
         let entry_offsets = [0, 3, 6, 8];
 
-        let map_array = MapArray::new_from_strings(
-            keys.clone().into_iter(),
-            &values_data,
-            &entry_offsets,
-        )
-        .unwrap();
+        let map_array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
 
         assert_eq!(
             &values_data,
@@ -768,9 +761,8 @@ mod tests {
             "Invalid argument error: Incorrect length of null buffer for MapArray, expected 4 got 3"
         );
 
-        let err =
-            MapArray::try_new(field, offsets.clone(), entries.slice(0, 2), None, false)
-                .unwrap_err();
+        let err = MapArray::try_new(field, offsets.clone(), entries.slice(0, 2), None, false)
+            .unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -783,9 +775,7 @@ mod tests {
             .to_string();
 
         assert!(
-            err.starts_with(
-                "Invalid argument error: MapArray expected data type Int64 got Struct"
-            ),
+            err.starts_with("Invalid argument error: MapArray expected data type Int64 got Struct"),
             "{err}"
         );
 

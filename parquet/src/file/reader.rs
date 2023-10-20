@@ -161,33 +161,28 @@ pub trait RowGroupReader: Send + Sync {
         let col_descr = schema_descr.column(i);
         let col_page_reader = self.get_column_page_reader(i)?;
         let col_reader = match col_descr.physical_type() {
-            Type::BOOLEAN => ColumnReader::BoolColumnReader(ColumnReaderImpl::new(
+            Type::BOOLEAN => {
+                ColumnReader::BoolColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::INT32 => {
+                ColumnReader::Int32ColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::INT64 => {
+                ColumnReader::Int64ColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::INT96 => {
+                ColumnReader::Int96ColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::FLOAT => {
+                ColumnReader::FloatColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::DOUBLE => {
+                ColumnReader::DoubleColumnReader(ColumnReaderImpl::new(col_descr, col_page_reader))
+            }
+            Type::BYTE_ARRAY => ColumnReader::ByteArrayColumnReader(ColumnReaderImpl::new(
                 col_descr,
                 col_page_reader,
             )),
-            Type::INT32 => ColumnReader::Int32ColumnReader(ColumnReaderImpl::new(
-                col_descr,
-                col_page_reader,
-            )),
-            Type::INT64 => ColumnReader::Int64ColumnReader(ColumnReaderImpl::new(
-                col_descr,
-                col_page_reader,
-            )),
-            Type::INT96 => ColumnReader::Int96ColumnReader(ColumnReaderImpl::new(
-                col_descr,
-                col_page_reader,
-            )),
-            Type::FLOAT => ColumnReader::FloatColumnReader(ColumnReaderImpl::new(
-                col_descr,
-                col_page_reader,
-            )),
-            Type::DOUBLE => ColumnReader::DoubleColumnReader(ColumnReaderImpl::new(
-                col_descr,
-                col_page_reader,
-            )),
-            Type::BYTE_ARRAY => ColumnReader::ByteArrayColumnReader(
-                ColumnReaderImpl::new(col_descr, col_page_reader),
-            ),
             Type::FIXED_LEN_BYTE_ARRAY => ColumnReader::FixedLenByteArrayColumnReader(
                 ColumnReaderImpl::new(col_descr, col_page_reader),
             ),

@@ -93,6 +93,7 @@ pub use gen::SqlSupportedTransactions;
 pub use gen::SqlSupportedUnions;
 pub use gen::SqlSupportsConvert;
 pub use gen::SqlTransactionIsolationLevel;
+pub use gen::SubstraitPlan;
 pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
@@ -294,9 +295,8 @@ impl Any {
         if !self.is::<M>() {
             return Ok(None);
         }
-        let m = Message::decode(&*self.value).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to decode Any value: {err}"))
-        })?;
+        let m = Message::decode(&*self.value)
+            .map_err(|err| ArrowError::ParseError(format!("Unable to decode Any value: {err}")))?;
         Ok(Some(m))
     }
 

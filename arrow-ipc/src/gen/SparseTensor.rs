@@ -425,18 +425,13 @@ impl<'a: 'b, 'b> SparseTensorIndexCOOBuilder<'a, 'b> {
     }
     #[inline]
     pub fn add_indicesBuffer(&mut self, indicesBuffer: &Buffer) {
-        self.fbb_.push_slot_always::<&Buffer>(
-            SparseTensorIndexCOO::VT_INDICESBUFFER,
-            indicesBuffer,
-        );
+        self.fbb_
+            .push_slot_always::<&Buffer>(SparseTensorIndexCOO::VT_INDICESBUFFER, indicesBuffer);
     }
     #[inline]
     pub fn add_isCanonical(&mut self, isCanonical: bool) {
-        self.fbb_.push_slot::<bool>(
-            SparseTensorIndexCOO::VT_ISCANONICAL,
-            isCanonical,
-            false,
-        );
+        self.fbb_
+            .push_slot::<bool>(SparseTensorIndexCOO::VT_ISCANONICAL, isCanonical, false);
     }
     #[inline]
     pub fn new(
@@ -543,10 +538,7 @@ impl<'a> SparseMatrixIndexCSX<'a> {
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<flatbuffers::ForwardsUOffset<Int>>(
-                    SparseMatrixIndexCSX::VT_INDPTRTYPE,
-                    None,
-                )
+                .get::<flatbuffers::ForwardsUOffset<Int>>(SparseMatrixIndexCSX::VT_INDPTRTYPE, None)
                 .unwrap()
         }
     }
@@ -692,10 +684,8 @@ impl<'a: 'b, 'b> SparseMatrixIndexCSXBuilder<'a, 'b> {
     }
     #[inline]
     pub fn add_indptrBuffer(&mut self, indptrBuffer: &Buffer) {
-        self.fbb_.push_slot_always::<&Buffer>(
-            SparseMatrixIndexCSX::VT_INDPTRBUFFER,
-            indptrBuffer,
-        );
+        self.fbb_
+            .push_slot_always::<&Buffer>(SparseMatrixIndexCSX::VT_INDPTRBUFFER, indptrBuffer);
     }
     #[inline]
     pub fn add_indicesType(&mut self, indicesType: flatbuffers::WIPOffset<Int<'b>>) {
@@ -706,10 +696,8 @@ impl<'a: 'b, 'b> SparseMatrixIndexCSXBuilder<'a, 'b> {
     }
     #[inline]
     pub fn add_indicesBuffer(&mut self, indicesBuffer: &Buffer) {
-        self.fbb_.push_slot_always::<&Buffer>(
-            SparseMatrixIndexCSX::VT_INDICESBUFFER,
-            indicesBuffer,
-        );
+        self.fbb_
+            .push_slot_always::<&Buffer>(SparseMatrixIndexCSX::VT_INDICESBUFFER, indicesBuffer);
     }
     #[inline]
     pub fn new(
@@ -838,10 +826,7 @@ impl<'a> SparseTensorIndexCSF<'a> {
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<flatbuffers::ForwardsUOffset<Int>>(
-                    SparseTensorIndexCSF::VT_INDPTRTYPE,
-                    None,
-                )
+                .get::<flatbuffers::ForwardsUOffset<Int>>(SparseTensorIndexCSF::VT_INDPTRTYPE, None)
                 .unwrap()
         }
     }
@@ -1163,9 +1148,7 @@ impl<'a> SparseTensor<'a> {
     }
     /// The dimensions of the tensor, optionally named.
     #[inline]
-    pub fn shape(
-        &self,
-    ) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<TensorDim<'a>>> {
+    pub fn shape(&self) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<TensorDim<'a>>> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
@@ -1540,9 +1523,7 @@ impl<'a> SparseTensor<'a> {
 
     #[inline]
     #[allow(non_snake_case)]
-    pub fn sparseIndex_as_sparse_tensor_index_coo(
-        &self,
-    ) -> Option<SparseTensorIndexCOO<'a>> {
+    pub fn sparseIndex_as_sparse_tensor_index_coo(&self) -> Option<SparseTensorIndexCOO<'a>> {
         if self.sparseIndex_type() == SparseTensorIndex::SparseTensorIndexCOO {
             let u = self.sparseIndex();
             // Safety:
@@ -1556,9 +1537,7 @@ impl<'a> SparseTensor<'a> {
 
     #[inline]
     #[allow(non_snake_case)]
-    pub fn sparseIndex_as_sparse_matrix_index_csx(
-        &self,
-    ) -> Option<SparseMatrixIndexCSX<'a>> {
+    pub fn sparseIndex_as_sparse_matrix_index_csx(&self) -> Option<SparseMatrixIndexCSX<'a>> {
         if self.sparseIndex_type() == SparseTensorIndex::SparseMatrixIndexCSX {
             let u = self.sparseIndex();
             // Safety:
@@ -1572,9 +1551,7 @@ impl<'a> SparseTensor<'a> {
 
     #[inline]
     #[allow(non_snake_case)]
-    pub fn sparseIndex_as_sparse_tensor_index_csf(
-        &self,
-    ) -> Option<SparseTensorIndexCSF<'a>> {
+    pub fn sparseIndex_as_sparse_tensor_index_csf(&self) -> Option<SparseTensorIndexCSF<'a>> {
         if self.sparseIndex_type() == SparseTensorIndex::SparseTensorIndexCSF {
             let u = self.sparseIndex();
             // Safety:
@@ -1595,45 +1572,147 @@ impl flatbuffers::Verifiable for SparseTensor<'_> {
     ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
-     .visit_union::<Type, _>("type_type", Self::VT_TYPE_TYPE, "type_", Self::VT_TYPE_, true, |key, v, pos| {
-        match key {
-          Type::Null => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Null>>("Type::Null", pos),
-          Type::Int => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Int>>("Type::Int", pos),
-          Type::FloatingPoint => v.verify_union_variant::<flatbuffers::ForwardsUOffset<FloatingPoint>>("Type::FloatingPoint", pos),
-          Type::Binary => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Binary>>("Type::Binary", pos),
-          Type::Utf8 => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Utf8>>("Type::Utf8", pos),
-          Type::Bool => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Bool>>("Type::Bool", pos),
-          Type::Decimal => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Decimal>>("Type::Decimal", pos),
-          Type::Date => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Date>>("Type::Date", pos),
-          Type::Time => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Time>>("Type::Time", pos),
-          Type::Timestamp => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Timestamp>>("Type::Timestamp", pos),
-          Type::Interval => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Interval>>("Type::Interval", pos),
-          Type::List => v.verify_union_variant::<flatbuffers::ForwardsUOffset<List>>("Type::List", pos),
-          Type::Struct_ => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Struct_>>("Type::Struct_", pos),
-          Type::Union => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Union>>("Type::Union", pos),
-          Type::FixedSizeBinary => v.verify_union_variant::<flatbuffers::ForwardsUOffset<FixedSizeBinary>>("Type::FixedSizeBinary", pos),
-          Type::FixedSizeList => v.verify_union_variant::<flatbuffers::ForwardsUOffset<FixedSizeList>>("Type::FixedSizeList", pos),
-          Type::Map => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Map>>("Type::Map", pos),
-          Type::Duration => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Duration>>("Type::Duration", pos),
-          Type::LargeBinary => v.verify_union_variant::<flatbuffers::ForwardsUOffset<LargeBinary>>("Type::LargeBinary", pos),
-          Type::LargeUtf8 => v.verify_union_variant::<flatbuffers::ForwardsUOffset<LargeUtf8>>("Type::LargeUtf8", pos),
-          Type::LargeList => v.verify_union_variant::<flatbuffers::ForwardsUOffset<LargeList>>("Type::LargeList", pos),
-          Type::RunEndEncoded => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RunEndEncoded>>("Type::RunEndEncoded", pos),
-          _ => Ok(()),
-        }
-     })?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<TensorDim>>>>("shape", Self::VT_SHAPE, true)?
-     .visit_field::<i64>("non_zero_length", Self::VT_NON_ZERO_LENGTH, false)?
-     .visit_union::<SparseTensorIndex, _>("sparseIndex_type", Self::VT_SPARSEINDEX_TYPE, "sparseIndex", Self::VT_SPARSEINDEX, true, |key, v, pos| {
-        match key {
-          SparseTensorIndex::SparseTensorIndexCOO => v.verify_union_variant::<flatbuffers::ForwardsUOffset<SparseTensorIndexCOO>>("SparseTensorIndex::SparseTensorIndexCOO", pos),
-          SparseTensorIndex::SparseMatrixIndexCSX => v.verify_union_variant::<flatbuffers::ForwardsUOffset<SparseMatrixIndexCSX>>("SparseTensorIndex::SparseMatrixIndexCSX", pos),
-          SparseTensorIndex::SparseTensorIndexCSF => v.verify_union_variant::<flatbuffers::ForwardsUOffset<SparseTensorIndexCSF>>("SparseTensorIndex::SparseTensorIndexCSF", pos),
-          _ => Ok(()),
-        }
-     })?
-     .visit_field::<Buffer>("data", Self::VT_DATA, true)?
-     .finish();
+            .visit_union::<Type, _>(
+                "type_type",
+                Self::VT_TYPE_TYPE,
+                "type_",
+                Self::VT_TYPE_,
+                true,
+                |key, v, pos| match key {
+                    Type::Null => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Null>>(
+                        "Type::Null",
+                        pos,
+                    ),
+                    Type::Int => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Int>>(
+                        "Type::Int",
+                        pos,
+                    ),
+                    Type::FloatingPoint => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<FloatingPoint>>(
+                            "Type::FloatingPoint",
+                            pos,
+                        ),
+                    Type::Binary => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Binary>>(
+                        "Type::Binary",
+                        pos,
+                    ),
+                    Type::Utf8 => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Utf8>>(
+                        "Type::Utf8",
+                        pos,
+                    ),
+                    Type::Bool => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Bool>>(
+                        "Type::Bool",
+                        pos,
+                    ),
+                    Type::Decimal => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<Decimal>>(
+                            "Type::Decimal",
+                            pos,
+                        ),
+                    Type::Date => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Date>>(
+                        "Type::Date",
+                        pos,
+                    ),
+                    Type::Time => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Time>>(
+                        "Type::Time",
+                        pos,
+                    ),
+                    Type::Timestamp => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<Timestamp>>(
+                            "Type::Timestamp",
+                            pos,
+                        ),
+                    Type::Interval => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<Interval>>(
+                            "Type::Interval",
+                            pos,
+                        ),
+                    Type::List => v.verify_union_variant::<flatbuffers::ForwardsUOffset<List>>(
+                        "Type::List",
+                        pos,
+                    ),
+                    Type::Struct_ => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<Struct_>>(
+                            "Type::Struct_",
+                            pos,
+                        ),
+                    Type::Union => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Union>>(
+                        "Type::Union",
+                        pos,
+                    ),
+                    Type::FixedSizeBinary => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<FixedSizeBinary>>(
+                            "Type::FixedSizeBinary",
+                            pos,
+                        ),
+                    Type::FixedSizeList => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<FixedSizeList>>(
+                            "Type::FixedSizeList",
+                            pos,
+                        ),
+                    Type::Map => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Map>>(
+                        "Type::Map",
+                        pos,
+                    ),
+                    Type::Duration => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<Duration>>(
+                            "Type::Duration",
+                            pos,
+                        ),
+                    Type::LargeBinary => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<LargeBinary>>(
+                            "Type::LargeBinary",
+                            pos,
+                        ),
+                    Type::LargeUtf8 => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<LargeUtf8>>(
+                            "Type::LargeUtf8",
+                            pos,
+                        ),
+                    Type::LargeList => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<LargeList>>(
+                            "Type::LargeList",
+                            pos,
+                        ),
+                    Type::RunEndEncoded => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<RunEndEncoded>>(
+                            "Type::RunEndEncoded",
+                            pos,
+                        ),
+                    _ => Ok(()),
+                },
+            )?
+            .visit_field::<flatbuffers::ForwardsUOffset<
+                flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<TensorDim>>,
+            >>("shape", Self::VT_SHAPE, true)?
+            .visit_field::<i64>("non_zero_length", Self::VT_NON_ZERO_LENGTH, false)?
+            .visit_union::<SparseTensorIndex, _>(
+                "sparseIndex_type",
+                Self::VT_SPARSEINDEX_TYPE,
+                "sparseIndex",
+                Self::VT_SPARSEINDEX,
+                true,
+                |key, v, pos| match key {
+                    SparseTensorIndex::SparseTensorIndexCOO => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<SparseTensorIndexCOO>>(
+                            "SparseTensorIndex::SparseTensorIndexCOO",
+                            pos,
+                        ),
+                    SparseTensorIndex::SparseMatrixIndexCSX => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<SparseMatrixIndexCSX>>(
+                            "SparseTensorIndex::SparseMatrixIndexCSX",
+                            pos,
+                        ),
+                    SparseTensorIndex::SparseTensorIndexCSF => v
+                        .verify_union_variant::<flatbuffers::ForwardsUOffset<SparseTensorIndexCSF>>(
+                            "SparseTensorIndex::SparseTensorIndexCSF",
+                            pos,
+                        ),
+                    _ => Ok(()),
+                },
+            )?
+            .visit_field::<Buffer>("data", Self::VT_DATA, true)?
+            .finish();
         Ok(())
     }
 }
@@ -1676,10 +1755,7 @@ impl<'a: 'b, 'b> SparseTensorBuilder<'a, 'b> {
             .push_slot::<Type>(SparseTensor::VT_TYPE_TYPE, type_type, Type::NONE);
     }
     #[inline]
-    pub fn add_type_(
-        &mut self,
-        type_: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>,
-    ) {
+    pub fn add_type_(&mut self, type_: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>) {
         self.fbb_
             .push_slot_always::<flatbuffers::WIPOffset<_>>(SparseTensor::VT_TYPE_, type_);
     }
@@ -1722,9 +1798,7 @@ impl<'a: 'b, 'b> SparseTensorBuilder<'a, 'b> {
             .push_slot_always::<&Buffer>(SparseTensor::VT_DATA, data);
     }
     #[inline]
-    pub fn new(
-        _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>,
-    ) -> SparseTensorBuilder<'a, 'b> {
+    pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> SparseTensorBuilder<'a, 'b> {
         let start = _fbb.start_table();
         SparseTensorBuilder {
             fbb_: _fbb,
@@ -2023,9 +2097,7 @@ impl core::fmt::Debug for SparseTensor<'_> {
 /// catch every error, or be maximally performant. For the
 /// previous, unchecked, behavior use
 /// `root_as_sparse_tensor_unchecked`.
-pub fn root_as_sparse_tensor(
-    buf: &[u8],
-) -> Result<SparseTensor, flatbuffers::InvalidFlatbuffer> {
+pub fn root_as_sparse_tensor(buf: &[u8]) -> Result<SparseTensor, flatbuffers::InvalidFlatbuffer> {
     flatbuffers::root::<SparseTensor>(buf)
 }
 #[inline]

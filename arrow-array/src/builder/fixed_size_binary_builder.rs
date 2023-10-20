@@ -75,7 +75,8 @@ impl FixedSizeBinaryBuilder {
     pub fn append_value(&mut self, value: impl AsRef<[u8]>) -> Result<(), ArrowError> {
         if self.value_length != value.as_ref().len() as i32 {
             Err(ArrowError::InvalidArgumentError(
-                "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths".to_string()
+                "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
+                    .to_string(),
             ))
         } else {
             self.values_builder.append_slice(value.as_ref());
@@ -95,11 +96,10 @@ impl FixedSizeBinaryBuilder {
     /// Builds the [`FixedSizeBinaryArray`] and reset this builder.
     pub fn finish(&mut self) -> FixedSizeBinaryArray {
         let array_length = self.len();
-        let array_data_builder =
-            ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
-                .add_buffer(self.values_builder.finish())
-                .nulls(self.null_buffer_builder.finish())
-                .len(array_length);
+        let array_data_builder = ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
+            .add_buffer(self.values_builder.finish())
+            .nulls(self.null_buffer_builder.finish())
+            .len(array_length);
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
     }
@@ -108,11 +108,10 @@ impl FixedSizeBinaryBuilder {
     pub fn finish_cloned(&self) -> FixedSizeBinaryArray {
         let array_length = self.len();
         let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
-        let array_data_builder =
-            ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
-                .add_buffer(values_buffer)
-                .nulls(self.null_buffer_builder.finish_cloned())
-                .len(array_length);
+        let array_data_builder = ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
+            .add_buffer(values_buffer)
+            .nulls(self.null_buffer_builder.finish_cloned())
+            .len(array_length);
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
     }
