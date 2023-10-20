@@ -875,4 +875,43 @@ mod tests {
             UnionMode::Dense,
         );
     }
+
+    #[test]
+    fn test_struct_reorder() {
+        let mut datafields = DataType::Struct(Fields::from(vec![
+            Field::new("f1", DataType::Int32, false),
+            Field::new("f2", DataType::Utf8, false),
+        ]));
+        let reverse_datafields = DataType::Struct(Fields::from(vec![
+            Field::new("f2", DataType::Utf8, false),
+            Field::new("f1", DataType::Int32, false),
+        ]));
+        match datafields {
+            DataType::Struct(ref mut fields) => {
+                fields.reverse();
+            }
+            _ => {}
+        };
+        assert_eq!(datafields, reverse_datafields);
+    }
+
+    #[test]
+    fn test_struct_push() {
+        let mut datafields = DataType::Struct(Fields::from(vec![
+            Field::new("f1", DataType::Int32, false),
+            Field::new("f2", DataType::Utf8, false),
+        ]));
+        match datafields {
+            DataType::Struct(ref mut fields) => {
+                fields.push(Field::new("f3", DataType::Boolean, false));
+            }
+            _ => {}
+        };
+        let expected_datafields = DataType::Struct(Fields::from(vec![
+            Field::new("f1", DataType::Int32, false),
+            Field::new("f2", DataType::Utf8, false),
+            Field::new("f3", DataType::Boolean, false),
+        ]));
+        assert_eq!(datafields, expected_datafields);
+    }
 }

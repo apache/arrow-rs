@@ -41,7 +41,7 @@ use std::sync::Arc;
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
-pub struct Fields(Arc<[FieldRef]>);
+pub struct Fields(Arc<Vec<FieldRef>>);
 
 impl std::fmt::Debug for Fields {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -50,9 +50,13 @@ impl std::fmt::Debug for Fields {
 }
 
 impl Fields {
+    pub fn new(fields: Arc<Vec<FieldRef>>) -> Self {
+        Self(fields)
+    }
+
     /// Returns a new empty [`Fields`]
     pub fn empty() -> Self {
-        Self(Arc::new([]))
+        Self(Arc::new(vec![]))
     }
 
     /// Return size of this instance in bytes.
@@ -83,6 +87,16 @@ impl Fields {
                 .zip(other.iter())
                 .all(|(a, b)| Arc::ptr_eq(a, b) || a.contains(b))
     }
+
+    pub fn reverse(&mut self) {
+        let new_fields: Vec<FieldRef> = self.iter().rev().map(|f| f.clone() as FieldRef).collect();
+        self.0 = Arc::new(new_fields);
+    }
+
+    pub fn push(&mut self, field: Field) {
+        let fields = Arc::make_mut(&mut self.0);
+        fields.push(Arc::new(field));
+    }
 }
 
 impl Default for Fields {
@@ -99,7 +113,7 @@ impl FromIterator<Field> for Fields {
 
 impl FromIterator<FieldRef> for Fields {
     fn from_iter<T: IntoIterator<Item = FieldRef>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
+        Self(Arc::new(iter.into_iter().map(|f| f as FieldRef).collect()))
     }
 }
 
@@ -117,13 +131,13 @@ impl From<Vec<FieldRef>> for Fields {
 
 impl From<&[FieldRef]> for Fields {
     fn from(value: &[FieldRef]) -> Self {
-        Self(value.into())
+        Self(Arc::new(value.to_vec()))
     }
 }
 
 impl<const N: usize> From<[FieldRef; N]> for Fields {
     fn from(value: [FieldRef; N]) -> Self {
-        Self(Arc::new(value))
+        Self(Arc::new(value.to_vec()))
     }
 }
 
