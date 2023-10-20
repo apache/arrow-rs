@@ -24,6 +24,8 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
 
+use super::BinaryDecoderProvider;
+
 pub struct ListArrayDecoder<O> {
     data_type: DataType,
     decoder: Box<dyn ArrayDecoder>,
@@ -37,6 +39,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
         coerce_primitive: bool,
         strict_mode: bool,
         is_nullable: bool,
+        binary_decoder: Option<&BinaryDecoderProvider>,
     ) -> Result<Self, ArrowError> {
         let field = match &data_type {
             DataType::List(f) if !O::IS_LARGE => f,
@@ -48,6 +51,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
             coerce_primitive,
             strict_mode,
             field.is_nullable(),
+            binary_decoder,
         )?;
 
         Ok(Self {

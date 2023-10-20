@@ -22,6 +22,8 @@ use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Fields};
 
+use super::BinaryDecoderProvider;
+
 pub struct StructArrayDecoder {
     data_type: DataType,
     decoders: Vec<Box<dyn ArrayDecoder>>,
@@ -35,6 +37,7 @@ impl StructArrayDecoder {
         coerce_primitive: bool,
         strict_mode: bool,
         is_nullable: bool,
+        binary_decoder: Option<&BinaryDecoderProvider>,
     ) -> Result<Self, ArrowError> {
         let decoders = struct_fields(&data_type)
             .iter()
@@ -48,6 +51,7 @@ impl StructArrayDecoder {
                     coerce_primitive,
                     strict_mode,
                     nullable,
+                    binary_decoder,
                 )
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;

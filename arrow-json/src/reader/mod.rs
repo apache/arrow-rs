@@ -136,6 +136,7 @@
 use std::io::BufRead;
 use std::sync::Arc;
 
+use arrow_buffer::ArrowNativeType;
 use chrono::Utc;
 use serde::Serialize;
 
@@ -149,6 +150,7 @@ use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
 
+use crate::reader::binary_array::BinaryArrayDecoderWrapper;
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
 use crate::reader::list_array::ListArrayDecoder;
@@ -160,6 +162,9 @@ use crate::reader::struct_array::StructArrayDecoder;
 use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
+pub use self::binary_array::BinaryArrayDecoder;
+
+mod binary_array;
 mod boolean_array;
 mod decimal_array;
 mod list_array;
@@ -181,6 +186,7 @@ pub struct ReaderBuilder {
     is_field: bool,
 
     schema: SchemaRef,
+    binary_decoder: Option<BinaryDecoderProvider>,
 }
 
 impl ReaderBuilder {
@@ -199,6 +205,7 @@ impl ReaderBuilder {
             strict_mode: false,
             is_field: false,
             schema,
+            binary_decoder: None,
         }
     }
 
@@ -239,6 +246,7 @@ impl ReaderBuilder {
             strict_mode: false,
             is_field: true,
             schema: Arc::new(Schema::new([field.into()])),
+            binary_decoder: None,
         }
     }
 
@@ -272,6 +280,14 @@ impl ReaderBuilder {
         }
     }
 
+    /// Sets binary decoder for use with decoder
+    pub fn with_binary_decoding(self, binary_decoder: BinaryDecoderProvider) -> Self {
+        Self {
+            binary_decoder: Some(binary_decoder),
+            ..self
+        }
+    }
+
     /// Create a [`Reader`] with the provided [`BufRead`]
     pub fn build<R: BufRead>(self, reader: R) -> Result<Reader<R>, ArrowError> {
         Ok(Reader {
@@ -290,8 +306,13 @@ impl ReaderBuilder {
             }
         };
 
-        let decoder =
-            make_decoder(data_type, self.coerce_primitive, self.strict_mode, nullable)?;
+        let decoder = make_decoder(
+            data_type,
+            self.coerce_primitive,
+            self.strict_mode,
+            nullable,
+            self.binary_decoder.as_ref(),
+        )?;
 
         let num_fields = self.schema.all_fields().len();
 
@@ -648,11 +669,16 @@ macro_rules! primitive_decoder {
     };
 }
 
+/// Type alias for a function that accepts a [`DataType`] and a bool indicating whether it is nullable
+/// and returns a [`BinaryArrayDecoder`]
+pub type BinaryDecoderProvider = fn(DataType, bool) -> Box<dyn BinaryArrayDecoder>;
+
 fn make_decoder(
     data_type: DataType,
     coerce_primitive: bool,
     strict_mode: bool,
     is_nullable: bool,
+    binary_decoder: Option<&BinaryDecoderProvider>,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
@@ -699,13 +725,25 @@ fn make_decoder(
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
         DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive))),
         DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive))),
-        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
-        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
-        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
-        DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
-            Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
+        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable, binary_decoder)?)),
+        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable, binary_decoder)?)),
+        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, binary_decoder)?)),
+        DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => match binary_decoder {
+            Some(builder) => {
+                match &data_type {
+                    DataType::FixedSizeBinary(size) => Ok(Box::new(BinaryArrayDecoderWrapper::<i32>::new(
+                        builder(data_type.clone(), is_nullable),
+                        Some((*size).as_usize())))),
+                    DataType::Binary => Ok(Box::new(BinaryArrayDecoderWrapper::<i32>::new(
+                        builder(data_type.clone(), is_nullable), None))),
+                    DataType::LargeBinary => Ok(Box::new(BinaryArrayDecoderWrapper::<i64>::new(
+                        builder(data_type.clone(), is_nullable), None))),
+                    _ => Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON"))),
+                }
+            },
+            None => Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
         }
-        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
+        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, binary_decoder)?)),
         d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }
 }
@@ -2238,5 +2276,57 @@ mod tests {
         let b = decoder.flush().unwrap().unwrap();
         let values = b.column(0).as_primitive::<Int32Type>().values();
         assert_eq!(values, &[1, 2, 3, 4]);
+    }
+
+    struct NoOpDecoder {}
+
+    impl BinaryArrayDecoder for NoOpDecoder {
+        fn decode_string<'a>(
+            &self,
+            _buffer: &'a str,
+        ) -> Option<std::borrow::Cow<'a, str>> {
+            None
+        }
+
+        fn get_string_length(&self, _buffer: &str) -> Option<usize> {
+            None
+        }
+    }
+
+    #[test]
+    fn test_binary_field() {
+        let fields = vec![
+            Field::new("binary", DataType::Binary, true),
+            Field::new("binary", DataType::FixedSizeBinary(10), true),
+            Field::new("binary", DataType::LargeBinary, true),
+        ];
+        for field in fields.into_iter() {
+            let data_type = field.data_type().clone();
+            ReaderBuilder::new_with_field(field)
+                .build_decoder()
+                .expect_err(
+                    format!("building a decoder should fail for type: {}", data_type)
+                        .as_str(),
+                );
+        }
+    }
+
+    #[test]
+    fn test_binary_field_with_decoder() {
+        let fields = vec![
+            Field::new("binary", DataType::Binary, true),
+            Field::new("binary", DataType::FixedSizeBinary(10), true),
+            Field::new("binary", DataType::LargeBinary, true),
+        ];
+        for field in fields.into_iter() {
+            let data_type = field.data_type().clone();
+            ReaderBuilder::new_with_field(field)
+                .with_binary_decoding(|_dt, _nullable| Box::new(NoOpDecoder {}))
+                .build_decoder()
+                .expect(
+                    format!("building a decoder should work for type: {}", data_type)
+                        .as_str(),
+                );
+        }
     }
 }

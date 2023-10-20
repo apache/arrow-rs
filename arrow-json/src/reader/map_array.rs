@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{make_decoder, ArrayDecoder};
+use crate::reader::{make_decoder, ArrayDecoder, BinaryDecoderProvider};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::ArrowNativeType;
@@ -36,6 +36,7 @@ impl MapArrayDecoder {
         coerce_primitive: bool,
         strict_mode: bool,
         is_nullable: bool,
+        binary_decoder: Option<&BinaryDecoderProvider>,
     ) -> Result<Self, ArrowError> {
         let fields = match &data_type {
             DataType::Map(_, true) => {
@@ -59,12 +60,14 @@ impl MapArrayDecoder {
             coerce_primitive,
             strict_mode,
             fields[0].is_nullable(),
+            binary_decoder,
         )?;
         let values = make_decoder(
             fields[1].data_type().clone(),
             coerce_primitive,
             strict_mode,
             fields[1].is_nullable(),
+            binary_decoder,
         )?;
 
         Ok(Self {
