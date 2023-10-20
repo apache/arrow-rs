@@ -88,8 +88,8 @@ jobs:
         with:
           path: rust
           fetch-depth: 0
-      - name: Install pythonnet and jpype
-        run: conda run --no-capture-output pip install pythonnet jpype1
+      - name: Install pythonnet
+        run: conda run --no-capture-output pip install pythonnet
       - name: Install archery
         run: conda run --no-capture-output pip install -e dev/archery[integration]
       - name: Make build directory
@@ -102,7 +102,7 @@ jobs:
         run: conda run --no-capture-output ci/scripts/csharp_build.sh $PWD /build
       - name: Build Go
         run: conda run --no-capture-output ci/scripts/go_build.sh $PWD
-# Temporarily disabled - https://github.com/apache/arrow-rs/pull/4957
+# Temporarily disabled - https://github.com/apache/arrow-rs/issues/4963
 #      - name: Build Java
 #        run: conda run --no-capture-output ci/scripts/java_build.sh $PWD /build
       - name: Build JS
