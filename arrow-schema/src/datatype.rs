@@ -886,12 +886,9 @@ mod tests {
             Field::new("f2", DataType::Utf8, false),
             Field::new("f1", DataType::Int32, false),
         ]));
-        match datafields {
-            DataType::Struct(ref mut fields) => {
-                fields.reverse();
-            }
-            _ => {}
-        };
+        if let DataType::Struct(ref mut fields) = datafields {
+            fields.reverse();
+        }
         assert_eq!(datafields, reverse_datafields);
     }
 
@@ -901,12 +898,9 @@ mod tests {
             Field::new("f1", DataType::Int32, false),
             Field::new("f2", DataType::Utf8, false),
         ]));
-        match datafields {
-            DataType::Struct(ref mut fields) => {
-                fields.push(Field::new("f3", DataType::Boolean, false));
-            }
-            _ => {}
-        };
+        if let DataType::Struct(ref mut fields) = datafields {
+            fields.push(Field::new("f3", DataType::Boolean, false));
+        }
         let expected_datafields = DataType::Struct(Fields::from(vec![
             Field::new("f1", DataType::Int32, false),
             Field::new("f2", DataType::Utf8, false),
