@@ -23,7 +23,7 @@ use futures::stream::BoxStream;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult,
 };
 use std::fmt::Formatter;
 use tempfile::tempdir;
@@ -40,7 +40,7 @@ impl std::fmt::Display for MyStore {
 
 #[async_trait]
 impl ObjectStore for MyStore {
-    async fn put(&self, path: &Path, data: Bytes) -> object_store::Result<()> {
+    async fn put(&self, path: &Path, data: Bytes) -> object_store::Result<PutResult> {
         self.0.put(path, data).await
     }
 
@@ -51,11 +51,7 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    async fn abort_multipart(
-        &self,
-        _: &Path,
-        _: &MultipartId,
-    ) -> object_store::Result<()> {
+    async fn abort_multipart(&self, _: &Path, _: &MultipartId) -> object_store::Result<()> {
         todo!()
     }
 
@@ -75,17 +71,11 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    async fn list(
-        &self,
-        _: Option<&Path>,
-    ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>> {
+    fn list(&self, _: Option<&Path>) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
         todo!()
     }
 
-    async fn list_with_delimiter(
-        &self,
-        _: Option<&Path>,
-    ) -> object_store::Result<ListResult> {
+    async fn list_with_delimiter(&self, _: Option<&Path>) -> object_store::Result<ListResult> {
         todo!()
     }
 

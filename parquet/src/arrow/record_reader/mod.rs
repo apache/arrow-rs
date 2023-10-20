@@ -100,10 +100,7 @@ where
         let values_decoder = CV::new(descr);
 
         let def_level_decoder = (descr.max_def_level() != 0).then(|| {
-            DefinitionLevelBufferDecoder::new(
-                descr.max_def_level(),
-                packed_null_mask(descr),
-            )
+            DefinitionLevelBufferDecoder::new(descr.max_def_level(), packed_null_mask(descr))
         });
 
         let rep_level_decoder = (descr.max_rep_level() != 0)
@@ -134,9 +131,7 @@ where
         loop {
             let records_to_read = num_records - records_read;
             records_read += self.read_one_batch(records_to_read)?;
-            if records_read == num_records
-                || !self.column_reader.as_mut().unwrap().has_next()?
-            {
+            if records_read == num_records || !self.column_reader.as_mut().unwrap().has_next()? {
                 break;
             }
         }
@@ -226,9 +221,7 @@ where
 
         if values_read < levels_read {
             let def_levels = self.def_levels.as_ref().ok_or_else(|| {
-                general_err!(
-                    "Definition levels should exist when data is less than levels!"
-                )
+                general_err!("Definition levels should exist when data is less than levels!")
             })?;
 
             self.values.pad_nulls(
@@ -256,9 +249,7 @@ where
 /// only possible if the max definition level is 1, and corresponds to nulls at the
 /// leaf level, as opposed to a nullable parent nested type
 fn packed_null_mask(descr: &ColumnDescPtr) -> bool {
-    descr.max_def_level() == 1
-        && descr.max_rep_level() == 0
-        && descr.self_type().is_optional()
+    descr.max_def_level() == 1 && descr.max_rep_level() == 0 && descr.self_type().is_optional()
 }
 
 #[cfg(test)]

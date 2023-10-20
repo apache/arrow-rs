@@ -71,9 +71,7 @@ use crate::datatypes::{DataType, Field, Schema};
 use crate::error::ArrowError;
 use crate::ffi;
 use crate::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-use crate::ffi_stream::{
-    export_reader_into_raw, ArrowArrayStreamReader, FFI_ArrowArrayStream,
-};
+use crate::ffi_stream::{export_reader_into_raw, ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use crate::record_batch::RecordBatch;
 
 import_exception!(pyarrow, ArrowException);
@@ -138,8 +136,7 @@ impl ToPyArrow for DataType {
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("DataType")?;
-        let dtype =
-            class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
+        let dtype = class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
         Ok(dtype.into())
     }
 }
@@ -162,8 +159,7 @@ impl ToPyArrow for Field {
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("Field")?;
-        let dtype =
-            class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
+        let dtype = class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
         Ok(dtype.into())
     }
 }
@@ -186,8 +182,7 @@ impl ToPyArrow for Schema {
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("Schema")?;
-        let schema =
-            class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
+        let schema = class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
         Ok(schema.into())
     }
 }
@@ -271,8 +266,7 @@ impl FromPyArrow for RecordBatch {
 impl ToPyArrow for RecordBatch {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         // Workaround apache/arrow#37669 by returning RecordBatchIterator
-        let reader =
-            RecordBatchIterator::new(vec![Ok(self.clone())], self.schema().clone());
+        let reader = RecordBatchIterator::new(vec![Ok(self.clone())], self.schema().clone());
         let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
         let py_reader = reader.into_pyarrow(py)?;
         py_reader.call_method0(py, "read_next_batch")

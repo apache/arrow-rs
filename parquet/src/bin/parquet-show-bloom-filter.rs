@@ -49,7 +49,9 @@ struct Args {
     #[clap(help("Check the bloom filter indexes for the given column"))]
     column: String,
     #[clap(
-        help("Check if the given values match bloom filter, the values will be evaluated as strings"),
+        help(
+            "Check if the given values match bloom filter, the values will be evaluated as strings"
+        ),
         required = true
     )]
     values: Vec<String>,

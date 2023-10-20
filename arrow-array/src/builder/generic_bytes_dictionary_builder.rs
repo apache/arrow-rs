@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::builder::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
-use crate::types::{
-    ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, GenericStringType,
-};
+use crate::types::{ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
@@ -91,10 +89,7 @@ where
             state: Default::default(),
             dedup: Default::default(),
             keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
-            values_builder: GenericByteBuilder::<T>::with_capacity(
-                value_capacity,
-                data_capacity,
-            ),
+            values_builder: GenericByteBuilder::<T>::with_capacity(value_capacity, data_capacity),
         }
     }
 
@@ -131,8 +126,7 @@ where
         let mut dedup = HashMap::with_capacity_and_hasher(dict_len, ());
 
         let values_len = dictionary_values.value_data().len();
-        let mut values_builder =
-            GenericByteBuilder::<T>::with_capacity(dict_len, values_len);
+        let mut values_builder = GenericByteBuilder::<T>::with_capacity(dict_len, values_len);
 
         K::Native::from_usize(dictionary_values.len())
             .ok_or(ArrowError::DictionaryKeyOverflowError)?;
@@ -214,10 +208,7 @@ where
     /// value is appended to the values array.
     ///
     /// Returns an error if the new index would overflow the key type.
-    pub fn append(
-        &mut self,
-        value: impl AsRef<T::Native>,
-    ) -> Result<K::Native, ArrowError> {
+    pub fn append(&mut self, value: impl AsRef<T::Native>) -> Result<K::Native, ArrowError> {
         let value_native: &T::Native = value.as_ref();
         let value_bytes: &[u8] = value_native.as_ref();
 
@@ -240,8 +231,7 @@ where
                     state.hash_one(get_bytes(storage, *idx))
                 });
 
-                K::Native::from_usize(idx)
-                    .ok_or(ArrowError::DictionaryKeyOverflowError)?
+                K::Native::from_usize(idx).ok_or(ArrowError::DictionaryKeyOverflowError)?
             }
         };
         self.keys_builder.append_value(key);
@@ -283,8 +273,7 @@ where
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
-        let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
+        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
 
         let builder = keys
             .into_data()
@@ -300,8 +289,7 @@ where
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
 
-        let data_type =
-            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
+        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
 
         let builder = keys
             .into_data()
@@ -367,12 +355,10 @@ fn get_bytes<T: ByteArrayType>(values: &GenericByteBuilder<T>, idx: usize) -> &[
 /// assert_eq!(ava.value(1), "def");
 ///
 /// ```
-pub type StringDictionaryBuilder<K> =
-    GenericByteDictionaryBuilder<K, GenericStringType<i32>>;
+pub type StringDictionaryBuilder<K> = GenericByteDictionaryBuilder<K, GenericStringType<i32>>;
 
 /// Builder for [`DictionaryArray`] of [`LargeStringArray`](crate::array::LargeStringArray)
-pub type LargeStringDictionaryBuilder<K> =
-    GenericByteDictionaryBuilder<K, GenericStringType<i64>>;
+pub type LargeStringDictionaryBuilder<K> = GenericByteDictionaryBuilder<K, GenericStringType<i64>>;
 
 /// Builder for [`DictionaryArray`] of [`BinaryArray`](crate::array::BinaryArray)
 ///
@@ -407,12 +393,10 @@ pub type LargeStringDictionaryBuilder<K> =
 /// assert_eq!(ava.value(1), b"def");
 ///
 /// ```
-pub type BinaryDictionaryBuilder<K> =
-    GenericByteDictionaryBuilder<K, GenericBinaryType<i32>>;
+pub type BinaryDictionaryBuilder<K> = GenericByteDictionaryBuilder<K, GenericBinaryType<i32>>;
 
 /// Builder for [`DictionaryArray`] of [`LargeBinaryArray`](crate::array::LargeBinaryArray)
-pub type LargeBinaryDictionaryBuilder<K> =
-    GenericByteDictionaryBuilder<K, GenericBinaryType<i64>>;
+pub type LargeBinaryDictionaryBuilder<K> = GenericByteDictionaryBuilder<K, GenericBinaryType<i64>>;
 
 #[cfg(test)]
 mod tests {
@@ -444,8 +428,7 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &GenericByteArray<T> =
-            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+        let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
         assert_eq!(*ava.value(0), *values[0]);
         assert_eq!(*ava.value(1), *values[1]);
@@ -483,8 +466,7 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &GenericByteArray<T> =
-            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+        let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
         assert_eq!(ava.value(0), values[0]);
         assert_eq!(ava.value(1), values[1]);
@@ -542,11 +524,8 @@ mod tests {
         <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
     {
         let mut builder =
-            GenericByteDictionaryBuilder::<Int8Type, T>::new_with_dictionary(
-                6,
-                &dictionary,
-            )
-            .unwrap();
+            GenericByteDictionaryBuilder::<Int8Type, T>::new_with_dictionary(6, &dictionary)
+                .unwrap();
         builder.append(values[0]).unwrap();
         builder.append_null();
         builder.append(values[1]).unwrap();
@@ -562,8 +541,7 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &GenericByteArray<T> =
-            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+        let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
         assert!(!ava.is_valid(0));
         assert_eq!(ava.value(1), values[1]);
@@ -597,11 +575,8 @@ mod tests {
         <T as ByteArrayType>::Native: AsRef<<T as ByteArrayType>::Native>,
     {
         let mut builder =
-            GenericByteDictionaryBuilder::<Int16Type, T>::new_with_dictionary(
-                4,
-                &dictionary,
-            )
-            .unwrap();
+            GenericByteDictionaryBuilder::<Int16Type, T>::new_with_dictionary(4, &dictionary)
+                .unwrap();
         builder.append(values[0]).unwrap();
         builder.append_null();
         builder.append(values[1]).unwrap();

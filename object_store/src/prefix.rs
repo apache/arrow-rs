@@ -23,7 +23,7 @@ use tokio::io::AsyncWrite;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult, Result,
 };
 
 #[doc(hidden)]
@@ -80,7 +80,7 @@ impl<T: ObjectStore> PrefixStore<T> {
 
 #[async_trait::async_trait]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         let full_path = self.full_path(location);
         self.inner.put(&full_path, bytes).await
     }
@@ -93,19 +93,12 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.put_multipart(&full_path).await
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
         let full_path = self.full_path(location);
         self.inner.abort_multipart(&full_path, multipart_id).await
     }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         let full_path = self.full_path(location);
         self.inner.append(&full_path).await
     }
@@ -125,11 +118,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get_opts(&full_path, options).await
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let full_path = self.full_path(location);
         self.inner.get_ranges(&full_path, ranges).await
     }
@@ -145,24 +134,21 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.delete(&full_path).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
-        let s = self.inner.list(Some(&prefix)).await?;
-        Ok(s.map_ok(|meta| self.strip_meta(meta)).boxed())
+        let s = self.inner.list(Some(&prefix));
+        s.map_ok(|meta| self.strip_meta(meta)).boxed()
     }
 
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
         let offset = self.full_path(offset);
         let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
-        let s = self.inner.list_with_offset(Some(&prefix), &offset).await?;
-        Ok(s.map_ok(|meta| self.strip_meta(meta)).boxed())
+        let s = self.inner.list_with_offset(Some(&prefix), &offset);
+        s.map_ok(|meta| self.strip_meta(meta)).boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {

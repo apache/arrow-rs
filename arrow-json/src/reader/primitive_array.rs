@@ -94,8 +94,8 @@ where
     P::Native: ParseJsonNumber + NumCast,
 {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
-        let mut builder = PrimitiveBuilder::<P>::with_capacity(pos.len())
-            .with_data_type(self.data_type.clone());
+        let mut builder =
+            PrimitiveBuilder::<P>::with_capacity(pos.len()).with_data_type(self.data_type.clone());
         let d = &self.data_type;
 
         for p in pos {
@@ -111,10 +111,9 @@ where
                 }
                 TapeElement::Number(idx) => {
                     let s = tape.get_string(idx);
-                    let value =
-                        ParseJsonNumber::parse(s.as_bytes()).ok_or_else(|| {
-                            ArrowError::JsonError(format!("failed to parse {s} as {d}",))
-                        })?;
+                    let value = ParseJsonNumber::parse(s.as_bytes()).ok_or_else(|| {
+                        ArrowError::JsonError(format!("failed to parse {s} as {d}",))
+                    })?;
 
                     builder.append_value(value)
                 }

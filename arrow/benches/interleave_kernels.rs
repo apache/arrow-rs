@@ -74,8 +74,7 @@ fn add_benchmark(c: &mut Criterion) {
     let dict = create_dict_from_values::<Int32Type>(1024, 0.0, &values);
 
     let values = create_string_array_with_len::<i32>(1024, 0.0, 20);
-    let sparse_dict =
-        create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &values, 10..20);
+    let sparse_dict = create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &values, 10..20);
 
     let cases: &[(&str, &dyn Array)] = &[
         ("i32(0.0)", &i32),

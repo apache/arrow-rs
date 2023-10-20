@@ -45,7 +45,7 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
                 let cursor = Cursor::new(buf.as_slice());
                 let reader = csv::ReaderBuilder::new(batch.schema())
                     .with_batch_size(batch_size)
-                    .has_header(true)
+                    .with_header(true)
                     .build_buffered(cursor)
                     .unwrap();
 
@@ -76,8 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let cols = vec![Arc::new(values) as ArrayRef];
     do_bench(c, "4096 u64(0)", cols);
 
-    let values =
-        Int64Array::from_iter_values((0..4096).map(|_| rng.gen_range(0..1024) - 512));
+    let values = Int64Array::from_iter_values((0..4096).map(|_| rng.gen_range(0..1024) - 512));
     let cols = vec![Arc::new(values) as ArrayRef];
     do_bench(c, "4096 i64_small(0)", cols);
 
@@ -103,20 +102,16 @@ fn criterion_benchmark(c: &mut Criterion) {
     let cols = vec![Arc::new(values) as ArrayRef];
     do_bench(c, "4096 f64(0)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
     do_bench(c, "4096 string(10, 0)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 30)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 30)) as ArrayRef];
     do_bench(c, "4096 string(30, 0)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 100)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 100)) as ArrayRef];
     do_bench(c, "4096 string(100, 0)", cols);
 
-    let cols =
-        vec![Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 100)) as ArrayRef];
+    let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 100)) as ArrayRef];
     do_bench(c, "4096 string(100, 0.5)", cols);
 
     let cols = vec![

@@ -19,7 +19,6 @@
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
 use std::collections::VecDeque;
-use std::io::Cursor;
 use std::iter;
 use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
@@ -40,8 +39,9 @@ use crate::format::{PageHeader, PageLocation, PageType};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use crate::util::memory::ByteBufferPtr;
-use thrift::protocol::{TCompactInputProtocol, TSerializable};
+use thrift::protocol::TCompactInputProtocol;
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -213,10 +213,8 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
             let mut offset_indexes = vec![];
 
             for rg in &mut filtered_row_groups {
-                let column_index =
-                    index_reader::read_columns_indexes(&chunk_reader, rg.columns())?;
-                let offset_index =
-                    index_reader::read_pages_locations(&chunk_reader, rg.columns())?;
+                let column_index = index_reader::read_columns_indexes(&chunk_reader, rg.columns())?;
+                let offset_index = index_reader::read_pages_locations(&chunk_reader, rg.columns())?;
                 columns_indexes.push(column_index);
                 offset_indexes.push(offset_index);
             }
@@ -402,8 +400,8 @@ pub(crate) fn decode_page(
     let mut can_decompress = true;
 
     if let Some(ref header_v2) = page_header.data_page_header_v2 {
-        offset = (header_v2.definition_levels_byte_length
-            + header_v2.repetition_levels_byte_length) as usize;
+        offset = (header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length)
+            as usize;
         // When is_compressed flag is missing the page is considered compressed
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
@@ -437,10 +435,9 @@ pub(crate) fn decode_page(
 
     let result = match page_header.type_ {
         PageType::DICTIONARY_PAGE => {
-            let dict_header =
-                page_header.dictionary_page_header.as_ref().ok_or_else(|| {
-                    ParquetError::General("Missing dictionary page header".to_string())
-                })?;
+            let dict_header = page_header.dictionary_page_header.as_ref().ok_or_else(|| {
+                ParquetError::General("Missing dictionary page header".to_string())
+            })?;
             let is_sorted = dict_header.is_sorted.unwrap_or(false);
             Page::DictionaryPage {
                 buf: buffer,
@@ -450,9 +447,9 @@ pub(crate) fn decode_page(
             }
         }
         PageType::DATA_PAGE => {
-            let header = page_header.data_page_header.ok_or_else(|| {
-                ParquetError::General("Missing V1 data page header".to_string())
-            })?;
+            let header = page_header
+                .data_page_header
+                .ok_or_else(|| ParquetError::General("Missing V1 data page header".to_string()))?;
             Page::DataPage {
                 buf: buffer,
                 num_values: header.num_values as u32,
@@ -463,9 +460,9 @@ pub(crate) fn decode_page(
             }
         }
         PageType::DATA_PAGE_V2 => {
-            let header = page_header.data_page_header_v2.ok_or_else(|| {
-                ParquetError::General("Missing V2 data page header".to_string())
-            })?;
+            let header = page_header
+                .data_page_header_v2
+                .ok_or_else(|| ParquetError::General("Missing V2 data page header".to_string()))?;
             let is_compressed = header.is_compressed.unwrap_or(true);
             Page::DataPageV2 {
                 buf: buffer,
@@ -532,13 +529,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         page_locations: Option<Vec<PageLocation>>,
     ) -> Result<Self> {
         let props = Arc::new(ReaderProperties::builder().build());
-        SerializedPageReader::new_with_properties(
-            reader,
-            meta,
-            total_rows,
-            page_locations,
-            props,
-        )
+        SerializedPageReader::new_with_properties(reader, meta, total_rows, page_locations, props)
     }
 
     /// Creates a new serialized page with custom options.
@@ -555,14 +546,11 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         let state = match page_locations {
             Some(locations) => {
                 let dictionary_page = match locations.first() {
-                    Some(dict_offset) if dict_offset.offset as u64 != start => {
-                        Some(PageLocation {
-                            offset: start as i64,
-                            compressed_page_size: (dict_offset.offset as u64 - start)
-                                as i32,
-                            first_row_index: 0,
-                        })
-                    }
+                    Some(dict_offset) if dict_offset.offset as u64 != start => Some(PageLocation {
+                        offset: start as i64,
+                        compressed_page_size: (dict_offset.offset as u64 - start) as i32,
+                        first_row_index: 0,
+                    }),
                     _ => None,
                 };
 
@@ -661,11 +649,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
 
-                    let mut cursor = Cursor::new(buffer.as_ref());
-                    let header = read_page_header(&mut cursor)?;
-                    let offset = cursor.position();
+                    let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
+                    let header = PageHeader::read_from_in_protocol(&mut prot)?;
+                    let offset = buffer.len() - prot.as_slice().len();
 
-                    let bytes = buffer.slice(offset as usize..);
+                    let bytes = buffer.slice(offset..);
                     decode_page(
                         header,
                         bytes.into(),
@@ -770,6 +758,13 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
             }
         }
     }
+
+    fn at_record_boundary(&mut self) -> Result<bool> {
+        match &mut self.state {
+            SerializedPageReaderState::Values { .. } => Ok(self.peek_next_page()?.is_none()),
+            SerializedPageReaderState::Pages { .. } => Ok(true),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -783,9 +778,7 @@ mod tests {
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType};
     use crate::file::page_index::index::{Index, NativeIndex};
-    use crate::file::page_index::index_reader::{
-        read_columns_indexes, read_pages_locations,
-    };
+    use crate::file::page_index::index_reader::{read_columns_indexes, read_pages_locations};
     use crate::file::writer::SerializedFileWriter;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
@@ -1147,8 +1140,7 @@ mod tests {
         assert_eq!(col0_metadata.bloom_filter_offset().unwrap(), 192);
 
         // test page encoding stats
-        let page_encoding_stats =
-            col0_metadata.page_encoding_stats().unwrap().get(0).unwrap();
+        let page_encoding_stats = col0_metadata.page_encoding_stats().unwrap().get(0).unwrap();
 
         assert_eq!(page_encoding_stats.page_type, basic::PageType::DATA_PAGE);
         assert_eq!(page_encoding_stats.encoding, Encoding::PLAIN);
@@ -1539,10 +1531,7 @@ mod tests {
         });
     }
 
-    fn get_row_group_min_max_bytes(
-        r: &RowGroupMetaData,
-        col_num: usize,
-    ) -> (&[u8], &[u8]) {
+    fn get_row_group_min_max_bytes(r: &RowGroupMetaData, col_num: usize) -> (&[u8], &[u8]) {
         let statistics = r.column(col_num).statistics().unwrap();
         (statistics.min_bytes(), statistics.max_bytes())
     }
@@ -1704,8 +1693,7 @@ mod tests {
         let schema = parse_message_type(message_type).unwrap();
         let mut out = Vec::with_capacity(1024);
         let mut writer =
-            SerializedFileWriter::new(&mut out, Arc::new(schema), Default::default())
-                .unwrap();
+            SerializedFileWriter::new(&mut out, Arc::new(schema), Default::default()).unwrap();
 
         let mut r = writer.next_row_group().unwrap();
         let mut c = r.next_column().unwrap().unwrap();

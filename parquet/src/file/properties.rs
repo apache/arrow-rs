@@ -16,6 +16,7 @@
 // under the License.
 
 //! Configuration via [`WriterProperties`] and [`ReaderProperties`]
+use std::str::FromStr;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::basic::{Compression, Encoding};
@@ -43,8 +44,7 @@ pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 /// Default value for [`WriterProperties::max_row_group_size`]
 pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
 /// Default value for [`WriterProperties::created_by`]
-pub const DEFAULT_CREATED_BY: &str =
-    concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
+pub const DEFAULT_CREATED_BY: &str = concat!("parquet-rs version ", env!("CARGO_PKG_VERSION"));
 /// Default value for [`WriterProperties::column_index_truncate_length`]
 pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`BloomFilterProperties::fpp`]
@@ -68,6 +68,18 @@ impl WriterVersion {
         match self {
             WriterVersion::PARQUET_1_0 => 1,
             WriterVersion::PARQUET_2_0 => 2,
+        }
+    }
+}
+
+impl FromStr for WriterVersion {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "PARQUET_1_0" | "parquet_1_0" => Ok(WriterVersion::PARQUET_1_0),
+            "PARQUET_2_0" | "parquet_2_0" => Ok(WriterVersion::PARQUET_2_0),
+            _ => Err(format!("Invalid writer version: {}", s)),
         }
     }
 }
@@ -299,10 +311,7 @@ impl WriterProperties {
     /// Returns the [`BloomFilterProperties`] for the given column
     ///
     /// Returns `None` if bloom filter is disabled
-    pub fn bloom_filter_properties(
-        &self,
-        col: &ColumnPath,
-    ) -> Option<&BloomFilterProperties> {
+    pub fn bloom_filter_properties(&self, col: &ColumnPath) -> Option<&BloomFilterProperties> {
         self.column_properties
             .get(col)
             .and_then(|c| c.bloom_filter_properties())
@@ -595,11 +604,7 @@ impl WriterPropertiesBuilder {
 
     /// Sets max size for statistics for a column.
     /// Takes precedence over globally defined settings.
-    pub fn set_column_max_statistics_size(
-        mut self,
-        col: ColumnPath,
-        value: usize,
-    ) -> Self {
+    pub fn set_column_max_statistics_size(mut self, col: ColumnPath, value: usize) -> Self {
         self.get_mut_props(col).set_max_statistics_size(value);
         self
     }
@@ -607,11 +612,7 @@ impl WriterPropertiesBuilder {
     /// Sets whether a bloom filter should be created for a specific column.
     /// The behavior is similar to [`set_bloom_filter_enabled`](Self::set_bloom_filter_enabled).
     /// Takes precedence over globally defined settings.
-    pub fn set_column_bloom_filter_enabled(
-        mut self,
-        col: ColumnPath,
-        value: bool,
-    ) -> Self {
+    pub fn set_column_bloom_filter_enabled(mut self, col: ColumnPath, value: bool) -> Self {
         self.get_mut_props(col).set_bloom_filter_enabled(value);
         self
     }
@@ -653,6 +654,19 @@ pub enum EnabledStatistics {
     Chunk,
     /// Compute page-level and chunk-level statistics
     Page,
+}
+
+impl FromStr for EnabledStatistics {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "NONE" | "none" => Ok(EnabledStatistics::None),
+            "CHUNK" | "chunk" => Ok(EnabledStatistics::Chunk),
+            "PAGE" | "page" => Ok(EnabledStatistics::Page),
+            _ => Err(format!("Invalid statistics arg: {}", s)),
+        }
+    }
 }
 
 impl Default for EnabledStatistics {
@@ -886,9 +900,7 @@ impl ReaderPropertiesBuilder {
     pub fn build(self) -> ReaderProperties {
         ReaderProperties {
             codec_options: self.codec_options_builder.build(),
-            read_bloom_filter: self
-                .read_bloom_filter
-                .unwrap_or(DEFAULT_READ_BLOOM_FILTER),
+            read_bloom_filter: self.read_bloom_filter.unwrap_or(DEFAULT_READ_BLOOM_FILTER),
         }
     }
 
@@ -1040,10 +1052,7 @@ mod tests {
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .set_column_compression(ColumnPath::from("col"), Compression::SNAPPY)
             .set_column_dictionary_enabled(ColumnPath::from("col"), true)
-            .set_column_statistics_enabled(
-                ColumnPath::from("col"),
-                EnabledStatistics::Chunk,
-            )
+            .set_column_statistics_enabled(ColumnPath::from("col"), EnabledStatistics::Chunk)
             .set_column_max_statistics_size(ColumnPath::from("col"), 123)
             .set_column_bloom_filter_enabled(ColumnPath::from("col"), true)
             .set_column_bloom_filter_ndv(ColumnPath::from("col"), 100_u64)
@@ -1181,5 +1190,47 @@ mod tests {
             .build();
 
         assert_eq!(props.codec_options(), &codec_options);
+    }
+
+    #[test]
+    fn test_parse_writerversion() {
+        let mut writer_version = "PARQUET_1_0".parse::<WriterVersion>().unwrap();
+        assert_eq!(writer_version, WriterVersion::PARQUET_1_0);
+        writer_version = "PARQUET_2_0".parse::<WriterVersion>().unwrap();
+        assert_eq!(writer_version, WriterVersion::PARQUET_2_0);
+
+        // test lowercase
+        writer_version = "parquet_1_0".parse::<WriterVersion>().unwrap();
+        assert_eq!(writer_version, WriterVersion::PARQUET_1_0);
+
+        // test invalid version
+        match "PARQUET_-1_0".parse::<WriterVersion>() {
+            Ok(_) => panic!("Should not be able to parse PARQUET_-1_0"),
+            Err(e) => {
+                assert_eq!(e, "Invalid writer version: PARQUET_-1_0");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_enabledstatistics() {
+        let mut enabled_statistics = "NONE".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::None);
+        enabled_statistics = "CHUNK".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::Chunk);
+        enabled_statistics = "PAGE".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::Page);
+
+        // test lowercase
+        enabled_statistics = "none".parse::<EnabledStatistics>().unwrap();
+        assert_eq!(enabled_statistics, EnabledStatistics::None);
+
+        //test invalid statistics
+        match "ChunkAndPage".parse::<EnabledStatistics>() {
+            Ok(_) => panic!("Should not be able to parse ChunkAndPage"),
+            Err(e) => {
+                assert_eq!(e, "Invalid statistics arg: ChunkAndPage");
+            }
+        }
     }
 }

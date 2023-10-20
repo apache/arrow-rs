@@ -32,28 +32,26 @@ use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::sql::metadata::{
-    SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData,
-    XdbcTypeInfoDataBuilder,
+    SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
 };
 use arrow_flight::sql::{
     server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
-    ActionBeginTransactionRequest, ActionBeginTransactionResult,
-    ActionCancelQueryRequest, ActionCancelQueryResult,
-    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
-    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
-    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
-    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
-    CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
+    ActionBeginTransactionRequest, ActionBeginTransactionResult, ActionCancelQueryRequest,
+    ActionCancelQueryResult, ActionClosePreparedStatementRequest,
+    ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult,
+    ActionCreatePreparedSubstraitPlanRequest, ActionEndSavepointRequest,
+    ActionEndTransactionRequest, Any, CommandGetCatalogs, CommandGetCrossReference,
+    CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
+    CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
     CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable, ProstMessageExt,
-    Searchable, SqlInfo, TicketStatementQuery, XdbcDataType,
+    CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable, ProstMessageExt, Searchable,
+    SqlInfo, TicketStatementQuery, XdbcDataType,
 };
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
-    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
-    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, Location, SchemaAsIpc, Ticket,
+    flight_service_server::FlightService, flight_service_server::FlightServiceServer, Action,
+    FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
+    IpcMessage, Location, SchemaAsIpc, Ticket,
 };
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
@@ -167,8 +165,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let bytes = BASE64_STANDARD
             .decode(base64)
             .map_err(|e| status!("authorization not decodable", e))?;
-        let str = String::from_utf8(bytes)
-            .map_err(|e| status!("authorization not parsable", e))?;
+        let str = String::from_utf8(bytes).map_err(|e| status!("authorization not parsable", e))?;
         let parts: Vec<_> = str.split(':').collect();
         let (user, pass) = match parts.as_slice() {
             [user, pass] => (user, pass),
@@ -195,8 +192,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         self.check_token(&request)?;
-        let batch =
-            Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
+        let batch = Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
         let schema = batch.schema();
         let batches = vec![batch];
         let flight_data = batches_to_flight_data(schema.as_ref(), batches)
@@ -238,8 +234,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         self.check_token(&request)?;
         let handle = std::str::from_utf8(&cmd.prepared_statement_handle)
             .map_err(|e| status!("Unable to parse handle", e))?;
-        let batch =
-            Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
+        let batch = Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
         let schema = (*batch.schema()).clone();
         let num_rows = batch.num_rows();
         let num_bytes = batch.get_array_memory_size();
@@ -736,8 +731,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("USE_TLS").ok().is_some() {
         let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;
         let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;
-        let client_ca =
-            std::fs::read_to_string("arrow-flight/examples/data/client_ca.pem")?;
+        let client_ca = std::fs::read_to_string("arrow-flight/examples/data/client_ca.pem")?;
 
         let tls_config = ServerTlsConfig::new()
             .identity(Identity::from_pem(&cert, &key))

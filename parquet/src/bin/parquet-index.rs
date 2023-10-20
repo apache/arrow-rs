@@ -102,9 +102,7 @@ impl Args {
                 Index::INT96(v) => print_index(&v.indexes, offset_index, &row_counts)?,
                 Index::FLOAT(v) => print_index(&v.indexes, offset_index, &row_counts)?,
                 Index::DOUBLE(v) => print_index(&v.indexes, offset_index, &row_counts)?,
-                Index::BYTE_ARRAY(v) => {
-                    print_index(&v.indexes, offset_index, &row_counts)?
-                }
+                Index::BYTE_ARRAY(v) => print_index(&v.indexes, offset_index, &row_counts)?,
                 Index::FIXED_LEN_BYTE_ARRAY(v) => {
                     print_index(&v.indexes, offset_index, &row_counts)?
                 }

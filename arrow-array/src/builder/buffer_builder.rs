@@ -45,11 +45,9 @@ pub type Float32BufferBuilder = BufferBuilder<f32>;
 pub type Float64BufferBuilder = BufferBuilder<f64>;
 
 /// Buffer builder for 128-bit decimal type.
-pub type Decimal128BufferBuilder =
-    BufferBuilder<<Decimal128Type as ArrowPrimitiveType>::Native>;
+pub type Decimal128BufferBuilder = BufferBuilder<<Decimal128Type as ArrowPrimitiveType>::Native>;
 /// Buffer builder for 256-bit decimal type.
-pub type Decimal256BufferBuilder =
-    BufferBuilder<<Decimal256Type as ArrowPrimitiveType>::Native>;
+pub type Decimal256BufferBuilder = BufferBuilder<<Decimal256Type as ArrowPrimitiveType>::Native>;
 
 /// Buffer builder for timestamp type of second unit.
 pub type TimestampSecondBufferBuilder =
@@ -107,9 +105,7 @@ pub type DurationNanosecondBufferBuilder =
 
 #[cfg(test)]
 mod tests {
-    use crate::builder::{
-        ArrayBuilder, Int32BufferBuilder, Int8Builder, UInt8BufferBuilder,
-    };
+    use crate::builder::{ArrayBuilder, Int32BufferBuilder, Int8Builder, UInt8BufferBuilder};
     use crate::Array;
 
     #[test]

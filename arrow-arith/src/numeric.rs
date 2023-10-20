@@ -144,13 +144,13 @@ pub fn neg(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
             let a = array
                 .as_primitive::<IntervalMonthDayNanoType>()
                 .try_unary::<_, IntervalMonthDayNanoType, ArrowError>(|x| {
-                let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(x);
-                Ok(IntervalMonthDayNanoType::make_value(
-                    months.neg_checked()?,
-                    days.neg_checked()?,
-                    nanos.neg_checked()?,
-                ))
-            })?;
+                    let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(x);
+                    Ok(IntervalMonthDayNanoType::make_value(
+                        months.neg_checked()?,
+                        days.neg_checked()?,
+                        nanos.neg_checked()?,
+                    ))
+                })?;
             Ok(Arc::new(a))
         }
         t => Err(ArrowError::InvalidArgumentError(format!(
@@ -201,11 +201,7 @@ impl Op {
 }
 
 /// Dispatch the given `op` to the appropriate specialized kernel
-fn arithmetic_op(
-    op: Op,
-    lhs: &dyn Datum,
-    rhs: &dyn Datum,
-) -> Result<ArrayRef, ArrowError> {
+fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     use DataType::*;
     use IntervalUnit::*;
     use TimeUnit::*;
@@ -675,8 +671,7 @@ fn date_op<T: DateOp>(
         (Date64, Op::Sub | Op::SubWrapping, Date64) => {
             let l = l.as_primitive::<Date64Type>();
             let r = r.as_primitive::<Date64Type>();
-            let result =
-                try_op_ref!(DurationMillisecondType, l, l_s, r, r_s, l.sub_checked(r));
+            let result = try_op_ref!(DurationMillisecondType, l, l_s, r, r_s, l.sub_checked(r));
             return Ok(result);
         }
         _ => {}
@@ -800,8 +795,7 @@ fn decimal_op<T: DecimalType>(
             let mul_pow = result_scale - s1 + s2;
 
             // p1 - s1 + s2 + result_scale
-            let result_precision =
-                (mul_pow.saturating_add(*p1 as i8) as u8).min(T::MAX_PRECISION);
+            let result_precision = (mul_pow.saturating_add(*p1 as i8) as u8).min(T::MAX_PRECISION);
 
             let (l_mul, r_mul) = match mul_pow.cmp(&0) {
                 Ordering::Greater => (
@@ -1158,7 +1152,10 @@ mod tests {
             .with_precision_and_scale(3, -1)
             .unwrap();
         let err = add(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Compute error: Overflow happened on: 10 * 100000000000000000000000000000000000000");
+        assert_eq!(
+            err,
+            "Compute error: Overflow happened on: 10 * 100000000000000000000000000000000000000"
+        );
 
         let b = Decimal128Array::from(vec![0])
             .with_precision_and_scale(1, 1)
@@ -1199,9 +1196,7 @@ mod tests {
             "1960-01-30T04:23:20Z",
         ]
         .into_iter()
-        .map(|x| {
-            T::make_value(DateTime::parse_from_rfc3339(x).unwrap().naive_utc()).unwrap()
-        })
+        .map(|x| T::make_value(DateTime::parse_from_rfc3339(x).unwrap().naive_utc()).unwrap())
         .collect();
 
         let a = PrimitiveArray::<T>::new(values, None);

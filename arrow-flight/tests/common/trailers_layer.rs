@@ -81,9 +81,7 @@ where
             ready!(self.as_mut().project().inner.poll(cx));
 
         match result {
-            Ok(response) => {
-                Poll::Ready(Ok(response.map(|body| WrappedBody { inner: body })))
-            }
+            Ok(response) => Poll::Ready(Ok(response.map(|body| WrappedBody { inner: body }))),
             Err(e) => Poll::Ready(Err(e)),
         }
     }

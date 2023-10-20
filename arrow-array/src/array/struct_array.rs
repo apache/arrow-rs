@@ -462,9 +462,7 @@ impl Index<&str> for StructArray {
 mod tests {
     use super::*;
 
-    use crate::{
-        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
-    };
+    use crate::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray};
     use arrow_buffer::ToByteSlice;
     use std::sync::Arc;
 
@@ -540,12 +538,10 @@ mod tests {
             None,
             Some("mark"),
         ]));
-        let ints: ArrayRef =
-            Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)]));
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)]));
 
         let arr =
-            StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
-                .unwrap();
+            StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())]).unwrap();
 
         let struct_data = arr.into_data();
         assert_eq!(4, struct_data.len());
@@ -578,13 +574,11 @@ mod tests {
             None,
             // 3 elements, not 4
         ]));
-        let ints: ArrayRef =
-            Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)]));
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)]));
 
-        let err =
-            StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
-                .unwrap_err()
-                .to_string();
+        let err = StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
+            .unwrap_err()
+            .to_string();
 
         assert_eq!(
             err,
@@ -599,8 +593,7 @@ mod tests {
     fn test_struct_array_from_mismatched_types_single() {
         drop(StructArray::from(vec![(
             Arc::new(Field::new("b", DataType::Int16, false)),
-            Arc::new(BooleanArray::from(vec![false, false, true, true]))
-                as Arc<dyn Array>,
+            Arc::new(BooleanArray::from(vec![false, false, true, true])) as Arc<dyn Array>,
         )]));
     }
 
@@ -612,8 +605,7 @@ mod tests {
         drop(StructArray::from(vec![
             (
                 Arc::new(Field::new("b", DataType::Int16, false)),
-                Arc::new(BooleanArray::from(vec![false, false, true, true]))
-                    as Arc<dyn Array>,
+                Arc::new(BooleanArray::from(vec![false, false, true, true])) as Arc<dyn Array>,
             ),
             (
                 Arc::new(Field::new("c", DataType::Utf8, false)),
@@ -733,9 +725,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Found unmasked nulls for non-nullable StructArray field \\\"c\\\""
-    )]
+    #[should_panic(expected = "Found unmasked nulls for non-nullable StructArray field \\\"c\\\"")]
     fn test_struct_array_from_mismatched_nullability() {
         drop(StructArray::from(vec![(
             Arc::new(Field::new("c", DataType::Int32, false)),

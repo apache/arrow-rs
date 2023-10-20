@@ -174,10 +174,7 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_action`
-    pub fn set_do_action_response(
-        &self,
-        response: Vec<Result<arrow_flight::Result, Status>>,
-    ) {
+    pub fn set_do_action_response(&self, response: Vec<Result<arrow_flight::Result, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.do_action_response.replace(response);
     }
@@ -278,9 +275,10 @@ impl FlightService for TestFlightServer {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.handshake_request = Some(handshake_request);
 
-        let response = state.handshake_response.take().unwrap_or_else(|| {
-            Err(Status::internal("No handshake response configured"))
-        })?;
+        let response = state
+            .handshake_response
+            .take()
+            .unwrap_or_else(|| Err(Status::internal("No handshake response configured")))?;
 
         // turn into a streaming response
         let output = futures::stream::iter(std::iter::once(Ok(response)));
@@ -313,9 +311,10 @@ impl FlightService for TestFlightServer {
         self.save_metadata(&request);
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.get_flight_info_request = Some(request.into_inner());
-        let response = state.get_flight_info_response.take().unwrap_or_else(|| {
-            Err(Status::internal("No get_flight_info response configured"))
-        })?;
+        let response = state
+            .get_flight_info_response
+            .take()
+            .unwrap_or_else(|| Err(Status::internal("No get_flight_info response configured")))?;
         Ok(Response::new(response))
     }
 
@@ -326,9 +325,10 @@ impl FlightService for TestFlightServer {
         self.save_metadata(&request);
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.get_schema_request = Some(request.into_inner());
-        let schema = state.get_schema_response.take().unwrap_or_else(|| {
-            Err(Status::internal("No get_schema response configured"))
-        })?;
+        let schema = state
+            .get_schema_response
+            .take()
+            .unwrap_or_else(|| Err(Status::internal("No get_schema response configured")))?;
 
         // encode the schema
         let options = arrow_ipc::writer::IpcWriteOptions::default();

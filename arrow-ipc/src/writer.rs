@@ -23,6 +23,7 @@
 use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
+use std::sync::Arc;
 
 use flatbuffers::FlatBufferBuilder;
 
@@ -106,8 +107,7 @@ impl IpcWriteOptions {
             crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
                     Err(ArrowError::InvalidArgumentError(
-                        "Legacy IPC format only supported on metadata version 4"
-                            .to_string(),
+                        "Legacy IPC format only supported on metadata version 4".to_string(),
                     ))
                 } else {
                     Ok(Self {
@@ -172,11 +172,7 @@ impl Default for IpcWriteOptions {
 pub struct IpcDataGenerator {}
 
 impl IpcDataGenerator {
-    pub fn schema_to_bytes(
-        &self,
-        schema: &Schema,
-        write_options: &IpcWriteOptions,
-    ) -> EncodedData {
+    pub fn schema_to_bytes(&self, schema: &Schema, write_options: &IpcWriteOptions) -> EncodedData {
         let mut fbb = FlatBufferBuilder::new();
         let schema = {
             let fb = crate::convert::schema_to_fb_offset(&mut fbb, schema);
@@ -275,9 +271,7 @@ impl IpcDataGenerator {
                 let map_array = as_map_array(column);
 
                 let (keys, values) = match field.data_type() {
-                    DataType::Struct(fields) if fields.len() == 2 => {
-                        (&fields[0], &fields[1])
-                    }
+                    DataType::Struct(fields) if fields.len() == 2 => (&fields[0], &fields[1]),
                     _ => panic!("Incorrect field data type {:?}", field.data_type()),
                 };
 
@@ -556,18 +550,15 @@ impl IpcDataGenerator {
 pub(crate) fn unslice_run_array(arr: ArrayData) -> Result<ArrayData, ArrowError> {
     match arr.data_type() {
         DataType::RunEndEncoded(k, _) => match k.data_type() {
-            DataType::Int16 => Ok(into_zero_offset_run_array(
-                RunArray::<Int16Type>::from(arr),
-            )?
-            .into_data()),
-            DataType::Int32 => Ok(into_zero_offset_run_array(
-                RunArray::<Int32Type>::from(arr),
-            )?
-            .into_data()),
-            DataType::Int64 => Ok(into_zero_offset_run_array(
-                RunArray::<Int64Type>::from(arr),
-            )?
-            .into_data()),
+            DataType::Int16 => {
+                Ok(into_zero_offset_run_array(RunArray::<Int16Type>::from(arr))?.into_data())
+            }
+            DataType::Int32 => {
+                Ok(into_zero_offset_run_array(RunArray::<Int32Type>::from(arr))?.into_data())
+            }
+            DataType::Int64 => {
+                Ok(into_zero_offset_run_array(RunArray::<Int64Type>::from(arr))?.into_data())
+            }
             d => unreachable!("Unexpected data type {d}"),
         },
         d => Err(ArrowError::InvalidArgumentError(format!(
@@ -656,11 +647,7 @@ impl DictionaryTracker {
     /// * If the tracker has not been configured to error on replacement or this dictionary
     ///   has never been seen before, return `Ok(true)` to indicate that the dictionary was just
     ///   inserted.
-    pub fn insert(
-        &mut self,
-        dict_id: i64,
-        column: &ArrayRef,
-    ) -> Result<bool, ArrowError> {
+    pub fn insert(&mut self, dict_id: i64, column: &ArrayRef) -> Result<bool, ArrowError> {
         let dict_data = column.to_data();
         let dict_values = &dict_data.child_data()[0];
 
@@ -696,7 +683,7 @@ pub struct FileWriter<W: Write> {
     /// IPC write options
     write_options: IpcWriteOptions,
     /// A reference to the schema, used in validating record batches
-    schema: Schema,
+    schema: SchemaRef,
     /// The number of bytes between each block of bytes, as an offset for random access
     block_offsets: usize,
     /// Dictionary blocks that will be written as part of the IPC footer
@@ -739,7 +726,7 @@ impl<W: Write> FileWriter<W> {
         Ok(Self {
             writer,
             write_options,
-            schema: schema.clone(),
+            schema: Arc::new(schema.clone()),
             block_offsets: meta + data + header_size,
             dictionary_blocks: vec![],
             record_blocks: vec![],
@@ -772,14 +759,12 @@ impl<W: Write> FileWriter<W> {
             let (meta, data) =
                 write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
 
-            let block =
-                crate::Block::new(self.block_offsets as i64, meta as i32, data as i64);
+            let block = crate::Block::new(self.block_offsets as i64, meta as i32, data as i64);
             self.dictionary_blocks.push(block);
             self.block_offsets += meta + data;
         }
 
-        let (meta, data) =
-            write_message(&mut self.writer, encoded_message, &self.write_options)?;
+        let (meta, data) = write_message(&mut self.writer, encoded_message, &self.write_options)?;
         // add a record block for the footer
         let block = crate::Block::new(
             self.block_offsets as i64,
@@ -830,6 +815,11 @@ impl<W: Write> FileWriter<W> {
         self.finished = true;
 
         Ok(())
+    }
+
+    /// Returns the arrow [`SchemaRef`] for this arrow file.
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     /// Gets a reference to the underlying writer.
@@ -1091,9 +1081,7 @@ fn write_continuation<W: Write>(
 
     // the version of the writer determines whether continuation markers should be added
     match write_options.metadata_version {
-        crate::MetadataVersion::V1
-        | crate::MetadataVersion::V2
-        | crate::MetadataVersion::V3 => {
+        crate::MetadataVersion::V1 | crate::MetadataVersion::V2 | crate::MetadataVersion::V3 => {
             unreachable!("Options with the metadata version cannot be created")
         }
         crate::MetadataVersion::V4 => {
@@ -1265,15 +1253,8 @@ fn write_array_data(
         if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
             let byte_offset = array_data.offset() * byte_width;
             let buffer_length = min(min_length, buffer.len() - byte_offset);
-            let buffer_slice =
-                &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)];
-            offset = write_buffer(
-                buffer_slice,
-                buffers,
-                arrow_data,
-                offset,
-                compression_codec,
-            )?;
+            let buffer_slice = &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)];
+            offset = write_buffer(buffer_slice, buffers, arrow_data, offset, compression_codec)?;
         } else {
             offset = write_buffer(
                 buffer.as_slice(),
@@ -1293,8 +1274,7 @@ fn write_array_data(
         offset = write_buffer(&buffer, buffers, arrow_data, offset, compression_codec)?;
     } else {
         for buffer in array_data.buffers() {
-            offset =
-                write_buffer(buffer, buffers, arrow_data, offset, compression_codec)?;
+            offset = write_buffer(buffer, buffers, arrow_data, offset, compression_codec)?;
         }
     }
 
@@ -1368,9 +1348,7 @@ fn write_buffer(
     }
     .try_into()
     .map_err(|e| {
-        ArrowError::InvalidArgumentError(format!(
-            "Could not convert compressed size to i64: {e}"
-        ))
+        ArrowError::InvalidArgumentError(format!("Could not convert compressed size to i64: {e}"))
     })?;
 
     // make new index entry
@@ -1411,21 +1389,18 @@ mod tests {
         let values: Vec<Option<i32>> = vec![];
         let array = Int32Array::from(values);
         let record_batch =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)]).unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
 
         {
-            let write_option =
-                IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
-                    .unwrap()
-                    .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
-                    .unwrap();
+            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
+                .unwrap()
+                .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
+                .unwrap();
 
             let mut writer =
-                FileWriter::try_new_with_options(&mut file, &schema, write_option)
-                    .unwrap();
+                FileWriter::try_new_with_options(&mut file, &schema, write_option).unwrap();
             writer.write(&record_batch).unwrap();
             writer.finish().unwrap();
         }
@@ -1464,20 +1439,17 @@ mod tests {
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
         let array = Int32Array::from(values);
         let record_batch =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)]).unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
         {
-            let write_option =
-                IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
-                    .unwrap()
-                    .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
-                    .unwrap();
+            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
+                .unwrap()
+                .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
+                .unwrap();
 
             let mut writer =
-                FileWriter::try_new_with_options(&mut file, &schema, write_option)
-                    .unwrap();
+                FileWriter::try_new_with_options(&mut file, &schema, write_option).unwrap();
             writer.write(&record_batch).unwrap();
             writer.finish().unwrap();
         }
@@ -1516,19 +1488,16 @@ mod tests {
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
         let array = Int32Array::from(values);
         let record_batch =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)]).unwrap();
         let mut file = tempfile::tempfile().unwrap();
         {
-            let write_option =
-                IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
-                    .unwrap()
-                    .try_with_compression(Some(crate::CompressionType::ZSTD))
-                    .unwrap();
+            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
+                .unwrap()
+                .try_with_compression(Some(crate::CompressionType::ZSTD))
+                .unwrap();
 
             let mut writer =
-                FileWriter::try_new_with_options(&mut file, &schema, write_option)
-                    .unwrap();
+                FileWriter::try_new_with_options(&mut file, &schema, write_option).unwrap();
             writer.write(&record_batch).unwrap();
             writer.finish().unwrap();
         }
@@ -1575,11 +1544,9 @@ mod tests {
             None,
         ];
         let array1 = UInt32Array::from(values);
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(array1) as ArrayRef],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array1) as ArrayRef])
+                .unwrap();
         let mut file = tempfile::tempfile().unwrap();
         {
             let mut writer = FileWriter::try_new(&mut file, &schema).unwrap();
@@ -1628,8 +1595,7 @@ mod tests {
         .unwrap();
         let mut file = tempfile::tempfile().unwrap();
         {
-            let mut writer =
-                FileWriter::try_new_with_options(&mut file, &schema, options).unwrap();
+            let mut writer = FileWriter::try_new_with_options(&mut file, &schema, options).unwrap();
 
             writer.write(&batch).unwrap();
             writer.finish().unwrap();
@@ -1657,18 +1623,14 @@ mod tests {
     fn test_write_null_file_v4() {
         write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap());
         write_null_file(IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap());
-        write_null_file(
-            IpcWriteOptions::try_new(64, false, MetadataVersion::V4).unwrap(),
-        );
+        write_null_file(IpcWriteOptions::try_new(64, false, MetadataVersion::V4).unwrap());
         write_null_file(IpcWriteOptions::try_new(64, true, MetadataVersion::V4).unwrap());
     }
 
     #[test]
     fn test_write_null_file_v5() {
         write_null_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap());
-        write_null_file(
-            IpcWriteOptions::try_new(64, false, MetadataVersion::V5).unwrap(),
-        );
+        write_null_file(IpcWriteOptions::try_new(64, false, MetadataVersion::V5).unwrap());
     }
 
     #[test]
@@ -1678,15 +1640,13 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
-        let dctfield =
-            Field::new_dict("dict", array.data_type().clone(), false, 2, false);
+        let dctfield = Field::new_dict("dict", array.data_type().clone(), false, 2, false);
 
         let types = Buffer::from_slice_ref([0_i8, 0, 0]);
         let offsets = Buffer::from_slice_ref([0_i32, 1, 2]);
 
         let union =
-            UnionArray::try_new(&[0], types, Some(offsets), vec![(dctfield, array)])
-                .unwrap();
+            UnionArray::try_new(&[0], types, Some(offsets), vec![(dctfield, array)]).unwrap();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "union",
@@ -1758,16 +1718,13 @@ mod tests {
         builder.append::<Int32Type>("a", 4).unwrap();
         let union = builder.build().unwrap();
 
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(union) as ArrayRef],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(union) as ArrayRef])
+                .unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
         {
-            let mut writer =
-                FileWriter::try_new_with_options(&mut file, &schema, options).unwrap();
+            let mut writer = FileWriter::try_new_with_options(&mut file, &schema, options).unwrap();
 
             writer.write(&batch).unwrap();
             writer.finish().unwrap();
@@ -1793,12 +1750,8 @@ mod tests {
 
     #[test]
     fn test_write_union_file_v4_v5() {
-        write_union_file(
-            IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap(),
-        );
-        write_union_file(
-            IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap(),
-        );
+        write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap());
+        write_union_file(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap());
     }
 
     fn serialize(record: &RecordBatch) -> Vec<u8> {
@@ -1811,8 +1764,7 @@ mod tests {
 
     fn deserialize(bytes: Vec<u8>) -> RecordBatch {
         let mut stream_reader =
-            crate::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None)
-                .unwrap();
+            crate::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None).unwrap();
         stream_reader.next().unwrap().unwrap()
     }
 
@@ -1827,8 +1779,7 @@ mod tests {
             let a = Int32Array::from_iter_values(0..rows as i32);
             let b = StringArray::from_iter_values((0..rows).map(|i| i.to_string()));
 
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap()
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap()
         }
 
         let big_record_batch = create_batch(65536);
@@ -1838,9 +1789,7 @@ mod tests {
 
         let offset = 2;
         let record_batch_slice = big_record_batch.slice(offset, length);
-        assert!(
-            serialize(&big_record_batch).len() > serialize(&small_record_batch).len()
-        );
+        assert!(serialize(&big_record_batch).len() > serialize(&small_record_batch).len());
         assert_eq!(
             serialize(&small_record_batch).len(),
             serialize(&record_batch_slice).len()
@@ -1863,8 +1812,7 @@ mod tests {
             let a = Int32Array::from(vec![Some(1), None, Some(1), None, Some(1)]);
             let b = StringArray::from(vec![None, Some("a"), Some("a"), None, Some("a")]);
 
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap()
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap()
         }
 
         let record_batch = create_batch();
@@ -1887,13 +1835,11 @@ mod tests {
             let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
                 .into_iter()
                 .collect();
-            let keys: Int32Array =
-                [Some(0), Some(2), None, Some(1)].into_iter().collect();
+            let keys: Int32Array = [Some(0), Some(2), None, Some(1)].into_iter().collect();
 
             let array = DictionaryArray::new(keys, Arc::new(values));
 
-            let schema =
-                Schema::new(vec![Field::new("dict", array.data_type().clone(), true)]);
+            let schema = Schema::new(vec![Field::new("dict", array.data_type().clone(), true)]);
 
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
         }
@@ -1916,8 +1862,7 @@ mod tests {
             let strings: StringArray = [Some("foo"), None, Some("bar"), Some("baz")]
                 .into_iter()
                 .collect();
-            let ints: Int32Array =
-                [Some(0), Some(2), None, Some(1)].into_iter().collect();
+            let ints: Int32Array = [Some(0), Some(2), None, Some(1)].into_iter().collect();
 
             let struct_array = StructArray::from(vec![
                 (
@@ -1962,8 +1907,7 @@ mod tests {
     fn truncate_ipc_string_array_with_all_empty_string() {
         fn create_batch() -> RecordBatch {
             let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
-            let a =
-                StringArray::from(vec![Some(""), Some(""), Some(""), Some(""), Some("")]);
+            let a = StringArray::from(vec![Some(""), Some(""), Some(""), Some(""), Some("")]);
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap()
         }
 
@@ -1992,8 +1936,7 @@ mod tests {
         )
         .expect("new batch");
 
-        let mut writer =
-            StreamWriter::try_new(vec![], &batch.schema()).expect("new writer");
+        let mut writer = StreamWriter::try_new(vec![], &batch.schema()).expect("new writer");
         writer.write(&batch).expect("write");
         let outbuf = writer.into_inner().expect("inner");
 
@@ -2015,9 +1958,9 @@ mod tests {
         // slice somewhere in the middle
         assert_bool_roundtrip(
             [
-                true, false, true, true, false, false, true, true, true, false, false,
-                false, true, true, true, true, false, false, false, false, true, true,
-                true, true, true, false, false, false, false, false,
+                true, false, true, true, false, false, true, true, true, false, false, false, true,
+                true, true, true, false, false, false, false, true, true, true, true, true, false,
+                false, false, false, false,
             ],
             13,
             17,
@@ -2026,8 +1969,7 @@ mod tests {
         // start at byte boundary, end in the middle
         assert_bool_roundtrip(
             [
-                true, false, true, true, false, false, true, true, true, false, false,
-                false,
+                true, false, true, true, false, false, true, true, true, false, false, false,
             ],
             8,
             2,
@@ -2036,27 +1978,22 @@ mod tests {
         // start and stop and byte boundary
         assert_bool_roundtrip(
             [
-                true, false, true, true, false, false, true, true, true, false, false,
-                false, true, true, true, true, true, false, false, false, false, false,
+                true, false, true, true, false, false, true, true, true, false, false, false, true,
+                true, true, true, true, false, false, false, false, false,
             ],
             8,
             8,
         );
     }
 
-    fn assert_bool_roundtrip<const N: usize>(
-        bools: [bool; N],
-        offset: usize,
-        length: usize,
-    ) {
+    fn assert_bool_roundtrip<const N: usize>(bools: [bool; N], offset: usize, length: usize) {
         let val_bool_field = Field::new("val", DataType::Boolean, false);
 
         let schema = Arc::new(Schema::new(vec![val_bool_field]));
 
         let bools = BooleanArray::from(bools.to_vec());
 
-        let batch =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(bools)]).unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(bools)]).unwrap();
         let batch = batch.slice(offset, length);
 
         let mut writer = StreamWriter::try_new(Vec::<u8>::new(), &schema).unwrap();
@@ -2072,8 +2009,7 @@ mod tests {
     #[test]
     fn test_run_array_unslice() {
         let total_len = 80;
-        let vals: Vec<Option<i32>> =
-            vec![Some(1), None, Some(2), Some(3), Some(4), None, Some(5)];
+        let vals: Vec<Option<i32>> = vec![Some(1), None, Some(2), Some(3), Some(4), None, Some(5)];
         let repeats: Vec<usize> = vec![3, 4, 1, 2];
         let mut input_array: Vec<Option<i32>> = Vec::with_capacity(total_len);
         for ix in 0_usize..32 {
@@ -2095,13 +2031,11 @@ mod tests {
                 run_array.slice(0, slice_len).into_data().into();
 
             // Create unsliced run array.
-            let unsliced_run_array =
-                into_zero_offset_run_array(sliced_run_array).unwrap();
+            let unsliced_run_array = into_zero_offset_run_array(sliced_run_array).unwrap();
             let typed = unsliced_run_array
                 .downcast::<PrimitiveArray<Int32Type>>()
                 .unwrap();
-            let expected: Vec<Option<i32>> =
-                input_array.iter().take(slice_len).copied().collect();
+            let expected: Vec<Option<i32>> = input_array.iter().take(slice_len).copied().collect();
             let actual: Vec<Option<i32>> = typed.into_iter().collect();
             assert_eq!(expected, actual);
 
@@ -2112,8 +2046,7 @@ mod tests {
                 .into();
 
             // Create unsliced run array.
-            let unsliced_run_array =
-                into_zero_offset_run_array(sliced_run_array).unwrap();
+            let unsliced_run_array = into_zero_offset_run_array(sliced_run_array).unwrap();
             let typed = unsliced_run_array
                 .downcast::<PrimitiveArray<Int32Type>>()
                 .unwrap();
@@ -2148,8 +2081,7 @@ mod tests {
             ls.finish()
         };
 
-        let batch =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)]).unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)]).unwrap();
         let batch = batch.slice(1, 1);
 
         let mut writer = FileWriter::try_new(Vec::<u8>::new(), &schema).unwrap();

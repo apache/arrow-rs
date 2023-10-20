@@ -53,9 +53,7 @@ pub fn encoded_len(a: Option<&[u8]>) -> usize {
 #[inline]
 pub fn padded_length(a: Option<usize>) -> usize {
     match a {
-        Some(a) if a <= BLOCK_SIZE => {
-            1 + ceil(a, MINI_BLOCK_SIZE) * (MINI_BLOCK_SIZE + 1)
-        }
+        Some(a) if a <= BLOCK_SIZE => 1 + ceil(a, MINI_BLOCK_SIZE) * (MINI_BLOCK_SIZE + 1),
         // Each miniblock ends with a 1 byte continuation, therefore add
         // `(MINI_BLOCK_COUNT - 1)` additional bytes over non-miniblock size
         Some(a) => MINI_BLOCK_COUNT + ceil(a, BLOCK_SIZE) * (BLOCK_SIZE + 1),

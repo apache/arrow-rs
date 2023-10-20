@@ -297,7 +297,8 @@ macro_rules! next {
 pub struct TapeDecoder {
     elements: Vec<TapeElement>,
 
-    num_rows: usize,
+    /// The number of rows decoded, including any in progress if `!stack.is_empty()`
+    cur_row: usize,
 
     /// Number of rows to read per batch
     batch_size: usize,
@@ -330,36 +331,34 @@ impl TapeDecoder {
             offsets,
             elements,
             batch_size,
-            num_rows: 0,
+            cur_row: 0,
             bytes: Vec::with_capacity(num_fields * 2 * 8),
             stack: Vec::with_capacity(10),
         }
     }
 
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
-        if self.num_rows >= self.batch_size {
-            return Ok(0);
-        }
-
         let mut iter = BufIter::new(buf);
 
         while !iter.is_empty() {
-            match self.stack.last_mut() {
-                // Start of row
+            let state = match self.stack.last_mut() {
+                Some(l) => l,
                 None => {
-                    // Skip over leading whitespace
                     iter.skip_whitespace();
-                    match next!(iter) {
-                        b'{' => {
-                            let idx = self.elements.len() as u32;
-                            self.stack.push(DecoderState::Object(idx));
-                            self.elements.push(TapeElement::StartObject(u32::MAX));
-                        }
-                        b => return Err(err(b, "trimming leading whitespace")),
+                    if iter.is_empty() || self.cur_row >= self.batch_size {
+                        break;
                     }
+
+                    // Start of row
+                    self.cur_row += 1;
+                    self.stack.push(DecoderState::Value);
+                    self.stack.last_mut().unwrap()
                 }
+            };
+
+            match state {
                 // Decoding an object
-                Some(DecoderState::Object(start_idx)) => {
+                DecoderState::Object(start_idx) => {
                     iter.advance_until(|b| !json_whitespace(b) && b != b',');
                     match next!(iter) {
                         b'"' => {
@@ -370,28 +369,22 @@ impl TapeDecoder {
                         b'}' => {
                             let start_idx = *start_idx;
                             let end_idx = self.elements.len() as u32;
-                            self.elements[start_idx as usize] =
-                                TapeElement::StartObject(end_idx);
+                            self.elements[start_idx as usize] = TapeElement::StartObject(end_idx);
                             self.elements.push(TapeElement::EndObject(start_idx));
                             self.stack.pop();
-                            self.num_rows += self.stack.is_empty() as usize;
-                            if self.num_rows >= self.batch_size {
-                                break;
-                            }
                         }
                         b => return Err(err(b, "parsing object")),
                     }
                 }
                 // Decoding a list
-                Some(DecoderState::List(start_idx)) => {
+                DecoderState::List(start_idx) => {
                     iter.advance_until(|b| !json_whitespace(b) && b != b',');
                     match iter.peek() {
                         Some(b']') => {
                             iter.next();
                             let start_idx = *start_idx;
                             let end_idx = self.elements.len() as u32;
-                            self.elements[start_idx as usize] =
-                                TapeElement::StartList(end_idx);
+                            self.elements[start_idx as usize] = TapeElement::StartList(end_idx);
                             self.elements.push(TapeElement::EndList(start_idx));
                             self.stack.pop();
                         }
@@ -400,7 +393,7 @@ impl TapeDecoder {
                     }
                 }
                 // Decoding a string
-                Some(DecoderState::String) => {
+                DecoderState::String => {
                     let s = iter.advance_until(|b| matches!(b, b'\\' | b'"'));
                     self.bytes.extend_from_slice(s);
 
@@ -415,7 +408,7 @@ impl TapeDecoder {
                         b => unreachable!("{}", b),
                     }
                 }
-                Some(state @ DecoderState::Value) => {
+                state @ DecoderState::Value => {
                     iter.skip_whitespace();
                     *state = match next!(iter) {
                         b'"' => DecoderState::String,
@@ -439,7 +432,7 @@ impl TapeDecoder {
                         b => return Err(err(b, "parsing value")),
                     };
                 }
-                Some(DecoderState::Number) => {
+                DecoderState::Number => {
                     let s = iter.advance_until(|b| {
                         !matches!(b, b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
                     });
@@ -452,14 +445,14 @@ impl TapeDecoder {
                         self.offsets.push(self.bytes.len());
                     }
                 }
-                Some(DecoderState::Colon) => {
+                DecoderState::Colon => {
                     iter.skip_whitespace();
                     match next!(iter) {
                         b':' => self.stack.pop(),
                         b => return Err(err(b, "parsing colon")),
                     };
                 }
-                Some(DecoderState::Literal(literal, idx)) => {
+                DecoderState::Literal(literal, idx) => {
                     let bytes = literal.bytes();
                     let expected = bytes.iter().skip(*idx as usize).copied();
                     for (expected, b) in expected.zip(&mut iter) {
@@ -474,7 +467,7 @@ impl TapeDecoder {
                         self.elements.push(element);
                     }
                 }
-                Some(DecoderState::Escape) => {
+                DecoderState::Escape => {
                     let v = match next!(iter) {
                         b'u' => {
                             self.stack.pop();
@@ -496,7 +489,7 @@ impl TapeDecoder {
                     self.bytes.push(v);
                 }
                 // Parse a unicode escape sequence
-                Some(DecoderState::Unicode(high, low, idx)) => loop {
+                DecoderState::Unicode(high, low, idx) => loop {
                     match *idx {
                         0..=3 => *high = *high << 4 | parse_hex(next!(iter))? as u16,
                         4 => {
@@ -547,7 +540,7 @@ impl TapeDecoder {
             .try_for_each(|row| row.serialize(&mut serializer))
             .map_err(|e| ArrowError::JsonError(e.to_string()))?;
 
-        self.num_rows += rows.len();
+        self.cur_row += rows.len();
 
         Ok(())
     }
@@ -566,7 +559,10 @@ impl TapeDecoder {
         }
 
         if self.offsets.len() >= u32::MAX as usize {
-            return Err(ArrowError::JsonError(format!("Encountered more than {} JSON elements, consider using a smaller batch size", u32::MAX)));
+            return Err(ArrowError::JsonError(format!(
+                "Encountered more than {} JSON elements, consider using a smaller batch size",
+                u32::MAX
+            )));
         }
 
         // Sanity check
@@ -575,9 +571,8 @@ impl TapeDecoder {
             self.bytes.len()
         );
 
-        let strings = std::str::from_utf8(&self.bytes).map_err(|_| {
-            ArrowError::JsonError("Encountered non-UTF-8 data".to_string())
-        })?;
+        let strings = std::str::from_utf8(&self.bytes)
+            .map_err(|_| ArrowError::JsonError("Encountered non-UTF-8 data".to_string()))?;
 
         for offset in self.offsets.iter().copied() {
             if !strings.is_char_boundary(offset) {
@@ -591,7 +586,7 @@ impl TapeDecoder {
             strings,
             elements: &self.elements,
             string_offsets: &self.offsets,
-            num_rows: self.num_rows,
+            num_rows: self.cur_row,
         })
     }
 
@@ -599,7 +594,7 @@ impl TapeDecoder {
     pub fn clear(&mut self) {
         assert!(self.stack.is_empty());
 
-        self.num_rows = 0;
+        self.cur_row = 0;
         self.bytes.clear();
         self.elements.clear();
         self.elements.push(TapeElement::Null);
@@ -678,9 +673,8 @@ fn err(b: u8, ctx: &str) -> ArrowError {
 /// Creates a character from an UTF-16 surrogate pair
 fn char_from_surrogate_pair(low: u16, high: u16) -> Result<char, ArrowError> {
     let n = (((high - 0xD800) as u32) << 10 | (low - 0xDC00) as u32) + 0x1_0000;
-    char::from_u32(n).ok_or_else(|| {
-        ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}"))
-    })
+    char::from_u32(n)
+        .ok_or_else(|| ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}")))
 }
 
 /// Writes `c` as UTF-8 to `out`
@@ -823,9 +817,8 @@ mod tests {
         assert_eq!(
             &finished.string_offsets,
             &[
-                0, 5, 10, 13, 14, 17, 19, 22, 25, 28, 29, 30, 31, 32, 32, 32, 33, 34, 35,
-                41, 47, 52, 55, 57, 58, 59, 62, 63, 63, 66, 69, 70, 71, 72, 73, 74, 75,
-                76, 77
+                0, 5, 10, 13, 14, 17, 19, 22, 25, 28, 29, 30, 31, 32, 32, 32, 33, 34, 35, 41, 47,
+                52, 55, 57, 58, 59, 62, 63, 63, 66, 69, 70, 71, 72, 73, 74, 75, 76, 77
             ]
         )
     }
@@ -837,7 +830,7 @@ mod tests {
         let err = decoder.decode(b"hello").unwrap_err().to_string();
         assert_eq!(
             err,
-            "Json error: Encountered unexpected 'h' whilst trimming leading whitespace"
+            "Json error: Encountered unexpected 'h' whilst parsing value"
         );
 
         let mut decoder = TapeDecoder::new(16, 2);

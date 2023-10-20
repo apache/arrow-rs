@@ -207,15 +207,15 @@ where
             }
 
             let iter = ArrayIter::new(array);
-            let sum =
-                iter.into_iter()
-                    .try_fold(T::default_value(), |accumulator, value| {
-                        if let Some(value) = value {
-                            accumulator.add_checked(value)
-                        } else {
-                            Ok(accumulator)
-                        }
-                    })?;
+            let sum = iter
+                .into_iter()
+                .try_fold(T::default_value(), |accumulator, value| {
+                    if let Some(value) = value {
+                        accumulator.add_checked(value)
+                    } else {
+                        Ok(accumulator)
+                    }
+                })?;
 
             Ok(Some(sum))
         }
@@ -230,11 +230,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
 {
-    min_max_array_helper::<T, A, _, _>(
-        array,
-        |a, b| (is_nan(*a) & !is_nan(*b)) || a > b,
-        min,
-    )
+    min_max_array_helper::<T, A, _, _>(array, |a, b| (is_nan(*a) & !is_nan(*b)) || a > b, min)
 }
 
 /// Returns the max of values in the array of `ArrowNumericType` type, or dictionary
@@ -244,11 +240,7 @@ where
     T: ArrowNumericType,
     T::Native: ArrowNativeType,
 {
-    min_max_array_helper::<T, A, _, _>(
-        array,
-        |a, b| (!is_nan(*a) & is_nan(*b)) || a < b,
-        max,
-    )
+    min_max_array_helper::<T, A, _, _>(array, |a, b| (!is_nan(*a) & is_nan(*b)) || a < b, max)
 }
 
 fn min_max_array_helper<T, A: ArrayAccessor<Item = T::Native>, F, M>(
@@ -501,10 +493,7 @@ mod simd {
         fn init_accumulator_chunk() -> Self::SimdAccumulator;
 
         /// Updates the accumulator with the values of one chunk
-        fn accumulate_chunk_non_null(
-            accumulator: &mut Self::SimdAccumulator,
-            chunk: T::Simd,
-        );
+        fn accumulate_chunk_non_null(accumulator: &mut Self::SimdAccumulator, chunk: T::Simd);
 
         /// Updates the accumulator with the values of one chunk according to the given vector mask
         fn accumulate_chunk_nullable(
@@ -602,10 +591,7 @@ mod simd {
             (T::init(T::default_value()), T::mask_init(false))
         }
 
-        fn accumulate_chunk_non_null(
-            accumulator: &mut Self::SimdAccumulator,
-            chunk: T::Simd,
-        ) {
+        fn accumulate_chunk_non_null(accumulator: &mut Self::SimdAccumulator, chunk: T::Simd) {
             let acc_is_nan = !T::eq(accumulator.0, accumulator.0);
             let is_lt = acc_is_nan | T::lt(chunk, accumulator.0);
             let first_or_lt = !accumulator.1 | is_lt;
@@ -627,10 +613,7 @@ mod simd {
             accumulator.1 |= vecmask;
         }
 
-        fn accumulate_scalar(
-            accumulator: &mut Self::ScalarAccumulator,
-            value: T::Native,
-        ) {
+        fn accumulate_scalar(accumulator: &mut Self::ScalarAccumulator, value: T::Native) {
             if !accumulator.1 {
                 accumulator.0 = value;
             } else {
@@ -690,10 +673,7 @@ mod simd {
             (T::init(T::default_value()), T::mask_init(false))
         }
 
-        fn accumulate_chunk_non_null(
-            accumulator: &mut Self::SimdAccumulator,
-            chunk: T::Simd,
-        ) {
+        fn accumulate_chunk_non_null(accumulator: &mut Self::SimdAccumulator, chunk: T::Simd) {
             let chunk_is_nan = !T::eq(chunk, chunk);
             let is_gt = chunk_is_nan | T::gt(chunk, accumulator.0);
             let first_or_gt = !accumulator.1 | is_gt;
@@ -715,10 +695,7 @@ mod simd {
             accumulator.1 |= vecmask;
         }
 
-        fn accumulate_scalar(
-            accumulator: &mut Self::ScalarAccumulator,
-            value: T::Native,
-        ) {
+        fn accumulate_scalar(accumulator: &mut Self::ScalarAccumulator, value: T::Native) {
             if !accumulator.1 {
                 accumulator.0 = value;
             } else {
@@ -1009,8 +986,7 @@ mod tests {
 
     #[test]
     fn test_primitive_array_bool_or_with_nulls() {
-        let a =
-            BooleanArray::from(vec![None, Some(false), Some(false), None, Some(false)]);
+        let a = BooleanArray::from(vec![None, Some(false), Some(false), None, Some(false)]);
         assert!(!bool_or(&a).unwrap());
     }
 
@@ -1297,8 +1273,7 @@ mod tests {
         assert_eq!(Some(false), min_boolean(&a));
         assert_eq!(Some(true), max_boolean(&a));
 
-        let a =
-            BooleanArray::from(vec![Some(false), Some(true), None, Some(false), None]);
+        let a = BooleanArray::from(vec![Some(false), Some(true), None, Some(false), None]);
         assert_eq!(Some(false), min_boolean(&a));
         assert_eq!(Some(true), max_boolean(&a));
     }
