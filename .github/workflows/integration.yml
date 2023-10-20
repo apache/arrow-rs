@@ -102,8 +102,9 @@ jobs:
         run: conda run --no-capture-output ci/scripts/csharp_build.sh $PWD /build
       - name: Build Go
         run: conda run --no-capture-output ci/scripts/go_build.sh $PWD
-      - name: Build Java
-        run: conda run --no-capture-output ci/scripts/java_build.sh $PWD /build
+# Temporarily disabled - https://github.com/apache/arrow-rs/pull/4957
+#      - name: Build Java
+#        run: conda run --no-capture-output ci/scripts/java_build.sh $PWD /build
       - name: Build JS
         run: conda run --no-capture-output ci/scripts/js_build.sh $PWD /build
       - name: Run integration tests
@@ -114,7 +115,7 @@ jobs:
             --run-ipc \
             --with-cpp=1 \
             --with-csharp=1 \
-            --with-java=1 \
+            --with-java=0 \
             --with-js=1 \
             --with-go=1 \
             --with-rust=1 \
