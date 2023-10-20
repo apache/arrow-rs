@@ -91,10 +91,7 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// Attempts to create RunArray using given run_ends (index where a run ends)
     /// and the values (value of the run). Returns an error if the given data is not compatible
     /// with RunEndEncoded specification.
-    pub fn try_new(
-        run_ends: &PrimitiveArray<R>,
-        values: &dyn Array,
-    ) -> Result<Self, ArrowError> {
+    pub fn try_new(run_ends: &PrimitiveArray<R>, values: &dyn Array) -> Result<Self, ArrowError> {
         let run_ends_type = run_ends.data_type().clone();
         let values_type = values.data_type().clone();
         let ree_array_type = DataType::RunEndEncoded(
@@ -182,10 +179,7 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// scaled well for larger inputs.
     /// See <https://github.com/apache/arrow-rs/pull/3622#issuecomment-1407753727> for more details.
     #[inline]
-    pub fn get_physical_indices<I>(
-        &self,
-        logical_indices: &[I],
-    ) -> Result<Vec<usize>, ArrowError>
+    pub fn get_physical_indices<I>(&self, logical_indices: &[I]) -> Result<Vec<usize>, ArrowError>
     where
         I: ArrowNativeType,
     {
@@ -211,8 +205,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         });
 
         // Return early if all the logical indices cannot be converted to physical indices.
-        let largest_logical_index =
-            logical_indices[*ordered_indices.last().unwrap()].as_usize();
+        let largest_logical_index = logical_indices[*ordered_indices.last().unwrap()].as_usize();
         if largest_logical_index >= len {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {largest_logical_index}.",
@@ -225,8 +218,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         let mut physical_indices = vec![0; indices_len];
 
         let mut ordered_index = 0_usize;
-        for (physical_index, run_end) in
-            self.run_ends.values().iter().enumerate().skip(skip_value)
+        for (physical_index, run_end) in self.run_ends.values().iter().enumerate().skip(skip_value)
         {
             // Get the run end index (relative to offset) of current physical index
             let run_end_value = run_end.as_usize() - offset;
@@ -234,8 +226,7 @@ impl<R: RunEndIndexType> RunArray<R> {
             // All the `logical_indices` that are less than current run end index
             // belongs to current physical index.
             while ordered_index < indices_len
-                && logical_indices[ordered_indices[ordered_index]].as_usize()
-                    < run_end_value
+                && logical_indices[ordered_indices[ordered_index]].as_usize() < run_end_value
             {
                 physical_indices[ordered_indices[ordered_index]] = physical_index;
                 ordered_index += 1;
@@ -245,8 +236,7 @@ impl<R: RunEndIndexType> RunArray<R> {
         // If there are input values >= run_ends.last_value then we'll not be able to convert
         // all logical indices to physical indices.
         if ordered_index < logical_indices.len() {
-            let logical_index =
-                logical_indices[ordered_indices[ordered_index]].as_usize();
+            let logical_index = logical_indices[ordered_indices[ordered_index]].as_usize();
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {logical_index}.",
             )));
@@ -704,8 +694,7 @@ mod tests {
                 seed.shuffle(&mut rng);
             }
             // repeat the items between 1 and 8 times. Cap the length for smaller sized arrays
-            let num =
-                max_run_length.min(rand::thread_rng().gen_range(1..=max_run_length));
+            let num = max_run_length.min(rand::thread_rng().gen_range(1..=max_run_length));
             for _ in 0..num {
                 result.push(seed[ix]);
             }
@@ -749,19 +738,16 @@ mod tests {
     #[test]
     fn test_run_array() {
         // Construct a value array
-        let value_data = PrimitiveArray::<Int8Type>::from_iter_values([
-            10_i8, 11, 12, 13, 14, 15, 16, 17,
-        ]);
+        let value_data =
+            PrimitiveArray::<Int8Type>::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
 
         // Construct a run_ends array:
         let run_ends_values = [4_i16, 6, 7, 9, 13, 18, 20, 22];
-        let run_ends_data = PrimitiveArray::<Int16Type>::from_iter_values(
-            run_ends_values.iter().copied(),
-        );
+        let run_ends_data =
+            PrimitiveArray::<Int16Type>::from_iter_values(run_ends_values.iter().copied());
 
         // Construct a run ends encoded array from the above two
-        let ree_array =
-            RunArray::<Int16Type>::try_new(&run_ends_data, &value_data).unwrap();
+        let ree_array = RunArray::<Int16Type>::try_new(&run_ends_data, &value_data).unwrap();
 
         assert_eq!(ree_array.len(), 22);
         assert_eq!(ree_array.null_count(), 0);
@@ -872,8 +858,7 @@ mod tests {
         let values: StringArray = [Some("foo"), Some("bar"), None, Some("baz")]
             .into_iter()
             .collect();
-        let run_ends: Int32Array =
-            [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
+        let run_ends: Int32Array = [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
 
         let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
         assert_eq!(array.values().data_type(), &DataType::Utf8);
@@ -924,7 +909,10 @@ mod tests {
         let run_ends: Int32Array = [Some(1), None, Some(3)].into_iter().collect();
 
         let actual = RunArray::<Int32Type>::try_new(&run_ends, &values);
-        let expected = ArrowError::InvalidArgumentError("Found null values in run_ends array. The run_ends array should not have null values.".to_string());
+        let expected = ArrowError::InvalidArgumentError(
+            "Found null values in run_ends array. The run_ends array should not have null values."
+                .to_string(),
+        );
         assert_eq!(expected.to_string(), actual.err().unwrap().to_string());
     }
 
@@ -1003,8 +991,7 @@ mod tests {
             let mut rng = thread_rng();
             logical_indices.shuffle(&mut rng);
 
-            let physical_indices =
-                run_array.get_physical_indices(&logical_indices).unwrap();
+            let physical_indices = run_array.get_physical_indices(&logical_indices).unwrap();
 
             assert_eq!(logical_indices.len(), physical_indices.len());
 

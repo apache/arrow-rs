@@ -139,8 +139,7 @@ mod tests {
         assert_eq!(&schema, &generated_schema);
 
         let props = Default::default();
-        let mut writer =
-            SerializedFileWriter::new(file, generated_schema, props).unwrap();
+        let mut writer = SerializedFileWriter::new(file, generated_schema, props).unwrap();
 
         let mut row_group = writer.next_row_group().unwrap();
         drs.as_slice().write_to_row_group(&mut row_group).unwrap();

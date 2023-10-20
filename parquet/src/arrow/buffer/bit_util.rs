@@ -28,8 +28,7 @@ pub fn count_set_bits(bytes: &[u8], range: Range<usize>) -> usize {
 pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
     let bit_length = bytes.len() * 8;
     let unaligned = UnalignedBitChunk::new(bytes, 0, bit_length);
-    let mut chunk_end_idx =
-        bit_length + unaligned.lead_padding() + unaligned.trailing_padding();
+    let mut chunk_end_idx = bit_length + unaligned.lead_padding() + unaligned.trailing_padding();
 
     let iter = unaligned
         .prefix()

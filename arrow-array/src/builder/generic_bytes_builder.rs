@@ -68,12 +68,8 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         let value_builder = BufferBuilder::<u8>::new_from_buffer(value_buffer);
 
         let null_buffer_builder = null_buffer
-            .map(|buffer| {
-                NullBufferBuilder::new_from_buffer(buffer, offsets_builder.len() - 1)
-            })
-            .unwrap_or_else(|| {
-                NullBufferBuilder::new_with_len(offsets_builder.len() - 1)
-            });
+            .map(|buffer| NullBufferBuilder::new_from_buffer(buffer, offsets_builder.len() - 1))
+            .unwrap_or_else(|| NullBufferBuilder::new_with_len(offsets_builder.len() - 1));
 
         Self {
             offsets_builder,
@@ -84,8 +80,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
 
     #[inline]
     fn next_offset(&self) -> T::Offset {
-        T::Offset::from_usize(self.value_builder.len())
-            .expect("byte array offset overflow")
+        T::Offset::from_usize(self.value_builder.len()).expect("byte array offset overflow")
     }
 
     /// Appends a value into the builder.

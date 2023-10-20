@@ -35,6 +35,9 @@ pub struct HeaderConfig {
     ///
     /// Defaults to `true`
     pub last_modified_required: bool,
+
+    /// The version header name if any
+    pub version_header: Option<&'static str>,
 }
 
 #[derive(Debug, Snafu)]
@@ -64,6 +67,12 @@ pub enum Error {
     },
 }
 
+/// Extracts an etag from the provided [`HeaderMap`]
+pub fn get_etag(headers: &HeaderMap) -> Result<String, Error> {
+    let e_tag = headers.get(ETAG).ok_or(Error::MissingEtag)?;
+    Ok(e_tag.to_str().context(BadHeaderSnafu)?.to_string())
+}
+
 /// Extracts [`ObjectMeta`] from the provided [`HeaderMap`]
 pub fn header_meta(
     location: &Path,
@@ -81,13 +90,10 @@ pub fn header_meta(
         None => Utc.timestamp_nanos(0),
     };
 
-    let e_tag = match headers.get(ETAG) {
-        Some(e_tag) => {
-            let e_tag = e_tag.to_str().context(BadHeaderSnafu)?;
-            Some(e_tag.to_string())
-        }
-        None if cfg.etag_required => return Err(Error::MissingEtag),
-        None => None,
+    let e_tag = match get_etag(headers) {
+        Ok(e_tag) => Some(e_tag),
+        Err(Error::MissingEtag) if !cfg.etag_required => None,
+        Err(e) => return Err(e),
     };
 
     let content_length = headers
@@ -95,14 +101,20 @@ pub fn header_meta(
         .context(MissingContentLengthSnafu)?;
 
     let content_length = content_length.to_str().context(BadHeaderSnafu)?;
-    let content_length = content_length
+    let size = content_length
         .parse()
         .context(InvalidContentLengthSnafu { content_length })?;
+
+    let version = match cfg.version_header.and_then(|h| headers.get(h)) {
+        Some(v) => Some(v.to_str().context(BadHeaderSnafu)?.to_string()),
+        None => None,
+    };
 
     Ok(ObjectMeta {
         location: location.clone(),
         last_modified,
-        size: content_length,
+        version,
+        size,
         e_tag,
     })
 }

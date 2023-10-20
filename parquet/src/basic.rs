@@ -18,6 +18,7 @@
 //! Contains Rust mappings for Thrift definition.
 //! Refer to [`parquet.thrift`](https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift) file to see raw definitions.
 
+use std::str::FromStr;
 use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
@@ -27,8 +28,8 @@ use crate::errors::{ParquetError, Result};
 
 // Re-export crate::format types used in this module
 pub use crate::format::{
-    BsonType, DateType, DecimalType, EnumType, IntType, JsonType, ListType, MapType,
-    NullType, StringType, TimeType, TimeUnit, TimestampType, UUIDType,
+    BsonType, DateType, DecimalType, EnumType, IntType, JsonType, ListType, MapType, NullType,
+    StringType, TimeType, TimeUnit, TimestampType, UUIDType,
 };
 
 // ----------------------------------------------------------------------
@@ -278,6 +279,27 @@ pub enum Encoding {
     BYTE_STREAM_SPLIT,
 }
 
+impl FromStr for Encoding {
+    type Err = ParquetError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "PLAIN" | "plain" => Ok(Encoding::PLAIN),
+            "PLAIN_DICTIONARY" | "plain_dictionary" => Ok(Encoding::PLAIN_DICTIONARY),
+            "RLE" | "rle" => Ok(Encoding::RLE),
+            "BIT_PACKED" | "bit_packed" => Ok(Encoding::BIT_PACKED),
+            "DELTA_BINARY_PACKED" | "delta_binary_packed" => Ok(Encoding::DELTA_BINARY_PACKED),
+            "DELTA_LENGTH_BYTE_ARRAY" | "delta_length_byte_array" => {
+                Ok(Encoding::DELTA_LENGTH_BYTE_ARRAY)
+            }
+            "DELTA_BYTE_ARRAY" | "delta_byte_array" => Ok(Encoding::DELTA_BYTE_ARRAY),
+            "RLE_DICTIONARY" | "rle_dictionary" => Ok(Encoding::RLE_DICTIONARY),
+            "BYTE_STREAM_SPLIT" | "byte_stream_split" => Ok(Encoding::BYTE_STREAM_SPLIT),
+            _ => Err(general_err!("unknown encoding: {}", s)),
+        }
+    }
+}
+
 // ----------------------------------------------------------------------
 // Mirrors `parquet::CompressionCodec`
 
@@ -293,6 +315,84 @@ pub enum Compression {
     LZ4,
     ZSTD(ZstdLevel),
     LZ4_RAW,
+}
+
+fn split_compression_string(str_setting: &str) -> Result<(&str, Option<u32>), ParquetError> {
+    let split_setting = str_setting.split_once('(');
+
+    match split_setting {
+        Some((codec, level_str)) => {
+            let level = &level_str[..level_str.len() - 1]
+                .parse::<u32>()
+                .map_err(|_| {
+                    ParquetError::General(format!("invalid compression level: {}", level_str))
+                })?;
+            Ok((codec, Some(*level)))
+        }
+        None => Ok((str_setting, None)),
+    }
+}
+
+fn check_level_is_none(level: &Option<u32>) -> Result<(), ParquetError> {
+    if level.is_some() {
+        return Err(ParquetError::General("level is not support".to_string()));
+    }
+
+    Ok(())
+}
+
+fn require_level(codec: &str, level: Option<u32>) -> Result<u32, ParquetError> {
+    level.ok_or(ParquetError::General(format!("{} require level", codec)))
+}
+
+impl FromStr for Compression {
+    type Err = ParquetError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let (codec, level) = split_compression_string(s)?;
+
+        let c = match codec {
+            "UNCOMPRESSED" | "uncompressed" => {
+                check_level_is_none(&level)?;
+                Compression::UNCOMPRESSED
+            }
+            "SNAPPY" | "snappy" => {
+                check_level_is_none(&level)?;
+                Compression::SNAPPY
+            }
+            "GZIP" | "gzip" => {
+                let level = require_level(codec, level)?;
+                Compression::GZIP(GzipLevel::try_new(level)?)
+            }
+            "LZO" | "lzo" => {
+                check_level_is_none(&level)?;
+                Compression::LZO
+            }
+            "BROTLI" | "brotli" => {
+                let level = require_level(codec, level)?;
+                Compression::BROTLI(BrotliLevel::try_new(level)?)
+            }
+            "LZ4" | "lz4" => {
+                check_level_is_none(&level)?;
+                Compression::LZ4
+            }
+            "ZSTD" | "zstd" => {
+                let level = require_level(codec, level)?;
+                Compression::ZSTD(ZstdLevel::try_new(level as i32)?)
+            }
+            "LZ4_RAW" | "lz4_raw" => {
+                check_level_is_none(&level)?;
+                Compression::LZ4_RAW
+            }
+            _ => {
+                return Err(ParquetError::General(format!(
+                    "unsupport compression {codec}"
+                )));
+            }
+        };
+
+        Ok(c)
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -364,10 +464,9 @@ impl ColumnOrder {
         // TODO: Should this take converted and logical type, for compatibility?
         match logical_type {
             Some(logical) => match logical {
-                LogicalType::String
-                | LogicalType::Enum
-                | LogicalType::Json
-                | LogicalType::Bson => SortOrder::UNSIGNED,
+                LogicalType::String | LogicalType::Enum | LogicalType::Json | LogicalType::Bson => {
+                    SortOrder::UNSIGNED
+                }
                 LogicalType::Integer { is_signed, .. } => match is_signed {
                     true => SortOrder::SIGNED,
                     false => SortOrder::UNSIGNED,
@@ -385,10 +484,7 @@ impl ColumnOrder {
         }
     }
 
-    fn get_converted_sort_order(
-        converted_type: ConvertedType,
-        physical_type: Type,
-    ) -> SortOrder {
+    fn get_converted_sort_order(converted_type: ConvertedType, physical_type: Type) -> SortOrder {
         match converted_type {
             // Unsigned byte-wise comparison.
             ConvertedType::UTF8
@@ -558,12 +654,8 @@ impl TryFrom<Option<parquet::ConvertedType>> for ConvertedType {
                 parquet::ConvertedType::DATE => ConvertedType::DATE,
                 parquet::ConvertedType::TIME_MILLIS => ConvertedType::TIME_MILLIS,
                 parquet::ConvertedType::TIME_MICROS => ConvertedType::TIME_MICROS,
-                parquet::ConvertedType::TIMESTAMP_MILLIS => {
-                    ConvertedType::TIMESTAMP_MILLIS
-                }
-                parquet::ConvertedType::TIMESTAMP_MICROS => {
-                    ConvertedType::TIMESTAMP_MICROS
-                }
+                parquet::ConvertedType::TIMESTAMP_MILLIS => ConvertedType::TIMESTAMP_MILLIS,
+                parquet::ConvertedType::TIMESTAMP_MICROS => ConvertedType::TIMESTAMP_MICROS,
                 parquet::ConvertedType::UINT_8 => ConvertedType::UINT_8,
                 parquet::ConvertedType::UINT_16 => ConvertedType::UINT_16,
                 parquet::ConvertedType::UINT_32 => ConvertedType::UINT_32,
@@ -599,12 +691,8 @@ impl From<ConvertedType> for Option<parquet::ConvertedType> {
             ConvertedType::DATE => Some(parquet::ConvertedType::DATE),
             ConvertedType::TIME_MILLIS => Some(parquet::ConvertedType::TIME_MILLIS),
             ConvertedType::TIME_MICROS => Some(parquet::ConvertedType::TIME_MICROS),
-            ConvertedType::TIMESTAMP_MILLIS => {
-                Some(parquet::ConvertedType::TIMESTAMP_MILLIS)
-            }
-            ConvertedType::TIMESTAMP_MICROS => {
-                Some(parquet::ConvertedType::TIMESTAMP_MICROS)
-            }
+            ConvertedType::TIMESTAMP_MILLIS => Some(parquet::ConvertedType::TIMESTAMP_MILLIS),
+            ConvertedType::TIMESTAMP_MICROS => Some(parquet::ConvertedType::TIMESTAMP_MICROS),
             ConvertedType::UINT_8 => Some(parquet::ConvertedType::UINT_8),
             ConvertedType::UINT_16 => Some(parquet::ConvertedType::UINT_16),
             ConvertedType::UINT_32 => Some(parquet::ConvertedType::UINT_32),
@@ -792,9 +880,7 @@ impl TryFrom<parquet::Encoding> for Encoding {
             parquet::Encoding::RLE => Encoding::RLE,
             parquet::Encoding::BIT_PACKED => Encoding::BIT_PACKED,
             parquet::Encoding::DELTA_BINARY_PACKED => Encoding::DELTA_BINARY_PACKED,
-            parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY => {
-                Encoding::DELTA_LENGTH_BYTE_ARRAY
-            }
+            parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY => Encoding::DELTA_LENGTH_BYTE_ARRAY,
             parquet::Encoding::DELTA_BYTE_ARRAY => Encoding::DELTA_BYTE_ARRAY,
             parquet::Encoding::RLE_DICTIONARY => Encoding::RLE_DICTIONARY,
             parquet::Encoding::BYTE_STREAM_SPLIT => Encoding::BYTE_STREAM_SPLIT,
@@ -811,9 +897,7 @@ impl From<Encoding> for parquet::Encoding {
             Encoding::RLE => parquet::Encoding::RLE,
             Encoding::BIT_PACKED => parquet::Encoding::BIT_PACKED,
             Encoding::DELTA_BINARY_PACKED => parquet::Encoding::DELTA_BINARY_PACKED,
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => {
-                parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY
-            }
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY,
             Encoding::DELTA_BYTE_ARRAY => parquet::Encoding::DELTA_BYTE_ARRAY,
             Encoding::RLE_DICTIONARY => parquet::Encoding::RLE_DICTIONARY,
             Encoding::BYTE_STREAM_SPLIT => parquet::Encoding::BYTE_STREAM_SPLIT,
@@ -1170,13 +1254,11 @@ mod tests {
             ConvertedType::TIME_MICROS
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::TIMESTAMP_MILLIS))
-                .unwrap(),
+            ConvertedType::try_from(Some(parquet::ConvertedType::TIMESTAMP_MILLIS)).unwrap(),
             ConvertedType::TIMESTAMP_MILLIS
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::TIMESTAMP_MICROS))
-                .unwrap(),
+            ConvertedType::try_from(Some(parquet::ConvertedType::TIMESTAMP_MICROS)).unwrap(),
             ConvertedType::TIMESTAMP_MICROS
         );
         assert_eq!(
@@ -1931,11 +2013,7 @@ mod tests {
         fn check_sort_order(types: Vec<LogicalType>, expected_order: SortOrder) {
             for tpe in types {
                 assert_eq!(
-                    ColumnOrder::get_sort_order(
-                        Some(tpe),
-                        ConvertedType::NONE,
-                        Type::BYTE_ARRAY
-                    ),
+                    ColumnOrder::get_sort_order(Some(tpe), ConvertedType::NONE, Type::BYTE_ARRAY),
                     expected_order
                 );
             }
@@ -2129,5 +2207,82 @@ mod tests {
             SortOrder::UNDEFINED
         );
         assert_eq!(ColumnOrder::UNDEFINED.sort_order(), SortOrder::SIGNED);
+    }
+
+    #[test]
+    fn test_parse_encoding() {
+        let mut encoding: Encoding = "PLAIN".parse().unwrap();
+        assert_eq!(encoding, Encoding::PLAIN);
+        encoding = "PLAIN_DICTIONARY".parse().unwrap();
+        assert_eq!(encoding, Encoding::PLAIN_DICTIONARY);
+        encoding = "RLE".parse().unwrap();
+        assert_eq!(encoding, Encoding::RLE);
+        encoding = "BIT_PACKED".parse().unwrap();
+        assert_eq!(encoding, Encoding::BIT_PACKED);
+        encoding = "DELTA_BINARY_PACKED".parse().unwrap();
+        assert_eq!(encoding, Encoding::DELTA_BINARY_PACKED);
+        encoding = "DELTA_LENGTH_BYTE_ARRAY".parse().unwrap();
+        assert_eq!(encoding, Encoding::DELTA_LENGTH_BYTE_ARRAY);
+        encoding = "DELTA_BYTE_ARRAY".parse().unwrap();
+        assert_eq!(encoding, Encoding::DELTA_BYTE_ARRAY);
+        encoding = "RLE_DICTIONARY".parse().unwrap();
+        assert_eq!(encoding, Encoding::RLE_DICTIONARY);
+        encoding = "BYTE_STREAM_SPLIT".parse().unwrap();
+        assert_eq!(encoding, Encoding::BYTE_STREAM_SPLIT);
+
+        // test lowercase
+        encoding = "byte_stream_split".parse().unwrap();
+        assert_eq!(encoding, Encoding::BYTE_STREAM_SPLIT);
+
+        // test unknown string
+        match "plain_xxx".parse::<Encoding>() {
+            Ok(e) => {
+                panic!("Should not be able to parse {:?}", e);
+            }
+            Err(e) => {
+                assert_eq!(e.to_string(), "Parquet error: unknown encoding: plain_xxx");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_compression() {
+        let mut compress: Compression = "snappy".parse().unwrap();
+        assert_eq!(compress, Compression::SNAPPY);
+        compress = "lzo".parse().unwrap();
+        assert_eq!(compress, Compression::LZO);
+        compress = "zstd(3)".parse().unwrap();
+        assert_eq!(compress, Compression::ZSTD(ZstdLevel::try_new(3).unwrap()));
+        compress = "LZ4_RAW".parse().unwrap();
+        assert_eq!(compress, Compression::LZ4_RAW);
+        compress = "uncompressed".parse().unwrap();
+        assert_eq!(compress, Compression::UNCOMPRESSED);
+        compress = "snappy".parse().unwrap();
+        assert_eq!(compress, Compression::SNAPPY);
+        compress = "gzip(9)".parse().unwrap();
+        assert_eq!(compress, Compression::GZIP(GzipLevel::try_new(9).unwrap()));
+        compress = "lzo".parse().unwrap();
+        assert_eq!(compress, Compression::LZO);
+        compress = "brotli(3)".parse().unwrap();
+        assert_eq!(
+            compress,
+            Compression::BROTLI(BrotliLevel::try_new(3).unwrap())
+        );
+        compress = "lz4".parse().unwrap();
+        assert_eq!(compress, Compression::LZ4);
+
+        // test unknown compression
+        let mut err = "plain_xxx".parse::<Encoding>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: unknown encoding: plain_xxx"
+        );
+
+        // test invalid compress level
+        err = "gzip(-10)".parse::<Encoding>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: unknown encoding: gzip(-10)"
+        );
     }
 }

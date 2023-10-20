@@ -55,8 +55,8 @@ mod tests {
     use crate::util::bit_util;
     use crate::{
         array::{
-            Array, ArrayData, BooleanArray, FixedSizeBinaryArray, Int64Array,
-            StructArray, UInt32Array, UInt64Array,
+            Array, ArrayData, BooleanArray, FixedSizeBinaryArray, Int64Array, StructArray,
+            UInt32Array, UInt64Array,
         },
         datatypes::{DataType, Field},
         ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
@@ -102,8 +102,7 @@ mod tests {
         let inner = StructArray::from(vec![
             (
                 Arc::new(Field::new("a1", DataType::Boolean, false)),
-                Arc::new(BooleanArray::from(vec![true, true, false, false]))
-                    as Arc<dyn Array>,
+                Arc::new(BooleanArray::from(vec![true, true, false, false])) as Arc<dyn Array>,
             ),
             (
                 Arc::new(Field::new("a2", DataType::UInt32, false)),
@@ -118,8 +117,7 @@ mod tests {
             ),
             (
                 Arc::new(Field::new("b", DataType::Boolean, false)),
-                Arc::new(BooleanArray::from(vec![false, false, true, true]))
-                    as Arc<dyn Array>,
+                Arc::new(BooleanArray::from(vec![false, false, true, true])) as Arc<dyn Array>,
             ),
             (
                 Arc::new(Field::new("c", DataType::UInt32, false)),
@@ -170,8 +168,7 @@ mod tests {
             Some(vec![30, 30, 30]),
             None,
         ];
-        let array =
-            FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
+        let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 3)?;
 
         let data = array.into_data();
         test_round_trip(&data)
@@ -244,10 +241,8 @@ mod tests {
         let mut validity_bits: [u8; 1] = [0; 1];
         bit_util::set_bit(&mut validity_bits, 2);
 
-        let list_data_type = DataType::FixedSizeList(
-            Arc::new(Field::new("f", inner_list_data_type, false)),
-            2,
-        );
+        let list_data_type =
+            DataType::FixedSizeList(Arc::new(Field::new("f", inner_list_data_type, false)), 2);
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .null_bit_buffer(Some(Buffer::from(validity_bits)))

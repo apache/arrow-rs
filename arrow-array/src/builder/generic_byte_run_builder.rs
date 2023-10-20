@@ -19,10 +19,7 @@ use crate::types::bytes::ByteArrayNativeType;
 use std::{any::Any, sync::Arc};
 
 use crate::{
-    types::{
-        BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType,
-        Utf8Type,
-    },
+    types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType, Utf8Type},
     ArrayRef, ArrowPrimitiveType, RunArray,
 };
 
@@ -112,10 +109,7 @@ where
     pub fn with_capacity(capacity: usize, data_capacity: usize) -> Self {
         Self {
             run_ends_builder: PrimitiveBuilder::with_capacity(capacity),
-            values_builder: GenericByteBuilder::<V>::with_capacity(
-                capacity,
-                data_capacity,
-            ),
+            values_builder: GenericByteBuilder::<V>::with_capacity(capacity, data_capacity),
             current_value: Vec::new(),
             has_current_value: false,
             current_run_end_index: 0,
@@ -282,12 +276,13 @@ where
     }
 
     fn run_end_index_as_native(&self) -> R::Native {
-        R::Native::from_usize(self.current_run_end_index)
-        .unwrap_or_else(|| panic!(
+        R::Native::from_usize(self.current_run_end_index).unwrap_or_else(|| {
+            panic!(
                 "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
                 self.current_run_end_index,
                 R::DATA_TYPE
-        ))
+            )
+        })
     }
 }
 
@@ -413,8 +408,7 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &GenericByteArray<T> =
-            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+        let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
         assert_eq!(*ava.value(0), *values[0]);
         assert!(ava.is_null(1));
@@ -459,8 +453,7 @@ mod tests {
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &GenericByteArray<T> =
-            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+        let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
         assert_eq!(ava.value(0), values[0]);
         assert!(ava.is_null(1));

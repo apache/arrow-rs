@@ -226,9 +226,7 @@ impl TokenProvider for SelfSignedJwt {
     }
 }
 
-fn read_credentials_file<T>(
-    service_account_path: impl AsRef<std::path::Path>,
-) -> Result<T>
+fn read_credentials_file<T>(service_account_path: impl AsRef<std::path::Path>) -> Result<T>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -329,9 +327,8 @@ async fn make_metadata_request(
     hostname: &str,
     retry: &RetryConfig,
 ) -> crate::Result<TokenResponse> {
-    let url = format!(
-        "http://{hostname}/computeMetadata/v1/instance/service-accounts/default/token"
-    );
+    let url =
+        format!("http://{hostname}/computeMetadata/v1/instance/service-accounts/default/token");
     let response: TokenResponse = client
         .request(Method::GET, url)
         .header("Metadata-Flavor", "Google")
@@ -396,8 +393,7 @@ pub enum ApplicationDefaultCredentials {
 }
 
 impl ApplicationDefaultCredentials {
-    const CREDENTIALS_PATH: &'static str =
-        ".config/gcloud/application_default_credentials.json";
+    const CREDENTIALS_PATH: &'static str = ".config/gcloud/application_default_credentials.json";
 
     // Create a new application default credential in the following situations:
     //  1. a file is passed in and the type matches.

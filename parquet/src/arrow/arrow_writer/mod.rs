@@ -28,13 +28,10 @@ use thrift::protocol::TCompactOutputProtocol;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchWriter};
-use arrow_schema::{
-    ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef,
-};
+use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef};
 
 use super::schema::{
-    add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
-    decimal_length_from_precision,
+    add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema, decimal_length_from_precision,
 };
 
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
@@ -776,8 +773,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                 }
                 _ => {
                     return Err(ParquetError::NYI(
-                        "Attempting to write an Arrow type that is not yet implemented"
-                            .to_string(),
+                        "Attempting to write an Arrow type that is not yet implemented".to_string(),
                     ));
                 }
             };
@@ -802,10 +798,7 @@ fn write_primitive<E: ColumnValueEncoder>(
     )
 }
 
-fn get_bool_array_slice(
-    array: &arrow_array::BooleanArray,
-    indices: &[usize],
-) -> Vec<bool> {
+fn get_bool_array_slice(array: &arrow_array::BooleanArray, indices: &[usize]) -> Vec<bool> {
     let mut values = Vec::with_capacity(indices.len());
     for i in indices {
         values.push(array.value(*i))
@@ -894,9 +887,7 @@ mod tests {
     use std::fs::File;
     use std::sync::Arc;
 
-    use crate::arrow::arrow_reader::{
-        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
-    };
+    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UInt8Type};
     use arrow::error::Result as ArrowResult;
@@ -930,9 +921,7 @@ mod tests {
         let b = Int32Array::from(vec![Some(1), None, None, Some(4), Some(5)]);
 
         // build a record batch
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
         roundtrip(batch, Some(SMALL_SIZE / 2));
     }
@@ -947,10 +936,7 @@ mod tests {
         buffer
     }
 
-    fn get_bytes_by_into_inner(
-        schema: SchemaRef,
-        expected_batch: &RecordBatch,
-    ) -> Vec<u8> {
+    fn get_bytes_by_into_inner(schema: SchemaRef, expected_batch: &RecordBatch) -> Vec<u8> {
         let mut writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
         writer.write(expected_batch).unwrap();
         writer.into_inner().unwrap()
@@ -977,8 +963,7 @@ mod tests {
             get_bytes_by_into_inner(schema, &expected_batch),
         ] {
             let cursor = Bytes::from(buffer);
-            let mut record_batch_reader =
-                ParquetRecordBatchReader::try_new(cursor, 1024).unwrap();
+            let mut record_batch_reader = ParquetRecordBatchReader::try_new(cursor, 1024).unwrap();
 
             let actual_batch = record_batch_reader
                 .next()
@@ -1025,8 +1010,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
-        let a_value_offsets =
-            arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
@@ -1066,8 +1050,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
-        let a_value_offsets =
-            arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
@@ -1122,8 +1105,7 @@ mod tests {
     }
 
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
-        let decimal_field =
-            Field::new("a", DataType::Decimal128(precision, scale), false);
+        let decimal_field = Field::new("a", DataType::Decimal128(precision, scale), false);
         let schema = Schema::new(vec![decimal_field]);
 
         let decimal_values = vec![10_000, 50_000, 0, -100]
@@ -1193,8 +1175,7 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
-        let g_value_offsets =
-            arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let g_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
         let g_list_data = ArrayData::builder(struct_field_g.data_type().clone())
@@ -1268,8 +1249,7 @@ mod tests {
 
         // build a record batch
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(some_nested_object)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(some_nested_object)]).unwrap();
 
         roundtrip(batch, Some(SMALL_SIZE / 2));
     }
@@ -1409,8 +1389,7 @@ mod tests {
 
     #[test]
     fn arrow_writer_page_size() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
         let mut builder = StringBuilder::with_capacity(100, 329 * 10_000);
 
@@ -1474,10 +1453,7 @@ mod tests {
     const SMALL_SIZE: usize = 7;
     const MEDIUM_SIZE: usize = 63;
 
-    fn roundtrip(
-        expected_batch: RecordBatch,
-        max_row_group_size: Option<usize>,
-    ) -> Vec<File> {
+    fn roundtrip(expected_batch: RecordBatch, max_row_group_size: Option<usize>) -> Vec<File> {
         let mut files = vec![];
         for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
             let mut props = WriterProperties::builder().set_writer_version(version);
@@ -1532,9 +1508,7 @@ mod tests {
     }
 
     fn roundtrip_opts(expected_batch: &RecordBatch, props: WriterProperties) -> File {
-        roundtrip_opts_with_array_validation(expected_batch, props, |a, b| {
-            assert_eq!(a, b)
-        })
+        roundtrip_opts_with_array_validation(expected_batch, props, |a, b| assert_eq!(a, b))
     }
 
     struct RoundTripOptions {
@@ -1559,10 +1533,7 @@ mod tests {
         one_column_roundtrip_with_options(RoundTripOptions::new(values, nullable))
     }
 
-    fn one_column_roundtrip_with_schema(
-        values: ArrayRef,
-        schema: SchemaRef,
-    ) -> Vec<File> {
+    fn one_column_roundtrip_with_schema(values: ArrayRef, schema: SchemaRef) -> Vec<File> {
         let mut options = RoundTripOptions::new(values, false);
         options.schema = schema;
         one_column_roundtrip_with_options(options)
@@ -1576,14 +1547,13 @@ mod tests {
         } = options;
 
         let encodings = match values.data_type() {
-            DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Binary
-            | DataType::LargeBinary => vec![
-                Encoding::PLAIN,
-                Encoding::DELTA_BYTE_ARRAY,
-                Encoding::DELTA_LENGTH_BYTE_ARRAY,
-            ],
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
+                vec![
+                    Encoding::PLAIN,
+                    Encoding::DELTA_BYTE_ARRAY,
+                    Encoding::DELTA_LENGTH_BYTE_ARRAY,
+                ]
+            }
             DataType::Int64
             | DataType::Int32
             | DataType::Int16
@@ -1686,9 +1656,7 @@ mod tests {
                     let row_group_reader = file_reader
                         .get_row_group(ri)
                         .expect("Unable to read row group");
-                    if let Some(sbbf) =
-                        row_group_reader.get_column_bloom_filter(column_index)
-                    {
+                    if let Some(sbbf) = row_group_reader.get_column_bloom_filter(column_index) {
                         bloom_filters.push(sbbf.clone());
                     } else {
                         panic!("No bloom filter for column named {file_column} found");
@@ -1747,18 +1715,13 @@ mod tests {
                 .take(200_000)
                 .collect::<BooleanArray>(),
         );
-        let schema =
-            Schema::new(vec![Field::new("col", values.data_type().clone(), true)]);
-        let expected_batch =
-            RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
+        let schema = Schema::new(vec![Field::new("col", values.data_type().clone(), true)]);
+        let expected_batch = RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
         let file = tempfile::tempfile().unwrap();
 
-        let mut writer = ArrowWriter::try_new(
-            file.try_clone().unwrap(),
-            expected_batch.schema(),
-            None,
-        )
-        .expect("Unable to write file");
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), expected_batch.schema(), None)
+                .expect("Unable to write file");
         writer.write(&expected_batch).unwrap();
         writer.close().unwrap();
     }
@@ -1770,8 +1733,8 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
 
         let mut out = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut out, batch.schema(), None)
-            .expect("Unable to write file");
+        let mut writer =
+            ArrowWriter::try_new(&mut out, batch.schema(), None).expect("Unable to write file");
         writer.write(&batch).unwrap();
         let file_meta_data = writer.close().unwrap();
         for row_group in file_meta_data.row_groups {
@@ -2050,8 +2013,7 @@ mod tests {
     #[test]
     fn null_list_single_column() {
         let null_field = Field::new("item", DataType::Null, true);
-        let list_field =
-            Field::new("emptylist", DataType::List(Arc::new(null_field)), true);
+        let list_field = Field::new("emptylist", DataType::List(Arc::new(null_field)), true);
 
         let schema = Schema::new(vec![list_field]);
 
@@ -2087,8 +2049,7 @@ mod tests {
     #[test]
     fn list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let a_value_offsets =
-            arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
         let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
@@ -2112,8 +2073,7 @@ mod tests {
     #[test]
     fn large_list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let a_value_offsets =
-            arrow::buffer::Buffer::from(&[0i64, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_value_offsets = arrow::buffer::Buffer::from(&[0i64, 1, 3, 3, 6, 10].to_byte_slice());
         let a_list_data = ArrayData::builder(DataType::LargeList(Arc::new(Field::new(
             "large_item",
             DataType::Int32,
@@ -2195,11 +2155,12 @@ mod tests {
                 roundtrip_opts_with_array_validation(&expected_batch, props, |a, b| {
                     let string_array_a = StringArray::from(a.clone());
                     let string_array_b = StringArray::from(b.clone());
-                    let vec_a: Vec<&str> =
-                        string_array_a.iter().map(|v| v.unwrap()).collect();
-                    let vec_b: Vec<&str> =
-                        string_array_b.iter().map(|v| v.unwrap()).collect();
-                    assert_eq!(vec_a, vec_b, "failed for encoder: {encoding:?} and row_group_size: {row_group_size:?}");
+                    let vec_a: Vec<&str> = string_array_a.iter().map(|v| v.unwrap()).collect();
+                    let vec_b: Vec<&str> = string_array_b.iter().map(|v| v.unwrap()).collect();
+                    assert_eq!(
+                        vec_a, vec_b,
+                        "failed for encoder: {encoding:?} and row_group_size: {row_group_size:?}"
+                    );
                 });
             }
         }
@@ -2484,12 +2445,10 @@ mod tests {
             .build();
 
         let mut writer =
-            ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props))
-                .unwrap();
+            ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
 
         for array in arrays {
-            let batch =
-                RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
             writer.write(&batch).unwrap();
         }
 
@@ -2525,8 +2484,7 @@ mod tests {
             })
             .collect();
 
-        let expected_values: Vec<_> =
-            [0..100, 0..50, 200..500].into_iter().flatten().collect();
+        let expected_values: Vec<_> = [0..100, 0..50, 200..500].into_iter().flatten().collect();
         assert_eq!(&values, &expected_values)
     }
 
@@ -2575,11 +2533,9 @@ mod tests {
         let list_a_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
         let struct_b_array = StructArray::from(vec![(list_a.clone(), list_a_array)]);
 
-        let batch1 = RecordBatch::try_from_iter(vec![(
-            "struct_b",
-            Arc::new(struct_b_array) as ArrayRef,
-        )])
-        .unwrap();
+        let batch1 =
+            RecordBatch::try_from_iter(vec![("struct_b", Arc::new(struct_b_array) as ArrayRef)])
+                .unwrap();
 
         let field_a_array = Int32Array::from(vec![6, 7, 8, 9, 10]);
         let field_b_array = Int32Array::from_iter(vec![None, None, None, Some(1), None]);
@@ -2599,11 +2555,9 @@ mod tests {
         let list_a_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
         let struct_b_array = StructArray::from(vec![(list_a, list_a_array)]);
 
-        let batch2 = RecordBatch::try_from_iter(vec![(
-            "struct_b",
-            Arc::new(struct_b_array) as ArrayRef,
-        )])
-        .unwrap();
+        let batch2 =
+            RecordBatch::try_from_iter(vec![("struct_b", Arc::new(struct_b_array) as ArrayRef)])
+                .unwrap();
 
         let batches = &[batch1, batch2];
 
@@ -2678,8 +2632,7 @@ mod tests {
         .unwrap();
 
         let mut buf = Vec::with_capacity(1024);
-        let mut writer =
-            ArrowWriter::try_new(&mut buf, Arc::new(file_schema), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buf, Arc::new(file_schema), None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
     }
@@ -2697,8 +2650,7 @@ mod tests {
         .unwrap();
 
         let mut buf = Vec::with_capacity(1024);
-        let mut writer =
-            ArrowWriter::try_new(&mut buf, file_schema.clone(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buf, file_schema.clone(), None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 

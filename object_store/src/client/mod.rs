@@ -61,8 +61,7 @@ fn map_client_error(e: reqwest::Error) -> super::Error {
     }
 }
 
-static DEFAULT_USER_AGENT: &str =
-    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+static DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 /// Configuration keys for [`ClientOptions`]
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Deserialize, Serialize)]
@@ -231,9 +230,7 @@ impl ClientOptions {
             ClientConfigKey::ConnectTimeout => {
                 self.connect_timeout = Some(ConfigValue::Deferred(value.into()))
             }
-            ClientConfigKey::DefaultContentType => {
-                self.default_content_type = Some(value.into())
-            }
+            ClientConfigKey::DefaultContentType => self.default_content_type = Some(value.into()),
             ClientConfigKey::Http1Only => self.http1_only.parse(value),
             ClientConfigKey::Http2Only => self.http2_only.parse(value),
             ClientConfigKey::Http2KeepAliveInterval => {
@@ -252,13 +249,9 @@ impl ClientOptions {
                 self.pool_max_idle_per_host = Some(ConfigValue::Deferred(value.into()))
             }
             ClientConfigKey::ProxyUrl => self.proxy_url = Some(value.into()),
-            ClientConfigKey::ProxyCaCertificate => {
-                self.proxy_ca_certificate = Some(value.into())
-            }
+            ClientConfigKey::ProxyCaCertificate => self.proxy_ca_certificate = Some(value.into()),
             ClientConfigKey::ProxyExcludes => self.proxy_excludes = Some(value.into()),
-            ClientConfigKey::Timeout => {
-                self.timeout = Some(ConfigValue::Deferred(value.into()))
-            }
+            ClientConfigKey::Timeout => self.timeout = Some(ConfigValue::Deferred(value.into())),
             ClientConfigKey::UserAgent => {
                 self.user_agent = Some(ConfigValue::Deferred(value.into()))
             }
@@ -270,12 +263,8 @@ impl ClientOptions {
     pub fn get_config_value(&self, key: &ClientConfigKey) -> Option<String> {
         match key {
             ClientConfigKey::AllowHttp => Some(self.allow_http.to_string()),
-            ClientConfigKey::AllowInvalidCertificates => {
-                Some(self.allow_insecure.to_string())
-            }
-            ClientConfigKey::ConnectTimeout => {
-                self.connect_timeout.as_ref().map(fmt_duration)
-            }
+            ClientConfigKey::AllowInvalidCertificates => Some(self.allow_insecure.to_string()),
+            ClientConfigKey::ConnectTimeout => self.connect_timeout.as_ref().map(fmt_duration),
             ClientConfigKey::DefaultContentType => self.default_content_type.clone(),
             ClientConfigKey::Http1Only => Some(self.http1_only.to_string()),
             ClientConfigKey::Http2KeepAliveInterval => {
@@ -288,9 +277,7 @@ impl ClientOptions {
                 Some(self.http2_keep_alive_while_idle.to_string())
             }
             ClientConfigKey::Http2Only => Some(self.http2_only.to_string()),
-            ClientConfigKey::PoolIdleTimeout => {
-                self.pool_idle_timeout.as_ref().map(fmt_duration)
-            }
+            ClientConfigKey::PoolIdleTimeout => self.pool_idle_timeout.as_ref().map(fmt_duration),
             ClientConfigKey::PoolMaxIdlePerHost => {
                 self.pool_max_idle_per_host.as_ref().map(|v| v.to_string())
             }
@@ -378,10 +365,7 @@ impl ClientOptions {
     }
 
     /// Set a trusted proxy CA certificate
-    pub fn with_proxy_ca_certificate(
-        mut self,
-        proxy_ca_certificate: impl Into<String>,
-    ) -> Self {
+    pub fn with_proxy_ca_certificate(mut self, proxy_ca_certificate: impl Into<String>) -> Self {
         self.proxy_ca_certificate = Some(proxy_ca_certificate.into());
         self
     }
@@ -522,9 +506,8 @@ impl ClientOptions {
             let mut proxy = Proxy::all(proxy).map_err(map_client_error)?;
 
             if let Some(certificate) = &self.proxy_ca_certificate {
-                let certificate =
-                    reqwest::tls::Certificate::from_pem(certificate.as_bytes())
-                        .map_err(map_client_error)?;
+                let certificate = reqwest::tls::Certificate::from_pem(certificate.as_bytes())
+                    .map_err(map_client_error)?;
 
                 builder = builder.add_root_certificate(certificate);
             }

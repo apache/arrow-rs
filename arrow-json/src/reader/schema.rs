@@ -52,10 +52,7 @@ impl InferredType {
             }
             (_, InferredType::Any) => {}
             // convert a scalar type to a single-item scalar array type.
-            (
-                InferredType::Array(self_inner_type),
-                other_scalar @ InferredType::Scalar(_),
-            ) => {
+            (InferredType::Array(self_inner_type), other_scalar @ InferredType::Scalar(_)) => {
                 self_inner_type.merge(other_scalar)?;
             }
             (s @ InferredType::Scalar(_), InferredType::Array(mut other_inner_type)) => {
@@ -197,9 +194,10 @@ impl<R: BufRead> Iterator for ValueIter<R> {
                     }
 
                     self.record_count += 1;
-                    return Some(serde_json::from_str(trimmed_s).map_err(|e| {
-                        ArrowError::JsonError(format!("Not valid JSON: {e}"))
-                    }));
+                    return Some(
+                        serde_json::from_str(trimmed_s)
+                            .map_err(|e| ArrowError::JsonError(format!("Not valid JSON: {e}"))),
+                    );
                 }
             }
         }
@@ -393,17 +391,13 @@ fn collect_field_types_from_object(
                         InferredType::Scalar(_) => {
                             field_types.insert(
                                 k.to_string(),
-                                InferredType::Array(Box::new(InferredType::Scalar(
-                                    HashSet::new(),
-                                ))),
+                                InferredType::Array(Box::new(InferredType::Scalar(HashSet::new()))),
                             );
                         }
                         InferredType::Object(_) => {
                             field_types.insert(
                                 k.to_string(),
-                                InferredType::Array(Box::new(InferredType::Object(
-                                    HashMap::new(),
-                                ))),
+                                InferredType::Array(Box::new(InferredType::Object(HashMap::new()))),
                             );
                         }
                         InferredType::Any | InferredType::Array(_) => {
@@ -456,8 +450,7 @@ fn collect_field_types_from_object(
             }
             Value::Object(inner_map) => {
                 if !field_types.contains_key(k) {
-                    field_types
-                        .insert(k.to_string(), InferredType::Object(HashMap::new()));
+                    field_types.insert(k.to_string(), InferredType::Object(HashMap::new()));
                 }
                 match field_types.get_mut(k).unwrap() {
                     InferredType::Object(inner_field_types) => {
@@ -528,8 +521,7 @@ mod tests {
             Field::new("d", list_type_of(DataType::Utf8), true),
         ]);
 
-        let mut reader =
-            BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
+        let mut reader = BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
         let inferred_schema = infer_json_schema_from_seekable(&mut reader, None).unwrap();
 
         assert_eq!(inferred_schema, schema);
@@ -550,9 +542,7 @@ mod tests {
                     Field::new("a", DataType::Boolean, true),
                     Field::new(
                         "b",
-                        DataType::Struct(
-                            vec![Field::new("c", DataType::Utf8, true)].into(),
-                        ),
+                        DataType::Struct(vec![Field::new("c", DataType::Utf8, true)].into()),
                         true,
                     ),
                 ])),
@@ -568,9 +558,9 @@ mod tests {
                 Ok(serde_json::json!({"c1": {"a": false, "b": null}, "c2": 0})),
                 Ok(serde_json::json!({"c1": {"a": true, "b": {"c": "text"}}, "c3": "ok"})),
             ]
-                .into_iter(),
+            .into_iter(),
         )
-            .unwrap();
+        .unwrap();
 
         assert_eq!(inferred_schema, schema);
     }
@@ -606,9 +596,9 @@ mod tests {
                 })),
                 Ok(serde_json::json!({"c1": [], "c2": 0.5, "c3": []})),
             ]
-                .into_iter(),
+            .into_iter(),
         )
-            .unwrap();
+        .unwrap();
 
         assert_eq!(inferred_schema, schema);
     }

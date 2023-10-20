@@ -76,11 +76,7 @@ impl RecordDecoder {
     /// Decodes records from `input` returning the number of records and bytes read
     ///
     /// Note: this expects to be called with an empty `input` to signal EOF
-    pub fn decode(
-        &mut self,
-        input: &[u8],
-        to_read: usize,
-    ) -> Result<(usize, usize), ArrowError> {
+    pub fn decode(&mut self, input: &[u8], to_read: usize) -> Result<(usize, usize), ArrowError> {
         if to_read == 0 {
             return Ok((0, 0));
         }
@@ -124,11 +120,17 @@ impl RecordDecoder {
                     // Need to allocate more capacity
                     ReadRecordResult::OutputFull => break,
                     ReadRecordResult::OutputEndsFull => {
-                        return Err(ArrowError::CsvError(format!("incorrect number of fields for line {}, expected {} got more than {}", self.line_number, self.num_columns, self.current_field)));
+                        return Err(ArrowError::CsvError(format!(
+                            "incorrect number of fields for line {}, expected {} got more than {}",
+                            self.line_number, self.num_columns, self.current_field
+                        )));
                     }
                     ReadRecordResult::Record => {
                         if self.current_field != self.num_columns {
-                            return Err(ArrowError::CsvError(format!("incorrect number of fields for line {}, expected {} got {}", self.line_number, self.num_columns, self.current_field)));
+                            return Err(ArrowError::CsvError(format!(
+                                "incorrect number of fields for line {}, expected {} got {}",
+                                self.line_number, self.num_columns, self.current_field
+                            )));
                         }
                         read += 1;
                         self.current_field = 0;
@@ -334,8 +336,7 @@ mod tests {
         let mut decoder = RecordDecoder::new(Reader::new(), 2);
         let err = decoder.decode(csv.as_bytes(), 4).unwrap_err().to_string();
 
-        let expected =
-            "Csv error: incorrect number of fields for line 3, expected 2 got 1";
+        let expected = "Csv error: incorrect number of fields for line 3, expected 2 got 1";
 
         assert_eq!(err, expected);
 

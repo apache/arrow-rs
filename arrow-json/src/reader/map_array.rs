@@ -124,10 +124,7 @@ impl ArrayDecoder for MapArrayDecoder {
             }
 
             let offset = i32::from_usize(key_pos.len()).ok_or_else(|| {
-                ArrowError::JsonError(format!(
-                    "offset overflow decoding {}",
-                    self.data_type
-                ))
+                ArrowError::JsonError(format!("offset overflow decoding {}", self.data_type))
             })?;
             offsets.append(offset)
         }

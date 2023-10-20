@@ -69,8 +69,7 @@ impl<'a> Predicate<'a> {
                 && !pattern[..pattern.len() - 1].contains(is_like_pattern)
             {
                 return Ok(Self::IStartsWithAscii(&pattern[..pattern.len() - 1]));
-            } else if pattern.starts_with('%') && !pattern[1..].contains(is_like_pattern)
-            {
+            } else if pattern.starts_with('%') && !pattern[1..].contains(is_like_pattern) {
                 return Ok(Self::IEndsWithAscii(&pattern[1..]));
             }
         }
@@ -110,17 +109,15 @@ impl<'a> Predicate<'a> {
             Predicate::Contains(v) => {
                 BooleanArray::from_unary(array, |haystack| haystack.contains(v) != negate)
             }
-            Predicate::StartsWith(v) => BooleanArray::from_unary(array, |haystack| {
-                haystack.starts_with(v) != negate
-            }),
-            Predicate::IStartsWithAscii(v) => {
-                BooleanArray::from_unary(array, |haystack| {
-                    starts_with_ignore_ascii_case(haystack, v) != negate
-                })
+            Predicate::StartsWith(v) => {
+                BooleanArray::from_unary(array, |haystack| haystack.starts_with(v) != negate)
             }
-            Predicate::EndsWith(v) => BooleanArray::from_unary(array, |haystack| {
-                haystack.ends_with(v) != negate
+            Predicate::IStartsWithAscii(v) => BooleanArray::from_unary(array, |haystack| {
+                starts_with_ignore_ascii_case(haystack, v) != negate
             }),
+            Predicate::EndsWith(v) => {
+                BooleanArray::from_unary(array, |haystack| haystack.ends_with(v) != negate)
+            }
             Predicate::IEndsWithAscii(v) => BooleanArray::from_unary(array, |haystack| {
                 ends_with_ignore_ascii_case(haystack, v) != negate
             }),

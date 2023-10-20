@@ -34,18 +34,19 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use snafu::{OptionExt, ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 use url::Url;
 
 use crate::client::get::GetClientExt;
+use crate::client::header::get_etag;
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -95,8 +96,14 @@ impl std::fmt::Display for HttpStore {
 
 #[async_trait]
 impl ObjectStore for HttpStore {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.client.put(location, bytes).await
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+        let response = self.client.put(location, bytes).await?;
+        let e_tag = match get_etag(response.headers()) {
+            Ok(e_tag) => Some(e_tag),
+            Err(crate::client::header::Error::MissingEtag) => None,
+            Err(source) => return Err(Error::Metadata { source }.into()),
+        };
+        Ok(PutResult { e_tag })
     }
 
     async fn put_multipart(
@@ -106,11 +113,7 @@ impl ObjectStore for HttpStore {
         Err(super::Error::NotImplemented)
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         Err(super::Error::NotImplemented)
     }
 
@@ -122,14 +125,13 @@ impl ObjectStore for HttpStore {
         self.client.delete(location).await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or_default();
-        let status = self.client.list(prefix, "infinity").await?;
-        Ok(futures::stream::iter(
-            status
+        let prefix = prefix.cloned();
+        futures::stream::once(async move {
+            let status = self.client.list(prefix.as_ref(), "infinity").await?;
+
+            let iter = status
                 .response
                 .into_iter()
                 .filter(|r| !r.is_dir())
@@ -138,9 +140,12 @@ impl ObjectStore for HttpStore {
                     response.object_meta(self.client.base_url())
                 })
                 // Filter out exact prefix matches
-                .filter_ok(move |r| r.location.as_ref().len() > prefix_len),
-        )
-        .boxed())
+                .filter_ok(move |r| r.location.as_ref().len() > prefix_len);
+
+            Ok::<_, crate::Error>(futures::stream::iter(iter))
+        })
+        .try_flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {

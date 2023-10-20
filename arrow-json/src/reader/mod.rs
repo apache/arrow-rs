@@ -143,9 +143,7 @@ use serde::Serialize;
 use arrow_array::timezone::Tz;
 use arrow_array::types::Float32Type;
 use arrow_array::types::*;
-use arrow_array::{
-    downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray,
-};
+use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
@@ -650,8 +648,9 @@ impl Decoder {
 
         let batch = match self.is_field {
             true => RecordBatch::try_new(self.schema.clone(), vec![make_array(decoded)])?,
-            false => RecordBatch::from(StructArray::from(decoded))
-                .with_schema(self.schema.clone())?,
+            false => {
+                RecordBatch::from(StructArray::from(decoded)).with_schema(self.schema.clone())?
+            }
         };
 
         Ok(Some(batch))
@@ -758,9 +757,7 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{
-        make_array, Array, BooleanArray, ListArray, StringArray, StructArray,
-    };
+    use arrow_array::{make_array, Array, BooleanArray, ListArray, StringArray, StructArray};
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
@@ -1584,11 +1581,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int16, false),
             Field::new("b", DataType::Utf8, false),
-            Field::new_struct(
-                "c",
-                vec![Field::new("a", DataType::Boolean, false)],
-                false,
-            ),
+            Field::new_struct("c", vec![Field::new("a", DataType::Boolean, false)], false),
         ]));
 
         let err = ReaderBuilder::new(schema)
@@ -1871,15 +1864,13 @@ mod tests {
 
     #[test]
     fn test_nested_list_json_arrays() {
-        let c_field =
-            Field::new_struct("c", vec![Field::new("d", DataType::Utf8, true)], true);
+        let c_field = Field::new_struct("c", vec![Field::new("d", DataType::Utf8, true)], true);
         let a_struct_field = Field::new_struct(
             "a",
             vec![Field::new("b", DataType::Boolean, true), c_field.clone()],
             true,
         );
-        let a_field =
-            Field::new("a", DataType::List(Arc::new(a_struct_field.clone())), true);
+        let a_field = Field::new("a", DataType::List(Arc::new(a_struct_field.clone())), true);
         let schema = Arc::new(Schema::new(vec![a_field.clone()]));
         let builder = ReaderBuilder::new(schema).with_batch_size(64);
         let json_content = r#"

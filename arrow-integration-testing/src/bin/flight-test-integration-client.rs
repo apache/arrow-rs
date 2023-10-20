@@ -62,8 +62,7 @@ async fn main() -> Result {
         }
         None => {
             let path = args.path.expect("No path is given");
-            flight_client_scenarios::integration_test::run_scenario(&host, port, &path)
-                .await?;
+            flight_client_scenarios::integration_test::run_scenario(&host, port, &path).await?;
         }
     }
 

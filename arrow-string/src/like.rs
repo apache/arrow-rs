@@ -92,18 +92,12 @@ pub fn nilike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Arrow
 }
 
 /// Perform SQL `STARTSWITH(left, right)`
-pub fn starts_with(
-    left: &dyn Datum,
-    right: &dyn Datum,
-) -> Result<BooleanArray, ArrowError> {
+pub fn starts_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::StartsWith, left, right)
 }
 
 /// Perform SQL `ENDSWITH(left, right)`
-pub fn ends_with(
-    left: &dyn Datum,
-    right: &dyn Datum,
-) -> Result<BooleanArray, ArrowError> {
+pub fn ends_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::EndsWith, left, right)
 }
 
@@ -132,9 +126,7 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
 
     match (l.data_type(), r.data_type()) {
-        (Utf8, Utf8) => {
-            apply::<i32>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
-        }
+        (Utf8, Utf8) => apply::<i32>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v),
         (LargeUtf8, LargeUtf8) => {
             apply::<i64>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
         }
@@ -156,9 +148,7 @@ fn apply<O: OffsetSizeTrait>(
     let l_len = l_v.map(|l| l.len()).unwrap_or(l.len());
     if r_s {
         let idx = match r_v {
-            Some(dict) if dict.null_count() != 0 => {
-                return Ok(BooleanArray::new_null(l_len))
-            }
+            Some(dict) if dict.null_count() != 0 => return Ok(BooleanArray::new_null(l_len)),
             Some(dict) => dict.normalized_keys()[0],
             None => 0,
         };
@@ -312,10 +302,7 @@ macro_rules! legacy_kernels {
 
         #[doc(hidden)]
         #[deprecated(note = $deprecation)]
-        pub fn $fn_scalar_dyn(
-            left: &dyn Array,
-            right: &str,
-        ) -> Result<BooleanArray, ArrowError> {
+        pub fn $fn_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray, ArrowError> {
             let scalar = make_scalar(left.data_type(), right)?;
             $fn_datum(&left, &Scalar::new(&scalar))
         }
@@ -754,9 +741,7 @@ mod tests {
     test_utf8_scalar!(
         test_utf8_array_ilike_unicode,
         test_utf8_array_ilike_unicode_dyn,
-        vec![
-            "FFkoß", "FFkoSS", "FFkoss", "FFkoS", "FFkos", "ﬀkoSS", "ﬀkoß", "FFKoSS"
-        ],
+        vec!["FFkoß", "FFkoSS", "FFkoss", "FFkoS", "FFkos", "ﬀkoSS", "ﬀkoß", "FFKoSS"],
         "FFkoSS",
         ilike_utf8_scalar,
         ilike_utf8_scalar_dyn,

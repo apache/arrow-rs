@@ -56,8 +56,8 @@ pub fn read_json_file(json_name: &str) -> Result<ArrowFile> {
             .as_array()
             .expect("Unable to get dictionaries as array")
         {
-            let json_dict: ArrowJsonDictionaryBatch = serde_json::from_value(d.clone())
-                .expect("Unable to get dictionary from JSON");
+            let json_dict: ArrowJsonDictionaryBatch =
+                serde_json::from_value(d.clone()).expect("Unable to get dictionary from JSON");
             // TODO: convert to a concrete Arrow type
             dictionaries.insert(json_dict.id, json_dict);
         }

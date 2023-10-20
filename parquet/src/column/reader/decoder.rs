@@ -97,11 +97,10 @@ pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
     ///
     /// A record only ends when the data contains a subsequent repetition level of 0,
     /// it is therefore left to the caller to delimit the final record in a column
-    fn skip_rep_levels(
-        &mut self,
-        num_records: usize,
-        num_levels: usize,
-    ) -> Result<(usize, usize)>;
+    fn skip_rep_levels(&mut self, num_records: usize, num_levels: usize) -> Result<(usize, usize)>;
+
+    /// Flush any partially read or skipped record
+    fn flush_partial(&mut self) -> bool;
 }
 
 pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
@@ -115,20 +114,12 @@ pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
     /// Implementations may panic if `range` overlaps with already written data
     ///
     // TODO: Should this return the number of nulls
-    fn read_def_levels(
-        &mut self,
-        out: &mut Self::Slice,
-        range: Range<usize>,
-    ) -> Result<usize>;
+    fn read_def_levels(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize>;
 
     /// Skips over `num_levels` definition levels
     ///
     /// Returns the number of values skipped, and the number of levels skipped
-    fn skip_def_levels(
-        &mut self,
-        num_levels: usize,
-        max_def_level: i16,
-    ) -> Result<(usize, usize)>;
+    fn skip_def_levels(&mut self, num_levels: usize, max_def_level: i16) -> Result<(usize, usize)>;
 }
 
 /// Decodes value data to a [`ValuesBufferSlice`]
@@ -350,19 +341,11 @@ impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
 }
 
 impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
-    fn read_def_levels(
-        &mut self,
-        out: &mut Self::Slice,
-        range: Range<usize>,
-    ) -> Result<usize> {
+    fn read_def_levels(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
         self.decoder.as_mut().unwrap().read(&mut out[range])
     }
 
-    fn skip_def_levels(
-        &mut self,
-        num_levels: usize,
-        max_def_level: i16,
-    ) -> Result<(usize, usize)> {
+    fn skip_def_levels(&mut self, num_levels: usize, max_def_level: i16) -> Result<(usize, usize)> {
         let mut level_skip = 0;
         let mut value_skip = 0;
         let mut buf: Vec<i16> = vec![];
@@ -421,11 +404,7 @@ impl RepetitionLevelDecoderImpl {
     /// and returns the number of "complete" records along with the corresponding number of values
     ///
     /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
-    fn count_records(
-        &mut self,
-        records_to_read: usize,
-        num_levels: usize,
-    ) -> (bool, usize, usize) {
+    fn count_records(&mut self, records_to_read: usize, num_levels: usize) -> (bool, usize, usize) {
         let mut records_read = 0;
 
         let levels = num_levels.min(self.buffer_len - self.buffer_offset);
@@ -491,11 +470,7 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
         Ok((total_records_read, total_levels_read))
     }
 
-    fn skip_rep_levels(
-        &mut self,
-        num_records: usize,
-        num_levels: usize,
-    ) -> Result<(usize, usize)> {
+    fn skip_rep_levels(&mut self, num_records: usize, num_levels: usize) -> Result<(usize, usize)> {
         let mut total_records_read = 0;
         let mut total_levels_read = 0;
 
@@ -518,6 +493,10 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
             self.has_partial = partial;
         }
         Ok((total_records_read, total_levels_read))
+    }
+
+    fn flush_partial(&mut self) -> bool {
+        std::mem::take(&mut self.has_partial)
     }
 }
 
@@ -552,8 +531,7 @@ mod tests {
         for _ in 0..10 {
             let mut rng = thread_rng();
             let total_len = 10000_usize;
-            let mut encoded: Vec<i16> =
-                (0..total_len).map(|_| rng.gen_range(0..5)).collect();
+            let mut encoded: Vec<i16> = (0..total_len).map(|_| rng.gen_range(0..5)).collect();
             encoded[0] = 0;
             let mut encoder = RleEncoder::new(3, 1024);
             for v in &encoded {

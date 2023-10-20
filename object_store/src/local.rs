@@ -19,8 +19,8 @@
 use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
-    GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Result,
+    GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    PutResult, Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -36,6 +36,7 @@ use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::SystemTime;
 use std::{collections::BTreeSet, convert::TryFrom, io};
 use std::{collections::VecDeque, path::PathBuf};
 use tokio::io::AsyncWrite;
@@ -270,7 +271,7 @@ impl Config {
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         let path = self.config.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
             let (mut file, suffix) = new_staged_upload(&path)?;
@@ -282,8 +283,17 @@ impl ObjectStore for LocalFileSystem {
                 })
                 .map_err(|e| {
                     let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
-                    e.into()
-                })
+                    e
+                })?;
+
+            let metadata = file.metadata().map_err(|e| Error::Metadata {
+                source: e.into(),
+                path: path.to_string_lossy().to_string(),
+            })?;
+
+            Ok(PutResult {
+                e_tag: Some(get_etag(&metadata)),
+            })
         })
         .await
     }
@@ -301,11 +311,7 @@ impl ObjectStore for LocalFileSystem {
         ))
     }
 
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
         let dest = self.config.path_to_filesystem(location)?;
         let path: PathBuf = staged_upload_path(&dest, multipart_id);
 
@@ -319,10 +325,7 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         // Get the path to the file from the configuration.
         let path = self.config.path_to_filesystem(location)?;
         loop {
@@ -342,11 +345,10 @@ impl ObjectStore for LocalFileSystem {
                 // If the error is that the file was not found, attempt to create the file and any necessary parent directories.
                 Err(source) if source.kind() == ErrorKind::NotFound => {
                     // Get the path to the parent directory of the file.
-                    let parent =
-                        path.parent().ok_or_else(|| Error::UnableToCreateFile {
-                            path: path.to_path_buf(),
-                            source,
-                        })?;
+                    let parent = path.parent().ok_or_else(|| Error::UnableToCreateFile {
+                        path: path.to_path_buf(),
+                        source,
+                    })?;
 
                     // Create the parent directory and any necessary ancestors.
                     tokio::fs::create_dir_all(parent)
@@ -357,9 +359,7 @@ impl ObjectStore for LocalFileSystem {
                     continue;
                 }
                 // If any other error occurs, return a `UnableToOpenFile` error.
-                Err(source) => {
-                    return Err(Error::UnableToOpenFile { source, path }.into())
-                }
+                Err(source) => return Err(Error::UnableToOpenFile { source, path }.into()),
             }
         }
     }
@@ -390,11 +390,7 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let path = self.config.path_to_filesystem(location)?;
         let ranges = ranges.to_vec();
         maybe_spawn_blocking(move || {
@@ -420,14 +416,14 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let config = Arc::clone(&self.config);
 
         let root_path = match prefix {
-            Some(prefix) => config.path_to_filesystem(prefix)?,
+            Some(prefix) => match config.path_to_filesystem(prefix) {
+                Ok(path) => path,
+                Err(e) => return futures::future::ready(Err(e)).into_stream().boxed(),
+            },
             None => self.config.root.to_file_path().unwrap(),
         };
 
@@ -457,36 +453,34 @@ impl ObjectStore for LocalFileSystem {
         // If no tokio context, return iterator directly as no
         // need to perform chunked spawn_blocking reads
         if tokio::runtime::Handle::try_current().is_err() {
-            return Ok(futures::stream::iter(s).boxed());
+            return futures::stream::iter(s).boxed();
         }
 
         // Otherwise list in batches of CHUNK_SIZE
         const CHUNK_SIZE: usize = 1024;
 
         let buffer = VecDeque::with_capacity(CHUNK_SIZE);
-        let stream =
-            futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
-                if buffer.is_empty() {
-                    (s, buffer) = tokio::task::spawn_blocking(move || {
-                        for _ in 0..CHUNK_SIZE {
-                            match s.next() {
-                                Some(r) => buffer.push_back(r),
-                                None => break,
-                            }
+        futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
+            if buffer.is_empty() {
+                (s, buffer) = tokio::task::spawn_blocking(move || {
+                    for _ in 0..CHUNK_SIZE {
+                        match s.next() {
+                            Some(r) => buffer.push_back(r),
+                            None => break,
                         }
-                        (s, buffer)
-                    })
-                    .await?;
-                }
+                    }
+                    (s, buffer)
+                })
+                .await?;
+            }
 
-                match buffer.pop_front() {
-                    Some(Err(e)) => Err(e),
-                    Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
-                    None => Ok(None),
-                }
-            });
-
-        Ok(stream.boxed())
+            match buffer.pop_front() {
+                Some(Err(e)) => Err(e),
+                Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
+                None => Ok(None),
+            }
+        })
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -711,9 +705,7 @@ impl AsyncWrite for LocalUpload {
                                 runtime
                                     .spawn_blocking(move || (&*file2).write_all(&data))
                                     .map(move |res| match res {
-                                        Err(err) => {
-                                            Err(io::Error::new(ErrorKind::Other, err))
-                                        }
+                                        Err(err) => Err(io::Error::new(ErrorKind::Other, err)),
                                         Ok(res) => res.map(move |_| data_len),
                                     }),
                             ),
@@ -763,31 +755,24 @@ impl AsyncWrite for LocalUpload {
                         // We are moving file into the future, and it will be dropped on it's completion, closing the file.
                         let file = Arc::clone(file);
                         self.inner_state = LocalUploadState::ShuttingDown(Box::pin(
-                            runtime.spawn_blocking(move || (*file).sync_all()).map(
-                                move |res| match res {
-                                    Err(err) => {
-                                        Err(io::Error::new(io::ErrorKind::Other, err))
-                                    }
+                            runtime
+                                .spawn_blocking(move || (*file).sync_all())
+                                .map(move |res| match res {
+                                    Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
                                     Ok(res) => res,
-                                },
-                            ),
+                                }),
                         ));
                     }
                     LocalUploadState::ShuttingDown(fut) => match fut.poll_unpin(cx) {
                         Poll::Ready(res) => {
                             res?;
-                            let staging_path =
-                                staged_upload_path(&self.dest, &self.multipart_id);
+                            let staging_path = staged_upload_path(&self.dest, &self.multipart_id);
                             let dest = self.dest.clone();
                             self.inner_state = LocalUploadState::Committing(Box::pin(
                                 runtime
-                                    .spawn_blocking(move || {
-                                        std::fs::rename(&staging_path, &dest)
-                                    })
+                                    .spawn_blocking(move || std::fs::rename(&staging_path, &dest))
                                     .map(move |res| match res {
-                                        Err(err) => {
-                                            Err(io::Error::new(io::ErrorKind::Other, err))
-                                        }
+                                        Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
                                         Ok(res) => res,
                                     }),
                             ));
@@ -897,11 +882,7 @@ pub(crate) fn chunked_stream(
     .boxed()
 }
 
-pub(crate) fn read_range(
-    file: &mut File,
-    path: &PathBuf,
-    range: Range<usize>,
-) -> Result<Bytes> {
+pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<Bytes> {
     let to_read = range.end - range.start;
     file.seek(SeekFrom::Start(range.start as u64))
         .context(SeekSnafu { path })?;
@@ -961,24 +942,34 @@ fn last_modified(metadata: &Metadata) -> DateTime<Utc> {
         .into()
 }
 
+fn get_etag(metadata: &Metadata) -> String {
+    let inode = get_inode(metadata);
+    let size = metadata.len();
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|mtime| mtime.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .unwrap_or_default()
+        .as_micros();
+
+    // Use an ETag scheme based on that used by many popular HTTP servers
+    // <https://httpd.apache.org/docs/2.2/mod/core.html#fileetag>
+    // <https://stackoverflow.com/questions/47512043/how-etags-are-generated-and-configured>
+    format!("{inode:x}-{mtime:x}-{size:x}")
+}
+
 fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
     let last_modified = last_modified(&metadata);
     let size = usize::try_from(metadata.len()).context(FileSizeOverflowedUsizeSnafu {
         path: location.as_ref(),
     })?;
-    let inode = get_inode(&metadata);
-    let mtime = last_modified.timestamp_micros();
-
-    // Use an ETag scheme based on that used by many popular HTTP servers
-    // <https://httpd.apache.org/docs/2.2/mod/core.html#fileetag>
-    // <https://stackoverflow.com/questions/47512043/how-etags-are-generated-and-configured>
-    let etag = format!("{inode:x}-{mtime:x}-{size:x}");
 
     Ok(ObjectMeta {
         location,
         last_modified,
         size,
-        e_tag: Some(etag),
+        e_tag: Some(get_etag(&metadata)),
+        version: None,
     })
 }
 
@@ -1138,21 +1129,14 @@ mod tests {
 
         let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
-        // `list` must fail
-        match store.list(None).await {
-            Err(_) => {
-                // ok, error found
-            }
-            Ok(mut stream) => {
-                let mut any_err = false;
-                while let Some(res) = stream.next().await {
-                    if res.is_err() {
-                        any_err = true;
-                    }
-                }
-                assert!(any_err);
+        let mut stream = store.list(None);
+        let mut any_err = false;
+        while let Some(res) = stream.next().await {
+            if res.is_err() {
+                any_err = true;
             }
         }
+        assert!(any_err);
 
         // `list_with_delimiter
         assert!(store.list_with_delimiter(None).await.is_err());
@@ -1221,18 +1205,8 @@ mod tests {
         fs.list_with_delimiter(None).await.unwrap();
     }
 
-    async fn check_list(
-        integration: &LocalFileSystem,
-        prefix: Option<&Path>,
-        expected: &[&str],
-    ) {
-        let result: Vec<_> = integration
-            .list(prefix)
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
+    async fn check_list(integration: &LocalFileSystem, prefix: Option<&Path>, expected: &[&str]) {
+        let result: Vec<_> = integration.list(prefix).try_collect().await.unwrap();
 
         let mut strings: Vec<_> = result.iter().map(|x| x.location.as_ref()).collect();
         strings.sort_unstable();
@@ -1258,8 +1232,7 @@ mod tests {
 
         // Follow out of tree symlink
         let other = NamedTempFile::new().unwrap();
-        std::os::unix::fs::symlink(other.path(), root.path().join("test.parquet"))
-            .unwrap();
+        std::os::unix::fs::symlink(other.path(), root.path().join("test.parquet")).unwrap();
 
         // Should return test.parquet even though out of tree
         check_list(&integration, None, &["a/file.parquet", "test.parquet"]).await;
@@ -1284,11 +1257,7 @@ mod tests {
             .unwrap();
 
         // Ignore broken symlink
-        std::os::unix::fs::symlink(
-            root.path().join("foo.parquet"),
-            root.path().join("c"),
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(root.path().join("foo.parquet"), root.path().join("c")).unwrap();
 
         check_list(
             &integration,
@@ -1384,7 +1353,9 @@ mod tests {
             .to_string();
 
         assert!(
-            err.contains("Encountered illegal character sequence \"💀\" whilst parsing path segment \"💀\""),
+            err.contains(
+                "Encountered illegal character sequence \"💀\" whilst parsing path segment \"💀\""
+            ),
             "{}",
             err
         );
@@ -1397,12 +1368,10 @@ mod tests {
         let location = Path::from("some_file");
 
         let data = Bytes::from("arbitrary data");
-        let (multipart_id, mut writer) =
-            integration.put_multipart(&location).await.unwrap();
+        let (multipart_id, mut writer) = integration.put_multipart(&location).await.unwrap();
         writer.write_all(&data).await.unwrap();
 
-        let (multipart_id_2, mut writer_2) =
-            integration.put_multipart(&location).await.unwrap();
+        let (multipart_id_2, mut writer_2) = integration.put_multipart(&location).await.unwrap();
         assert_ne!(multipart_id, multipart_id_2);
         writer_2.write_all(&data).await.unwrap();
 
@@ -1428,8 +1397,7 @@ mod tests {
 
         std::fs::write(temp_dir.path().join(filename), "foo").unwrap();
 
-        let list_stream = integration.list(None).await.unwrap();
-        let res: Vec<_> = list_stream.try_collect().await.unwrap();
+        let res: Vec<_> = integration.list(None).try_collect().await.unwrap();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].location.as_ref(), filename);
 
@@ -1585,9 +1553,8 @@ mod unix_test {
         unistd::mkfifo(&path, stat::Mode::S_IRWXU).unwrap();
 
         // Need to open read and write side in parallel
-        let spawned = tokio::task::spawn_blocking(|| {
-            OpenOptions::new().write(true).open(path).unwrap()
-        });
+        let spawned =
+            tokio::task::spawn_blocking(|| OpenOptions::new().write(true).open(path).unwrap());
 
         let location = Path::from(filename);
         integration.head(&location).await.unwrap();

@@ -329,10 +329,7 @@ fn set_column_for_json_rows(
             rows.iter_mut().zip(listarr.iter()).try_for_each(
                 |(row, maybe_value)| -> Result<(), ArrowError> {
                     if let Some(v) = maybe_value {
-                        row.insert(
-                            col_name.to_string(),
-                            Value::Array(array_to_json_array(&v)?),
-                        );
+                        row.insert(col_name.to_string(), Value::Array(array_to_json_array(&v)?));
                     }
                     Ok(())
                 },
@@ -384,10 +381,7 @@ fn set_column_for_json_rows(
                 let mut obj = serde_json::Map::new();
 
                 for (_, (k, v)) in (0..len).zip(&mut kv) {
-                    obj.insert(
-                        k.expect("keys in a map should be non-null").to_string(),
-                        v,
-                    );
+                    obj.insert(k.expect("keys in a map should be non-null").to_string(), v);
                 }
 
                 row.insert(col_name.to_string(), serde_json::Value::Object(obj));
@@ -440,11 +434,7 @@ pub trait JsonFormat: Debug + Default {
 
     #[inline]
     /// write any bytes needed for the start of each row
-    fn start_row<W: Write>(
-        &self,
-        _writer: &mut W,
-        _is_first_row: bool,
-    ) -> Result<(), ArrowError> {
+    fn start_row<W: Write>(&self, _writer: &mut W, _is_first_row: bool) -> Result<(), ArrowError> {
         Ok(())
     }
 
@@ -491,11 +481,7 @@ impl JsonFormat for JsonArray {
         Ok(())
     }
 
-    fn start_row<W: Write>(
-        &self,
-        writer: &mut W,
-        is_first_row: bool,
-    ) -> Result<(), ArrowError> {
+    fn start_row<W: Write>(&self, writer: &mut W, is_first_row: bool) -> Result<(), ArrowError> {
         if !is_first_row {
             writer.write_all(b",")?;
         }
@@ -562,8 +548,7 @@ where
 
         self.format.start_row(&mut self.writer, is_first_row)?;
         self.writer.write_all(
-            &serde_json::to_vec(row)
-                .map_err(|error| ArrowError::JsonError(error.to_string()))?,
+            &serde_json::to_vec(row).map_err(|error| ArrowError::JsonError(error.to_string()))?,
         )?;
         self.format.end_row(&mut self.writer)?;
         Ok(())
@@ -657,9 +642,7 @@ mod tests {
         let a = Int32Array::from(vec![Some(1), Some(2), Some(3), None, Some(5)]);
         let b = StringArray::from(vec![Some("a"), Some("b"), Some("c"), Some("d"), None]);
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
         let mut buf = Vec::new();
         {
@@ -688,9 +671,7 @@ mod tests {
         let a = StringArray::from(vec![Some("a"), None, Some("c"), Some("d"), None]);
         let b = LargeStringArray::from(vec![Some("a"), Some("b"), None, Some("d"), None]);
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
         let mut buf = Vec::new();
         {
@@ -730,9 +711,7 @@ mod tests {
                 .into_iter()
                 .collect();
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
         let mut buf = Vec::new();
         {
@@ -1005,9 +984,7 @@ mod tests {
                     Field::new("c11", DataType::Int32, true),
                     Field::new(
                         "c12",
-                        DataType::Struct(
-                            vec![Field::new("c121", DataType::Utf8, false)].into(),
-                        ),
+                        DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)].into()),
                         false,
                     ),
                 ])),
@@ -1024,23 +1001,19 @@ mod tests {
             (
                 Arc::new(Field::new(
                     "c12",
-                    DataType::Struct(
-                        vec![Field::new("c121", DataType::Utf8, false)].into(),
-                    ),
+                    DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)].into()),
                     false,
                 )),
                 Arc::new(StructArray::from(vec![(
                     Arc::new(Field::new("c121", DataType::Utf8, false)),
-                    Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")]))
-                        as ArrayRef,
+                    Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")])) as ArrayRef,
                 )])) as ArrayRef,
             ),
         ]);
         let c2 = StringArray::from(vec![Some("a"), Some("b"), Some("c")]);
 
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
 
         let mut buf = Vec::new();
         {
@@ -1081,9 +1054,7 @@ mod tests {
 
         let b = Int32Array::from(vec![1, 2, 3, 4, 5]);
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                .unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
         let mut buf = Vec::new();
         {
@@ -1142,8 +1113,7 @@ mod tests {
         let c2 = StringArray::from(vec![Some("foo"), Some("bar"), None]);
 
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
 
         let mut buf = Vec::new();
         {
@@ -1170,9 +1140,7 @@ mod tests {
                     Field::new("c11", DataType::Int32, true),
                     Field::new(
                         "c12",
-                        DataType::Struct(
-                            vec![Field::new("c121", DataType::Utf8, false)].into(),
-                        ),
+                        DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)].into()),
                         false,
                     ),
                 ])),
@@ -1191,15 +1159,12 @@ mod tests {
             (
                 Arc::new(Field::new(
                     "c12",
-                    DataType::Struct(
-                        vec![Field::new("c121", DataType::Utf8, false)].into(),
-                    ),
+                    DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)].into()),
                     false,
                 )),
                 Arc::new(StructArray::from(vec![(
                     Arc::new(Field::new("c121", DataType::Utf8, false)),
-                    Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")]))
-                        as ArrayRef,
+                    Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")])) as ArrayRef,
                 )])) as ArrayRef,
             ),
         ]);
@@ -1221,8 +1186,7 @@ mod tests {
         let c2 = Int32Array::from(vec![1, 2, 3]);
 
         let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
-                .unwrap();
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
 
         let mut buf = Vec::new();
         {
@@ -1261,9 +1225,8 @@ mod tests {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
             // remove null value from object to make comparison consistent:
             if let Value::Object(obj) = expected_json {
-                expected_json = Value::Object(
-                    obj.into_iter().filter(|(_, v)| *v != Value::Null).collect(),
-                );
+                expected_json =
+                    Value::Object(obj.into_iter().filter(|(_, v)| *v != Value::Null).collect());
             }
             assert_eq!(serde_json::from_str::<Value>(r).unwrap(), expected_json,);
         }
@@ -1328,8 +1291,7 @@ mod tests {
         {"list": [{"ints": null}]}
         {"list": [null]}
         "#;
-        let ints_struct =
-            DataType::Struct(vec![Field::new("ints", DataType::Int32, true)].into());
+        let ints_struct = DataType::Struct(vec![Field::new("ints", DataType::Int32, true)].into());
         let list_type = DataType::List(Arc::new(Field::new("item", ints_struct, true)));
         let list_field = Field::new("list", list_type, true);
         let schema = Arc::new(Schema::new(vec![list_field]));
@@ -1368,8 +1330,7 @@ mod tests {
 
     #[test]
     fn json_writer_map() {
-        let keys_array =
-            super::StringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+        let keys_array = super::StringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
         let values_array = super::Int64Array::from(vec![10, 20, 30, 40, 50]);
 
         let keys = Arc::new(Field::new("keys", DataType::Utf8, false));
@@ -1449,9 +1410,8 @@ mod tests {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
             // remove null value from object to make comparison consistent:
             if let Value::Object(obj) = expected_json {
-                expected_json = Value::Object(
-                    obj.into_iter().filter(|(_, v)| *v != Value::Null).collect(),
-                );
+                expected_json =
+                    Value::Object(obj.into_iter().filter(|(_, v)| *v != Value::Null).collect());
             }
             assert_eq!(serde_json::from_str::<Value>(r).unwrap(), expected_json,);
         }
@@ -1494,9 +1454,8 @@ mod tests {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
             // remove null value from object to make comparison consistent:
             if let Value::Object(obj) = expected_json {
-                expected_json = Value::Object(
-                    obj.into_iter().filter(|(_, v)| *v != Value::Null).collect(),
-                );
+                expected_json =
+                    Value::Object(obj.into_iter().filter(|(_, v)| *v != Value::Null).collect());
             }
             assert_eq!(serde_json::from_str::<Value>(r).unwrap(), expected_json,);
         }
@@ -1518,8 +1477,7 @@ mod tests {
             Some(vec![Some(6), Some(7), Some(45)]),
         ];
 
-        let list_array =
-            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(data, 3);
+        let list_array = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(data, 3);
         let list_array = Arc::new(list_array) as ArrayRef;
 
         assert_eq!(array_to_json_array(&list_array).unwrap(), expected_json);

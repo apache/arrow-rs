@@ -22,8 +22,7 @@ use std::{collections::HashMap, convert::From, fmt, sync::Arc};
 use crate::format::SchemaElement;
 
 use crate::basic::{
-    ColumnOrder, ConvertedType, LogicalType, Repetition, SortOrder, TimeUnit,
-    Type as PhysicalType,
+    ColumnOrder, ConvertedType, LogicalType, Repetition, SortOrder, TimeUnit, Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
 
@@ -58,10 +57,7 @@ pub enum Type {
 
 impl Type {
     /// Creates primitive type builder with provided field name and physical type.
-    pub fn primitive_type_builder(
-        name: &str,
-        physical_type: PhysicalType,
-    ) -> PrimitiveTypeBuilder {
+    pub fn primitive_type_builder(name: &str, physical_type: PhysicalType) -> PrimitiveTypeBuilder {
         PrimitiveTypeBuilder::new(name, physical_type)
     }
 
@@ -128,8 +124,7 @@ impl Type {
     /// This method can be used to check if projected columns are part of the root schema.
     pub fn check_contains(&self, sub_type: &Type) -> bool {
         // Names match, and repetitions match or not set for both
-        let basic_match = self.get_basic_info().name()
-            == sub_type.get_basic_info().name()
+        let basic_match = self.get_basic_info().name() == sub_type.get_basic_info().name()
             && (self.is_schema() && sub_type.is_schema()
                 || !self.is_schema()
                     && !sub_type.is_schema()
@@ -292,9 +287,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 // If a converted type is populated, check that it is consistent with
                 // its logical type
                 if self.converted_type != ConvertedType::NONE {
-                    if ConvertedType::from(self.logical_type.clone())
-                        != self.converted_type
-                    {
+                    if ConvertedType::from(self.logical_type.clone()) != self.converted_type {
                         return Err(general_err!(
                             "Logical type {:?} is incompatible with converted type {} for field '{}'",
                             logical_type,
@@ -420,9 +413,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
             }
             ConvertedType::INTERVAL => {
-                if self.physical_type != PhysicalType::FIXED_LEN_BYTE_ARRAY
-                    || self.length != 12
-                {
+                if self.physical_type != PhysicalType::FIXED_LEN_BYTE_ARRAY || self.length != 12 {
                     return Err(general_err!(
                         "INTERVAL cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(12) field",
                         self.name
@@ -431,7 +422,10 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             }
             ConvertedType::ENUM => {
                 if self.physical_type != PhysicalType::BYTE_ARRAY {
-                    return Err(general_err!("ENUM cannot annotate field '{}' because it is not a BYTE_ARRAY field", self.name));
+                    return Err(general_err!(
+                        "ENUM cannot annotate field '{}' because it is not a BYTE_ARRAY field",
+                        self.name
+                    ));
                 }
             }
             _ => {
@@ -507,8 +501,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
             }
             PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                let max_precision =
-                    (2f64.powi(8 * self.length - 1) - 1f64).log10().floor() as i32;
+                let max_precision = (2f64.powi(8 * self.length - 1) - 1f64).log10().floor() as i32;
 
                 if self.precision > max_precision {
                     return Err(general_err!(
@@ -1049,10 +1042,7 @@ pub fn from_thrift(elements: &[SchemaElement]) -> Result<TypePtr> {
 /// The first result is the starting index for the next Type after this one. If it is
 /// equal to `elements.len()`, then this Type is the last one.
 /// The second result is the result Type.
-fn from_thrift_helper(
-    elements: &[SchemaElement],
-    index: usize,
-) -> Result<(usize, TypePtr)> {
+fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize, TypePtr)> {
     // Whether or not the current node is root (message type).
     // There is only one message type node in the schema tree.
     let is_root_node = index == 0;
@@ -1086,8 +1076,7 @@ fn from_thrift_helper(
                     "Repetition level must be defined for a primitive type"
                 ));
             }
-            let repetition =
-                Repetition::try_from(elements[index].repetition_type.unwrap())?;
+            let repetition = Repetition::try_from(elements[index].repetition_type.unwrap())?;
             let physical_type = PhysicalType::try_from(elements[index].type_.unwrap())?;
             let length = elements[index].type_length.unwrap_or(-1);
             let scale = elements[index].scale.unwrap_or(-1);
@@ -1617,8 +1606,7 @@ mod tests {
             .with_repetition(Repetition::REQUIRED)
             .with_converted_type(ConvertedType::INT_64)
             .build()?;
-        let item2 =
-            Type::primitive_type_builder("item2", PhysicalType::BOOLEAN).build()?;
+        let item2 = Type::primitive_type_builder("item2", PhysicalType::BOOLEAN).build()?;
         let item3 = Type::primitive_type_builder("item3", PhysicalType::INT32)
             .with_repetition(Repetition::REPEATED)
             .with_converted_type(ConvertedType::INT_32)

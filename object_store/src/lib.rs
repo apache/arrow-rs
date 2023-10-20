@@ -64,19 +64,19 @@
 //!
 #![cfg_attr(
     feature = "gcp",
-    doc = "* `gcp`: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
+    doc = "* [`gcp`]: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
 )]
 #![cfg_attr(
     feature = "aws",
-    doc = "* `aws`: [Amazon S3](https://aws.amazon.com/s3/). See [`AmazonS3Builder`](aws::AmazonS3Builder)"
+    doc = "* [`aws`]: [Amazon S3](https://aws.amazon.com/s3/). See [`AmazonS3Builder`](aws::AmazonS3Builder)"
 )]
 #![cfg_attr(
     feature = "azure",
-    doc = "* `azure`: [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/). See [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
+    doc = "* [`azure`]: [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/). See [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
 )]
 #![cfg_attr(
     feature = "http",
-    doc = "* `http`: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
+    doc = "* [`http`]: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
 //!
 //! # Adapters
@@ -95,18 +95,18 @@
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
+//! # use std::sync::Arc;
+//! # use object_store::{path::Path, ObjectStore};
+//! # use futures::stream::StreamExt;
 //! # // use LocalFileSystem for example
-//! # fn get_object_store() -> LocalFileSystem {
-//! #   LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
 //! # }
-//!
+//! #
 //! # async fn example() {
-//! use std::sync::Arc;
-//! use object_store::{path::Path, ObjectStore};
-//! use futures::stream::StreamExt;
-//!
+//! #
 //! // create an ObjectStore
-//! let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//! let object_store: Arc<dyn ObjectStore> = get_object_store();
 //!
 //! // Recursively list all files below the 'data' path.
 //! // 1. On AWS S3 this would be the 'data/' prefix
@@ -114,21 +114,12 @@
 //! let prefix: Path = "data".try_into().unwrap();
 //!
 //! // Get an `async` stream of Metadata objects:
-//!  let list_stream = object_store
-//!      .list(Some(&prefix))
-//!      .await
-//!      .expect("Error listing files");
+//! let mut list_stream = object_store.list(Some(&prefix));
 //!
-//!  // Print a line about each object based on its metadata
-//!  // using for_each from `StreamExt` trait.
-//!  list_stream
-//!      .for_each(move |meta|  {
-//!          async {
-//!              let meta = meta.expect("Error listing");
-//!              println!("Name: {}, size: {}", meta.location, meta.size);
-//!          }
-//!      })
-//!      .await;
+//! // Print a line about each object
+//! while let Some(meta) = list_stream.next().await.transpose().unwrap() {
+//!     println!("Name: {}, size: {}", meta.location, meta.size);
+//! }
 //! # }
 //! ```
 //!
@@ -147,19 +138,18 @@
 //! from remote storage or files in the local filesystem as a stream.
 //!
 //! ```
+//! # use futures::TryStreamExt;
 //! # use object_store::local::LocalFileSystem;
-//! # // use LocalFileSystem for example
-//! # fn get_object_store() -> LocalFileSystem {
-//! #   LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # use std::sync::Arc;
+//! # use object_store::{path::Path, ObjectStore};
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
 //! # }
-//!
+//! #
 //! # async fn example() {
-//! use std::sync::Arc;
-//! use object_store::{path::Path, ObjectStore};
-//! use futures::stream::StreamExt;
-//!
+//! #
 //! // create an ObjectStore
-//! let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//! let object_store: Arc<dyn ObjectStore> = get_object_store();
 //!
 //! // Retrieve a specific file
 //! let path: Path = "data/file01.parquet".try_into().unwrap();
@@ -171,16 +161,11 @@
 //!     .unwrap()
 //!     .into_stream();
 //!
-//! // Count the '0's using `map` from `StreamExt` trait
+//! // Count the '0's using `try_fold` from `TryStreamExt` trait
 //! let num_zeros = stream
-//!     .map(|bytes| {
-//!         let bytes = bytes.unwrap();
-//!        bytes.iter().filter(|b| **b == 0).count()
-//!     })
-//!     .collect::<Vec<usize>>()
-//!     .await
-//!     .into_iter()
-//!     .sum::<usize>();
+//!     .try_fold(0, |acc, bytes| async move {
+//!         Ok(acc + bytes.iter().filter(|b| **b == 0).count())
+//!     }).await.unwrap();
 //!
 //! println!("Num zeros in {} is {}", path, num_zeros);
 //! # }
@@ -196,22 +181,19 @@
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # fn get_object_store() -> LocalFileSystem {
-//! #     LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # use object_store::ObjectStore;
+//! # use std::sync::Arc;
+//! # use bytes::Bytes;
+//! # use object_store::path::Path;
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
 //! # }
 //! # async fn put() {
-//!  use object_store::ObjectStore;
-//!  use std::sync::Arc;
-//!  use bytes::Bytes;
-//!  use object_store::path::Path;
-//!
-//!  let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//! #
+//!  let object_store: Arc<dyn ObjectStore> = get_object_store();
 //!  let path: Path = "data/file1".try_into().unwrap();
 //!  let bytes = Bytes::from_static(b"hello");
-//!  object_store
-//!      .put(&path, bytes)
-//!      .await
-//!      .unwrap();
+//!  object_store.put(&path, bytes).await.unwrap();
 //! # }
 //! ```
 //!
@@ -220,22 +202,20 @@
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # fn get_object_store() -> LocalFileSystem {
-//! #     LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # use object_store::ObjectStore;
+//! # use std::sync::Arc;
+//! # use bytes::Bytes;
+//! # use tokio::io::AsyncWriteExt;
+//! # use object_store::path::Path;
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
 //! # }
 //! # async fn multi_upload() {
-//!  use object_store::ObjectStore;
-//!  use std::sync::Arc;
-//!  use bytes::Bytes;
-//!  use tokio::io::AsyncWriteExt;
-//!  use object_store::path::Path;
-//!
-//!  let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//! #
+//!  let object_store: Arc<dyn ObjectStore> = get_object_store();
 //!  let path: Path = "data/large_file".try_into().unwrap();
-//!  let (_id, mut writer) =  object_store
-//!      .put_multipart(&path)
-//!      .await
-//!      .unwrap();
+//!  let (_id, mut writer) =  object_store.put_multipart(&path).await.unwrap();
+//!
 //!  let bytes = Bytes::from_static(b"hello");
 //!  writer.write_all(&bytes).await.unwrap();
 //!  writer.flush().await.unwrap();
@@ -276,8 +256,8 @@ mod client;
 
 #[cfg(feature = "cloud")]
 pub use client::{
-    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions,
-    CredentialProvider, StaticCredentialProvider,
+    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
+    StaticCredentialProvider,
 };
 
 #[cfg(feature = "cloud")]
@@ -320,7 +300,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// The operation is guaranteed to be atomic, it will either successfully
     /// write the entirety of `bytes` to `location`, or fail. No clients
     /// should be able to observe a partially written object
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()>;
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult>;
 
     /// Get a multi-part upload that allows writing data in chunks
     ///
@@ -343,11 +323,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// See documentation for individual stores for exact behavior, as capabilities
     /// vary by object store.
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()>;
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()>;
 
     /// Returns an [`AsyncWrite`] that can be used to append to the object at `location`
     ///
@@ -369,10 +345,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Additionally some stores, such as Azure, may only support appending to objects created
     /// with [`ObjectStore::append`], and not with [`ObjectStore::put`], [`ObjectStore::copy`], or
     /// [`ObjectStore::put_multipart`]
-    async fn append(
-        &self,
-        _location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn append(&self, _location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         Err(Error::NotImplemented)
     }
 
@@ -396,11 +369,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte ranges
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         coalesce_ranges(
             ranges,
             |range| self.get_range(location, range),
@@ -439,23 +408,22 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// return Ok. If it is an error, it will be [`Error::NotFound`].
     ///
     /// ```
+    /// # use futures::{StreamExt, TryStreamExt};
     /// # use object_store::local::LocalFileSystem;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let root = tempfile::TempDir::new().unwrap();
     /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-    /// use object_store::{ObjectStore, ObjectMeta};
-    /// use object_store::path::Path;
-    /// use futures::{StreamExt, TryStreamExt};
-    /// use bytes::Bytes;
-    ///
+    /// # use object_store::{ObjectStore, ObjectMeta};
+    /// # use object_store::path::Path;
+    /// # use futures::{StreamExt, TryStreamExt};
+    /// # use bytes::Bytes;
+    /// #
     /// // Create two objects
     /// store.put(&Path::from("foo"), Bytes::from("foo")).await?;
     /// store.put(&Path::from("bar"), Bytes::from("bar")).await?;
     ///
     /// // List object
-    /// let locations = store.list(None).await?
-    ///   .map(|meta: Result<ObjectMeta, _>| meta.map(|m| m.location))
-    ///   .boxed();
+    /// let locations = store.list(None).map_ok(|m| m.location).boxed();
     ///
     /// // Delete them
     /// store.delete_stream(locations).try_collect::<Vec<Path>>().await?;
@@ -484,10 +452,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// `foo/bar_baz/x`.
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>>;
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>>;
 
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
@@ -495,18 +460,15 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// the number of network requests required
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
-    async fn list_with_offset(
+    fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
         let offset = offset.clone();
-        let stream = self
-            .list(prefix)
-            .await?
+        self.list(prefix)
             .try_filter(move |f| futures::future::ready(f.location > offset))
-            .boxed();
-        Ok(stream)
+            .boxed()
     }
 
     /// List objects with the given prefix and an implementation specific
@@ -555,7 +517,7 @@ macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
         impl ObjectStore for $type {
-            async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+            async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
                 self.as_ref().put(location, bytes).await
             }
 
@@ -574,10 +536,7 @@ macro_rules! as_ref_impl {
                 self.as_ref().abort_multipart(location, multipart_id).await
             }
 
-            async fn append(
-                &self,
-                location: &Path,
-            ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+            async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
                 self.as_ref().append(location).await
             }
 
@@ -585,19 +544,11 @@ macro_rules! as_ref_impl {
                 self.as_ref().get(location).await
             }
 
-            async fn get_opts(
-                &self,
-                location: &Path,
-                options: GetOptions,
-            ) -> Result<GetResult> {
+            async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
                 self.as_ref().get_opts(location, options).await
             }
 
-            async fn get_range(
-                &self,
-                location: &Path,
-                range: Range<usize>,
-            ) -> Result<Bytes> {
+            async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
                 self.as_ref().get_range(location, range).await
             }
 
@@ -624,25 +575,19 @@ macro_rules! as_ref_impl {
                 self.as_ref().delete_stream(locations)
             }
 
-            async fn list(
-                &self,
-                prefix: Option<&Path>,
-            ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-                self.as_ref().list(prefix).await
+            fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+                self.as_ref().list(prefix)
             }
 
-            async fn list_with_offset(
+            fn list_with_offset(
                 &self,
                 prefix: Option<&Path>,
                 offset: &Path,
-            ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-                self.as_ref().list_with_offset(prefix, offset).await
+            ) -> BoxStream<'_, Result<ObjectMeta>> {
+                self.as_ref().list_with_offset(prefix, offset)
             }
 
-            async fn list_with_delimiter(
-                &self,
-                prefix: Option<&Path>,
-            ) -> Result<ListResult> {
+            async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
                 self.as_ref().list_with_delimiter(prefix).await
             }
 
@@ -689,7 +634,11 @@ pub struct ObjectMeta {
     /// The size in bytes of the object
     pub size: usize,
     /// The unique identifier for the object
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
     pub e_tag: Option<String>,
+    /// A version indicator for this object
+    pub version: Option<String>,
 }
 
 /// Options for a get request, such as range
@@ -738,6 +687,8 @@ pub struct GetOptions {
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
     pub range: Option<Range<usize>>,
+    /// Request a particular object version
+    pub version: Option<String>,
     /// Request transfer of no content
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-head>
@@ -827,20 +778,16 @@ impl GetResult {
             #[cfg(not(target_arch = "wasm32"))]
             GetResultPayload::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
-                    file.seek(SeekFrom::Start(self.range.start as _)).map_err(
-                        |source| local::Error::Seek {
+                    file.seek(SeekFrom::Start(self.range.start as _))
+                        .map_err(|source| local::Error::Seek {
                             source,
                             path: path.clone(),
-                        },
-                    )?;
+                        })?;
 
                     let mut buffer = Vec::with_capacity(len);
                     file.take(len as _)
                         .read_to_end(&mut buffer)
-                        .map_err(|source| local::Error::UnableToReadBytes {
-                            source,
-                            path,
-                        })?;
+                        .map_err(|source| local::Error::UnableToReadBytes { source, path })?;
 
                     Ok(buffer.into())
                 })
@@ -878,6 +825,15 @@ impl GetResult {
             _ => unimplemented!("File IO not implemented on wasm32."),
         }
     }
+}
+
+/// Result for a put request
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PutResult {
+    /// The unique identifier for the object
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
+    pub e_tag: Option<String>,
 }
 
 /// A specialized `Result` for object store-related errors
@@ -934,11 +890,7 @@ pub enum Error {
     #[snafu(display("Operation not yet implemented."))]
     NotImplemented,
 
-    #[snafu(display(
-        "Configuration key: '{}' is not valid for store '{}'.",
-        key,
-        store
-    ))]
+    #[snafu(display("Configuration key: '{}' is not valid for store '{}'.", key, store))]
     UnknownConfigurationKey { store: &'static str, key: String },
 }
 
@@ -973,7 +925,6 @@ mod test_util {
     ) -> Result<Vec<Path>> {
         storage
             .list(prefix)
-            .await?
             .map_ok(|meta| meta.location)
             .try_collect::<Vec<Path>>()
             .await
@@ -1264,13 +1215,8 @@ mod tests {
         ];
 
         for (prefix, offset) in cases {
-            let s = storage
-                .list_with_offset(prefix.as_ref(), &offset)
-                .await
-                .unwrap();
-
-            let mut actual: Vec<_> =
-                s.map_ok(|x| x.location).try_collect().await.unwrap();
+            let s = storage.list_with_offset(prefix.as_ref(), &offset);
+            let mut actual: Vec<_> = s.map_ok(|x| x.location).try_collect().await.unwrap();
 
             actual.sort_unstable();
 
@@ -1278,8 +1224,7 @@ mod tests {
                 .iter()
                 .cloned()
                 .filter(|x| {
-                    let prefix_match =
-                        prefix.as_ref().map(|p| x.prefix_matches(p)).unwrap_or(true);
+                    let prefix_match = prefix.as_ref().map(|p| x.prefix_matches(p)).unwrap_or(true);
                     prefix_match && x > &offset
                 })
                 .collect();
@@ -1418,6 +1363,44 @@ mod tests {
             ..GetOptions::default()
         };
         storage.get_opts(&path, options).await.unwrap();
+
+        let result = storage.put(&path, "test".into()).await.unwrap();
+        let new_tag = result.e_tag.unwrap();
+        assert_ne!(tag, new_tag);
+
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.e_tag.unwrap(), new_tag);
+
+        let options = GetOptions {
+            if_match: Some(new_tag),
+            ..GetOptions::default()
+        };
+        storage.get_opts(&path, options).await.unwrap();
+
+        let options = GetOptions {
+            if_match: Some(tag),
+            ..GetOptions::default()
+        };
+        let err = storage.get_opts(&path, options).await.unwrap_err();
+        assert!(matches!(err, Error::Precondition { .. }), "{err}");
+
+        if let Some(version) = meta.version {
+            storage.put(&path, "bar".into()).await.unwrap();
+
+            let options = GetOptions {
+                version: Some(version),
+                ..GetOptions::default()
+            };
+
+            // Can retrieve previous version
+            let get_opts = storage.get_opts(&path, options).await.unwrap();
+            let old = get_opts.bytes().await.unwrap();
+            assert_eq!(old, b"foo".as_slice());
+
+            // Current version contains the updated data
+            let current = storage.get(&path).await.unwrap().bytes().await.unwrap();
+            assert_eq!(&current, b"bar".as_slice());
+        }
     }
 
     /// Returns a chunk of length `chunk_length`
@@ -1631,8 +1614,7 @@ mod tests {
         storage: &DynObjectStore,
         location: Option<Path>,
     ) -> crate::Result<Bytes> {
-        let location =
-            location.unwrap_or_else(|| Path::from("this_file_should_not_exist"));
+        let location = location.unwrap_or_else(|| Path::from("this_file_should_not_exist"));
 
         let err = storage.head(&location).await.unwrap_err();
         assert!(matches!(err, crate::Error::NotFound { .. }));
@@ -1700,12 +1682,7 @@ mod tests {
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {
-        let paths = storage
-            .list(None)
-            .await
-            .unwrap()
-            .map_ok(|meta| meta.location)
-            .boxed();
+        let paths = storage.list(None).map_ok(|meta| meta.location).boxed();
         storage
             .delete_stream(paths)
             .try_collect::<Vec<_>>()
@@ -1714,18 +1691,18 @@ mod tests {
     }
 
     /// Test that the returned stream does not borrow the lifetime of Path
-    async fn list_store<'a, 'b>(
+    fn list_store<'a>(
         store: &'a dyn ObjectStore,
-        path_str: &'b str,
-    ) -> super::Result<BoxStream<'a, super::Result<ObjectMeta>>> {
+        path_str: &str,
+    ) -> BoxStream<'a, Result<ObjectMeta>> {
         let path = Path::from(path_str);
-        store.list(Some(&path)).await
+        store.list(Some(&path))
     }
 
     #[tokio::test]
     async fn test_list_lifetimes() {
         let store = memory::InMemory::new();
-        let mut stream = list_store(&store, "path").await.unwrap();
+        let mut stream = list_store(&store, "path");
         assert!(stream.next().await.is_none());
     }
 
@@ -1736,6 +1713,7 @@ mod tests {
             last_modified: Utc.timestamp_nanos(100),
             size: 100,
             e_tag: Some("123".to_string()),
+            version: None,
         };
 
         let mut options = GetOptions::default();

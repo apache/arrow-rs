@@ -17,9 +17,7 @@
 
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::encoder::{
-    ColumnValueEncoder, DataPageValues, DictionaryPage,
-};
+use crate::column::writer::encoder::{ColumnValueEncoder, DataPageValues, DictionaryPage};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
@@ -29,8 +27,8 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
 use arrow_array::{
-    Array, ArrayAccessor, BinaryArray, DictionaryArray, LargeBinaryArray,
-    LargeStringArray, StringArray,
+    Array, ArrayAccessor, BinaryArray, DictionaryArray, LargeBinaryArray, LargeStringArray,
+    StringArray,
 };
 use arrow_schema::DataType;
 
@@ -119,12 +117,13 @@ impl FallbackEncoder {
     /// Create the fallback encoder for the given [`ColumnDescPtr`] and [`WriterProperties`]
     fn new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
         // Set either main encoder or fallback encoder.
-        let encoding = props.encoding(descr.path()).unwrap_or_else(|| {
-            match props.writer_version() {
-                WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
-                WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
-            }
-        });
+        let encoding =
+            props
+                .encoding(descr.path())
+                .unwrap_or_else(|| match props.writer_version() {
+                    WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
+                    WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
+                });
 
         let encoder = match encoding {
             Encoding::PLAIN => FallbackEncoderImpl::Plain { buffer: vec![] },
@@ -232,9 +231,7 @@ impl FallbackEncoder {
         max_value: Option<ByteArray>,
     ) -> Result<DataPageValues<ByteArray>> {
         let (buf, encoding) = match &mut self.encoder {
-            FallbackEncoderImpl::Plain { buffer } => {
-                (std::mem::take(buffer), Encoding::PLAIN)
-            }
+            FallbackEncoderImpl::Plain { buffer } => (std::mem::take(buffer), Encoding::PLAIN),
             FallbackEncoderImpl::DeltaLength { buffer, lengths } => {
                 let lengths = lengths.flush_buffer()?;
 
@@ -253,9 +250,8 @@ impl FallbackEncoder {
                 let prefix_lengths = prefix_lengths.flush_buffer()?;
                 let suffix_lengths = suffix_lengths.flush_buffer()?;
 
-                let mut out = Vec::with_capacity(
-                    prefix_lengths.len() + suffix_lengths.len() + buffer.len(),
-                );
+                let mut out =
+                    Vec::with_capacity(prefix_lengths.len() + suffix_lengths.len() + buffer.len());
                 out.extend_from_slice(prefix_lengths.data());
                 out.extend_from_slice(suffix_lengths.data());
                 out.extend_from_slice(buffer);
@@ -437,12 +433,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         })
     }
 
-    fn write(
-        &mut self,
-        _values: &Self::Values,
-        _offset: usize,
-        _len: usize,
-    ) -> Result<()> {
+    fn write(&mut self, _values: &Self::Values, _offset: usize, _len: usize) -> Result<()> {
         unreachable!("should call write_gather instead")
     }
 

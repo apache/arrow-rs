@@ -539,9 +539,7 @@ impl AsBytes for bool {
 
 impl AsBytes for Int96 {
     fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(self.data() as *const [u32] as *const u8, 12)
-        }
+        unsafe { std::slice::from_raw_parts(self.data() as *const [u32] as *const u8, 12) }
     }
 }
 
@@ -620,17 +618,10 @@ pub(crate) mod private {
         ) -> Result<()>;
 
         /// Establish the data that will be decoded in a buffer
-        fn set_data(
-            decoder: &mut PlainDecoderDetails,
-            data: ByteBufferPtr,
-            num_values: usize,
-        );
+        fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize);
 
         /// Decode the value from a given buffer for a higher level decoder
-        fn decode(
-            buffer: &mut [Self],
-            decoder: &mut PlainDecoderDetails,
-        ) -> Result<usize>;
+        fn decode(buffer: &mut [Self], decoder: &mut PlainDecoderDetails) -> Result<usize>;
 
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize>;
 
@@ -680,20 +671,13 @@ pub(crate) mod private {
         }
 
         #[inline]
-        fn set_data(
-            decoder: &mut PlainDecoderDetails,
-            data: ByteBufferPtr,
-            num_values: usize,
-        ) {
+        fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize) {
             decoder.bit_reader.replace(BitReader::new(data));
             decoder.num_values = num_values;
         }
 
         #[inline]
-        fn decode(
-            buffer: &mut [Self],
-            decoder: &mut PlainDecoderDetails,
-        ) -> Result<usize> {
+        fn decode(buffer: &mut [Self], decoder: &mut PlainDecoderDetails) -> Result<usize> {
             let bit_reader = decoder.bit_reader.as_mut().unwrap();
             let num_values = std::cmp::min(buffer.len(), decoder.num_values);
             let values_read = bit_reader.get_batch(&mut buffer[..num_values], 1);
@@ -823,10 +807,7 @@ pub(crate) mod private {
         ) -> Result<()> {
             for value in values {
                 let raw = unsafe {
-                    std::slice::from_raw_parts(
-                        value.data() as *const [u32] as *const u8,
-                        12,
-                    )
+                    std::slice::from_raw_parts(value.data() as *const [u32] as *const u8, 12)
                 };
                 writer.write_all(raw)?;
             }
@@ -834,21 +815,14 @@ pub(crate) mod private {
         }
 
         #[inline]
-        fn set_data(
-            decoder: &mut PlainDecoderDetails,
-            data: ByteBufferPtr,
-            num_values: usize,
-        ) {
+        fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize) {
             decoder.data.replace(data);
             decoder.start = 0;
             decoder.num_values = num_values;
         }
 
         #[inline]
-        fn decode(
-            buffer: &mut [Self],
-            decoder: &mut PlainDecoderDetails,
-        ) -> Result<usize> {
+        fn decode(buffer: &mut [Self], decoder: &mut PlainDecoderDetails) -> Result<usize> {
             // TODO - Remove the duplication between this and the general slice method
             let data = decoder
                 .data
@@ -869,10 +843,8 @@ pub(crate) mod private {
             let mut pos = 0; // position in byte array
             for item in buffer.iter_mut().take(num_values) {
                 let elem0 = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
-                let elem1 =
-                    u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap());
-                let elem2 =
-                    u32::from_le_bytes(bytes[pos + 8..pos + 12].try_into().unwrap());
+                let elem1 = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap());
+                let elem2 = u32::from_le_bytes(bytes[pos + 8..pos + 12].try_into().unwrap());
 
                 item.set_data(elem0, elem1, elem2);
                 pos += 12;
@@ -930,21 +902,14 @@ pub(crate) mod private {
         }
 
         #[inline]
-        fn set_data(
-            decoder: &mut PlainDecoderDetails,
-            data: ByteBufferPtr,
-            num_values: usize,
-        ) {
+        fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize) {
             decoder.data.replace(data);
             decoder.start = 0;
             decoder.num_values = num_values;
         }
 
         #[inline]
-        fn decode(
-            buffer: &mut [Self],
-            decoder: &mut PlainDecoderDetails,
-        ) -> Result<usize> {
+        fn decode(buffer: &mut [Self], decoder: &mut PlainDecoderDetails) -> Result<usize> {
             let data = decoder
                 .data
                 .as_mut()
@@ -952,8 +917,7 @@ pub(crate) mod private {
             let num_values = std::cmp::min(buffer.len(), decoder.num_values);
             for val_array in buffer.iter_mut().take(num_values) {
                 let len: usize =
-                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref())
-                        as usize;
+                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref()) as usize;
                 decoder.start += std::mem::size_of::<u32>();
 
                 if data.len() < decoder.start + len {
@@ -979,8 +943,7 @@ pub(crate) mod private {
 
             for _ in 0..num_values {
                 let len: usize =
-                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref())
-                        as usize;
+                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref()) as usize;
                 decoder.start += std::mem::size_of::<u32>() + len;
             }
             decoder.num_values -= num_values;
@@ -1021,21 +984,14 @@ pub(crate) mod private {
         }
 
         #[inline]
-        fn set_data(
-            decoder: &mut PlainDecoderDetails,
-            data: ByteBufferPtr,
-            num_values: usize,
-        ) {
+        fn set_data(decoder: &mut PlainDecoderDetails, data: ByteBufferPtr, num_values: usize) {
             decoder.data.replace(data);
             decoder.start = 0;
             decoder.num_values = num_values;
         }
 
         #[inline]
-        fn decode(
-            buffer: &mut [Self],
-            decoder: &mut PlainDecoderDetails,
-        ) -> Result<usize> {
+        fn decode(buffer: &mut [Self], decoder: &mut PlainDecoderDetails) -> Result<usize> {
             assert!(decoder.type_length > 0);
 
             let data = decoder
@@ -1115,9 +1071,7 @@ pub trait DataType: 'static + Send {
     where
         Self: Sized;
 
-    fn get_column_writer(
-        column_writer: ColumnWriter<'_>,
-    ) -> Option<ColumnWriterImpl<'_, Self>>
+    fn get_column_writer(column_writer: ColumnWriter<'_>) -> Option<ColumnWriterImpl<'_, Self>>
     where
         Self: Sized;
 
@@ -1160,9 +1114,7 @@ macro_rules! make_type {
                 $size
             }
 
-            fn get_column_reader(
-                column_reader: ColumnReader,
-            ) -> Option<ColumnReaderImpl<Self>> {
+            fn get_column_reader(column_reader: ColumnReader) -> Option<ColumnReaderImpl<Self>> {
                 match column_reader {
                     ColumnReader::$reader_ident(w) => Some(w),
                     _ => None,

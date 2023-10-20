@@ -26,8 +26,8 @@ use chrono::{DateTime, TimeZone};
 
 #[test]
 fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
-    let a = TimestampSecondArray::from(vec![60 * 60 * 10])
-        .with_timezone("Asia/Kolkata".to_string());
+    let a =
+        TimestampSecondArray::from(vec![60 * 60 * 10]).with_timezone("Asia/Kolkata".to_string());
     let b = hour(&a).unwrap();
     assert_eq!(15, b.value(0));
 }

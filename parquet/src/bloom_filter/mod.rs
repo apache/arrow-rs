@@ -152,9 +152,8 @@ pub(crate) fn read_bloom_filter_header_and_length(
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
     let total_length = buffer.len();
     let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
-    let header = BloomFilterHeader::read_from_in_protocol(&mut prot).map_err(|e| {
-        ParquetError::General(format!("Could not read bloom filter header: {e}"))
-    })?;
+    let header = BloomFilterHeader::read_from_in_protocol(&mut prot)
+        .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
     Ok((header, (total_length - prot.as_slice().len()) as u64))
 }
 
@@ -233,9 +232,7 @@ impl Sbbf {
             writer
                 .write_all(block.to_le_bytes().as_slice())
                 .map_err(|e| {
-                    ParquetError::General(format!(
-                        "Could not write bloom filter bit set: {e}"
-                    ))
+                    ParquetError::General(format!("Could not write bloom filter bit set: {e}"))
                 })?;
         }
         Ok(())
@@ -258,9 +255,9 @@ impl Sbbf {
         reader: Arc<R>,
     ) -> Result<Option<Self>, ParquetError> {
         let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
-            offset.try_into().map_err(|_| {
-                ParquetError::General("Bloom filter offset is invalid".to_string())
-            })?
+            offset
+                .try_into()
+                .map_err(|_| ParquetError::General("Bloom filter offset is invalid".to_string()))?
         } else {
             return Ok(None);
         };
@@ -348,8 +345,7 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
 mod tests {
     use super::*;
     use crate::format::{
-        BloomFilterAlgorithm, BloomFilterCompression, SplitBlockAlgorithm, Uncompressed,
-        XxHash,
+        BloomFilterAlgorithm, BloomFilterCompression, SplitBlockAlgorithm, Uncompressed, XxHash,
     };
 
     #[test]
@@ -387,8 +383,8 @@ mod tests {
     fn test_with_fixture() {
         // bloom filter produced by parquet-mr/spark for a column of i64 f"a{i}" for i in 0..10
         let bitset: &[u8] = &[
-            200, 1, 80, 20, 64, 68, 8, 109, 6, 37, 4, 67, 144, 80, 96, 32, 8, 132, 43,
-            33, 0, 5, 99, 65, 2, 0, 224, 44, 64, 78, 96, 4,
+            200, 1, 80, 20, 64, 68, 8, 109, 6, 37, 4, 67, 144, 80, 96, 32, 8, 132, 43, 33, 0, 5,
+            99, 65, 2, 0, 224, 44, 64, 78, 96, 4,
         ];
         let sbbf = Sbbf::new(bitset);
         for a in 0..10i64 {
@@ -402,8 +398,7 @@ mod tests {
     /// so altogether it'll be 20 bytes at most.
     #[test]
     fn test_bloom_filter_header_size_assumption() {
-        let buffer: &[u8; 16] =
-            &[21, 64, 28, 28, 0, 0, 28, 28, 0, 0, 28, 28, 0, 0, 0, 99];
+        let buffer: &[u8; 16] = &[21, 64, 28, 28, 0, 0, 28, 28, 0, 0, 28, 28, 0, 0, 0, 99];
         let (
             BloomFilterHeader {
                 algorithm,

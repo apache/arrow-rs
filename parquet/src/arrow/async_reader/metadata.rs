@@ -20,9 +20,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::index::Index;
-use crate::file::page_index::index_reader::{
-    acc_range, decode_column_index, decode_offset_index,
-};
+use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -56,11 +54,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
     /// Create a new [`MetadataLoader`] by reading the footer information
     ///
     /// See [`fetch_parquet_metadata`] for the meaning of the individual parameters
-    pub async fn load(
-        mut fetch: F,
-        file_size: usize,
-        prefetch: Option<usize>,
-    ) -> Result<Self> {
+    pub async fn load(mut fetch: F, file_size: usize, prefetch: Option<usize>) -> Result<Self> {
         if file_size < 8 {
             return Err(ParquetError::EOF(format!(
                 "file size of {file_size} is less than footer"
@@ -126,11 +120,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
     ///
     /// * `column_index`: if true will load column index
     /// * `offset_index`: if true will load offset index
-    pub async fn load_page_index(
-        &mut self,
-        column_index: bool,
-        offset_index: bool,
-    ) -> Result<()> {
+    pub async fn load_page_index(&mut self, column_index: bool, offset_index: bool) -> Result<()> {
         if !column_index && !offset_index {
             return Ok(());
         }
@@ -189,9 +179,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
                     x.columns()
                         .iter()
                         .map(|c| match c.offset_index_range() {
-                            Some(r) => decode_offset_index(
-                                &data[r.start - offset..r.end - offset],
-                            ),
+                            Some(r) => decode_offset_index(&data[r.start - offset..r.end - offset]),
                             None => Err(general_err!("missing offset index")),
                         })
                         .collect::<Result<Vec<_>>>()

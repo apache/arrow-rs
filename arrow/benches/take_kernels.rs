@@ -47,9 +47,7 @@ fn bench_take(values: &dyn Array, indices: &UInt32Array) {
 }
 
 fn bench_take_bounds_check(values: &dyn Array, indices: &UInt32Array) {
-    criterion::black_box(
-        take(values, indices, Some(TakeOptions { check_bounds: true })).unwrap(),
-    );
+    criterion::black_box(take(values, indices, Some(TakeOptions { check_bounds: true })).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {

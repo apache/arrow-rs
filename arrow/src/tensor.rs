@@ -27,9 +27,7 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 
 /// Computes the strides required assuming a row major memory layout
-fn compute_row_major_strides<T: ArrowPrimitiveType>(
-    shape: &[usize],
-) -> Result<Vec<usize>> {
+fn compute_row_major_strides<T: ArrowPrimitiveType>(shape: &[usize]) -> Result<Vec<usize>> {
     let mut remaining_bytes = mem::size_of::<T::Native>();
 
     for i in shape {
@@ -52,9 +50,7 @@ fn compute_row_major_strides<T: ArrowPrimitiveType>(
 }
 
 /// Computes the strides required assuming a column major memory layout
-fn compute_column_major_strides<T: ArrowPrimitiveType>(
-    shape: &[usize],
-) -> Result<Vec<usize>> {
+fn compute_column_major_strides<T: ArrowPrimitiveType>(shape: &[usize]) -> Result<Vec<usize>> {
     let mut remaining_bytes = mem::size_of::<T::Native>();
     let mut strides = Vec::<usize>::new();
 
@@ -128,8 +124,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
             None => {
                 if buffer.len() != mem::size_of::<T::Native>() {
                     return Err(ArrowError::InvalidArgumentError(
-                        "underlying buffer should only contain a single tensor element"
-                            .to_string(),
+                        "underlying buffer should only contain a single tensor element".to_string(),
                     ));
                 }
 
@@ -158,8 +153,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
                 if let Some(ref n) = names {
                     if n.len() != s.len() {
                         return Err(ArrowError::InvalidArgumentError(
-                            "number of dimensions and number of dimension names differ"
-                                .to_string(),
+                            "number of dimensions and number of dimension names differ".to_string(),
                         ));
                     }
                 }
@@ -167,8 +161,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
                 let total_elements: usize = s.iter().product();
                 if total_elements != (buffer.len() / mem::size_of::<T::Native>()) {
                     return Err(ArrowError::InvalidArgumentError(
-                        "number of elements in buffer does not match dimensions"
-                            .to_string(),
+                        "number of elements in buffer does not match dimensions".to_string(),
                     ));
                 }
             }
@@ -185,8 +178,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
                         Some(st)
                     } else {
                         return Err(ArrowError::InvalidArgumentError(
-                            "the input stride does not match the selected shape"
-                                .to_string(),
+                            "the input stride does not match the selected shape".to_string(),
                         ));
                     }
                 } else {
@@ -306,9 +298,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
     pub fn is_column_major(&self) -> Result<bool> {
         match self.shape {
             None => Ok(false),
-            Some(ref s) => {
-                Ok(Some(compute_column_major_strides::<T>(s)?) == self.strides)
-            }
+            Some(ref s) => Ok(Some(compute_column_major_strides::<T>(s)?) == self.strides),
         }
     }
 }
@@ -434,8 +424,7 @@ mod tests {
         }
         let buf = builder.finish();
         let names = vec!["Dim 1", "Dim 2"];
-        let tensor =
-            Int64Tensor::new_column_major(buf, Some(vec![2, 4]), Some(names)).unwrap();
+        let tensor = Int64Tensor::new_column_major(buf, Some(vec![2, 4]), Some(names)).unwrap();
         assert_eq!(8, tensor.size());
         assert_eq!(Some(vec![2_usize, 4]).as_ref(), tensor.shape());
         assert_eq!(Some(vec![8_usize, 16]).as_ref(), tensor.strides());
@@ -455,8 +444,7 @@ mod tests {
         }
         let buf = builder.finish();
 
-        let result =
-            Int32Tensor::try_new(buf, Some(vec![2, 8]), Some(vec![2, 8, 1]), None);
+        let result = Int32Tensor::try_new(buf, Some(vec![2, 8]), Some(vec![2, 8, 1]), None);
 
         if result.is_ok() {
             panic!("shape and stride dimensions are different")

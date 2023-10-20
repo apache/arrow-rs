@@ -17,7 +17,7 @@
 
 //! An in-memory object store implementation
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, Result,
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutResult, Result,
 };
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
@@ -106,11 +106,12 @@ struct Storage {
 type SharedStorage = Arc<RwLock<Storage>>;
 
 impl Storage {
-    fn insert(&mut self, location: &Path, bytes: Bytes) {
+    fn insert(&mut self, location: &Path, bytes: Bytes) -> usize {
         let etag = self.next_etag;
         self.next_etag += 1;
         let entry = Entry::new(bytes, Utc::now(), etag);
         self.map.insert(location.clone(), entry);
+        etag
     }
 }
 
@@ -122,9 +123,11 @@ impl std::fmt::Display for InMemory {
 
 #[async_trait]
 impl ObjectStore for InMemory {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.storage.write().insert(location, bytes);
-        Ok(())
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+        let etag = self.storage.write().insert(location, bytes);
+        Ok(PutResult {
+            e_tag: Some(etag.to_string()),
+        })
     }
 
     async fn put_multipart(
@@ -141,19 +144,12 @@ impl ObjectStore for InMemory {
         ))
     }
 
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> Result<()> {
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
         // Nothing to clean up
         Ok(())
     }
 
-    async fn append(
-        &self,
-        location: &Path,
-    ) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
+    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
         Ok(Box::new(InMemoryAppend {
             location: location.clone(),
             data: Vec::<u8>::new(),
@@ -170,6 +166,7 @@ impl ObjectStore for InMemory {
             last_modified: entry.last_modified,
             size: entry.data.len(),
             e_tag: Some(e_tag),
+            version: None,
         };
         options.check_preconditions(&meta)?;
 
@@ -191,11 +188,7 @@ impl ObjectStore for InMemory {
         })
     }
 
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[Range<usize>],
-    ) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
         let entry = self.entry(location).await?;
         ranges
             .iter()
@@ -220,6 +213,7 @@ impl ObjectStore for InMemory {
             last_modified: entry.last_modified,
             size: entry.data.len(),
             e_tag: Some(entry.e_tag.to_string()),
+            version: None,
         })
     }
 
@@ -228,10 +222,7 @@ impl ObjectStore for InMemory {
         Ok(())
     }
 
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let root = Path::default();
         let prefix = prefix.unwrap_or(&root);
 
@@ -252,11 +243,12 @@ impl ObjectStore for InMemory {
                     last_modified: value.last_modified,
                     size: value.data.len(),
                     e_tag: Some(value.e_tag.to_string()),
+                    version: None,
                 })
             })
             .collect();
 
-        Ok(futures::stream::iter(values).boxed())
+        futures::stream::iter(values).boxed()
     }
 
     /// The memory implementation returns all results, as opposed to the cloud
@@ -296,6 +288,7 @@ impl ObjectStore for InMemory {
                     last_modified: v.last_modified,
                     size: v.data.len(),
                     e_tag: Some(v.e_tag.to_string()),
+                    version: None,
                 };
                 objects.push(object);
             }

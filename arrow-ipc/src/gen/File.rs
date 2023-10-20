@@ -61,10 +61,7 @@ impl<'b> flatbuffers::Push for Block {
     type Output = Block;
     #[inline]
     unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-        let src = ::core::slice::from_raw_parts(
-            self as *const Block as *const u8,
-            Self::size(),
-        );
+        let src = ::core::slice::from_raw_parts(self as *const Block as *const u8, Self::size());
         dst.copy_from_slice(src);
     }
 }
@@ -307,11 +304,7 @@ impl flatbuffers::Verifiable for Footer<'_> {
         use flatbuffers::Verifiable;
         v.visit_table(pos)?
             .visit_field::<MetadataVersion>("version", Self::VT_VERSION, false)?
-            .visit_field::<flatbuffers::ForwardsUOffset<Schema>>(
-                "schema",
-                Self::VT_SCHEMA,
-                false,
-            )?
+            .visit_field::<flatbuffers::ForwardsUOffset<Schema>>("schema", Self::VT_SCHEMA, false)?
             .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, Block>>>(
                 "dictionaries",
                 Self::VT_DICTIONARIES,
@@ -335,9 +328,7 @@ pub struct FooterArgs<'a> {
     pub dictionaries: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, Block>>>,
     pub recordBatches: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, Block>>>,
     pub custom_metadata: Option<
-        flatbuffers::WIPOffset<
-            flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue<'a>>>,
-        >,
+        flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<KeyValue<'a>>>>,
     >,
 }
 impl<'a> Default for FooterArgs<'a> {
@@ -360,39 +351,29 @@ pub struct FooterBuilder<'a: 'b, 'b> {
 impl<'a: 'b, 'b> FooterBuilder<'a, 'b> {
     #[inline]
     pub fn add_version(&mut self, version: MetadataVersion) {
-        self.fbb_.push_slot::<MetadataVersion>(
-            Footer::VT_VERSION,
-            version,
-            MetadataVersion::V1,
-        );
+        self.fbb_
+            .push_slot::<MetadataVersion>(Footer::VT_VERSION, version, MetadataVersion::V1);
     }
     #[inline]
     pub fn add_schema(&mut self, schema: flatbuffers::WIPOffset<Schema<'b>>) {
         self.fbb_
-            .push_slot_always::<flatbuffers::WIPOffset<Schema>>(
-                Footer::VT_SCHEMA,
-                schema,
-            );
+            .push_slot_always::<flatbuffers::WIPOffset<Schema>>(Footer::VT_SCHEMA, schema);
     }
     #[inline]
     pub fn add_dictionaries(
         &mut self,
         dictionaries: flatbuffers::WIPOffset<flatbuffers::Vector<'b, Block>>,
     ) {
-        self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
-            Footer::VT_DICTIONARIES,
-            dictionaries,
-        );
+        self.fbb_
+            .push_slot_always::<flatbuffers::WIPOffset<_>>(Footer::VT_DICTIONARIES, dictionaries);
     }
     #[inline]
     pub fn add_recordBatches(
         &mut self,
         recordBatches: flatbuffers::WIPOffset<flatbuffers::Vector<'b, Block>>,
     ) {
-        self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
-            Footer::VT_RECORDBATCHES,
-            recordBatches,
-        );
+        self.fbb_
+            .push_slot_always::<flatbuffers::WIPOffset<_>>(Footer::VT_RECORDBATCHES, recordBatches);
     }
     #[inline]
     pub fn add_custom_metadata(
@@ -407,9 +388,7 @@ impl<'a: 'b, 'b> FooterBuilder<'a, 'b> {
         );
     }
     #[inline]
-    pub fn new(
-        _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>,
-    ) -> FooterBuilder<'a, 'b> {
+    pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> FooterBuilder<'a, 'b> {
         let start = _fbb.start_table();
         FooterBuilder {
             fbb_: _fbb,
@@ -451,9 +430,7 @@ pub fn root_as_footer(buf: &[u8]) -> Result<Footer, flatbuffers::InvalidFlatbuff
 /// catch every error, or be maximally performant. For the
 /// previous, unchecked, behavior use
 /// `size_prefixed_root_as_footer_unchecked`.
-pub fn size_prefixed_root_as_footer(
-    buf: &[u8],
-) -> Result<Footer, flatbuffers::InvalidFlatbuffer> {
+pub fn size_prefixed_root_as_footer(buf: &[u8]) -> Result<Footer, flatbuffers::InvalidFlatbuffer> {
     flatbuffers::size_prefixed_root::<Footer>(buf)
 }
 #[inline]

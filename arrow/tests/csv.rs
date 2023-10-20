@@ -40,10 +40,8 @@ fn test_export_csv_timestamps() {
         vec![Some(1555584887378), Some(1635577147000)],
     )
     .with_timezone("Australia/Sydney".to_string());
-    let c2 =
-        TimestampMillisecondArray::from(vec![Some(1555584887378), Some(1635577147000)]);
-    let batch =
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
+    let c2 = TimestampMillisecondArray::from(vec![Some(1555584887378), Some(1635577147000)]);
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
 
     let mut sw = Vec::new();
     let mut writer = arrow_csv::Writer::new(&mut sw);

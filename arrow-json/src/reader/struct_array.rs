@@ -68,8 +68,7 @@ impl StructArrayDecoder {
 impl ArrayDecoder for StructArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let fields = struct_fields(&self.data_type);
-        let mut child_pos: Vec<_> =
-            (0..fields.len()).map(|_| vec![0; pos.len()]).collect();
+        let mut child_pos: Vec<_> = (0..fields.len()).map(|_| vec![0; pos.len()]).collect();
 
         let mut nulls = self
             .is_nullable
@@ -122,10 +121,9 @@ impl ArrayDecoder for StructArrayDecoder {
             .zip(fields)
             .map(|((d, pos), f)| {
                 d.decode(tape, &pos).map_err(|e| match e {
-                    ArrowError::JsonError(s) => ArrowError::JsonError(format!(
-                        "whilst decoding field '{}': {s}",
-                        f.name()
-                    )),
+                    ArrowError::JsonError(s) => {
+                        ArrowError::JsonError(format!("whilst decoding field '{}': {s}", f.name()))
+                    }
                     e => e,
                 })
             })
@@ -137,11 +135,13 @@ impl ArrayDecoder for StructArrayDecoder {
             // Sanity check
             assert_eq!(c.len(), pos.len());
             if let Some(a) = c.nulls() {
-                let nulls_valid = f.is_nullable()
-                    || nulls.as_ref().map(|n| n.contains(a)).unwrap_or_default();
+                let nulls_valid =
+                    f.is_nullable() || nulls.as_ref().map(|n| n.contains(a)).unwrap_or_default();
 
                 if !nulls_valid {
-                    return Err(ArrowError::JsonError(format!("Encountered unmasked nulls in non-nullable StructArray child: {f}")));
+                    return Err(ArrowError::JsonError(format!(
+                        "Encountered unmasked nulls in non-nullable StructArray child: {f}"
+                    )));
                 }
             }
         }

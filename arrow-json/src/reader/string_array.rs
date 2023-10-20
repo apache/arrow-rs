@@ -72,8 +72,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
             )));
         }
 
-        let mut builder =
-            GenericStringBuilder::<O>::with_capacity(pos.len(), data_capacity);
+        let mut builder = GenericStringBuilder::<O>::with_capacity(pos.len(), data_capacity);
 
         for p in pos {
             match tape.get(*p) {

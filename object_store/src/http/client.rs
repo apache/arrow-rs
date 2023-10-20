@@ -90,11 +90,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(
-        url: Url,
-        client_options: ClientOptions,
-        retry_config: RetryConfig,
-    ) -> Result<Self> {
+    pub fn new(url: Url, client_options: ClientOptions, retry_config: RetryConfig) -> Result<Self> {
         let client = client_options.client()?;
         Ok(Self {
             url,
@@ -160,7 +156,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    pub async fn put(&self, location: &Path, bytes: Bytes) -> Result<Response> {
         let mut retry = false;
         loop {
             let url = self.path_url(location);
@@ -170,7 +166,7 @@ impl Client {
             }
 
             match builder.send_retry(&self.retry_config).await {
-                Ok(_) => return Ok(()),
+                Ok(response) => return Ok(response),
                 Err(source) => match source.status() {
                     // Some implementations return 404 instead of 409
                     Some(StatusCode::CONFLICT | StatusCode::NOT_FOUND) if !retry => {
@@ -183,11 +179,7 @@ impl Client {
         }
     }
 
-    pub async fn list(
-        &self,
-        location: Option<&Path>,
-        depth: &str,
-    ) -> Result<MultiStatus> {
+    pub async fn list(&self, location: Option<&Path>, depth: &str) -> Result<MultiStatus> {
         let url = location
             .map(|path| self.path_url(path))
             .unwrap_or_else(|| self.url.clone());
@@ -220,8 +212,7 @@ impl Client {
             Err(source) => return Err(Error::Request { source }.into()),
         };
 
-        let status = quick_xml::de::from_reader(response.reader())
-            .context(InvalidPropFindSnafu)?;
+        let status = quick_xml::de::from_reader(response.reader()).context(InvalidPropFindSnafu)?;
         Ok(status)
     }
 
@@ -286,6 +277,7 @@ impl GetClient for Client {
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: false,
         last_modified_required: false,
+        version_header: None,
     };
 
     async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
@@ -384,6 +376,7 @@ impl MultiStatusResponse {
             last_modified,
             size: self.size()?,
             e_tag: self.prop_stat.prop.e_tag.clone(),
+            version: None,
         })
     }
 
