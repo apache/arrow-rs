@@ -183,16 +183,13 @@ mod tests {
 
         let mut out: Vec<APartiallyCompleteRecord> = Vec::new();
 
-        use parquet::file::{
-            reader::FileReader, serialized_reader::SerializedFileReader,
-        };
+        use parquet::file::{reader::FileReader, serialized_reader::SerializedFileReader};
 
         let generated_schema = drs.schema().unwrap();
 
         let props = Default::default();
         let mut writer =
-            SerializedFileWriter::new(file.try_clone().unwrap(), generated_schema, props)
-                .unwrap();
+            SerializedFileWriter::new(file.try_clone().unwrap(), generated_schema, props).unwrap();
 
         let mut row_group = writer.next_row_group().unwrap();
         drs.write_to_row_group(&mut row_group).unwrap();
@@ -205,10 +202,9 @@ mod tests {
         out.read_from_row_group(&mut *row_group, 1).unwrap();
 
         // correct for rounding error when writing milliseconds
-        drs[0].now = chrono::naive::NaiveDateTime::from_timestamp_millis(
-            drs[0].now.timestamp_millis(),
-        )
-        .unwrap();
+        drs[0].now =
+            chrono::naive::NaiveDateTime::from_timestamp_millis(drs[0].now.timestamp_millis())
+                .unwrap();
 
         assert!(out[0].double.is_nan()); // these three lines are necessary because NAN != NAN
         out[0].double = 0.;

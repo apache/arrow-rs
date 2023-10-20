@@ -875,22 +875,24 @@ mod test {
         let counter = Field::from(&fields[0]);
 
         let snippet = counter.reader_snippet().to_string();
-        assert_eq!(snippet,
-                   (quote!{
-                        {
-                            let mut vals_vec = Vec::new();
-                            vals_vec.resize(num_records, Default::default());
-                            let mut vals: &mut[i64] = vals_vec.as_mut_slice();
-                            if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
-                                typed.read_records(num_records, None, None, vals)?;
-                            } else {
-                                panic!("Schema and struct disagree on type for {}", stringify!{ counter });
-                            }
-                            for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
-                                r.counter = vals[i] as usize;
-                            }
-                        }
-                   }).to_string()
+        assert_eq!(
+            snippet,
+            (quote! {
+                 {
+                     let mut vals_vec = Vec::new();
+                     vals_vec.resize(num_records, Default::default());
+                     let mut vals: &mut[i64] = vals_vec.as_mut_slice();
+                     if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
+                         typed.read_records(num_records, None, None, vals)?;
+                     } else {
+                         panic!("Schema and struct disagree on type for {}", stringify!{ counter });
+                     }
+                     for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
+                         r.counter = vals[i] as usize;
+                     }
+                 }
+            })
+            .to_string()
         )
     }
 
