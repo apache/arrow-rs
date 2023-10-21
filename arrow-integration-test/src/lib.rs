@@ -30,7 +30,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::array::{RecordBatch, RecordBatchReader};
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::compute;
 use arrow::datatypes::*;

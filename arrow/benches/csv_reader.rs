@@ -24,7 +24,6 @@ use std::sync::Arc;
 use criterion::*;
 use rand::Rng;
 
-use arrow::array::RecordBatch;
 use arrow::array::*;
 use arrow::csv;
 use arrow::datatypes::*;

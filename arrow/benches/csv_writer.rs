@@ -20,7 +20,6 @@ extern crate criterion;
 
 use criterion::*;
 
-use arrow::array::RecordBatch;
 use arrow::array::*;
 use arrow::csv;
 use arrow::datatypes::*;
