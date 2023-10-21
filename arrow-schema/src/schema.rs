@@ -346,7 +346,7 @@ impl Schema {
     /// assert_eq!(schema.remove_field("b").unwrap(), Field::new("b", DataType::Int8, false).into());
     /// assert_eq!(schema.fields.len(), 2);
     /// ```
-    pub fn remove_field(&mut self, name: &str) -> Option<FieldRef> {
+    pub fn remove_field_with_name(&mut self, name: &str) -> Option<FieldRef> {
         if let Some((idx, _)) = self.fields.find(name) {
             self.fields.remove(idx)
         } else {
