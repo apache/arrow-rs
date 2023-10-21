@@ -30,7 +30,7 @@
 //! # use arrow::error::Result;
 //! # use arrow::ffi_stream::{export_reader_into_raw, ArrowArrayStreamReader, FFI_ArrowArrayStream};
 //! # use arrow::ipc::reader::FileReader;
-//! # use arrow::record_batch::RecordBatchReader;
+//! # use arrow::array::RecordBatchReader;
 //! # fn main() -> Result<()> {
 //! // create an record batch reader natively
 //! let file = File::open("arrow_file").unwrap();

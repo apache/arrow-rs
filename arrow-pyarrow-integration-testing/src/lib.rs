@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use arrow::array::new_empty_array;
-use arrow::record_batch::{RecordBatchIterator, RecordBatchReader};
+use arrow::array::{RecordBatchIterator, RecordBatchReader};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
@@ -32,7 +32,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
 use arrow::ffi_stream::ArrowArrayStreamReader;
 use arrow::pyarrow::{FromPyArrow, PyArrowException, PyArrowType, ToPyArrow};
-use arrow::record_batch::RecordBatch;
+use arrow::array::RecordBatch;
 
 fn to_py_err(err: ArrowError) -> PyErr {
     PyArrowException::new_err(err.to_string())

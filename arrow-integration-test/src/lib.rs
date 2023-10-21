@@ -30,11 +30,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::*;
+use arrow::array::{RecordBatch, RecordBatchReader};
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::compute;
 use arrow::datatypes::*;
 use arrow::error::{ArrowError, Result};
-use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow::util::bit_util;
 use arrow_buffer::i256;
 

@@ -221,7 +221,7 @@
 //! ```
 //! # use std::sync::Arc;
 //! # use arrow::array::{Float32Array, Int32Array};
-//! # use arrow::record_batch::RecordBatch;
+//! # use arrow::array::RecordBatch;
 //! #
 //! let col_1 = Arc::new(Int32Array::from_iter([1, 2, 3])) as _;
 //! let col_2 = Arc::new(Float32Array::from_iter([1., 6.3, 4.])) as _;
@@ -373,11 +373,6 @@ pub use arrow_json as json;
 #[cfg(feature = "pyarrow")]
 pub mod pyarrow;
 
-pub mod record_batch {
-    pub use arrow_array::{
-        RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
-    };
-}
 pub use arrow_array::temporal_conversions;
 pub use arrow_row as row;
 pub mod tensor;

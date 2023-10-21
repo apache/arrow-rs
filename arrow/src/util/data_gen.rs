@@ -21,8 +21,8 @@ use std::{convert::TryFrom, sync::Arc};
 
 use rand::{distributions::uniform::SampleUniform, Rng};
 
+use crate::array::{RecordBatch, RecordBatchOptions};
 use crate::error::{ArrowError, Result};
-use crate::record_batch::{RecordBatch, RecordBatchOptions};
 use crate::{array::*, datatypes::SchemaRef};
 use crate::{
     buffer::{Buffer, MutableBuffer},

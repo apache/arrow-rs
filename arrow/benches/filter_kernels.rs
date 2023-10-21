@@ -18,8 +18,8 @@ extern crate arrow;
 
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
 use arrow::compute::{filter_record_batch, FilterBuilder, FilterPredicate};
-use arrow::record_batch::RecordBatch;
 use arrow::util::bench_util::*;
 
 use arrow::array::*;

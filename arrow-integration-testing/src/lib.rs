@@ -19,9 +19,9 @@
 
 use serde_json::Value;
 
+use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::error::Result;
-use arrow::record_batch::RecordBatch;
 use arrow::util::test_util::arrow_test_data;
 use arrow_integration_test::*;
 use std::collections::HashMap;

@@ -22,11 +22,11 @@ use std::sync::Arc;
 
 use arrow::{
     array::ArrayRef,
+    array::RecordBatch,
     buffer::Buffer,
     datatypes::Schema,
     datatypes::SchemaRef,
     ipc::{self, reader, writer},
-    record_batch::RecordBatch,
 };
 use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_server::FlightService,

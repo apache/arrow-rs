@@ -28,7 +28,7 @@
 //! use arrow::array::*;
 //! use arrow::csv;
 //! use arrow::datatypes::*;
-//! use arrow::record_batch::RecordBatch;
+//! use arrow::array::RecordBatch;
 //! use arrow::util::string_writer::StringWriter;
 //! use std::sync::Arc;
 //!

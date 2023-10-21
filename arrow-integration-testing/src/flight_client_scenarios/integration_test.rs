@@ -20,10 +20,10 @@ use std::collections::HashMap;
 
 use arrow::{
     array::ArrayRef,
+    array::RecordBatch,
     buffer::Buffer,
     datatypes::SchemaRef,
     ipc::{self, reader, writer},
-    record_batch::RecordBatch,
 };
 use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,

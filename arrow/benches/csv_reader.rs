@@ -24,10 +24,10 @@ use std::sync::Arc;
 use criterion::*;
 use rand::Rng;
 
+use arrow::array::RecordBatch;
 use arrow::array::*;
 use arrow::csv;
 use arrow::datatypes::*;
-use arrow::record_batch::RecordBatch;
 use arrow::util::bench_util::{create_primitive_array, create_string_array_with_len};
 use arrow::util::test_util::seedable_rng;
 
