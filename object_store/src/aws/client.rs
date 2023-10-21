@@ -117,6 +117,9 @@ pub(crate) enum Error {
     #[snafu(display("Error performing complete multipart request: {}", source))]
     CompleteMultipartRequest { source: crate::client::retry::Error },
 
+    #[snafu(display("Error getting complete multipart response body: {}", source))]
+    CompleteMultipartResponseBody { source: reqwest::Error },
+
     #[snafu(display("Got invalid list response: {}", source))]
     InvalidListResponse { source: quick_xml::de::DeError },
 
@@ -162,6 +165,13 @@ struct MultipartPart {
     e_tag: String,
     #[serde(rename = "PartNumber")]
     part_number: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase", rename = "CompleteMultipartUploadResult")]
+struct CompleteMultipartResult {
+    #[serde(rename = "ETag")]
+    e_tag: String,
 }
 
 #[derive(Deserialize)]
@@ -565,9 +575,17 @@ impl S3Client {
             .await
             .context(CompleteMultipartRequestSnafu)?;
 
-        let etag = get_etag(response.headers()).context(MetadataSnafu)?;
+        let data = response
+            .bytes()
+            .await
+            .context(CompleteMultipartResponseBodySnafu)?;
 
-        Ok(PutResult { e_tag: Some(etag) })
+        let response: CompleteMultipartResult =
+            quick_xml::de::from_reader(data.reader()).context(InvalidMultipartResponseSnafu)?;
+
+        Ok(PutResult {
+            e_tag: Some(response.e_tag),
+        })
     }
 }
 
