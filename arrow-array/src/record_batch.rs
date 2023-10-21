@@ -333,7 +333,7 @@ impl RecordBatch {
     ///
     /// # Panics
     ///
-    /// Panics if `index` is outside of `0..num_columns`.
+    /// Panics if `index`` out of bounds.
     ///
     /// # Example
     ///
