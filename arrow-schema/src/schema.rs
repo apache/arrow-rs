@@ -343,7 +343,7 @@ impl Schema {
     ///   Field::new("c", DataType::Utf8, false),
     /// ]);
     /// assert_eq!(schema.fields.len(), 3);
-    /// assert_eq!(schema.remove_field("b").unwrap(), Field::new("b", DataType::Int8, false).into());
+    /// assert_eq!(schema.remove_field_with_name("b").unwrap(), Field::new("b", DataType::Int8, false).into());
     /// assert_eq!(schema.fields.len(), 2);
     /// ```
     pub fn remove_field_with_name(&mut self, name: &str) -> Option<FieldRef> {
