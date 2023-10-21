@@ -22,17 +22,18 @@
 //! especially useful when dealing with large files or high-throughput systems.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::{stream::FuturesUnordered, Future, StreamExt};
 use std::{io, pin::Pin, sync::Arc, task::Poll};
 use tokio::io::AsyncWrite;
 
-use crate::Result;
+use crate::path::Path;
+use crate::{MultipartId, PutResult, Result};
 
 type BoxedTryFuture<T> = Pin<Box<dyn Future<Output = Result<T, io::Error>> + Send>>;
 
-/// A trait that can be implemented by cloud-based object stores
-/// and used in combination with [`WriteMultiPart`] to provide
-/// multipart upload support
+/// A trait used in combination with [`WriteMultiPart`] to implement
+/// [`AsyncWrite`] on top of an API for multipart upload
 #[async_trait]
 pub trait PutPart: Send + Sync + 'static {
     /// Upload a single part
@@ -52,6 +53,9 @@ pub struct PartId {
 }
 
 /// Wrapper around a [`PutPart`] that implements [`AsyncWrite`]
+///
+/// Data will be uploaded in fixed size chunks of 10 MiB in parallel,
+/// up to the configured maximum concurrency
 pub struct WriteMultiPart<T: PutPart> {
     inner: Arc<T>,
     /// A list of completed parts, in sequential order.
@@ -262,4 +266,43 @@ impl<T: PutPart> std::fmt::Debug for WriteMultiPart<T> {
             .field("current_part_idx", &self.current_part_idx)
             .finish()
     }
+}
+
+/// A low-level interface for interacting with multipart upload APIs
+///
+/// Most use-cases should prefer [`ObjectStore::put_multipart`] as this is supported by more
+/// backends, including [`LocalFileSystem`], and automatically handles uploading fixed
+/// size parts of sufficient size in parallel
+///
+/// [`ObjectStore::put_multipart`]: crate::ObjectStore::put_multipart
+/// [`LocalFileSystem`]: crate::local::LocalFileSystem
+#[async_trait]
+pub trait MultiPartStore: Send + Sync + 'static {
+    /// Creates a new multipart upload, returning the [`MultipartId`]
+    async fn create_multipart(&self, path: &Path) -> Result<MultipartId>;
+
+    /// Uploads a new part with index `part_idx`
+    ///
+    /// Most stores require that all parts apart from the final are at least 5 MiB. Additionally
+    /// some stores require all parts excluding the last to be the same size, e.g. [R2]
+    ///
+    /// [R2]: https://developers.cloudflare.com/r2/objects/multipart-objects/#limitations
+    async fn put_part(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        part_idx: usize,
+        data: Bytes,
+    ) -> Result<PartId>;
+
+    /// Completes a multipart upload
+    async fn complete_multipart(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+    ) -> Result<PutResult>;
+
+    /// Aborts a multipart upload
+    async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()>;
 }

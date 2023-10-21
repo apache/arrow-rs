@@ -24,7 +24,7 @@ use crate::client::GetOptionsExt;
 use crate::gcp::{GcpCredential, GcpCredentialProvider, STORE};
 use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
-use crate::{ClientOptions, GetOptions, ListResult, MultipartId, Result, RetryConfig};
+use crate::{ClientOptions, GetOptions, ListResult, MultipartId, PutResult, Result, RetryConfig};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
@@ -184,6 +184,30 @@ impl GoogleCloudStorageClient {
         Ok(get_etag(response.headers()).context(MetadataSnafu)?)
     }
 
+    /// Perform a put part request <https://cloud.google.com/storage/docs/xml-api/put-object-multipart>
+    ///
+    /// Returns the new [`PartId`]
+    pub async fn put_part(
+        &self,
+        path: &Path,
+        upload_id: &MultipartId,
+        part_idx: usize,
+        data: Bytes,
+    ) -> Result<PartId> {
+        let content_id = self
+            .put_request(
+                path,
+                data,
+                &[
+                    ("partNumber", &format!("{}", part_idx + 1)),
+                    ("uploadId", upload_id),
+                ],
+            )
+            .await?;
+
+        Ok(PartId { content_id })
+    }
+
     /// Initiate a multi-part upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
     pub async fn multipart_initiate(&self, path: &Path) -> Result<MultipartId> {
         let credential = self.get_credential().await?;
@@ -240,7 +264,7 @@ impl GoogleCloudStorageClient {
         path: &Path,
         multipart_id: &MultipartId,
         completed_parts: Vec<PartId>,
-    ) -> Result<()> {
+    ) -> Result<PutResult> {
         let upload_id = multipart_id.clone();
         let url = self.object_url(path);
 
@@ -263,7 +287,8 @@ impl GoogleCloudStorageClient {
             // https://github.com/tafia/quick-xml/issues/350
             .replace("&quot;", "\"");
 
-        self.client
+        let result = self
+            .client
             .request(Method::POST, &url)
             .bearer_auth(&credential.bearer)
             .query(&[("uploadId", upload_id)])
@@ -274,7 +299,8 @@ impl GoogleCloudStorageClient {
                 path: path.as_ref(),
             })?;
 
-        Ok(())
+        let etag = get_etag(result.headers()).context(MetadataSnafu)?;
+        Ok(PutResult { e_tag: Some(etag) })
     }
 
     /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
