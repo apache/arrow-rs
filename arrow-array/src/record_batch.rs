@@ -20,7 +20,6 @@
 
 use crate::{new_empty_array, Array, ArrayRef, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaBuilder, SchemaRef};
-use std::mem;
 use std::ops::Index;
 use std::sync::Arc;
 
@@ -330,9 +329,13 @@ impl RecordBatch {
 
     /// Remove column by index and return it.
     ///
-    /// Return `Some(ArrayRef)` if the column is removed, otherwise return `None.
-    /// - Return `None` if the `index` is out of bounds
-    /// - Return `None` if the `index` is in bounds but the schema is shared (i.e. ref count > 1)
+    /// Return the `ArrayRef` if the column is removed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is outside of `0..num_columns`.
+    ///
+    /// # Example
     ///
     /// ```
     /// use std::sync::Arc;
@@ -347,25 +350,15 @@ impl RecordBatch {
     ///
     /// let mut batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array), Arc::new(bool_array)]).unwrap();
     ///
-    /// let removed_column = batch.remove_column(0).unwrap();
+    /// let removed_column = batch.remove_column(0);
     /// assert_eq!(removed_column.as_any().downcast_ref::<Int32Array>().unwrap(), &Int32Array::from(vec![1, 2, 3, 4, 5]));
     /// assert_eq!(batch.num_columns(), 1);
     /// ```
-    pub fn remove_column(&mut self, index: usize) -> Option<ArrayRef> {
-        if index < self.num_columns() {
-            let new_schema = mem::replace(&mut self.schema, Arc::new(Schema::empty()));
-            if Arc::strong_count(&new_schema) == 1 {
-                let mut schema = Arc::<Schema>::into_inner(new_schema).unwrap();
-                schema.fields.remove(index);
-                self.schema = Arc::new(schema);
-                return Some(self.columns.remove(index));
-            } else {
-                self.schema = new_schema;
-                return None;
-            }
-        }
-
-        None
+    pub fn remove_column(&mut self, index: usize) -> ArrayRef {
+        let mut builder = SchemaBuilder::from(self.schema.fields());
+        builder.remove(index);
+        self.schema = Arc::new(builder.finish());
+        self.columns.remove(index)
     }
 
     /// Return a new RecordBatch where each column is sliced
