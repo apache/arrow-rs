@@ -77,6 +77,16 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.put(location, bytes).await
     }
 
+    async fn put_opts(
+        &self,
+        location: &Path,
+        bytes: Bytes,
+        options: PutOptions,
+    ) -> Result<()> {
+        let _permit = self.semaphore.acquire().await.unwrap();
+        self.inner.put_opts(location, bytes, options).await
+    }
+
     async fn put_multipart(
         &self,
         location: &Path,
