@@ -21,6 +21,7 @@ pub mod cast;
 pub use cast::*;
 pub mod display;
 pub mod parse;
-
 #[cfg(feature = "prettyprint")]
 pub mod pretty;
+
+pub mod base64;
