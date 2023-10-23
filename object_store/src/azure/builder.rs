@@ -17,7 +17,7 @@
 
 use crate::azure::client::{AzureClient, AzureConfig};
 use crate::azure::credential::{
-    AzureCliCredential, ClientSecretOAuthProvider, ImdsManagedIdentityProvider,
+    AzureAccessKey, AzureCliCredential, ClientSecretOAuthProvider, ImdsManagedIdentityProvider,
     WorkloadIdentityOAuthProvider,
 };
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
@@ -800,11 +800,12 @@ impl MicrosoftAzureBuilder {
             // Allow overriding defaults. Values taken from
             // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
             let url = url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
-            let account_key = self
-                .access_key
-                .unwrap_or_else(|| EMULATOR_ACCOUNT_KEY.to_string());
+            let key = match self.access_key {
+                Some(k) => AzureAccessKey::try_new(&k)?,
+                None => AzureAccessKey::try_new(EMULATOR_ACCOUNT_KEY)?,
+            };
 
-            let credential = static_creds(AzureCredential::AccessKey(account_key));
+            let credential = static_creds(AzureCredential::AccessKey(key));
 
             self.client_options = self.client_options.with_allow_http(true);
             (true, url, credential, account_name)
@@ -828,7 +829,8 @@ impl MicrosoftAzureBuilder {
             } else if let Some(bearer_token) = self.bearer_token {
                 static_creds(AzureCredential::BearerToken(bearer_token))
             } else if let Some(access_key) = self.access_key {
-                static_creds(AzureCredential::AccessKey(access_key))
+                let key = AzureAccessKey::try_new(&access_key)?;
+                static_creds(AzureCredential::AccessKey(key))
             } else if let (Some(client_id), Some(tenant_id), Some(federated_token_file)) =
                 (&self.client_id, &self.tenant_id, self.federated_token_file)
             {

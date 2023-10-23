@@ -75,6 +75,9 @@ pub enum Error {
     #[snafu(display("Error reading federated token file "))]
     FederatedTokenFile,
 
+    #[snafu(display("Invalid Access Key: {}", source))]
+    InvalidAccessKey { source: base64::DecodeError },
+
     #[snafu(display("'az account get-access-token' command failed: {message}"))]
     AzureCli { message: String },
 
@@ -93,13 +96,25 @@ impl From<Error> for crate::Error {
     }
 }
 
+/// A shared Azure Storage Account Key
+#[derive(Debug, Eq, PartialEq)]
+pub struct AzureAccessKey(Vec<u8>);
+
+impl AzureAccessKey {
+    /// Create a new [`AzureAccessKey`], checking it for validity
+    pub fn try_new(key: &str) -> Result<Self> {
+        let key = BASE64_STANDARD.decode(key).context(InvalidAccessKeySnafu)?;
+        Ok(Self(key))
+    }
+}
+
 /// An Azure storage credential
 #[derive(Debug, Eq, PartialEq)]
 pub enum AzureCredential {
     /// A shared access key
     ///
     /// <https://learn.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key>
-    AccessKey(String),
+    AccessKey(AzureAccessKey),
     /// A shared access signature
     ///
     /// <https://learn.microsoft.com/en-us/rest/api/storageservices/delegate-access-with-shared-access-signature>
@@ -149,7 +164,7 @@ impl CredentialExt for RequestBuilder {
                     request.url(),
                     request.method(),
                     account,
-                    key.as_str(),
+                    key,
                 );
 
                 // "signature" is a base 64 encoded string so it should never
@@ -174,10 +189,10 @@ fn generate_authorization(
     u: &Url,
     method: &Method,
     account: &str,
-    key: &str,
+    key: &AzureAccessKey,
 ) -> String {
     let str_to_sign = string_to_sign(h, u, method, account);
-    let auth = hmac_sha256(BASE64_STANDARD.decode(key).unwrap(), str_to_sign);
+    let auth = hmac_sha256(&key.0, str_to_sign);
     format!("SharedKey {}:{}", account, BASE64_STANDARD.encode(auth))
 }
 
