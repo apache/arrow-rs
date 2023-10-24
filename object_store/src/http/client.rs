@@ -21,12 +21,12 @@ use crate::client::retry::{self, RetryConfig, RetryExt};
 use crate::client::GetOptionsExt;
 use crate::path::{Path, DELIMITER};
 use crate::util::deserialize_rfc1123;
-use crate::{ClientOptions, GetOptions, ObjectMeta, PutMode, PutOptions, Result};
+use crate::{ClientOptions, GetOptions, ObjectMeta, Result};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use percent_encoding::percent_decode_str;
-use reqwest::header::{CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH};
+use reqwest::header::CONTENT_TYPE;
 use reqwest::{Method, Response, StatusCode};
 use serde::Deserialize;
 use snafu::{OptionExt, ResultExt, Snafu};
@@ -69,9 +69,6 @@ enum Error {
         path: String,
         source: crate::path::Error,
     },
-
-    #[snafu(display("ETag required for conditional update"))]
-    MissingETag,
 }
 
 impl From<Error> for crate::Error {
@@ -175,12 +172,6 @@ impl Client {
                     Some(StatusCode::CONFLICT | StatusCode::NOT_FOUND) if !retry => {
                         retry = true;
                         self.create_parent_directories(location).await?
-                    }
-                    Some(StatusCode::NOT_MODIFIED) if matches!(opts.mode, PutMode::Create) => {
-                        return Err(crate::Error::AlreadyExists {
-                            path: location.to_string(),
-                            source: Box::new(source),
-                        })
                     }
                     _ => return Err(Error::Request { source }.into()),
                 },
