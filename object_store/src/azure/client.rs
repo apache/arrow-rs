@@ -191,22 +191,35 @@ impl AzureClient {
             builder = builder.header(CONTENT_LENGTH, HeaderValue::from_static("0"));
         }
 
-        builder = match opts.mode {
+        builder = match &opts.mode {
             PutMode::Overwrite => builder,
             PutMode::Create => builder.header(IF_NONE_MATCH, "*"),
-            PutMode::Update(v) => builder.header(IF_MATCH, v.e_tag.context(MissingETagSnafu)?),
+            PutMode::Update(v) => {
+                builder.header(IF_MATCH, v.e_tag.as_ref().context(MissingETagSnafu)?)
+            }
         };
 
-        let response = builder
+        let result = builder
             .query(query)
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config)
-            .await
-            .context(PutRequestSnafu {
-                path: path.as_ref(),
-            })?;
+            .await;
 
-        Ok(response)
+        match result {
+            Ok(response) => Ok(response),
+            Err(source) => {
+                return Err(match (opts.mode, source.status()) {
+                    (PutMode::Create, Some(StatusCode::CONFLICT)) => crate::Error::AlreadyExists {
+                        source: Box::new(source),
+                        path: path.to_string(),
+                    },
+                    _ => crate::Error::from(Error::PutRequest {
+                        source,
+                        path: path.to_string(),
+                    }),
+                });
+            }
+        }
     }
 
     /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
