@@ -46,7 +46,7 @@ use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
     ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, PutResult, Result, RetryConfig,
+    ObjectStore, PutOptions, PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -96,8 +96,8 @@ impl std::fmt::Display for HttpStore {
 
 #[async_trait]
 impl ObjectStore for HttpStore {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        let response = self.client.put(location, bytes).await?;
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        let response = self.client.put(location, bytes, opts).await?;
         let e_tag = match get_etag(response.headers()) {
             Ok(e_tag) => Some(e_tag),
             Err(crate::client::header::Error::MissingEtag) => None,
@@ -264,5 +264,6 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
+        put_opts(&integration, true).await;
     }
 }

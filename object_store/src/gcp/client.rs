@@ -24,16 +24,22 @@ use crate::client::GetOptionsExt;
 use crate::gcp::{GcpCredential, GcpCredentialProvider, STORE};
 use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
-use crate::{ClientOptions, GetOptions, ListResult, MultipartId, PutResult, Result, RetryConfig};
+use crate::{
+    ClientOptions, GetOptions, ListResult, MultipartId, PutMode, PutOptions, PutResult, Result,
+    RetryConfig,
+};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{header, Client, Method, Response, StatusCode};
 use serde::Serialize;
-use snafu::{ResultExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu};
 use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-goog-generation";
+
+const VERSION_MATCH: &str = "x-goog-if-generation-match";
+
 #[derive(Debug, Snafu)]
 enum Error {
     #[snafu(display("Error performing list request: {}", source))]
@@ -79,6 +85,9 @@ enum Error {
     Metadata {
         source: crate::client::header::Error,
     },
+
+    #[snafu(display("Version required for conditional update"))]
+    MissingVersion,
 }
 
 impl From<Error> for crate::Error {
@@ -157,6 +166,7 @@ impl GoogleCloudStorageClient {
         &self,
         path: &Path,
         payload: Bytes,
+        opts: PutOptions,
         query: &T,
     ) -> Result<PutResult> {
         let credential = self.get_credential().await?;
@@ -168,21 +178,44 @@ impl GoogleCloudStorageClient {
             .get_content_type(path)
             .unwrap_or("application/octet-stream");
 
-        let response = self
-            .client
-            .request(Method::PUT, url)
-            .query(query)
+        let mut builder = self.client.request(Method::PUT, url).query(query);
+
+        builder = match &opts.mode {
+            PutMode::Overwrite => builder,
+            PutMode::Create => builder.header(VERSION_MATCH, 0),
+            PutMode::Update(v) => builder.header(
+                VERSION_MATCH,
+                v.version.as_ref().context(MissingVersionSnafu)?,
+            ),
+        };
+
+        let result = builder
             .bearer_auth(&credential.bearer)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, payload.len())
             .body(payload)
             .send_retry(&self.config.retry_config)
-            .await
-            .context(PutRequestSnafu {
-                path: path.as_ref(),
-            })?;
+            .await;
 
-        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
+        match result {
+            Ok(response) => {
+                Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
+            }
+            Err(source) => {
+                return Err(match (opts.mode, source.status()) {
+                    (PutMode::Create, Some(StatusCode::PRECONDITION_FAILED)) => {
+                        crate::Error::AlreadyExists {
+                            source: Box::new(source),
+                            path: path.to_string(),
+                        }
+                    }
+                    _ => crate::Error::from(Error::PutRequest {
+                        source,
+                        path: path.to_string(),
+                    }),
+                });
+            }
+        }
     }
 
     /// Perform a put part request <https://cloud.google.com/storage/docs/xml-api/put-object-multipart>
@@ -199,6 +232,7 @@ impl GoogleCloudStorageClient {
             .put_request(
                 path,
                 data,
+                PutOptions::default(),
                 &[
                     ("partNumber", &format!("{}", part_idx + 1)),
                     ("uploadId", upload_id),
@@ -336,7 +370,7 @@ impl GoogleCloudStorageClient {
             .header("x-goog-copy-source", source);
 
         if if_not_exists {
-            builder = builder.header("x-goog-if-generation-match", 0);
+            builder = builder.header(VERSION_MATCH, 0);
         }
 
         builder
@@ -377,13 +411,18 @@ impl GetClient for GoogleCloudStorageClient {
             false => Method::GET,
         };
 
-        let mut request = self.client.request(method, url).with_get_options(options);
+        let mut request = self.client.request(method, url);
+
+        if let Some(version) = &options.version {
+            request = request.query(&[("generation", version)]);
+        }
 
         if !credential.bearer.is_empty() {
             request = request.bearer_auth(&credential.bearer);
         }
 
         let response = request
+            .with_get_options(options)
             .send_retry(&self.config.retry_config)
             .await
             .context(GetRequestSnafu {

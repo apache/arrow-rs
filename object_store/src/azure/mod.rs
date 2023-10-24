@@ -29,7 +29,8 @@
 use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
     path::Path,
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult, Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
+    Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -81,8 +82,8 @@ impl std::fmt::Display for MicrosoftAzure {
 
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        Ok(self.client.put_blob(location, bytes).await?)
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        self.client.put_blob(location, bytes, opts).await
     }
 
     async fn put_multipart(
@@ -199,6 +200,7 @@ mod tests {
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
+        put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
     }
 

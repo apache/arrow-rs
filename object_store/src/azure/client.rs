@@ -27,7 +27,8 @@ use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::util::deserialize_rfc1123;
 use crate::{
-    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutResult, Result, RetryConfig,
+    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode, PutOptions, PutResult,
+    Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -37,11 +38,11 @@ use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{
-    header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH},
+    header::{HeaderValue, CONTENT_LENGTH, IF_MATCH, IF_NONE_MATCH},
     Client as ReqwestClient, Method, Response, StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use snafu::{ResultExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -94,6 +95,9 @@ pub(crate) enum Error {
     Metadata {
         source: crate::client::header::Error,
     },
+
+    #[snafu(display("ETag required for conditional update"))]
+    MissingETag,
 }
 
 impl From<Error> for crate::Error {
@@ -163,6 +167,7 @@ impl AzureClient {
         path: &Path,
         bytes: Option<Bytes>,
         is_block_op: bool,
+        opts: PutOptions,
         query: &T,
     ) -> Result<Response> {
         let credential = self.get_credential().await?;
@@ -171,9 +176,7 @@ impl AzureClient {
         let mut builder = self.client.request(Method::PUT, url);
 
         if !is_block_op {
-            builder = builder.header(&BLOB_TYPE, "BlockBlob").query(query);
-        } else {
-            builder = builder.query(query);
+            builder = builder.header(&BLOB_TYPE, "BlockBlob");
         }
 
         if let Some(value) = self.config().client_options.get_content_type(path) {
@@ -188,7 +191,14 @@ impl AzureClient {
             builder = builder.header(CONTENT_LENGTH, HeaderValue::from_static("0"));
         }
 
+        builder = match opts.mode {
+            PutMode::Overwrite => builder,
+            PutMode::Create => builder.header(IF_NONE_MATCH, "*"),
+            PutMode::Update(v) => builder.header(IF_MATCH, v.e_tag.context(MissingETagSnafu)?),
+        };
+
         let response = builder
+            .query(query)
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config)
             .await
@@ -200,8 +210,11 @@ impl AzureClient {
     }
 
     /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
-    pub async fn put_blob(&self, path: &Path, bytes: Bytes) -> Result<PutResult> {
-        let response = self.put_request(path, Some(bytes), false, &()).await?;
+    pub async fn put_blob(&self, path: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        let response = self
+            .put_request(path, Some(bytes), false, opts, &())
+            .await?;
+
         Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
 
@@ -214,6 +227,7 @@ impl AzureClient {
             path,
             Some(data),
             true,
+            PutOptions::default(),
             &[
                 ("comp", "block"),
                 ("blockid", &BASE64_STANDARD.encode(block_id)),
@@ -235,7 +249,13 @@ impl AzureClient {
         let block_xml = block_list.to_xml();
 
         let response = self
-            .put_request(path, Some(block_xml.into()), true, &[("comp", "blocklist")])
+            .put_request(
+                path,
+                Some(block_xml.into()),
+                true,
+                PutOptions::default(),
+                &[("comp", "blocklist")],
+            )
             .await?;
 
         Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)

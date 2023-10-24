@@ -299,7 +299,12 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// The operation is guaranteed to be atomic, it will either successfully
     /// write the entirety of `bytes` to `location`, or fail. No clients
     /// should be able to observe a partially written object
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult>;
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+        self.put_opts(location, bytes, PutOptions::default()).await
+    }
+
+    /// Save the provided bytes to the specified location with the given options
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult>;
 
     /// Get a multi-part upload that allows writing data in chunks.
     ///
@@ -529,6 +534,15 @@ macro_rules! as_ref_impl {
         impl ObjectStore for $type {
             async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
                 self.as_ref().put(location, bytes).await
+            }
+
+            async fn put_opts(
+                &self,
+                location: &Path,
+                bytes: Bytes,
+                opts: PutOptions,
+            ) -> Result<PutResult> {
+                self.as_ref().put_opts(location, bytes, opts).await
             }
 
             async fn put_multipart(
@@ -834,6 +848,56 @@ impl GetResult {
             #[cfg(target_arch = "wasm32")]
             _ => unimplemented!("File IO not implemented on wasm32."),
         }
+    }
+}
+
+/// Configure preconditions for the put operation
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PutMode {
+    /// Perform an atomic write operation, overwriting any object present at the provided path
+    #[default]
+    Overwrite,
+    /// Perform an atomic write operation, returning [`Error::AlreadyExists`] if an
+    /// object already exists at the provided path
+    Create,
+    /// Perform an atomic write operation if the current version of the object matches the
+    /// provided [`UpdateVersion`], returning [`Error::Precondition`] otherwise
+    Update(UpdateVersion),
+}
+
+/// Uniquely identifies a version of an object to update
+///
+/// Stores will use differing combinations of `e_tag` and `version` to provide conditional
+/// updates, and it is therefore recommended applications preserve both
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateVersion {
+    /// The unique identifier for the newly created object
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
+    pub e_tag: Option<String>,
+    /// A version indicator for the newly created object
+    pub version: Option<String>,
+}
+
+impl From<PutResult> for UpdateVersion {
+    fn from(value: PutResult) -> Self {
+        Self {
+            e_tag: value.e_tag,
+            version: value.version,
+        }
+    }
+}
+
+/// Options for a put request
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PutOptions {
+    /// Configure the [`PutMode`] for this operation
+    pub mode: PutMode,
+}
+
+impl From<PutMode> for PutOptions {
+    fn from(mode: PutMode) -> Self {
+        Self { mode }
     }
 }
 
@@ -1408,12 +1472,63 @@ mod tests {
             // Can retrieve previous version
             let get_opts = storage.get_opts(&path, options).await.unwrap();
             let old = get_opts.bytes().await.unwrap();
-            assert_eq!(old, b"foo".as_slice());
+            assert_eq!(old, b"test".as_slice());
 
             // Current version contains the updated data
             let current = storage.get(&path).await.unwrap().bytes().await.unwrap();
             assert_eq!(&current, b"bar".as_slice());
         }
+    }
+
+    pub(crate) async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
+        let path = Path::from("put_opts");
+        let v1 = storage
+            .put_opts(&path, "a".into(), PutMode::Create.into())
+            .await
+            .unwrap();
+
+        let err = storage
+            .put_opts(&path, "b".into(), PutMode::Create.into())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::AlreadyExists { .. }), "{err}");
+
+        let b = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(b.as_ref(), b"a");
+
+        if !supports_update {
+            return;
+        }
+
+        let v2 = storage
+            .put_opts(&path, "c".into(), PutMode::Update(v1.clone().into()).into())
+            .await
+            .unwrap();
+
+        let b = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(b.as_ref(), b"c");
+
+        let err = storage
+            .put_opts(&path, "d".into(), PutMode::Update(v1.into()).into())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Precondition { .. }), "{err}");
+
+        storage
+            .put_opts(&path, "e".into(), PutMode::Update(v2.clone().into()).into())
+            .await
+            .unwrap();
+
+        let b = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(b.as_ref(), b"e");
+
+        // Update not exists
+        let path = Path::from("I don't exist");
+        let err = storage
+            .put_opts(&path, "e".into(), PutMode::Update(v2.into()).into())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Precondition { .. }), "{err}");
     }
 
     /// Returns a chunk of length `chunk_length`

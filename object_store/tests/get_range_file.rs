@@ -22,9 +22,7 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
-use object_store::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult,
-};
+use object_store::*;
 use std::fmt::Formatter;
 use tempfile::tempdir;
 use tokio::io::AsyncWrite;
@@ -40,50 +38,42 @@ impl std::fmt::Display for MyStore {
 
 #[async_trait]
 impl ObjectStore for MyStore {
-    async fn put(&self, path: &Path, data: Bytes) -> object_store::Result<PutResult> {
-        self.0.put(path, data).await
+    async fn put_opts(&self, path: &Path, data: Bytes, opts: PutOptions) -> Result<PutResult> {
+        self.0.put_opts(path, data, opts).await
     }
 
     async fn put_multipart(
         &self,
         _: &Path,
-    ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
         todo!()
     }
 
-    async fn abort_multipart(&self, _: &Path, _: &MultipartId) -> object_store::Result<()> {
+    async fn abort_multipart(&self, _: &Path, _: &MultipartId) -> Result<()> {
         todo!()
     }
 
-    async fn get_opts(
-        &self,
-        location: &Path,
-        options: GetOptions,
-    ) -> object_store::Result<GetResult> {
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.0.get_opts(location, options).await
     }
 
-    async fn head(&self, _: &Path) -> object_store::Result<ObjectMeta> {
+    async fn delete(&self, _: &Path) -> Result<()> {
         todo!()
     }
 
-    async fn delete(&self, _: &Path) -> object_store::Result<()> {
+    fn list(&self, _: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         todo!()
     }
 
-    fn list(&self, _: Option<&Path>) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+    async fn list_with_delimiter(&self, _: Option<&Path>) -> Result<ListResult> {
         todo!()
     }
 
-    async fn list_with_delimiter(&self, _: Option<&Path>) -> object_store::Result<ListResult> {
+    async fn copy(&self, _: &Path, _: &Path) -> Result<()> {
         todo!()
     }
 
-    async fn copy(&self, _: &Path, _: &Path) -> object_store::Result<()> {
-        todo!()
-    }
-
-    async fn copy_if_not_exists(&self, _: &Path, _: &Path) -> object_store::Result<()> {
+    async fn copy_if_not_exists(&self, _: &Path, _: &Path) -> Result<()> {
         todo!()
     }
 }

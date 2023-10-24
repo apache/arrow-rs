@@ -21,12 +21,12 @@ use crate::client::retry::{self, RetryConfig, RetryExt};
 use crate::client::GetOptionsExt;
 use crate::path::{Path, DELIMITER};
 use crate::util::deserialize_rfc1123;
-use crate::{ClientOptions, GetOptions, ObjectMeta, Result};
+use crate::{ClientOptions, GetOptions, ObjectMeta, PutMode, PutOptions, Result};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use percent_encoding::percent_decode_str;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH};
 use reqwest::{Method, Response, StatusCode};
 use serde::Deserialize;
 use snafu::{OptionExt, ResultExt, Snafu};
@@ -69,6 +69,9 @@ enum Error {
         path: String,
         source: crate::path::Error,
     },
+
+    #[snafu(display("ETag required for conditional update"))]
+    MissingETag,
 }
 
 impl From<Error> for crate::Error {
@@ -156,7 +159,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn put(&self, location: &Path, bytes: Bytes) -> Result<Response> {
+    pub async fn put(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<Response> {
         let mut retry = false;
         loop {
             let url = self.path_url(location);
@@ -165,6 +168,14 @@ impl Client {
                 builder = builder.header(CONTENT_TYPE, value);
             }
 
+            let builder = match &opts.mode {
+                PutMode::Overwrite => builder,
+                PutMode::Create => builder.header(IF_NONE_MATCH, "*"),
+                PutMode::Update(v) => {
+                    builder.header(IF_MATCH, v.e_tag.as_ref().context(MissingETagSnafu)?)
+                }
+            };
+
             match builder.send_retry(&self.retry_config).await {
                 Ok(response) => return Ok(response),
                 Err(source) => match source.status() {
@@ -172,6 +183,12 @@ impl Client {
                     Some(StatusCode::CONFLICT | StatusCode::NOT_FOUND) if !retry => {
                         retry = true;
                         self.create_parent_directories(location).await?
+                    }
+                    Some(StatusCode::NOT_MODIFIED) if matches!(opts.mode, PutMode::Create) => {
+                        return Err(crate::Error::AlreadyExists {
+                            path: location.to_string(),
+                            source: Box::new(source),
+                        })
                     }
                     _ => return Err(Error::Request { source }.into()),
                 },
@@ -243,6 +260,10 @@ impl Client {
                 .header("Destination", self.path_url(to).as_str());
 
             if !overwrite {
+                // While the Overwrite header appears to duplicate
+                // the functionality of the If-Match: * header of HTTP/1.1, If-Match
+                // applies only to the Request-URI, and not to the Destination of a COPY
+                // or MOVE.
                 builder = builder.header("Overwrite", "F");
             }
 

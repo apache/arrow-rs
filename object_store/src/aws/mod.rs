@@ -47,8 +47,8 @@ use crate::client::CredentialProvider;
 use crate::multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart};
 use crate::signer::Signer;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutResult,
-    Result,
+    Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutMode,
+    PutOptions, PutResult, Result,
 };
 
 mod builder;
@@ -158,8 +158,11 @@ impl Signer for AmazonS3 {
 
 #[async_trait]
 impl ObjectStore for AmazonS3 {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        self.client.put_request(location, bytes, &()).await
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        match opts.mode {
+            PutMode::Overwrite => self.client.put_request(location, bytes, &()).await,
+            PutMode::Create | PutMode::Update(_) => Err(Error::NotImplemented),
+        }
     }
 
     async fn put_multipart(
