@@ -159,7 +159,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn put(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<Response> {
+    pub async fn put(&self, location: &Path, bytes: Bytes) -> Result<Response> {
         let mut retry = false;
         loop {
             let url = self.path_url(location);
@@ -167,14 +167,6 @@ impl Client {
             if let Some(value) = self.client_options.get_content_type(location) {
                 builder = builder.header(CONTENT_TYPE, value);
             }
-
-            let builder = match &opts.mode {
-                PutMode::Overwrite => builder,
-                PutMode::Create => builder.header(IF_NONE_MATCH, "*"),
-                PutMode::Update(v) => {
-                    builder.header(IF_MATCH, v.e_tag.as_ref().context(MissingETagSnafu)?)
-                }
-            };
 
             match builder.send_retry(&self.retry_config).await {
                 Ok(response) => return Ok(response),
