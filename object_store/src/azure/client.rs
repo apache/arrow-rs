@@ -19,7 +19,7 @@ use super::credential::AzureCredential;
 use crate::azure::credential::*;
 use crate::azure::{AzureCredentialProvider, STORE};
 use crate::client::get::GetClient;
-use crate::client::header::{get_etag, HeaderConfig};
+use crate::client::header::{get_put_result, HeaderConfig};
 use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
@@ -45,6 +45,8 @@ use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
+
+const VERSION_HEADER: &str = "x-ms-version-id";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -156,7 +158,6 @@ impl AzureClient {
         self.config.credentials.get_credential().await
     }
 
-    /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
     pub async fn put_request<T: Serialize + crate::Debug + ?Sized + Sync>(
         &self,
         path: &Path,
@@ -198,6 +199,12 @@ impl AzureClient {
         Ok(response)
     }
 
+    /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
+    pub async fn put_blob(&self, path: &Path, bytes: Bytes) -> Result<PutResult> {
+        let response = self.put_request(path, Some(bytes), false, &()).await?;
+        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
+    }
+
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
     pub async fn put_block(&self, path: &Path, part_idx: usize, data: Bytes) -> Result<PartId> {
         let content_id = format!("{part_idx:20}");
@@ -231,8 +238,7 @@ impl AzureClient {
             .put_request(path, Some(block_xml.into()), true, &[("comp", "blocklist")])
             .await?;
 
-        let e_tag = get_etag(response.headers()).context(MetadataSnafu)?;
-        Ok(PutResult { e_tag: Some(e_tag) })
+        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
 
     /// Make an Azure Delete request <https://docs.microsoft.com/en-us/rest/api/storageservices/delete-blob>
@@ -303,7 +309,7 @@ impl GetClient for AzureClient {
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: true,
         last_modified_required: true,
-        version_header: Some("x-ms-version-id"),
+        version_header: Some(VERSION_HEADER),
     };
 
     /// Make an Azure GET request

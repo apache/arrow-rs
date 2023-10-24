@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::client::get::GetClient;
-use crate::client::header::{get_etag, HeaderConfig};
+use crate::client::header::{get_put_result, HeaderConfig};
 use crate::client::list::ListClient;
 use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
@@ -33,6 +33,7 @@ use serde::Serialize;
 use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
 
+const VERSION_HEADER: &str = "x-goog-generation";
 #[derive(Debug, Snafu)]
 enum Error {
     #[snafu(display("Error performing list request: {}", source))]
@@ -157,7 +158,7 @@ impl GoogleCloudStorageClient {
         path: &Path,
         payload: Bytes,
         query: &T,
-    ) -> Result<String> {
+    ) -> Result<PutResult> {
         let credential = self.get_credential().await?;
         let url = self.object_url(path);
 
@@ -181,7 +182,7 @@ impl GoogleCloudStorageClient {
                 path: path.as_ref(),
             })?;
 
-        Ok(get_etag(response.headers()).context(MetadataSnafu)?)
+        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
 
     /// Perform a put part request <https://cloud.google.com/storage/docs/xml-api/put-object-multipart>
@@ -194,7 +195,7 @@ impl GoogleCloudStorageClient {
         part_idx: usize,
         data: Bytes,
     ) -> Result<PartId> {
-        let content_id = self
+        let result = self
             .put_request(
                 path,
                 data,
@@ -205,7 +206,9 @@ impl GoogleCloudStorageClient {
             )
             .await?;
 
-        Ok(PartId { content_id })
+        Ok(PartId {
+            content_id: result.e_tag.unwrap(),
+        })
     }
 
     /// Initiate a multi-part upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
@@ -299,8 +302,7 @@ impl GoogleCloudStorageClient {
                 path: path.as_ref(),
             })?;
 
-        let etag = get_etag(result.headers()).context(MetadataSnafu)?;
-        Ok(PutResult { e_tag: Some(etag) })
+        Ok(get_put_result(result.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
 
     /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
@@ -362,7 +364,7 @@ impl GetClient for GoogleCloudStorageClient {
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: true,
         last_modified_required: true,
-        version_header: Some("x-goog-generation"),
+        version_header: Some(VERSION_HEADER),
     };
 
     /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>

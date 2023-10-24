@@ -18,7 +18,7 @@
 //! Logic for extracting ObjectMeta from headers used by AWS, GCP and Azure
 
 use crate::path::Path;
-use crate::ObjectMeta;
+use crate::{ObjectMeta, PutResult};
 use chrono::{DateTime, TimeZone, Utc};
 use hyper::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 use hyper::HeaderMap;
@@ -65,6 +65,21 @@ pub enum Error {
         content_length: String,
         source: std::num::ParseIntError,
     },
+}
+
+/// Extracts a [`PutResult`] from the provided [`HeaderMap`]
+pub fn get_put_result(headers: &HeaderMap, version: &str) -> Result<PutResult, Error> {
+    let e_tag = Some(get_etag(headers)?);
+    let version = get_version(headers, version)?;
+    Ok(PutResult { e_tag, version })
+}
+
+/// Extracts a optional version from the provided [`HeaderMap`]
+pub fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<String>, Error> {
+    Ok(match headers.get(version) {
+        Some(x) => Some(x.to_str().context(BadHeaderSnafu)?.to_string()),
+        None => None,
+    })
 }
 
 /// Extracts an etag from the provided [`HeaderMap`]

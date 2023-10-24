@@ -49,7 +49,6 @@ mod credential;
 
 /// [`CredentialProvider`] for [`MicrosoftAzure`]
 pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
-use crate::client::header::get_etag;
 use crate::multipart::MultiPartStore;
 pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
 pub use credential::AzureCredential;
@@ -83,15 +82,7 @@ impl std::fmt::Display for MicrosoftAzure {
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        let response = self
-            .client
-            .put_request(location, Some(bytes), false, &())
-            .await?;
-        let e_tag = get_etag(response.headers()).map_err(|e| crate::Error::Generic {
-            store: STORE,
-            source: Box::new(e),
-        })?;
-        Ok(PutResult { e_tag: Some(e_tag) })
+        Ok(self.client.put_blob(location, bytes).await?)
     }
 
     async fn put_multipart(

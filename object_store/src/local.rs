@@ -293,6 +293,7 @@ impl ObjectStore for LocalFileSystem {
 
             Ok(PutResult {
                 e_tag: Some(get_etag(&metadata)),
+                version: None,
             })
         })
         .await

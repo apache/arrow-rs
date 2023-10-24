@@ -19,8 +19,8 @@ use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
 use crate::aws::{AwsCredentialProvider, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET};
 use crate::client::get::GetClient;
-use crate::client::header::get_etag;
 use crate::client::header::HeaderConfig;
+use crate::client::header::{get_put_result, get_version};
 use crate::client::list::ListClient;
 use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
@@ -44,6 +44,8 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
+
+const VERSION_HEADER: &str = "x-amz-version-id";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -265,7 +267,7 @@ impl S3Client {
         path: &Path,
         bytes: Bytes,
         query: &T,
-    ) -> Result<String> {
+    ) -> Result<PutResult> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
         let mut builder = self.client.request(Method::PUT, url);
@@ -303,7 +305,7 @@ impl S3Client {
                 path: path.as_ref(),
             })?;
 
-        Ok(get_etag(response.headers()).context(MetadataSnafu)?)
+        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
 
     /// Make an S3 Delete request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html>
@@ -527,7 +529,7 @@ impl S3Client {
     ) -> Result<PartId> {
         let part = (part_idx + 1).to_string();
 
-        let content_id = self
+        let result = self
             .put_request(
                 path,
                 data,
@@ -535,7 +537,9 @@ impl S3Client {
             )
             .await?;
 
-        Ok(PartId { content_id })
+        Ok(PartId {
+            content_id: result.e_tag.unwrap(),
+        })
     }
 
     pub async fn complete_multipart(
@@ -575,6 +579,8 @@ impl S3Client {
             .await
             .context(CompleteMultipartRequestSnafu)?;
 
+        let version = get_version(response.headers(), VERSION_HEADER).context(MetadataSnafu)?;
+
         let data = response
             .bytes()
             .await
@@ -585,6 +591,7 @@ impl S3Client {
 
         Ok(PutResult {
             e_tag: Some(response.e_tag),
+            version,
         })
     }
 }
@@ -596,7 +603,7 @@ impl GetClient for S3Client {
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: false,
         last_modified_required: false,
-        version_header: Some("x-amz-version-id"),
+        version_header: Some(VERSION_HEADER),
     };
 
     /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>

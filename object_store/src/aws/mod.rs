@@ -159,8 +159,7 @@ impl Signer for AmazonS3 {
 #[async_trait]
 impl ObjectStore for AmazonS3 {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        let e_tag = self.client.put_request(location, bytes, &()).await?;
-        Ok(PutResult { e_tag: Some(e_tag) })
+        self.client.put_request(location, bytes, &()).await
     }
 
     async fn put_multipart(

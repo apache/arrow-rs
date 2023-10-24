@@ -103,7 +103,11 @@ impl ObjectStore for HttpStore {
             Err(crate::client::header::Error::MissingEtag) => None,
             Err(source) => return Err(Error::Metadata { source }.into()),
         };
-        Ok(PutResult { e_tag })
+
+        Ok(PutResult {
+            e_tag,
+            version: None,
+        })
     }
 
     async fn put_multipart(

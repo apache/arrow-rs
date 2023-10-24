@@ -840,10 +840,12 @@ impl GetResult {
 /// Result for a put request
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PutResult {
-    /// The unique identifier for the object
+    /// The unique identifier for the newly created object
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
     pub e_tag: Option<String>,
+    /// A version indicator for the newly created object
+    pub version: Option<String>,
 }
 
 /// A specialized `Result` for object store-related errors

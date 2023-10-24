@@ -127,6 +127,7 @@ impl ObjectStore for InMemory {
         let etag = self.storage.write().insert(location, bytes);
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
+            version: None,
         })
     }
 
