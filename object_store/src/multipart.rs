@@ -283,8 +283,13 @@ pub trait MultiPartStore: Send + Sync + 'static {
 
     /// Uploads a new part with index `part_idx`
     ///
-    /// Most stores require that all parts apart from the final are at least 5 MiB. Additionally
-    /// some stores require all parts excluding the last to be the same size, e.g. [R2]
+    /// `part_idx` should be an integer in the range `0..N` where `N` is the number of
+    /// parts in the upload. Parts may be uploaded concurrently and in any order.
+    ///
+    /// Most stores require that all parts excluding the last are at least 5 MiB, and some
+    /// further require that all parts excluding the last be the same size, e.g. [R2].
+    /// [`WriteMultiPart`] performs writes in fixed size blocks of 10 MiB, and clients wanting
+    /// to maximise compatibility should look to do likewise.
     ///
     /// [R2]: https://developers.cloudflare.com/r2/objects/multipart-objects/#limitations
     async fn put_part(
@@ -296,6 +301,11 @@ pub trait MultiPartStore: Send + Sync + 'static {
     ) -> Result<PartId>;
 
     /// Completes a multipart upload
+    ///
+    /// The `i`'th value of `parts` must be a [`PartId`] returned by a call to [`Self::put_part`]
+    /// with a `part_idx` of `i`, and the same `path` and `id` as provided to this method. Calling
+    /// this method with out of sequence or repeated [`PartId`], or [`PartId`] returned for other
+    /// values of `path` or `id`, will result in implementation-defined behaviour
     async fn complete_multipart(
         &self,
         path: &Path,
