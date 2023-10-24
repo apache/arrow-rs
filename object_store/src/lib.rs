@@ -1481,6 +1481,7 @@ mod tests {
     }
 
     pub(crate) async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
+        delete_fixtures(storage).await;
         let path = Path::from("put_opts");
         let v1 = storage
             .put_opts(&path, "a".into(), PutMode::Create.into())

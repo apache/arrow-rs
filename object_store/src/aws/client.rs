@@ -17,7 +17,9 @@
 
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
-use crate::aws::{AwsCredentialProvider, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET};
+use crate::aws::{
+    AwsCredentialProvider, S3ConditionalPut, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET,
+};
 use crate::client::get::GetClient;
 use crate::client::header::HeaderConfig;
 use crate::client::header::{get_put_result, get_version};
@@ -227,6 +229,7 @@ pub struct S3Config {
     pub skip_signature: bool,
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
+    pub conditional_put: Option<S3ConditionalPut>,
 }
 
 impl S3Config {
@@ -267,6 +270,7 @@ impl S3Client {
         path: &Path,
         bytes: Bytes,
         query: &T,
+        header: Option<(&str, &str)>,
     ) -> Result<PutResult> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
@@ -288,6 +292,10 @@ impl S3Client {
 
         if let Some(value) = self.config().client_options.get_content_type(path) {
             builder = builder.header(CONTENT_TYPE, value);
+        }
+
+        if let Some((k, v)) = header {
+            builder = builder.header(k, v);
         }
 
         let response = builder
@@ -534,6 +542,7 @@ impl S3Client {
                 path,
                 data,
                 &[("partNumber", &part), ("uploadId", upload_id)],
+                None,
             )
             .await?;
 

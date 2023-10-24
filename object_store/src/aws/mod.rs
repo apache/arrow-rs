@@ -54,13 +54,13 @@ use crate::{
 mod builder;
 mod checksum;
 mod client;
-mod copy;
 mod credential;
+mod precondition;
 mod resolve;
 
 pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
-pub use copy::S3CopyIfNotExists;
+pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
 pub use resolve::resolve_bucket_region;
 
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
@@ -159,9 +159,32 @@ impl Signer for AmazonS3 {
 #[async_trait]
 impl ObjectStore for AmazonS3 {
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        match opts.mode {
-            PutMode::Overwrite => self.client.put_request(location, bytes, &()).await,
-            PutMode::Create | PutMode::Update(_) => Err(Error::NotImplemented),
+        match (opts.mode, &self.client.config().conditional_put) {
+            (PutMode::Overwrite, _) => self.client.put_request(location, bytes, &(), None).await,
+            (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
+            (PutMode::Create, Some(S3ConditionalPut::ETagMatch)) => {
+                let header = Some(("If-None-Match", "*"));
+                match self.client.put_request(location, bytes, &(), header).await {
+                    // Technically If-None-Match should return NotModified but some stores,
+                    // such as R2, instead return PreconditionFailed
+                    // https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject
+                    Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
+                        Err(Error::AlreadyExists {
+                            path: location.to_string(),
+                            source: Box::new(e),
+                        })
+                    }
+                    r => r,
+                }
+            }
+            (PutMode::Update(v), Some(S3ConditionalPut::ETagMatch)) => {
+                let etag = v.e_tag.ok_or_else(|| Error::Generic {
+                    store: STORE,
+                    source: "ETag required for conditional put".to_string().into(),
+                })?;
+                let header = Some(("If-Match", etag.as_str()));
+                self.client.put_request(location, bytes, &(), header).await
+            }
         }
     }
 
@@ -308,6 +331,7 @@ mod tests {
         let config = integration.client.config();
         let is_local = config.endpoint.starts_with("http://");
         let test_not_exists = config.copy_if_not_exists.is_some();
+        let test_conditional_put = config.conditional_put.is_some();
 
         // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
         put_get_delete_list_opts(&integration, is_local).await;
@@ -320,6 +344,9 @@ mod tests {
 
         if test_not_exists {
             copy_if_not_exists(&integration).await;
+        }
+        if test_conditional_put {
+            put_opts(&integration, true).await;
         }
 
         // run integration test with unsigned payload enabled
