@@ -207,18 +207,16 @@ impl AzureClient {
 
         match result {
             Ok(response) => Ok(response),
-            Err(source) => {
-                return Err(match (opts.mode, source.status()) {
-                    (PutMode::Create, Some(StatusCode::CONFLICT)) => crate::Error::AlreadyExists {
-                        source: Box::new(source),
-                        path: path.to_string(),
-                    },
-                    _ => crate::Error::from(Error::PutRequest {
-                        source,
-                        path: path.to_string(),
-                    }),
-                });
-            }
+            Err(source) => Err(match (opts.mode, source.status()) {
+                (PutMode::Create, Some(StatusCode::CONFLICT)) => crate::Error::AlreadyExists {
+                    source: Box::new(source),
+                    path: path.to_string(),
+                },
+                _ => crate::Error::from(Error::PutRequest {
+                    source,
+                    path: path.to_string(),
+                }),
+            }),
         }
     }
 

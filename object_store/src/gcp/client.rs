@@ -201,20 +201,18 @@ impl GoogleCloudStorageClient {
             Ok(response) => {
                 Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
             }
-            Err(source) => {
-                return Err(match (opts.mode, source.status()) {
-                    (PutMode::Create, Some(StatusCode::PRECONDITION_FAILED)) => {
-                        crate::Error::AlreadyExists {
-                            source: Box::new(source),
-                            path: path.to_string(),
-                        }
-                    }
-                    _ => crate::Error::from(Error::PutRequest {
-                        source,
+            Err(source) => Err(match (opts.mode, source.status()) {
+                (PutMode::Create, Some(StatusCode::PRECONDITION_FAILED)) => {
+                    crate::Error::AlreadyExists {
+                        source: Box::new(source),
                         path: path.to_string(),
-                    }),
-                });
-            }
+                    }
+                }
+                _ => crate::Error::from(Error::PutRequest {
+                    source,
+                    path: path.to_string(),
+                }),
+            }),
         }
     }
 
