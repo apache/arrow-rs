@@ -19,13 +19,16 @@ use super::credential::AzureCredential;
 use crate::azure::credential::*;
 use crate::azure::{AzureCredentialProvider, STORE};
 use crate::client::get::GetClient;
-use crate::client::header::HeaderConfig;
+use crate::client::header::{get_etag, HeaderConfig};
 use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
+use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::util::deserialize_rfc1123;
-use crate::{ClientOptions, GetOptions, ListResult, ObjectMeta, Path, Result, RetryConfig};
+use crate::{
+    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutResult, Result, RetryConfig,
+};
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -83,6 +86,11 @@ pub(crate) enum Error {
     #[snafu(display("Error authorizing request: {}", source))]
     Authorization {
         source: crate::azure::credential::Error,
+    },
+
+    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    Metadata {
+        source: crate::client::header::Error,
     },
 }
 
@@ -188,6 +196,43 @@ impl AzureClient {
             })?;
 
         Ok(response)
+    }
+
+    /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
+    pub async fn put_block(&self, path: &Path, part_idx: usize, data: Bytes) -> Result<PartId> {
+        let content_id = format!("{part_idx:20}");
+        let block_id: BlockId = content_id.clone().into();
+
+        self.put_request(
+            path,
+            Some(data),
+            true,
+            &[
+                ("comp", "block"),
+                ("blockid", &BASE64_STANDARD.encode(block_id)),
+            ],
+        )
+        .await?;
+
+        Ok(PartId { content_id })
+    }
+
+    /// PUT a block list <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block-list>
+    pub async fn put_block_list(&self, path: &Path, parts: Vec<PartId>) -> Result<PutResult> {
+        let blocks = parts
+            .into_iter()
+            .map(|part| BlockId::from(part.content_id))
+            .collect();
+
+        let block_list = BlockList { blocks };
+        let block_xml = block_list.to_xml();
+
+        let response = self
+            .put_request(path, Some(block_xml.into()), true, &[("comp", "blocklist")])
+            .await?;
+
+        let e_tag = get_etag(response.headers()).context(MetadataSnafu)?;
+        Ok(PutResult { e_tag: Some(e_tag) })
     }
 
     /// Make an Azure Delete request <https://docs.microsoft.com/en-us/rest/api/storageservices/delete-blob>

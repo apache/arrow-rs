@@ -26,15 +26,12 @@
 //! [ObjectStore::abort_multipart] is a no-op, since Azure Blob Store doesn't provide
 //! a way to drop old blocks. Instead unused blocks are automatically cleaned up
 //! after 7 days.
-use self::client::{BlockId, BlockList};
 use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
     path::Path,
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult, Result,
 };
 use async_trait::async_trait;
-use base64::prelude::BASE64_STANDARD;
-use base64::Engine;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use std::fmt::Debug;
@@ -53,6 +50,7 @@ mod credential;
 /// [`CredentialProvider`] for [`MicrosoftAzure`]
 pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
 use crate::client::header::get_etag;
+use crate::multipart::MultiPartStore;
 pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
 pub use credential::AzureCredential;
 
@@ -151,43 +149,44 @@ struct AzureMultiPartUpload {
 
 #[async_trait]
 impl PutPart for AzureMultiPartUpload {
-    async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
-        let content_id = format!("{part_idx:20}");
-        let block_id: BlockId = content_id.clone().into();
-
-        self.client
-            .put_request(
-                &self.location,
-                Some(buf.into()),
-                true,
-                &[
-                    ("comp", "block"),
-                    ("blockid", &BASE64_STANDARD.encode(block_id)),
-                ],
-            )
-            .await?;
-
-        Ok(PartId { content_id })
+    async fn put_part(&self, buf: Vec<u8>, idx: usize) -> Result<PartId> {
+        self.client.put_block(&self.location, idx, buf.into()).await
     }
 
-    async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
-        let blocks = completed_parts
-            .into_iter()
-            .map(|part| BlockId::from(part.content_id))
-            .collect();
+    async fn complete(&self, parts: Vec<PartId>) -> Result<()> {
+        self.client.put_block_list(&self.location, parts).await?;
+        Ok(())
+    }
+}
 
-        let block_list = BlockList { blocks };
-        let block_xml = block_list.to_xml();
+#[async_trait]
+impl MultiPartStore for MicrosoftAzure {
+    async fn create_multipart(&self, _: &Path) -> Result<MultipartId> {
+        Ok(String::new())
+    }
 
-        self.client
-            .put_request(
-                &self.location,
-                Some(block_xml.into()),
-                true,
-                &[("comp", "blocklist")],
-            )
-            .await?;
+    async fn put_part(
+        &self,
+        path: &Path,
+        _: &MultipartId,
+        part_idx: usize,
+        data: Bytes,
+    ) -> Result<PartId> {
+        self.client.put_block(path, part_idx, data).await
+    }
 
+    async fn complete_multipart(
+        &self,
+        path: &Path,
+        _: &MultipartId,
+        parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        self.client.put_block_list(path, parts).await
+    }
+
+    async fn abort_multipart(&self, _: &Path, _: &MultipartId) -> Result<()> {
+        // There is no way to drop blocks that have been uploaded. Instead, they simply
+        // expire in 7 days.
         Ok(())
     }
 }
@@ -195,10 +194,7 @@ impl PutPart for AzureMultiPartUpload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{
-        copy_if_not_exists, get_opts, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list_opts, rename_and_copy, stream_get,
-    };
+    use crate::tests::*;
 
     #[tokio::test]
     async fn azure_blob_test() {
@@ -212,6 +208,7 @@ mod tests {
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
+        multipart(&integration, &integration).await;
     }
 
     #[test]

@@ -27,7 +27,9 @@ use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
-use crate::{ClientOptions, GetOptions, ListResult, MultipartId, Path, Result, RetryConfig};
+use crate::{
+    ClientOptions, GetOptions, ListResult, MultipartId, Path, PutResult, Result, RetryConfig,
+};
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -115,6 +117,9 @@ pub(crate) enum Error {
     #[snafu(display("Error performing complete multipart request: {}", source))]
     CompleteMultipartRequest { source: crate::client::retry::Error },
 
+    #[snafu(display("Error getting complete multipart response body: {}", source))]
+    CompleteMultipartResponseBody { source: reqwest::Error },
+
     #[snafu(display("Got invalid list response: {}", source))]
     InvalidListResponse { source: quick_xml::de::DeError },
 
@@ -160,6 +165,13 @@ struct MultipartPart {
     e_tag: String,
     #[serde(rename = "PartNumber")]
     part_number: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase", rename = "CompleteMultipartUploadResult")]
+struct CompleteMultipartResult {
+    #[serde(rename = "ETag")]
+    e_tag: String,
 }
 
 #[derive(Deserialize)]
@@ -506,12 +518,32 @@ impl S3Client {
         Ok(response.upload_id)
     }
 
+    pub async fn put_part(
+        &self,
+        path: &Path,
+        upload_id: &MultipartId,
+        part_idx: usize,
+        data: Bytes,
+    ) -> Result<PartId> {
+        let part = (part_idx + 1).to_string();
+
+        let content_id = self
+            .put_request(
+                path,
+                data,
+                &[("partNumber", &part), ("uploadId", upload_id)],
+            )
+            .await?;
+
+        Ok(PartId { content_id })
+    }
+
     pub async fn complete_multipart(
         &self,
         location: &Path,
         upload_id: &str,
         parts: Vec<PartId>,
-    ) -> Result<()> {
+    ) -> Result<PutResult> {
         let parts = parts
             .into_iter()
             .enumerate()
@@ -527,7 +559,8 @@ impl S3Client {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(location);
 
-        self.client
+        let response = self
+            .client
             .request(Method::POST, url)
             .query(&[("uploadId", upload_id)])
             .body(body)
@@ -542,7 +575,17 @@ impl S3Client {
             .await
             .context(CompleteMultipartRequestSnafu)?;
 
-        Ok(())
+        let data = response
+            .bytes()
+            .await
+            .context(CompleteMultipartResponseBodySnafu)?;
+
+        let response: CompleteMultipartResult =
+            quick_xml::de::from_reader(data.reader()).context(InvalidMultipartResponseSnafu)?;
+
+        Ok(PutResult {
+            e_tag: Some(response.e_tag),
+        })
     }
 }
 

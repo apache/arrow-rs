@@ -23,8 +23,7 @@ use reqwest::Method;
 use std::{fmt, time::Duration};
 use url::Url;
 
-/// Universal API to presigned URLs generated from multiple object store services. Not supported by
-/// all object store services.
+/// Universal API to generate presigned URLs from multiple object store services.
 #[async_trait]
 pub trait Signer: Send + Sync + fmt::Debug + 'static {
     /// Given the intended [`Method`] and [`Path`] to use and the desired length of time for which

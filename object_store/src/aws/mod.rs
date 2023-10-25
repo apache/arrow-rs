@@ -44,7 +44,7 @@ use crate::aws::client::S3Client;
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
-use crate::multipart::{PartId, PutPart, WriteMultiPart};
+use crate::multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart};
 use crate::signer::Signer;
 use crate::{
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutResult,
@@ -246,18 +246,9 @@ struct S3MultiPartUpload {
 #[async_trait]
 impl PutPart for S3MultiPartUpload {
     async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
-        let part = (part_idx + 1).to_string();
-
-        let content_id = self
-            .client
-            .put_request(
-                &self.location,
-                buf.into(),
-                &[("partNumber", &part), ("uploadId", &self.upload_id)],
-            )
-            .await?;
-
-        Ok(PartId { content_id })
+        self.client
+            .put_part(&self.location, &self.upload_id, part_idx, buf.into())
+            .await
     }
 
     async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
@@ -265,6 +256,36 @@ impl PutPart for S3MultiPartUpload {
             .complete_multipart(&self.location, &self.upload_id, completed_parts)
             .await?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl MultiPartStore for AmazonS3 {
+    async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
+        self.client.create_multipart(path).await
+    }
+
+    async fn put_part(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        part_idx: usize,
+        data: Bytes,
+    ) -> Result<PartId> {
+        self.client.put_part(path, id, part_idx, data).await
+    }
+
+    async fn complete_multipart(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        self.client.complete_multipart(path, id, parts).await
+    }
+
+    async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
+        self.client.delete_request(path, &[("uploadId", id)]).await
     }
 }
 
@@ -293,6 +314,8 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
+        multipart(&integration, &integration).await;
+
         if test_not_exists {
             copy_if_not_exists(&integration).await;
         }

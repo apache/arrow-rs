@@ -45,6 +45,7 @@ use tokio::io::AsyncWrite;
 
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
+use crate::multipart::MultiPartStore;
 pub use builder::{GoogleCloudStorageBuilder, GoogleConfigKey};
 pub use credential::GcpCredential;
 
@@ -90,27 +91,17 @@ struct GCSMultipartUpload {
 impl PutPart for GCSMultipartUpload {
     /// Upload an object part <https://cloud.google.com/storage/docs/xml-api/put-object-multipart>
     async fn put_part(&self, buf: Vec<u8>, part_idx: usize) -> Result<PartId> {
-        let upload_id = self.multipart_id.clone();
-        let content_id = self
-            .client
-            .put_request(
-                &self.path,
-                buf.into(),
-                &[
-                    ("partNumber", format!("{}", part_idx + 1)),
-                    ("uploadId", upload_id),
-                ],
-            )
-            .await?;
-
-        Ok(PartId { content_id })
+        self.client
+            .put_part(&self.path, &self.multipart_id, part_idx, buf.into())
+            .await
     }
 
     /// Complete a multipart upload <https://cloud.google.com/storage/docs/xml-api/post-object-complete>
     async fn complete(&self, completed_parts: Vec<PartId>) -> Result<()> {
         self.client
             .multipart_complete(&self.path, &self.multipart_id, completed_parts)
-            .await
+            .await?;
+        Ok(())
     }
 }
 
@@ -169,6 +160,36 @@ impl ObjectStore for GoogleCloudStorage {
     }
 }
 
+#[async_trait]
+impl MultiPartStore for GoogleCloudStorage {
+    async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
+        self.client.multipart_initiate(path).await
+    }
+
+    async fn put_part(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        part_idx: usize,
+        data: Bytes,
+    ) -> Result<PartId> {
+        self.client.put_part(path, id, part_idx, data).await
+    }
+
+    async fn complete_multipart(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        self.client.multipart_complete(path, id, parts).await
+    }
+
+    async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
+        self.client.multipart_cleanup(path, id).await
+    }
+}
+
 #[cfg(test)]
 mod test {
 
@@ -197,6 +218,7 @@ mod test {
             // Fake GCS server does not yet implement XML Multipart uploads
             // https://github.com/fsouza/fake-gcs-server/issues/852
             stream_get(&integration).await;
+            multipart(&integration, &integration).await;
             // Fake GCS server doesn't currently honor preconditions
             get_opts(&integration).await;
         }
