@@ -57,10 +57,10 @@ impl SchemaBuilder {
         self.fields.remove(idx)
     }
 
-    /// Change the FieldRef as index `idx`
+    /// Get mut FieldRef as index `idx`
     /// if index out of bounds, will panic
-    pub fn change_field(&mut self, idx: usize, field: impl Into<FieldRef>) {
-        self.fields[idx] = field.into()
+    pub fn field_mut(&mut self, idx: usize) -> &mut FieldRef {
+        &mut self.fields[idx]
     }
 
     /// Reverse the fileds
@@ -854,7 +854,7 @@ mod tests {
         let mut builder = SchemaBuilder::new();
         builder.push(Field::new("a", DataType::Int32, false));
         builder.push(Field::new("b", DataType::Utf8, false));
-        builder.change_field(1, Field::new("c", DataType::Int32, false));
+        *builder.field_mut(1) = Arc::new(Field::new("c", DataType::Int32, false));
         assert_eq!(
             builder.fields,
             vec![
