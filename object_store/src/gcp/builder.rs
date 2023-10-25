@@ -337,13 +337,8 @@ impl GoogleCloudStorageBuilder {
         let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
         let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
 
-        let validate = |s: &str| match s.contains('.') {
-            true => Err(UrlNotRecognisedSnafu { url }.build()),
-            false => Ok(s.to_string()),
-        };
-
         match parsed.scheme() {
-            "gs" => self.bucket_name = Some(validate(host)?),
+            "gs" => self.bucket_name = Some(host.to_string()),
             scheme => return Err(UnknownUrlSchemeSnafu { scheme }.build().into()),
         }
         Ok(())
