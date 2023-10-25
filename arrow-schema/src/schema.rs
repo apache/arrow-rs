@@ -57,6 +57,17 @@ impl SchemaBuilder {
         self.fields.remove(idx)
     }
 
+    /// Get mut FieldRef as index `idx`
+    /// if index out of bounds, will panic
+    pub fn field_mut(&mut self, idx: usize) -> &mut FieldRef {
+        &mut self.fields[idx]
+    }
+
+    /// Reverse the fileds
+    pub fn reverse(&mut self) {
+        self.fields.reverse();
+    }
+
     /// Appends a [`FieldRef`] to this [`SchemaBuilder`] checking for collision
     ///
     /// If an existing field exists with the same name, calls [`Field::try_merge`]
@@ -835,6 +846,36 @@ mod tests {
         assert!(
             res.to_string().contains(expected),
             "Could not find expected string '{expected}' in '{res}'"
+        );
+    }
+
+    #[test]
+    fn test_schemabuilder_change_field() {
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("a", DataType::Int32, false));
+        builder.push(Field::new("b", DataType::Utf8, false));
+        *builder.field_mut(1) = Arc::new(Field::new("c", DataType::Int32, false));
+        assert_eq!(
+            builder.fields,
+            vec![
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Field::new("c", DataType::Int32, false))
+            ]
+        );
+    }
+
+    #[test]
+    fn test_schemabuilder_reverse() {
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("a", DataType::Int32, false));
+        builder.push(Field::new("b", DataType::Utf8, true));
+        builder.reverse();
+        assert_eq!(
+            builder.fields,
+            vec![
+                Arc::new(Field::new("b", DataType::Utf8, true)),
+                Arc::new(Field::new("a", DataType::Int32, false))
+            ]
         );
     }
 }
