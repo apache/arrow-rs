@@ -14,12 +14,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The list response format used by GCP and AWS
+//! The list and multipart API used by both GCS and S3
 
+use crate::multipart::PartId;
 use crate::path::Path;
 use crate::{ListResult, ObjectMeta, Result};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -83,4 +84,45 @@ impl TryFrom<ListContents> for ObjectMeta {
             version: None,
         })
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct InitiateMultipartUploadResult {
+    pub upload_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CompleteMultipartUpload {
+    pub part: Vec<MultipartPart>,
+}
+
+impl From<Vec<PartId>> for CompleteMultipartUpload {
+    fn from(value: Vec<PartId>) -> Self {
+        let part = value
+            .into_iter()
+            .enumerate()
+            .map(|(part_number, part)| MultipartPart {
+                e_tag: part.content_id,
+                part_number: part_number + 1,
+            })
+            .collect();
+        Self { part }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct MultipartPart {
+    #[serde(rename = "ETag")]
+    pub e_tag: String,
+    #[serde(rename = "PartNumber")]
+    pub part_number: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CompleteMultipartUploadResult {
+    #[serde(rename = "ETag")]
+    pub e_tag: String,
 }

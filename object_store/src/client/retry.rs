@@ -79,6 +79,10 @@ impl Error {
                 path,
                 source: Box::new(self),
             },
+            Some(StatusCode::CONFLICT) => crate::Error::AlreadyExists {
+                path,
+                source: Box::new(self),
+            },
             _ => crate::Error::Generic {
                 store,
                 source: Box::new(self),

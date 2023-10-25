@@ -16,10 +16,13 @@
 // under the License.
 
 use crate::client::get::GetClient;
-use crate::client::header::{get_put_result, HeaderConfig};
+use crate::client::header::{get_put_result, get_version, HeaderConfig};
 use crate::client::list::ListClient;
-use crate::client::list_response::ListResponse;
 use crate::client::retry::RetryExt;
+use crate::client::s3::{
+    CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
+    ListResponse,
+};
 use crate::client::GetOptionsExt;
 use crate::gcp::{GcpCredential, GcpCredentialProvider, STORE};
 use crate::multipart::PartId;
@@ -31,14 +34,15 @@ use crate::{
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
-use reqwest::{header, Client, Method, Response, StatusCode};
+use reqwest::header::HeaderName;
+use reqwest::{header, Client, Method, RequestBuilder, Response, StatusCode};
 use serde::Serialize;
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-goog-generation";
 
-const VERSION_MATCH: &str = "x-goog-if-generation-match";
+const VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -88,6 +92,15 @@ enum Error {
 
     #[snafu(display("Version required for conditional update"))]
     MissingVersion,
+
+    #[snafu(display("Error performing complete multipart request: {}", source))]
+    CompleteMultipartRequest { source: crate::client::retry::Error },
+
+    #[snafu(display("Error getting complete multipart response body: {}", source))]
+    CompleteMultipartResponseBody { source: reqwest::Error },
+
+    #[snafu(display("Got invalid multipart response: {}", source))]
+    InvalidMultipartResponse { source: quick_xml::de::DeError },
 }
 
 impl From<Error> for crate::Error {
@@ -115,6 +128,39 @@ pub struct GoogleCloudStorageConfig {
     pub retry_config: RetryConfig,
 
     pub client_options: ClientOptions,
+}
+
+/// A builder for a put request allowing customisation of the headers and query string
+pub struct PutRequest<'a> {
+    path: &'a Path,
+    config: &'a GoogleCloudStorageConfig,
+    builder: RequestBuilder,
+}
+
+impl<'a> PutRequest<'a> {
+    fn header(self, k: &HeaderName, v: &str) -> Self {
+        let builder = self.builder.header(k, v);
+        Self { builder, ..self }
+    }
+
+    fn query<T: Serialize + ?Sized + Sync>(self, query: &T) -> Self {
+        let builder = self.builder.query(query);
+        Self { builder, ..self }
+    }
+
+    async fn send(self) -> Result<PutResult> {
+        let credential = self.config.credentials.get_credential().await?;
+        let response = self
+            .builder
+            .bearer_auth(&credential.bearer)
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(PutRequestSnafu {
+                path: self.path.as_ref(),
+            })?;
+
+        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
+    }
 }
 
 #[derive(Debug)]
@@ -162,14 +208,7 @@ impl GoogleCloudStorageClient {
     /// Perform a put request <https://cloud.google.com/storage/docs/xml-api/put-object-upload>
     ///
     /// Returns the new ETag
-    pub async fn put_request<T: Serialize + ?Sized + Sync>(
-        &self,
-        path: &Path,
-        payload: Bytes,
-        opts: PutOptions,
-        query: &T,
-    ) -> Result<PutResult> {
-        let credential = self.get_credential().await?;
+    pub fn put_request<'a>(&'a self, path: &'a Path, payload: Bytes) -> PutRequest<'a> {
         let url = self.object_url(path);
 
         let content_type = self
@@ -178,41 +217,37 @@ impl GoogleCloudStorageClient {
             .get_content_type(path)
             .unwrap_or("application/octet-stream");
 
-        let mut builder = self.client.request(Method::PUT, url).query(query);
-
-        builder = match &opts.mode {
-            PutMode::Overwrite => builder,
-            PutMode::Create => builder.header(VERSION_MATCH, 0),
-            PutMode::Update(v) => builder.header(
-                VERSION_MATCH,
-                v.version.as_ref().context(MissingVersionSnafu)?,
-            ),
-        };
-
-        let result = builder
-            .bearer_auth(&credential.bearer)
+        let builder = self
+            .client
+            .request(Method::PUT, url)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, payload.len())
-            .body(payload)
-            .send_retry(&self.config.retry_config)
-            .await;
+            .body(payload);
 
-        match result {
-            Ok(response) => {
-                Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
+        PutRequest {
+            path,
+            builder,
+            config: &self.config,
+        }
+    }
+
+    pub async fn put(&self, path: &Path, data: Bytes, opts: PutOptions) -> Result<PutResult> {
+        let builder = self.put_request(path, data);
+
+        let builder = match &opts.mode {
+            PutMode::Overwrite => builder,
+            PutMode::Create => builder.header(&VERSION_MATCH, "0"),
+            PutMode::Update(v) => {
+                let etag = v.version.as_ref().context(MissingVersionSnafu)?;
+                builder.header(&VERSION_MATCH, etag)
             }
-            Err(source) => Err(match (opts.mode, source.status()) {
-                (PutMode::Create, Some(StatusCode::PRECONDITION_FAILED)) => {
-                    crate::Error::AlreadyExists {
-                        source: Box::new(source),
-                        path: path.to_string(),
-                    }
-                }
-                _ => crate::Error::from(Error::PutRequest {
-                    source,
-                    path: path.to_string(),
-                }),
-            }),
+        };
+
+        match (opts.mode, builder.send().await) {
+            (PutMode::Create, Err(crate::Error::Precondition { path, source })) => {
+                Err(crate::Error::AlreadyExists { path, source })
+            }
+            (_, r) => r,
         }
     }
 
@@ -226,17 +261,11 @@ impl GoogleCloudStorageClient {
         part_idx: usize,
         data: Bytes,
     ) -> Result<PartId> {
-        let result = self
-            .put_request(
-                path,
-                data,
-                PutOptions::default(),
-                &[
-                    ("partNumber", &format!("{}", part_idx + 1)),
-                    ("uploadId", upload_id),
-                ],
-            )
-            .await?;
+        let query = &[
+            ("partNumber", &format!("{}", part_idx + 1)),
+            ("uploadId", upload_id),
+        ];
+        let result = self.put_request(path, data).query(query).send().await?;
 
         Ok(PartId {
             content_id: result.e_tag.unwrap(),
@@ -303,17 +332,8 @@ impl GoogleCloudStorageClient {
         let upload_id = multipart_id.clone();
         let url = self.object_url(path);
 
-        let parts = completed_parts
-            .into_iter()
-            .enumerate()
-            .map(|(part_number, part)| MultipartPart {
-                e_tag: part.content_id,
-                part_number: part_number + 1,
-            })
-            .collect();
-
+        let upload_info = CompleteMultipartUpload::from(completed_parts);
         let credential = self.get_credential().await?;
-        let upload_info = CompleteMultipartUpload { parts };
 
         let data = quick_xml::se::to_string(&upload_info)
             .context(InvalidPutResponseSnafu)?
@@ -322,7 +342,7 @@ impl GoogleCloudStorageClient {
             // https://github.com/tafia/quick-xml/issues/350
             .replace("&quot;", "\"");
 
-        let result = self
+        let response = self
             .client
             .request(Method::POST, &url)
             .bearer_auth(&credential.bearer)
@@ -330,11 +350,22 @@ impl GoogleCloudStorageClient {
             .body(data)
             .send_retry(&self.config.retry_config)
             .await
-            .context(PostRequestSnafu {
-                path: path.as_ref(),
-            })?;
+            .context(CompleteMultipartRequestSnafu)?;
 
-        Ok(get_put_result(result.headers(), VERSION_HEADER).context(MetadataSnafu)?)
+        let version = get_version(response.headers(), VERSION_HEADER).context(MetadataSnafu)?;
+
+        let data = response
+            .bytes()
+            .await
+            .context(CompleteMultipartResponseBodySnafu)?;
+
+        let response: CompleteMultipartUploadResult =
+            quick_xml::de::from_reader(data.reader()).context(InvalidMultipartResponseSnafu)?;
+
+        Ok(PutResult {
+            e_tag: Some(response.e_tag),
+            version,
+        })
     }
 
     /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
@@ -482,25 +513,4 @@ impl ListClient for GoogleCloudStorageClient {
         let token = response.next_continuation_token.take();
         Ok((response.try_into()?, token))
     }
-}
-
-#[derive(serde::Deserialize, Debug)]
-#[serde(rename_all = "PascalCase")]
-struct InitiateMultipartUploadResult {
-    upload_id: String,
-}
-
-#[derive(serde::Serialize, Debug)]
-#[serde(rename_all = "PascalCase", rename(serialize = "Part"))]
-struct MultipartPart {
-    #[serde(rename = "PartNumber")]
-    part_number: usize,
-    e_tag: String,
-}
-
-#[derive(serde::Serialize, Debug)]
-#[serde(rename_all = "PascalCase")]
-struct CompleteMultipartUpload {
-    #[serde(rename = "Part", default)]
-    parts: Vec<MultipartPart>,
 }

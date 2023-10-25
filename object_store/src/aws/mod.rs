@@ -35,6 +35,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use reqwest::header::{IF_MATCH, IF_NONE_MATCH};
 use reqwest::Method;
 use std::{sync::Arc, time::Duration};
 use tokio::io::AsyncWrite;
@@ -159,12 +160,12 @@ impl Signer for AmazonS3 {
 #[async_trait]
 impl ObjectStore for AmazonS3 {
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        let request = self.client.put_request(location, bytes);
         match (opts.mode, &self.client.config().conditional_put) {
-            (PutMode::Overwrite, _) => self.client.put_request(location, bytes, &(), None).await,
+            (PutMode::Overwrite, _) => request.send().await,
             (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
             (PutMode::Create, Some(S3ConditionalPut::ETagMatch)) => {
-                let header = Some(("If-None-Match", "*"));
-                match self.client.put_request(location, bytes, &(), header).await {
+                match request.header(&IF_NONE_MATCH, "*").send().await {
                     // Technically If-None-Match should return NotModified but some stores,
                     // such as R2, instead return PreconditionFailed
                     // https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject
@@ -182,8 +183,7 @@ impl ObjectStore for AmazonS3 {
                     store: STORE,
                     source: "ETag required for conditional put".to_string().into(),
                 })?;
-                let header = Some(("If-Match", etag.as_str()));
-                self.client.put_request(location, bytes, &(), header).await
+                request.header(&IF_MATCH, etag.as_str()).send().await
             }
         }
     }

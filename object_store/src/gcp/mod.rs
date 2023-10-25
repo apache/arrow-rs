@@ -109,7 +109,7 @@ impl PutPart for GCSMultipartUpload {
 #[async_trait]
 impl ObjectStore for GoogleCloudStorage {
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        self.client.put_request(location, bytes, opts, &()).await
+        self.client.put(location, bytes, opts).await
     }
 
     async fn put_multipart(
