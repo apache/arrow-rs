@@ -28,6 +28,7 @@ use crate::{FieldRef, Fields};
 #[derive(Debug, Default)]
 pub struct SchemaBuilder {
     fields: Vec<FieldRef>,
+    metadata: HashMap<String, String>,
 }
 
 impl SchemaBuilder {
@@ -40,6 +41,7 @@ impl SchemaBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             fields: Vec::with_capacity(capacity),
+            metadata: Default::default(),
         }
     }
 
@@ -57,10 +59,32 @@ impl SchemaBuilder {
         self.fields.remove(idx)
     }
 
-    /// Get mut FieldRef as index `idx`
-    /// if index out of bounds, will panic
+    /// Returns an immutable reference to the [`FieldRef`] at index `idx`
+    ///
+    /// # Panics
+    ///
+    /// Panics if index out of bounds
+    pub fn field(&mut self, idx: usize) -> &FieldRef {
+        &mut self.fields[idx]
+    }
+
+    /// Returns a mutable reference to the [`FieldRef`] at index `idx`
+    ///
+    /// # Panics
+    ///
+    /// Panics if index out of bounds
     pub fn field_mut(&mut self, idx: usize) -> &mut FieldRef {
         &mut self.fields[idx]
+    }
+
+    /// Returns an immutable reference to the Map of custom metadata key-value pairs.
+    pub fn metadata(&mut self) -> &HashMap<String, String> {
+        &self.metadata
+    }
+
+    /// Returns a mutable reference to the Map of custom metadata key-value pairs.
+    pub fn metadata_mut(&mut self) -> &mut HashMap<String, String> {
+        &mut self.metadata
     }
 
     /// Reverse the fileds
@@ -91,7 +115,10 @@ impl SchemaBuilder {
 
     /// Consume this [`SchemaBuilder`] yielding the final [`Schema`]
     pub fn finish(self) -> Schema {
-        Schema::new(self.fields)
+        Schema {
+            fields: self.fields.into(),
+            metadata: self.metadata,
+        }
     }
 }
 
@@ -99,6 +126,7 @@ impl From<&Fields> for SchemaBuilder {
     fn from(value: &Fields) -> Self {
         Self {
             fields: value.to_vec(),
+            metadata: Default::default(),
         }
     }
 }
@@ -107,6 +135,16 @@ impl From<Fields> for SchemaBuilder {
     fn from(value: Fields) -> Self {
         Self {
             fields: value.to_vec(),
+            metadata: Default::default(),
+        }
+    }
+}
+
+impl From<Schema> for SchemaBuilder {
+    fn from(value: Schema) -> Self {
+        Self {
+            fields: value.fields.to_vec(),
+            metadata: value.metadata,
         }
     }
 }
@@ -850,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn test_schemabuilder_change_field() {
+    fn test_schema_builder_change_field() {
         let mut builder = SchemaBuilder::new();
         builder.push(Field::new("a", DataType::Int32, false));
         builder.push(Field::new("b", DataType::Utf8, false));
@@ -865,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    fn test_schemabuilder_reverse() {
+    fn test_schema_builder_reverse() {
         let mut builder = SchemaBuilder::new();
         builder.push(Field::new("a", DataType::Int32, false));
         builder.push(Field::new("b", DataType::Utf8, true));
@@ -877,5 +915,19 @@ mod tests {
                 Arc::new(Field::new("a", DataType::Int32, false))
             ]
         );
+    }
+
+    #[test]
+    fn test_schema_builder_metadata() {
+        let mut metadata = HashMap::with_capacity(1);
+        metadata.insert("key".to_string(), "value".to_string());
+
+        let fields = vec![Field::new("test", DataType::Int8, true)];
+        let mut builder: SchemaBuilder = Schema::new(fields).with_metadata(metadata).into();
+        builder.metadata_mut().insert("k".into(), "v".into());
+        let out = builder.finish();
+        assert_eq!(out.metadata.len(), 2);
+        assert_eq!(out.metadata["k"], "v");
+        assert_eq!(out.metadata["key"], "value");
     }
 }
