@@ -193,6 +193,9 @@ impl Default for ClientOptions {
         // <https://docs.aws.amazon.com/sdkref/latest/guide/feature-smart-config-defaults.html>
         // <https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/timeouts-and-retries-for-latency-sensitive-applications.html>
         // Which recommend a connection timeout of 3.1s and a request timeout of 2s
+        //
+        // As object store requests may involve the transfer of non-trivial volumes of data
+        // we opt for a slightly higher default timeout of 30 seconds
         Self {
             user_agent: None,
             content_type_map: Default::default(),
@@ -203,7 +206,7 @@ impl Default for ClientOptions {
             proxy_excludes: None,
             allow_http: Default::default(),
             allow_insecure: Default::default(),
-            timeout: Some(Duration::from_secs(5).into()),
+            timeout: Some(Duration::from_secs(30).into()),
             connect_timeout: Some(Duration::from_secs(5).into()),
             pool_idle_timeout: None,
             pool_max_idle_per_host: None,
