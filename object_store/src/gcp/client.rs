@@ -42,7 +42,7 @@ use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-goog-generation";
 
-const VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
+static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
 
 #[derive(Debug, Snafu)]
 enum Error {
@@ -399,7 +399,7 @@ impl GoogleCloudStorageClient {
             .header("x-goog-copy-source", source);
 
         if if_not_exists {
-            builder = builder.header(VERSION_MATCH, 0);
+            builder = builder.header(&VERSION_MATCH, 0);
         }
 
         builder
