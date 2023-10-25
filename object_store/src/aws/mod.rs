@@ -35,7 +35,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-use reqwest::header::{IF_MATCH, IF_NONE_MATCH};
+use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
 use reqwest::Method;
 use std::{sync::Arc, time::Duration};
 use tokio::io::AsyncWrite;
@@ -51,6 +51,8 @@ use crate::{
     Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutMode,
     PutOptions, PutResult, Result,
 };
+
+static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
 
 mod builder;
 mod checksum;
@@ -161,6 +163,11 @@ impl Signer for AmazonS3 {
 impl ObjectStore for AmazonS3 {
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
         let request = self.client.put_request(location, bytes);
+        let request = match opts.tags.encoded() {
+            "" => request,
+            tags => request.header(&TAGS_HEADER, tags),
+        };
+
         match (opts.mode, &self.client.config().conditional_put) {
             (PutMode::Overwrite, _) => request.send().await,
             (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
@@ -341,6 +348,12 @@ mod tests {
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
+
+        tagging(&integration, |p| {
+            let client = Arc::clone(&integration.client);
+            async move { client.get_object_tagging(&p).await }
+        })
+        .await;
 
         if test_not_exists {
             copy_if_not_exists(&integration).await;

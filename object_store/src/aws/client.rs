@@ -588,6 +588,28 @@ impl S3Client {
             version,
         })
     }
+
+    #[cfg(test)]
+    pub async fn get_object_tagging(&self, path: &Path) -> Result<Response> {
+        let credential = self.config.get_credential().await?;
+        let url = format!("{}?tagging", self.config.path_url(path));
+        let response = self
+            .client
+            .request(Method::GET, url)
+            .with_aws_sigv4(
+                credential.as_deref(),
+                &self.config.region,
+                "s3",
+                self.config.sign_payload,
+                None,
+            )
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(GetRequestSnafu {
+                path: path.as_ref(),
+            })?;
+        Ok(response)
+    }
 }
 
 #[async_trait]
