@@ -625,13 +625,12 @@ mod tests {
     fn gcs_test_urls() {
         let mut builder = GoogleCloudStorageBuilder::new();
         builder.parse_url("gs://bucket/path").unwrap();
-        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+        assert_eq!(builder.bucket_name.as_deref(), Some("bucket"));
 
-        let err_cases = ["mailto://bucket/path", "gs://bucket.mydomain/path"];
-        let mut builder = GoogleCloudStorageBuilder::new();
-        for case in err_cases {
-            builder.parse_url(case).unwrap_err();
-        }
+        builder.parse_url("gs://bucket.mydomain/path").unwrap();
+        assert_eq!(builder.bucket_name.as_deref(), Some("bucket.mydomain"));
+
+        builder.parse_url("mailto://bucket/path").unwrap_err();
     }
 
     #[test]
