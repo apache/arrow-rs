@@ -263,7 +263,6 @@ pub use client::{
 #[cfg(feature = "cloud")]
 mod config;
 
-#[cfg(feature = "cloud")]
 pub mod multipart;
 mod parse;
 mod util;
