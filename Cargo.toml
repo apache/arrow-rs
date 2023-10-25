@@ -32,6 +32,8 @@ members = [
     "arrow-integration-testing",
     "arrow-ipc",
     "arrow-json",
+    "arrow-orc",
+    "arrow-orc/orc-gen",
     "arrow-ord",
     "arrow-row",
     "arrow-schema",
@@ -86,6 +88,7 @@ arrow-csv = { version = "48.0.0", path = "./arrow-csv" }
 arrow-data = { version = "48.0.0", path = "./arrow-data" }
 arrow-ipc = { version = "48.0.0", path = "./arrow-ipc" }
 arrow-json = { version = "48.0.0", path = "./arrow-json" }
+arrow-orc = { version = "48.0.0", path = "./arrow-orc" }
 arrow-ord = { version = "48.0.0", path = "./arrow-ord" }
 arrow-row = { version = "48.0.0", path = "./arrow-row" }
 arrow-schema = { version = "48.0.0", path = "./arrow-schema" }

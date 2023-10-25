@@ -39,6 +39,7 @@ pub enum ArrowError {
     IpcError(String),
     InvalidArgumentError(String),
     ParquetError(String),
+    OrcError(String),
     /// Error during import or export to/from the C Data Interface
     CDataInterface(String),
     DictionaryKeyOverflowError,
@@ -93,6 +94,7 @@ impl Display for ArrowError {
             ArrowError::ParquetError(desc) => {
                 write!(f, "Parquet argument error: {desc}")
             }
+            ArrowError::OrcError(desc) => write!(f, "ORC argument error: {desc}"),
             ArrowError::CDataInterface(desc) => {
                 write!(f, "C Data interface error: {desc}")
             }
