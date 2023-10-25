@@ -194,10 +194,7 @@ impl MultiPartStore for MicrosoftAzure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{
-        copy_if_not_exists, get_opts, list_uses_directories_correctly, list_with_delimiter,
-        put_get_delete_list_opts, rename_and_copy, stream_get,
-    };
+    use crate::tests::*;
 
     #[tokio::test]
     async fn azure_blob_test() {
