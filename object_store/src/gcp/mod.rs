@@ -218,6 +218,7 @@ mod test {
             // Fake GCS server does not yet implement XML Multipart uploads
             // https://github.com/fsouza/fake-gcs-server/issues/852
             stream_get(&integration).await;
+            multipart(&integration, &integration).await;
             // Fake GCS server doesn't currently honor preconditions
             get_opts(&integration).await;
         }

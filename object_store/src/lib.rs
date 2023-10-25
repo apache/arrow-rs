@@ -934,6 +934,7 @@ mod test_util {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::multipart::MultiPartStore;
     use crate::test_util::flatten_list_stream;
     use chrono::TimeZone;
     use rand::{thread_rng, Rng};
@@ -1679,6 +1680,31 @@ mod tests {
 
         // Clean up
         storage.delete(&path2).await.unwrap();
+    }
+
+    pub(crate) async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultiPartStore) {
+        let path = Path::from("test_multipart");
+        let chunk_size = 5 * 1024 * 1024;
+
+        let chunks = get_chunks(chunk_size, 2);
+
+        let id = multipart.create_multipart(&path).await.unwrap();
+
+        let parts: Vec<_> = futures::stream::iter(chunks)
+            .enumerate()
+            .map(|(idx, b)| multipart.put_part(&path, &id, idx, b))
+            .buffered(2)
+            .try_collect()
+            .await
+            .unwrap();
+
+        multipart
+            .complete_multipart(&path, &id, parts)
+            .await
+            .unwrap();
+
+        let meta = storage.head(&path).await.unwrap();
+        assert_eq!(meta.size, chunk_size * 2);
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {

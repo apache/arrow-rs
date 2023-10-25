@@ -314,6 +314,8 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
+        multipart(&integration, &integration).await;
+
         if test_not_exists {
             copy_if_not_exists(&integration).await;
         }

@@ -211,6 +211,7 @@ mod tests {
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
+        multipart(&integration, &integration).await;
     }
 
     #[test]
