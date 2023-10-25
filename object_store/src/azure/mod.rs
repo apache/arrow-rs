@@ -172,7 +172,7 @@ impl std::fmt::Display for MicrosoftAzure {
 impl ObjectStore for MicrosoftAzure {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         self.client
-            .put_request(location, Some(bytes), false, &())
+            .put_request(location, bytes, false, &())
             .await?;
         Ok(())
     }

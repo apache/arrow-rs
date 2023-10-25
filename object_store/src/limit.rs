@@ -19,7 +19,7 @@
 
 use crate::{
     BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, Path, Result, StreamExt,
+    ObjectMeta, ObjectStore, Path, Result, StreamExt, PutOptions,
 };
 use async_trait::async_trait;
 use bytes::Bytes;

@@ -275,7 +275,7 @@ impl Signer for AmazonS3 {
 impl ObjectStore for AmazonS3 {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
         self.client
-            .put_request(location, Some(bytes), &(), None)
+            .put_request(location, bytes, &(), None)
             .await?;
         Ok(())
     }
@@ -288,11 +288,11 @@ impl ObjectStore for AmazonS3 {
     ) -> Result<()> {
         if options.tags.is_empty() {
             self.client
-                .put_request(location, Some(bytes), &(), None)
+                .put_request(location, bytes, &(), None)
                 .await?;
         } else {
             self.client
-                .put_request(location, Some(bytes), &(), Some(&options.tags))
+                .put_request(location, bytes, &(), Some(&options.tags))
                 .await?;
         }
 
