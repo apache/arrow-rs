@@ -302,18 +302,29 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// should be able to observe a partially written object
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult>;
 
-    /// Get a multi-part upload that allows writing data in chunks
+    /// Get a multi-part upload that allows writing data in chunks.
     ///
     /// Most cloud-based uploads will buffer and upload parts in parallel.
     ///
     /// To complete the upload, [AsyncWrite::poll_shutdown] must be called
     /// to completion. This operation is guaranteed to be atomic, it will either
     /// make all the written data available at `location`, or fail. No clients
-    /// should be able to observe a partially written object
+    /// should be able to observe a partially written object.
     ///
     /// For some object stores (S3, GCS, and local in particular), if the
     /// writer fails or panics, you must call [ObjectStore::abort_multipart]
     /// to clean up partially written data.
+    ///
+    /// For applications requiring fine-grained control of multipart uploads
+    /// see [`MultiPartStore`], although note that this interface cannot be
+    /// supported by all [`ObjectStore`] backends.
+    ///
+    /// For applications looking to implement this interface for a custom
+    /// multipart API, see [`WriteMultiPart`] which handles the complexities
+    /// of performing parallel uploads of fixed size parts.
+    ///
+    /// [`WriteMultiPart`]: multipart::WriteMultiPart
+    /// [`MultiPartStore`]: multipart::MultiPartStore
     async fn put_multipart(
         &self,
         location: &Path,
