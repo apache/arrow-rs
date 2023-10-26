@@ -337,13 +337,8 @@ impl GoogleCloudStorageBuilder {
         let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
         let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
 
-        let validate = |s: &str| match s.contains('.') {
-            true => Err(UrlNotRecognisedSnafu { url }.build()),
-            false => Ok(s.to_string()),
-        };
-
         match parsed.scheme() {
-            "gs" => self.bucket_name = Some(validate(host)?),
+            "gs" => self.bucket_name = Some(host.to_string()),
             scheme => return Err(UnknownUrlSchemeSnafu { scheme }.build().into()),
         }
         Ok(())
@@ -630,13 +625,12 @@ mod tests {
     fn gcs_test_urls() {
         let mut builder = GoogleCloudStorageBuilder::new();
         builder.parse_url("gs://bucket/path").unwrap();
-        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+        assert_eq!(builder.bucket_name.as_deref(), Some("bucket"));
 
-        let err_cases = ["mailto://bucket/path", "gs://bucket.mydomain/path"];
-        let mut builder = GoogleCloudStorageBuilder::new();
-        for case in err_cases {
-            builder.parse_url(case).unwrap_err();
-        }
+        builder.parse_url("gs://bucket.mydomain/path").unwrap();
+        assert_eq!(builder.bucket_name.as_deref(), Some("bucket.mydomain"));
+
+        builder.parse_url("mailto://bucket/path").unwrap_err();
     }
 
     #[test]

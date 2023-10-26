@@ -234,6 +234,10 @@ mod tests {
                 "gs://bucket/path",
                 (ObjectStoreScheme::GoogleCloudStorage, "path"),
             ),
+            (
+                "gs://test.example.com/path",
+                (ObjectStoreScheme::GoogleCloudStorage, "path"),
+            ),
             ("http://mydomain/path", (ObjectStoreScheme::Http, "path")),
             ("https://mydomain/path", (ObjectStoreScheme::Http, "path")),
         ];
