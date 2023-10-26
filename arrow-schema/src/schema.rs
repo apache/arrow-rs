@@ -333,7 +333,7 @@ impl Schema {
                 .all(|(k, v1)| self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default())
     }
 
-    /// Remove field by name and return it. Recommend to use [`SchemaBuilder`]
+    /// Remove field by index and return it. Recommend to use [`SchemaBuilder`]
     /// if you are looking to remove multiple columns, as this will save allocations.
     ///
     /// # Panic
