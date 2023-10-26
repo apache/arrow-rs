@@ -327,6 +327,40 @@ impl RecordBatch {
         &self.columns[..]
     }
 
+    /// Remove column by index and return it.
+    ///
+    /// Return the `ArrayRef` if the column is removed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index`` out of bounds.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow_array::{BooleanArray, Int32Array, RecordBatch};
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let bool_array = BooleanArray::from(vec![true, false, false, true, true]);
+    /// let schema = Schema::new(vec![
+    ///     Field::new("id", DataType::Int32, false),
+    ///     Field::new("bool", DataType::Boolean, false),
+    /// ]);
+    ///
+    /// let mut batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array), Arc::new(bool_array)]).unwrap();
+    ///
+    /// let removed_column = batch.remove_column(0);
+    /// assert_eq!(removed_column.as_any().downcast_ref::<Int32Array>().unwrap(), &Int32Array::from(vec![1, 2, 3, 4, 5]));
+    /// assert_eq!(batch.num_columns(), 1);
+    /// ```
+    pub fn remove_column(&mut self, index: usize) -> ArrayRef {
+        let mut builder = SchemaBuilder::from(self.schema.fields());
+        builder.remove(index);
+        self.schema = Arc::new(builder.finish());
+        self.columns.remove(index)
+    }
+
     /// Return a new RecordBatch where each column is sliced
     /// according to `offset` and `length`
     ///
