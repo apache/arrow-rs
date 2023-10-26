@@ -1573,7 +1573,7 @@ mod tests {
             })
             .collect();
 
-        while let Some(_) = futures.next().await.transpose().unwrap() {}
+        while futures.next().await.transpose().unwrap().is_some() {}
         let b = storage.get(&path).await.unwrap().bytes().await.unwrap();
         let v = std::str::from_utf8(&b).unwrap().parse::<usize>().unwrap();
         assert_eq!(v, NUM_WORKERS * NUM_INCREMENTS);
