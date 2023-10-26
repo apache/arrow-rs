@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{ArrowError, Field, FieldRef};
+use crate::{ArrowError, Field, FieldRef, SchemaBuilder};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -100,6 +100,12 @@ impl Fields {
     }
 
     /// Remove a field by index and return it.
+    ///
+    /// # Panic
+    ///
+    /// Panics if `index` is out of bounds.
+    ///
+    /// # Example
     /// ```
     /// use arrow_schema::{DataType, Field, Fields};
     /// let mut fields = Fields::from(vec![
@@ -108,18 +114,14 @@ impl Fields {
     ///   Field::new("c", DataType::Utf8, false),
     /// ]);
     /// assert_eq!(fields.len(), 3);
-    /// assert_eq!(fields.remove(1).unwrap(), Field::new("b", DataType::Int8, false).into());
+    /// assert_eq!(fields.remove(1), Field::new("b", DataType::Int8, false).into());
     /// assert_eq!(fields.len(), 2);
     /// ```
-    pub fn remove(&mut self, index: usize) -> Option<FieldRef> {
-        if index >= self.len() {
-            return None;
-        }
-
-        let mut new_fields = self.0.iter().cloned().collect::<Vec<_>>();
-        let field = new_fields.remove(index);
-        self.0 = Arc::from(new_fields);
-        Some(field)
+    pub fn remove(&mut self, index: usize) -> FieldRef {
+        let mut builder = SchemaBuilder::from(Fields::from(&*self.0));
+        let field = builder.remove(index);
+        *self = builder.finish().fields;
+        field
     }
 }
 

@@ -336,6 +336,12 @@ impl Schema {
     /// Remove field by name and return it. Recommend to use [`SchemaBuilder`]
     /// if you are looking to remove multiple columns, as this will save allocations.
     ///
+    /// # Panic
+    ///
+    /// Panics if `index` is out of bounds.
+    ///
+    /// # Example
+    ///
     /// ```
     /// use arrow_schema::{DataType, Field, Schema};
     /// let mut schema = Schema::new(vec![
@@ -344,15 +350,11 @@ impl Schema {
     ///   Field::new("c", DataType::Utf8, false),
     /// ]);
     /// assert_eq!(schema.fields.len(), 3);
-    /// assert_eq!(schema.remove_field_with_name("b").unwrap(), Field::new("b", DataType::Int8, false).into());
+    /// assert_eq!(schema.remove(1), Field::new("b", DataType::Int8, false).into());
     /// assert_eq!(schema.fields.len(), 2);
     /// ```
-    pub fn remove_field_with_name(&mut self, name: &str) -> Option<FieldRef> {
-        if let Some((idx, _)) = self.fields.find(name) {
-            self.fields.remove(idx)
-        } else {
-            None
-        }
+    pub fn remove(&mut self, index: usize) -> FieldRef {
+        self.fields.remove(index)
     }
 }
 
