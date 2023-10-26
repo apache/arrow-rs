@@ -1013,6 +1013,7 @@ mod tests {
     use crate::multipart::MultiPartStore;
     use crate::test_util::flatten_list_stream;
     use chrono::TimeZone;
+    use futures::stream::FuturesUnordered;
     use rand::{thread_rng, Rng};
     use tokio::io::AsyncWriteExt;
 
@@ -1530,6 +1531,52 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Precondition { .. }), "{err}");
+
+        const NUM_WORKERS: usize = 5;
+        const NUM_INCREMENTS: usize = 10;
+
+        let path = Path::from("RACE");
+        let mut futures: FuturesUnordered<_> = (0..NUM_WORKERS)
+            .map(|_| async {
+                for _ in 0..NUM_INCREMENTS {
+                    loop {
+                        match storage.get(&path).await {
+                            Ok(r) => {
+                                let mode = PutMode::Update(UpdateVersion {
+                                    e_tag: r.meta.e_tag.clone(),
+                                    version: r.meta.version.clone(),
+                                });
+
+                                let b = r.bytes().await.unwrap();
+                                let v: usize = std::str::from_utf8(&b).unwrap().parse().unwrap();
+                                let new = (v + 1).to_string();
+
+                                match storage.put_opts(&path, new.into(), mode.into()).await {
+                                    Ok(_) => break,
+                                    Err(Error::Precondition { .. }) => continue,
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                            Err(Error::NotFound { .. }) => {
+                                let mode = PutMode::Create;
+                                match storage.put_opts(&path, "1".into(), mode.into()).await {
+                                    Ok(_) => break,
+                                    Err(Error::AlreadyExists { .. }) => continue,
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .collect();
+
+        while let Some(_) = futures.next().await.transpose().unwrap() {}
+        let b = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        let v = std::str::from_utf8(&b).unwrap().parse::<usize>().unwrap();
+        assert_eq!(v, NUM_WORKERS * NUM_INCREMENTS);
     }
 
     /// Returns a chunk of length `chunk_length`
