@@ -51,7 +51,7 @@ tonic = { version = "0.10.0", default-features = false, features = ["transport",
 # CLI-related dependencies
 anyhow = { version = "1.0", optional = true }
 clap = { version = "4.4.6", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage", "wrap_help", "color", "suggestions"], optional = true }
-tracing-log = { version = "0.1", optional = true }
+tracing-log = { version = "0.2", optional = true }
 tracing-subscriber = { version = "0.3.1", default-features = false, features = ["ansi", "env-filter", "fmt"], optional = true }
 
 [package.metadata.docs.rs]
