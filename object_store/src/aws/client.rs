@@ -119,11 +119,9 @@ pub(crate) enum Error {
 
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
-        match err {
-            _ => Self::Generic {
-                store: STORE,
-                source: Box::new(err),
-            },
+        Self::Generic {
+            store: STORE,
+            source: Box::new(err),
         }
     }
 }
