@@ -155,6 +155,8 @@ pub struct AmazonS3Builder {
     copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
     /// Put precondition
     conditional_put: Option<ConfigValue<S3ConditionalPut>>,
+    /// Ignore tags
+    skip_tagging: ConfigValue<bool>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -299,6 +301,15 @@ pub enum AmazonS3ConfigKey {
     /// Skip signing request
     SkipSignature,
 
+    /// Skips tagging objects
+    ///
+    /// This can be desirable if not supported by the backing store
+    ///
+    /// Supported keys:
+    /// - `aws_skip_tagging`
+    /// - `skip_tagging`
+    SkipTagging,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -322,6 +333,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::SkipSignature => "aws_skip_signature",
             Self::CopyIfNotExists => "aws_copy_if_not_exists",
             Self::ConditionalPut => "aws_conditional_put",
+            Self::SkipTagging => "aws_skip_tagging",
             Self::Client(opt) => opt.as_ref(),
         }
     }
@@ -350,6 +362,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             "aws_copy_if_not_exists" | "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             "aws_conditional_put" | "conditional_put" => Ok(Self::ConditionalPut),
+            "aws_skip_tagging" | "skip_tagging" => Ok(Self::SkipTagging),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.parse() {
@@ -453,6 +466,7 @@ impl AmazonS3Builder {
                 self.client_options = self.client_options.with_config(key, value)
             }
             AmazonS3ConfigKey::SkipSignature => self.skip_signature.parse(value),
+            AmazonS3ConfigKey::SkipTagging => self.skip_tagging.parse(value),
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
             }
@@ -525,6 +539,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::ConditionalPut => {
                 self.conditional_put.as_ref().map(ToString::to_string)
             }
+            AmazonS3ConfigKey::SkipTagging => Some(self.skip_tagging.to_string()),
         }
     }
 
@@ -735,6 +750,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// If set to `true` will ignore any tags provided to put_opts
+    pub fn with_skip_tagging(mut self, ignore: bool) -> Self {
+        self.skip_tagging = ignore.into();
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -851,6 +872,7 @@ impl AmazonS3Builder {
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
             skip_signature: self.skip_signature.get()?,
+            skip_tagging: self.skip_tagging.get()?,
             checksum,
             copy_if_not_exists,
             conditional_put: put_precondition,

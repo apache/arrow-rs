@@ -1904,7 +1904,7 @@ mod tests {
     }
 
     #[cfg(any(feature = "aws", feature = "azure"))]
-    pub(crate) async fn tagging<F, Fut>(storage: &dyn ObjectStore, get_tags: F)
+    pub(crate) async fn tagging<F, Fut>(storage: &dyn ObjectStore, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
         Fut: Future<Output = Result<reqwest::Response>> + Send,
@@ -1951,6 +1951,11 @@ mod tests {
             .put_opts(&path, "test".into(), tag_set.into())
             .await
             .unwrap();
+
+        // Write should always succeed, but certain configurations may simply ignore tags
+        if !validate {
+            return;
+        }
 
         let resp = get_tags(path.clone()).await.unwrap();
         let body = resp.bytes().await.unwrap();

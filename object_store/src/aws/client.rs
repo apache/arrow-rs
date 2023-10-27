@@ -204,6 +204,7 @@ pub struct S3Config {
     pub client_options: ClientOptions,
     pub sign_payload: bool,
     pub skip_signature: bool,
+    pub skip_tagging: bool,
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
     pub conditional_put: Option<S3ConditionalPut>,

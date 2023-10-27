@@ -126,6 +126,7 @@ pub(crate) struct AzureConfig {
     pub retry_config: RetryConfig,
     pub service: Url,
     pub is_emulator: bool,
+    pub skip_tagging: bool,
     pub client_options: ClientOptions,
 }
 
@@ -231,9 +232,9 @@ impl AzureClient {
             }
         };
 
-        let builder = match opts.tags.encoded() {
-            "" => builder,
-            tags => builder.header(&TAGS_HEADER, tags),
+        let builder = match (opts.tags.encoded(), self.config.skip_tagging) {
+            ("", _) | (_, true) => builder,
+            (tags, false) => builder.header(&TAGS_HEADER, tags),
         };
 
         let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;

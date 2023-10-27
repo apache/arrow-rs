@@ -162,11 +162,11 @@ impl Signer for AmazonS3 {
 #[async_trait]
 impl ObjectStore for AmazonS3 {
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
-        let request = self.client.put_request(location, bytes);
-        let request = match opts.tags.encoded() {
-            "" => request,
-            tags => request.header(&TAGS_HEADER, tags),
-        };
+        let mut request = self.client.put_request(location, bytes);
+        let tags = opts.tags.encoded();
+        if !tags.is_empty() && !self.client.config().skip_tagging {
+            request = request.header(&TAGS_HEADER, tags);
+        }
 
         match (opts.mode, &self.client.config().conditional_put) {
             (PutMode::Overwrite, _) => request.send().await,
@@ -349,12 +349,11 @@ mod tests {
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
 
-        tagging(&integration, |p| {
+        tagging(&integration, !config.skip_tagging, |p| {
             let client = Arc::clone(&integration.client);
             async move { client.get_object_tagging(&p).await }
         })
         .await;
-
         if test_not_exists {
             copy_if_not_exists(&integration).await;
         }

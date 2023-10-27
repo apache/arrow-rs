@@ -203,14 +203,12 @@ mod tests {
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
 
-        // Azure hierarchical namespaces don't support tagging
-        if std::env::var("AZURE_HIERARCHICAL").is_err() {
-            tagging(&integration, |p| {
-                let client = Arc::clone(&integration.client);
-                async move { client.get_blob_tagging(&p).await }
-            })
-            .await
-        }
+        let validate = !integration.client.config().skip_tagging;
+        tagging(&integration, validate, |p| {
+            let client = Arc::clone(&integration.client);
+            async move { client.get_blob_tagging(&p).await }
+        })
+        .await
     }
 
     #[test]
