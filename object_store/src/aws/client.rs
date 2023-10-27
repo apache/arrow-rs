@@ -58,27 +58,9 @@ const VERSION_HEADER: &str = "x-amz-version-id";
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
 pub(crate) enum Error {
-    #[snafu(display("Error performing get request {}: {}", path, source))]
-    GetRequest {
-        source: crate::client::retry::Error,
-        path: String,
-    },
-
     #[snafu(display("Error fetching get response body {}: {}", path, source))]
     GetResponseBody {
         source: reqwest::Error,
-        path: String,
-    },
-
-    #[snafu(display("Error performing put request {}: {}", path, source))]
-    PutRequest {
-        source: crate::client::retry::Error,
-        path: String,
-    },
-
-    #[snafu(display("Error performing delete request {}: {}", path, source))]
-    DeleteRequest {
-        source: crate::client::retry::Error,
         path: String,
     },
 
@@ -103,12 +85,6 @@ pub(crate) enum Error {
     #[snafu(display("Got invalid DeleteObjects response: {}", source))]
     InvalidDeleteObjectsResponse {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    #[snafu(display("Error performing copy request {}: {}", path, source))]
-    CopyRequest {
-        source: crate::client::retry::Error,
-        path: String,
     },
 
     #[snafu(display("Error performing list request: {}", source))]
@@ -144,10 +120,6 @@ pub(crate) enum Error {
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
         match err {
-            Error::GetRequest { source, path }
-            | Error::DeleteRequest { source, path }
-            | Error::CopyRequest { source, path }
-            | Error::PutRequest { source, path } => source.error(STORE, path),
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -261,9 +233,7 @@ impl<'a> Request<'a> {
             )
             .send_retry(&self.config.retry_config)
             .await
-            .context(PutRequestSnafu {
-                path: self.path.as_ref(),
-            })?;
+            .map_err(|e| e.error(STORE, self.path.to_string()))?;
 
         Ok(response)
     }
@@ -340,9 +310,7 @@ impl S3Client {
             )
             .send_retry(&self.config.retry_config)
             .await
-            .context(DeleteRequestSnafu {
-                path: path.as_ref(),
-            })?;
+            .map_err(|e| e.error(STORE, path.to_string()))?;
 
         Ok(())
     }
@@ -456,7 +424,7 @@ impl S3Client {
     }
 
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>
-    pub fn copy_request<'a>(&'a self, from: &Path, to: &'a Path) -> Request<'a> {
+    pub fn copy_request<'a>(&'a self, from: &'a Path, to: &Path) -> Request<'a> {
         let url = self.config.path_url(to);
         let source = format!("{}/{}", self.config.bucket, encode_path(from));
 
@@ -467,7 +435,7 @@ impl S3Client {
 
         Request {
             builder,
-            path: to,
+            path: from,
             config: &self.config,
             payload_sha256: None,
         }
@@ -622,9 +590,7 @@ impl GetClient for S3Client {
             )
             .send_retry(&self.config.retry_config)
             .await
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
-            })?;
+            .map_err(|e| e.error(STORE, path.to_string()))?;
 
         Ok(response)
     }
