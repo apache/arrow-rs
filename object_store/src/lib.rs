@@ -110,6 +110,42 @@
 //! * Rate Throttling: [`ThrottleConfig`](throttle::ThrottleConfig)
 //! * Concurrent Request Limit: [`LimitStore`](limit::LimitStore)
 //!
+//! # Configuration System
+//!
+//! This crate provides a configuration system inspired by the APIs exposed by [fsspec],
+//! [PyArrow FileSystem], and [Hadoop FileSystem], allowing creating a [`DynObjectStore`]
+//! from a URL and an optional list of key value pairs. This provides a flexible interface
+//! to support a wide variety of user-defined store configurations, with minimal additional
+//! application complexity.
+//!
+//! ```no_run
+//! # use url::Url;
+//! # use object_store::{parse_url, parse_url_opts};
+//! # use object_store::aws::{AmazonS3, AmazonS3Builder};
+//! #
+//! #
+//! // Can manually create a specific store variant using the appropriate builder
+//! let store: AmazonS3 = AmazonS3Builder::from_env()
+//!     .with_bucket_name("my-bucket").build().unwrap();
+//!
+//! // Alternatively can create an ObjectStore from an S3 URL
+//! let url = Url::parse("s3://bucket/path").unwrap();
+//! let (store, path) = parse_url(&url).unwrap();
+//! assert_eq!(path.as_ref(), "path");
+//!
+//! // Potentially with additional options
+//! let (store, path) = parse_url_opts(&url, vec![("aws_access_key_id", "...")]).unwrap();
+//!
+//! // Or with URLs that encode the bucket name in the URL path
+//! let url = Url::parse("https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/path").unwrap();
+//! let (store, path) = parse_url(&url).unwrap();
+//! assert_eq!(path.as_ref(), "path");
+//! ```
+//!
+//! [PyArrow FileSystem]: https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem.from_uri
+//! [fsspec]: https://filesystem-spec.readthedocs.io/en/latest/api.html#fsspec.filesystem
+//! [Hadoop FileSystem]: https://hadoop.apache.org/docs/r3.0.0/api/org/apache/hadoop/fs/FileSystem.html#get-java.net.URI-org.apache.hadoop.conf.Configuration-
+//!
 //! # List objects
 //!
 //! Use the [`ObjectStore::list`] method to iterate over objects in
