@@ -23,7 +23,8 @@ use tokio::io::AsyncWrite;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult, Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
+    Result,
 };
 
 #[doc(hidden)]
@@ -83,6 +84,11 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         let full_path = self.full_path(location);
         self.inner.put(&full_path, bytes).await
+    }
+
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        let full_path = self.full_path(location);
+        self.inner.put_opts(&full_path, bytes, opts).await
     }
 
     async fn put_multipart(

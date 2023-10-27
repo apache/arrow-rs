@@ -20,7 +20,7 @@ use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta, ObjectStore,
-    PutResult, Result,
+    PutMode, PutOptions, PutResult, Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -271,20 +271,44 @@ impl Config {
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        if matches!(opts.mode, PutMode::Update(_)) {
+            return Err(crate::Error::NotImplemented);
+        }
+
         let path = self.config.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
             let (mut file, suffix) = new_staged_upload(&path)?;
             let staging_path = staged_upload_path(&path, &suffix);
-            file.write_all(&bytes)
-                .context(UnableToCopyDataToFileSnafu)
-                .and_then(|_| {
-                    std::fs::rename(&staging_path, &path).context(UnableToRenameFileSnafu)
-                })
-                .map_err(|e| {
-                    let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
-                    e
-                })?;
+
+            let err = match file.write_all(&bytes) {
+                Ok(_) => match opts.mode {
+                    PutMode::Overwrite => match std::fs::rename(&staging_path, &path) {
+                        Ok(_) => None,
+                        Err(source) => Some(Error::UnableToRenameFile { source }),
+                    },
+                    PutMode::Create => match std::fs::hard_link(&staging_path, &path) {
+                        Ok(_) => {
+                            let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
+                            None
+                        }
+                        Err(source) => match source.kind() {
+                            ErrorKind::AlreadyExists => Some(Error::AlreadyExists {
+                                path: path.to_str().unwrap().to_string(),
+                                source,
+                            }),
+                            _ => Some(Error::UnableToRenameFile { source }),
+                        },
+                    },
+                    PutMode::Update(_) => unreachable!(),
+                },
+                Err(source) => Some(Error::UnableToCopyDataToFile { source }),
+            };
+
+            if let Some(err) = err {
+                let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
+                return Err(err.into());
+            }
 
             let metadata = file.metadata().map_err(|e| Error::Metadata {
                 source: e.into(),
@@ -293,6 +317,7 @@ impl ObjectStore for LocalFileSystem {
 
             Ok(PutResult {
                 e_tag: Some(get_etag(&metadata)),
+                version: None,
             })
         })
         .await
@@ -1054,6 +1079,7 @@ mod tests {
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
+        put_opts(&integration, false).await;
     }
 
     #[test]

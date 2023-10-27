@@ -29,7 +29,8 @@
 use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
     path::Path,
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult, Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
+    Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -49,7 +50,6 @@ mod credential;
 
 /// [`CredentialProvider`] for [`MicrosoftAzure`]
 pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
-use crate::client::header::get_etag;
 use crate::multipart::MultiPartStore;
 pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
 pub use credential::AzureCredential;
@@ -82,16 +82,8 @@ impl std::fmt::Display for MicrosoftAzure {
 
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        let response = self
-            .client
-            .put_request(location, Some(bytes), false, &())
-            .await?;
-        let e_tag = get_etag(response.headers()).map_err(|e| crate::Error::Generic {
-            store: STORE,
-            source: Box::new(e),
-        })?;
-        Ok(PutResult { e_tag: Some(e_tag) })
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        self.client.put_blob(location, bytes, opts).await
     }
 
     async fn put_multipart(
@@ -208,6 +200,7 @@ mod tests {
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
+        put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
     }
 

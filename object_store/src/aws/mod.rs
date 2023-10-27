@@ -35,6 +35,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use reqwest::header::{IF_MATCH, IF_NONE_MATCH};
 use reqwest::Method;
 use std::{sync::Arc, time::Duration};
 use tokio::io::AsyncWrite;
@@ -47,20 +48,20 @@ use crate::client::CredentialProvider;
 use crate::multipart::{MultiPartStore, PartId, PutPart, WriteMultiPart};
 use crate::signer::Signer;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutResult,
-    Result,
+    Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, PutMode,
+    PutOptions, PutResult, Result,
 };
 
 mod builder;
 mod checksum;
 mod client;
-mod copy;
 mod credential;
+mod precondition;
 mod resolve;
 
 pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
-pub use copy::S3CopyIfNotExists;
+pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
 pub use resolve::resolve_bucket_region;
 
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
@@ -158,9 +159,33 @@ impl Signer for AmazonS3 {
 
 #[async_trait]
 impl ObjectStore for AmazonS3 {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        let e_tag = self.client.put_request(location, bytes, &()).await?;
-        Ok(PutResult { e_tag: Some(e_tag) })
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        let request = self.client.put_request(location, bytes);
+        match (opts.mode, &self.client.config().conditional_put) {
+            (PutMode::Overwrite, _) => request.send().await,
+            (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
+            (PutMode::Create, Some(S3ConditionalPut::ETagMatch)) => {
+                match request.header(&IF_NONE_MATCH, "*").send().await {
+                    // Technically If-None-Match should return NotModified but some stores,
+                    // such as R2, instead return PreconditionFailed
+                    // https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject
+                    Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
+                        Err(Error::AlreadyExists {
+                            path: location.to_string(),
+                            source: Box::new(e),
+                        })
+                    }
+                    r => r,
+                }
+            }
+            (PutMode::Update(v), Some(S3ConditionalPut::ETagMatch)) => {
+                let etag = v.e_tag.ok_or_else(|| Error::Generic {
+                    store: STORE,
+                    source: "ETag required for conditional put".to_string().into(),
+                })?;
+                request.header(&IF_MATCH, etag.as_str()).send().await
+            }
+        }
     }
 
     async fn put_multipart(
@@ -306,6 +331,7 @@ mod tests {
         let config = integration.client.config();
         let is_local = config.endpoint.starts_with("http://");
         let test_not_exists = config.copy_if_not_exists.is_some();
+        let test_conditional_put = config.conditional_put.is_some();
 
         // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
         put_get_delete_list_opts(&integration, is_local).await;
@@ -318,6 +344,9 @@ mod tests {
 
         if test_not_exists {
             copy_if_not_exists(&integration).await;
+        }
+        if test_conditional_put {
+            put_opts(&integration, true).await;
         }
 
         // run integration test with unsigned payload enabled

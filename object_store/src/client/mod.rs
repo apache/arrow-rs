@@ -38,7 +38,7 @@ pub mod token;
 pub mod header;
 
 #[cfg(any(feature = "aws", feature = "gcp"))]
-pub mod list_response;
+pub mod s3;
 
 use async_trait::async_trait;
 use std::collections::HashMap;

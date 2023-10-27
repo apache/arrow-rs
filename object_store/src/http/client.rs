@@ -243,6 +243,10 @@ impl Client {
                 .header("Destination", self.path_url(to).as_str());
 
             if !overwrite {
+                // While the Overwrite header appears to duplicate
+                // the functionality of the If-Match: * header of HTTP/1.1, If-Match
+                // applies only to the Request-URI, and not to the Destination of a COPY
+                // or MOVE.
                 builder = builder.header("Overwrite", "F");
             }
 

@@ -19,7 +19,7 @@ use super::credential::AzureCredential;
 use crate::azure::credential::*;
 use crate::azure::{AzureCredentialProvider, STORE};
 use crate::client::get::GetClient;
-use crate::client::header::{get_etag, HeaderConfig};
+use crate::client::header::{get_put_result, HeaderConfig};
 use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::GetOptionsExt;
@@ -27,24 +27,28 @@ use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::util::deserialize_rfc1123;
 use crate::{
-    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutResult, Result, RetryConfig,
+    ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode, PutOptions, PutResult,
+    Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
+use hyper::http::HeaderName;
 use itertools::Itertools;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{
-    header::{HeaderValue, CONTENT_LENGTH, IF_NONE_MATCH},
-    Client as ReqwestClient, Method, Response, StatusCode,
+    header::{HeaderValue, CONTENT_LENGTH, IF_MATCH, IF_NONE_MATCH},
+    Client as ReqwestClient, Method, RequestBuilder, Response,
 };
 use serde::{Deserialize, Serialize};
-use snafu::{ResultExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
+
+const VERSION_HEADER: &str = "x-ms-version-id";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -92,6 +96,9 @@ pub(crate) enum Error {
     Metadata {
         source: crate::client::header::Error,
     },
+
+    #[snafu(display("ETag required for conditional update"))]
+    MissingETag,
 }
 
 impl From<Error> for crate::Error {
@@ -134,6 +141,39 @@ impl AzureConfig {
     }
 }
 
+/// A builder for a put request allowing customisation of the headers and query string
+struct PutRequest<'a> {
+    path: &'a Path,
+    config: &'a AzureConfig,
+    builder: RequestBuilder,
+}
+
+impl<'a> PutRequest<'a> {
+    fn header(self, k: &HeaderName, v: &str) -> Self {
+        let builder = self.builder.header(k, v);
+        Self { builder, ..self }
+    }
+
+    fn query<T: Serialize + ?Sized + Sync>(self, query: &T) -> Self {
+        let builder = self.builder.query(query);
+        Self { builder, ..self }
+    }
+
+    async fn send(self) -> Result<Response> {
+        let credential = self.config.credentials.get_credential().await?;
+        let response = self
+            .builder
+            .with_azure_authorization(&credential, &self.config.account)
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(PutRequestSnafu {
+                path: self.path.as_ref(),
+            })?;
+
+        Ok(response)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct AzureClient {
     config: AzureConfig,
@@ -156,63 +196,52 @@ impl AzureClient {
         self.config.credentials.get_credential().await
     }
 
-    /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
-    pub async fn put_request<T: Serialize + crate::Debug + ?Sized + Sync>(
-        &self,
-        path: &Path,
-        bytes: Option<Bytes>,
-        is_block_op: bool,
-        query: &T,
-    ) -> Result<Response> {
-        let credential = self.get_credential().await?;
+    fn put_request<'a>(&'a self, path: &'a Path, bytes: Bytes) -> PutRequest<'a> {
         let url = self.config.path_url(path);
 
         let mut builder = self.client.request(Method::PUT, url);
-
-        if !is_block_op {
-            builder = builder.header(&BLOB_TYPE, "BlockBlob").query(query);
-        } else {
-            builder = builder.query(query);
-        }
 
         if let Some(value) = self.config().client_options.get_content_type(path) {
             builder = builder.header(CONTENT_TYPE, value);
         }
 
-        if let Some(bytes) = bytes {
-            builder = builder
-                .header(CONTENT_LENGTH, HeaderValue::from(bytes.len()))
-                .body(bytes)
-        } else {
-            builder = builder.header(CONTENT_LENGTH, HeaderValue::from_static("0"));
+        builder = builder
+            .header(CONTENT_LENGTH, HeaderValue::from(bytes.len()))
+            .body(bytes);
+
+        PutRequest {
+            path,
+            builder,
+            config: &self.config,
         }
+    }
 
-        let response = builder
-            .with_azure_authorization(&credential, &self.config.account)
-            .send_retry(&self.config.retry_config)
-            .await
-            .context(PutRequestSnafu {
-                path: path.as_ref(),
-            })?;
+    /// Make an Azure PUT request <https://docs.microsoft.com/en-us/rest/api/storageservices/put-blob>
+    pub async fn put_blob(&self, path: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        let builder = self.put_request(path, bytes);
 
-        Ok(response)
+        let builder = match &opts.mode {
+            PutMode::Overwrite => builder,
+            PutMode::Create => builder.header(&IF_NONE_MATCH, "*"),
+            PutMode::Update(v) => {
+                let etag = v.e_tag.as_ref().context(MissingETagSnafu)?;
+                builder.header(&IF_MATCH, etag)
+            }
+        };
+
+        let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
+        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
 
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
     pub async fn put_block(&self, path: &Path, part_idx: usize, data: Bytes) -> Result<PartId> {
         let content_id = format!("{part_idx:20}");
-        let block_id: BlockId = content_id.clone().into();
+        let block_id = BASE64_STANDARD.encode(&content_id);
 
-        self.put_request(
-            path,
-            Some(data),
-            true,
-            &[
-                ("comp", "block"),
-                ("blockid", &BASE64_STANDARD.encode(block_id)),
-            ],
-        )
-        .await?;
+        self.put_request(path, data)
+            .query(&[("comp", "block"), ("blockid", &block_id)])
+            .send()
+            .await?;
 
         Ok(PartId { content_id })
     }
@@ -224,15 +253,13 @@ impl AzureClient {
             .map(|part| BlockId::from(part.content_id))
             .collect();
 
-        let block_list = BlockList { blocks };
-        let block_xml = block_list.to_xml();
-
         let response = self
-            .put_request(path, Some(block_xml.into()), true, &[("comp", "blocklist")])
+            .put_request(path, BlockList { blocks }.to_xml().into())
+            .query(&[("comp", "blocklist")])
+            .send()
             .await?;
 
-        let e_tag = get_etag(response.headers()).context(MetadataSnafu)?;
-        Ok(PutResult { e_tag: Some(e_tag) })
+        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
 
     /// Make an Azure Delete request <https://docs.microsoft.com/en-us/rest/api/storageservices/delete-blob>
@@ -284,13 +311,7 @@ impl AzureClient {
             .with_azure_authorization(&credential, &self.config.account)
             .send_retry(&self.config.retry_config)
             .await
-            .map_err(|err| match err.status() {
-                Some(StatusCode::CONFLICT) => crate::Error::AlreadyExists {
-                    source: Box::new(err),
-                    path: to.to_string(),
-                },
-                _ => err.error(STORE, from.to_string()),
-            })?;
+            .map_err(|err| err.error(STORE, from.to_string()))?;
 
         Ok(())
     }
@@ -303,7 +324,7 @@ impl GetClient for AzureClient {
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: true,
         last_modified_required: true,
-        version_header: Some("x-ms-version-id"),
+        version_header: Some(VERSION_HEADER),
     };
 
     /// Make an Azure GET request

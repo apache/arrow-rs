@@ -17,7 +17,8 @@
 
 //! An in-memory object store implementation
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutResult, Result,
+    path::Path, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, PutMode,
+    PutOptions, PutResult, Result, UpdateVersion,
 };
 use crate::{GetOptions, MultipartId};
 use async_trait::async_trait;
@@ -52,6 +53,9 @@ enum Error {
 
     #[snafu(display("Object already exists at that location: {path}"))]
     AlreadyExists { path: String },
+
+    #[snafu(display("ETag required for conditional update"))]
+    MissingETag,
 }
 
 impl From<Error> for super::Error {
@@ -110,8 +114,49 @@ impl Storage {
         let etag = self.next_etag;
         self.next_etag += 1;
         let entry = Entry::new(bytes, Utc::now(), etag);
-        self.map.insert(location.clone(), entry);
+        self.overwrite(location, entry);
         etag
+    }
+
+    fn overwrite(&mut self, location: &Path, entry: Entry) {
+        self.map.insert(location.clone(), entry);
+    }
+
+    fn create(&mut self, location: &Path, entry: Entry) -> Result<()> {
+        use std::collections::btree_map;
+        match self.map.entry(location.clone()) {
+            btree_map::Entry::Occupied(_) => Err(Error::AlreadyExists {
+                path: location.to_string(),
+            }
+            .into()),
+            btree_map::Entry::Vacant(v) => {
+                v.insert(entry);
+                Ok(())
+            }
+        }
+    }
+
+    fn update(&mut self, location: &Path, v: UpdateVersion, entry: Entry) -> Result<()> {
+        match self.map.get_mut(location) {
+            // Return Precondition instead of NotFound for consistency with stores
+            None => Err(crate::Error::Precondition {
+                path: location.to_string(),
+                source: format!("Object at location {location} not found").into(),
+            }),
+            Some(e) => {
+                let existing = e.e_tag.to_string();
+                let expected = v.e_tag.context(MissingETagSnafu)?;
+                if existing == expected {
+                    *e = entry;
+                    Ok(())
+                } else {
+                    Err(crate::Error::Precondition {
+                        path: location.to_string(),
+                        source: format!("{existing} does not match {expected}").into(),
+                    })
+                }
+            }
+        }
     }
 }
 
@@ -123,10 +168,21 @@ impl std::fmt::Display for InMemory {
 
 #[async_trait]
 impl ObjectStore for InMemory {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        let etag = self.storage.write().insert(location, bytes);
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        let mut storage = self.storage.write();
+        let etag = storage.next_etag;
+        let entry = Entry::new(bytes, Utc::now(), etag);
+
+        match opts.mode {
+            PutMode::Overwrite => storage.overwrite(location, entry),
+            PutMode::Create => storage.create(location, entry)?,
+            PutMode::Update(v) => storage.update(location, v, entry)?,
+        }
+        storage.next_etag += 1;
+
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
+            version: None,
         })
     }
 
@@ -425,7 +481,7 @@ impl AsyncWrite for InMemoryAppend {
     fn poll_shutdown(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         self.poll_flush(cx)
     }
 }
@@ -449,6 +505,7 @@ mod tests {
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
+        put_opts(&integration, true).await;
     }
 
     #[tokio::test]
