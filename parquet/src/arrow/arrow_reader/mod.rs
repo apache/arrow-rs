@@ -712,6 +712,7 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
+    use half::f16;
     use num::PrimInt;
     use rand::{thread_rng, Rng, RngCore};
     use tempfile::tempfile;
@@ -922,6 +923,53 @@ mod tests {
             .as_any()
             .downcast_ref::<UInt64Array>()
             .unwrap();
+    }
+
+    #[test]
+    fn test_float16_roundtrip() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "float16",
+            ArrowDataType::Float16,
+            true,
+        )]));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None)?;
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Float16Array::from_iter_values([
+                f16::EPSILON,
+                f16::INFINITY,
+                f16::MIN,
+                f16::MAX,
+                f16::NAN,
+                f16::INFINITY,
+                f16::NEG_INFINITY,
+                f16::ONE,
+                f16::NEG_ONE,
+                f16::ZERO,
+                f16::NEG_ZERO,
+                f16::E,
+                f16::PI,
+                f16::FRAC_1_PI,
+            ]))],
+        )?;
+
+        writer.write(&original)?;
+        writer.close()?;
+
+        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024)?;
+        let ret = reader.next().unwrap()?;
+        assert_eq!(ret, original);
+
+        // Ensure can be downcast to the correct type
+        ret.column(0)
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .unwrap();
+
+        Ok(())
     }
 
     struct RandFixedLenGen {}

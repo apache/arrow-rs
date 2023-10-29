@@ -194,6 +194,7 @@ pub enum LogicalType {
     Json,
     Bson,
     Uuid,
+    Float16,
 }
 
 // ----------------------------------------------------------------------
@@ -478,6 +479,7 @@ impl ColumnOrder {
                 LogicalType::Timestamp { .. } => SortOrder::SIGNED,
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
+                LogicalType::Float16 => SortOrder::SIGNED,
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -739,6 +741,7 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::JSON(_) => LogicalType::Json,
             parquet::LogicalType::BSON(_) => LogicalType::Bson,
             parquet::LogicalType::UUID(_) => LogicalType::Uuid,
+            parquet::LogicalType::FLOAT16(_) => LogicalType::Float16,
         }
     }
 }
@@ -779,6 +782,7 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::Json => parquet::LogicalType::JSON(Default::default()),
             LogicalType::Bson => parquet::LogicalType::BSON(Default::default()),
             LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
+            LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
         }
     }
 }
@@ -826,10 +830,11 @@ impl From<Option<LogicalType>> for ConvertedType {
                     (64, false) => ConvertedType::UINT_64,
                     t => panic!("Integer type {t:?} is not supported"),
                 },
-                LogicalType::Unknown => ConvertedType::NONE,
                 LogicalType::Json => ConvertedType::JSON,
                 LogicalType::Bson => ConvertedType::BSON,
-                LogicalType::Uuid => ConvertedType::NONE,
+                LogicalType::Uuid | LogicalType::Float16 | LogicalType::Unknown => {
+                    ConvertedType::NONE
+                }
             },
             None => ConvertedType::NONE,
         }
@@ -1075,6 +1080,7 @@ impl str::FromStr for LogicalType {
             "INTERVAL" => Err(general_err!(
                 "Interval parquet logical type not yet supported"
             )),
+            "FLOAT16" => Ok(LogicalType::Float16),
             other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
     }
@@ -1720,6 +1726,10 @@ mod tests {
             ConvertedType::ENUM
         );
         assert_eq!(
+            ConvertedType::from(Some(LogicalType::Float16)),
+            ConvertedType::NONE
+        );
+        assert_eq!(
             ConvertedType::from(Some(LogicalType::Unknown)),
             ConvertedType::NONE
         );
@@ -2092,6 +2102,7 @@ mod tests {
                 is_adjusted_to_u_t_c: true,
                 unit: TimeUnit::NANOS(Default::default()),
             },
+            LogicalType::Float16,
         ];
         check_sort_order(signed, SortOrder::SIGNED);
 

@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::basic::{
-    ConvertedType, LogicalType, TimeUnit as ParquetTimeUnit, Type as PhysicalType,
-};
+use crate::basic::{ConvertedType, LogicalType, TimeUnit as ParquetTimeUnit, Type as PhysicalType};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{BasicTypeInfo, Type};
 use arrow_schema::{DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION};
@@ -158,9 +156,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             (32, false) => Ok(DataType::UInt32),
             _ => Err(arrow_err!("Cannot create INT32 physical type from {:?}", t)),
         },
-        (Some(LogicalType::Decimal { scale, precision }), _) => {
-            decimal_128_type(scale, precision)
-        }
+        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(scale, precision),
         (Some(LogicalType::Date), _) => Ok(DataType::Date32),
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
             ParquetTimeUnit::MILLIS(_) => Ok(DataType::Time32(TimeUnit::Millisecond)),
@@ -237,9 +233,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             TimeUnit::Microsecond,
             Some("UTC".into()),
         )),
-        (Some(LogicalType::Decimal { scale, precision }), _) => {
-            decimal_128_type(scale, precision)
-        }
+        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(scale, precision),
         (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet INT64 logical type {:?} or converted type {}",
@@ -303,6 +297,16 @@ fn from_fixed_len_byte_array(
             // to return. Thus without the original Arrow schema, the results
             // would be incorrect if all 12 bytes of the interval are populated
             Ok(DataType::Interval(IntervalUnit::DayTime))
+        }
+        (Some(LogicalType::Float16), _) => {
+            if type_length == 2 {
+                Ok(DataType::Float16)
+            } else {
+                Err(ParquetError::General(
+                    "FLOAT16 logical type must be Fixed Length Byte Array with length 2"
+                        .to_string(),
+                ))
+            }
         }
         _ => Ok(DataType::FixedSizeBinary(type_length)),
     }
