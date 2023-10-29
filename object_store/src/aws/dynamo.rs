@@ -118,7 +118,7 @@ impl DynamoCommit {
     pub fn new(table_name: String) -> Self {
         Self {
             table_name,
-            timeout: 2_000,
+            timeout: 20_000,
             max_clock_skew_rate: 3,
             ttl: Duration::from_secs(60 * 60),
             test_interval: Duration::from_millis(100),
@@ -230,7 +230,7 @@ impl DynamoCommit {
 
         extract_lease(&response.item).ok_or_else(|| Error::NotFound {
             path: key.into(),
-            source: "DynamoDB GetItem returned not items".to_string().into(),
+            source: "DynamoDB GetItem returned no items".to_string().into(),
         })
     }
 
@@ -505,13 +505,16 @@ mod number {
     }
 }
 
+/// Re-export integration_test to be called by s3_test
+#[cfg(test)]
+pub(crate) use tests::integration_test;
+
 #[cfg(test)]
 mod tests {
-    use crate::aws::{AmazonS3Builder, S3CopyIfNotExists};
-    use crate::test_util::maybe_skip_integration;
-    use crate::ObjectStore;
 
     use super::*;
+    use crate::aws::AmazonS3;
+    use crate::ObjectStore;
 
     #[test]
     fn test_attribute_serde() {
@@ -521,17 +524,10 @@ mod tests {
         assert!(matches!(back, AttributeValue::Number(23)));
     }
 
-    #[tokio::test]
-    async fn test_dynamo() {
-        maybe_skip_integration!();
-        let integration = AmazonS3Builder::from_env().build().unwrap();
-        let d = match &integration.client.config.copy_if_not_exists {
-            Some(S3CopyIfNotExists::Dynamo(d)) => d,
-            _ => {
-                eprintln!("Skipping dynamo integration test - dynamo not configured");
-                return;
-            }
-        };
+    /// An integration test for DynamoDB
+    ///
+    /// This is a function called by s3_test to avoid test concurrency issues
+    pub async fn integration_test(integration: &AmazonS3, d: &DynamoCommit) {
         let client = integration.client.as_ref();
 
         let src = Path::from("dynamo_path_src");

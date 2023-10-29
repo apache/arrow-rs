@@ -390,6 +390,11 @@ mod tests {
         let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
         let integration = builder.build().unwrap();
         put_get_delete_list_opts(&integration, is_local).await;
+
+        match &integration.client.config.copy_if_not_exists {
+            Some(S3CopyIfNotExists::Dynamo(d)) => dynamo::integration_test(&integration, d).await,
+            _ => eprintln!("Skipping dynamo integration test - dynamo not configured"),
+        };
     }
 
     #[tokio::test]
