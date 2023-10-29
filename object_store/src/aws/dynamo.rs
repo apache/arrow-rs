@@ -17,22 +17,27 @@
 
 //! A DynamoDB based lock system
 
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use chrono::Utc;
+use reqwest::{Response, StatusCode};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Serialize, Serializer};
+
 use crate::aws::client::S3Client;
 use crate::aws::credential::CredentialExt;
+use crate::aws::AwsCredential;
 use crate::client::get::GetClientExt;
 use crate::client::retry::Error as RetryError;
 use crate::client::retry::RetryExt;
 use crate::path::Path;
 use crate::{Error, GetOptions, Result};
-use chrono::Utc;
-use reqwest::StatusCode;
-use serde::ser::SerializeMap;
-use serde::{Deserialize, Serialize, Serializer};
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
 
 /// The exception returned by DynamoDB on conflict
-const CONFLICT: &str = "com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException";
+const CONFLICT: &str = "ConditionalCheckFailedException";
+
+const STORE: &str = "DynamoDB";
 
 /// A DynamoDB-based commit protocol, used to provide conditional write support for S3
 ///
@@ -95,8 +100,8 @@ const CONFLICT: &str = "com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedE
 #[derive(Debug, Clone)]
 pub struct DynamoCommit {
     table_name: String,
-    /// The number of seconds a lease is valid for
-    timeout: usize,
+    /// The number of milliseconds a lease is valid for
+    timeout: u64,
     /// The maximum clock skew rate tolerated by the system
     max_clock_skew_rate: u32,
     /// The length of time a record will be retained in DynamoDB before being cleaned up
@@ -113,15 +118,44 @@ impl DynamoCommit {
     pub fn new(table_name: String) -> Self {
         Self {
             table_name,
-            timeout: 20,
+            timeout: 2_000,
             max_clock_skew_rate: 3,
             ttl: Duration::from_secs(60 * 60),
             test_interval: Duration::from_millis(100),
         }
     }
 
-    /// Returns the name of the DynamoDB table
-    pub fn table_name(&self) -> &str {
+    /// Overrides the lock timeout.
+    ///
+    /// A longer lock timeout reduces the probability of spurious commit failures and multi-writer
+    /// races, but will increase the time that writers must wait to reclaim a lock lost. The
+    /// default value of 2 seconds should be appropriate for must use-cases.
+    pub fn with_timeout(mut self, millis: u64) -> Self {
+        self.timeout = millis;
+        self
+    }
+
+    /// The maximum clock skew rate tolerated by the system.
+    ///
+    /// An environment in which the clock on the fastest node ticks twice as fast as the slowest
+    /// node, would have a clock skew rate of 2. The default value of 3 should be appropriate
+    /// for most environments.
+    pub fn with_max_clock_skew_rate(mut self, rate: u32) -> Self {
+        self.max_clock_skew_rate = rate;
+        self
+    }
+
+    /// The length of time a record should be retained in DynamoDB before being cleaned up
+    ///
+    /// This should be significantly larger than the configured lock timeout, with the default
+    /// value of 1 hour appropriate for most use-cases.
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
+        self
+    }
+
+    /// Returns the name of the DynamoDB table.
+    pub(crate) fn table_name(&self) -> &str {
         &self.table_name
     }
 
@@ -147,7 +181,7 @@ impl DynamoCommit {
                         Err(_) => Err(Error::Generic {
                             store: "DynamoDB",
                             source: format!(
-                                "Failed to perform copy operation in {} seconds",
+                                "Failed to perform copy operation in {} milliseconds",
                                 self.timeout
                             )
                             .into(),
@@ -170,6 +204,36 @@ impl DynamoCommit {
         }
     }
 
+    async fn get_lock(&self, s3: &S3Client, key: &str) -> Result<Lease> {
+        let key_attributes = [("key", AttributeValue::String(key))];
+        let req = GetItem {
+            table_name: &self.table_name,
+            key: Map(&key_attributes),
+        };
+        let credential = s3.config.get_credential().await?;
+
+        let resp = self
+            .request(s3, credential.as_deref(), "DynamoDB_20120810.GetItem", req)
+            .await
+            .map_err(|e| e.error(STORE, key.to_string()))?;
+
+        let body = resp.bytes().await.map_err(|e| Error::Generic {
+            store: STORE,
+            source: Box::new(e),
+        })?;
+
+        let response: GetItemResponse<'_> =
+            serde_json::from_slice(body.as_ref()).map_err(|e| Error::Generic {
+                store: STORE,
+                source: Box::new(e),
+            })?;
+
+        extract_lease(&response.item).ok_or_else(|| Error::NotFound {
+            path: key.into(),
+            source: "DynamoDB GetItem returned not items".to_string().into(),
+        })
+    }
+
     async fn try_lock(
         &self,
         s3: &S3Client,
@@ -178,12 +242,12 @@ impl DynamoCommit {
     ) -> Result<TryLockResult> {
         let attributes;
         let (next_gen, condition_expression, expression_attribute_values) = match existing {
-            None => (0_usize, "attribute_not_exists(#pk)", Map(&[])),
+            None => (0_u64, "attribute_not_exists(#pk)", Map(&[])),
             Some(existing) => {
                 attributes = [(":g", AttributeValue::Number(existing.generation))];
                 (
                     existing.generation.checked_add(1).unwrap(),
-                    "attribute_exists(#pk) AND generation == :g",
+                    "attribute_exists(#pk) AND generation = :g",
                     Map(attributes.as_slice()),
                 )
             }
@@ -211,37 +275,60 @@ impl DynamoCommit {
         let credential = s3.config.get_credential().await?;
 
         let acquire = Instant::now();
+        match self
+            .request(s3, credential.as_deref(), "DynamoDB_20120810.PutItem", req)
+            .await
+        {
+            Ok(_) => Ok(TryLockResult::Ok(Lease {
+                acquire,
+                generation: next_gen,
+                timeout: Duration::from_millis(self.timeout),
+            })),
+            Err(e) => match parse_error_response(&e) {
+                Some(e) if e.error.ends_with(CONFLICT) => match extract_lease(&e.item) {
+                    Some(lease) => Ok(TryLockResult::Conflict(lease)),
+                    // ReturnValuesOnConditionCheckFailure is a relatively recent addition
+                    // to DynamoDB and is not supported by dynamodb-local, which is used
+                    // by localstack. In such cases the conflict error will not contain
+                    // the conflicting item, and we must instead perform a get request
+                    //
+                    // <https://aws.amazon.com/about-aws/whats-new/2023/06/amazon-dynamodb-cost-failed-conditional-writes/>
+                    // <https://repost.aws/questions/QUNfADrK4RT6WHe61RzTK8aw/dynamodblocal-support-for-returnvaluesonconditioncheckfailure-for-single-write-operations>
+                    // <https://github.com/localstack/localstack/issues/9040>
+                    None => Ok(TryLockResult::Conflict(self.get_lock(s3, key).await?)),
+                },
+                _ => Err(Error::Generic {
+                    store: STORE,
+                    source: Box::new(e),
+                }),
+            },
+        }
+    }
+
+    async fn request<R: Serialize>(
+        &self,
+        s3: &S3Client,
+        cred: Option<&AwsCredential>,
+        target: &str,
+        req: R,
+    ) -> Result<Response, RetryError> {
         let region = &s3.config.region;
 
         let builder = match &s3.config.endpoint {
             Some(e) => s3.client.post(e),
             None => {
-                let url = format!("https://dynamodb.{region}.amazonaws.com",);
+                let url = format!("https://dynamodb.{region}.amazonaws.com");
                 s3.client.post(url)
             }
         };
 
-        let response = builder
+        builder
+            .timeout(Duration::from_millis(self.timeout))
             .json(&req)
-            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
-            .with_aws_sigv4(credential.as_deref(), region, "dynamodb", true, None)
+            .header("X-Amz-Target", target)
+            .with_aws_sigv4(cred, region, "dynamodb", true, None)
             .send_retry(&s3.config.retry_config)
-            .await;
-
-        match response {
-            Ok(_) => Ok(TryLockResult::Ok(Lease {
-                acquire,
-                generation: next_gen,
-                timeout: Duration::from_secs(self.timeout as _),
-            })),
-            Err(e) => match try_extract_lease(&e) {
-                Some(lease) => Ok(TryLockResult::Conflict(lease)),
-                None => Err(Error::Generic {
-                    store: "DynamoDB",
-                    source: Box::new(e),
-                }),
-            },
-        }
+            .await
     }
 }
 
@@ -269,43 +356,41 @@ async fn check_not_exists(client: &S3Client, path: &Path) -> Result<()> {
     }
 }
 
-/// If [`RetryError`] corresponds to [`CONFLICT`] extracts the pre-existing [`Lease`]
-fn try_extract_lease(e: &RetryError) -> Option<Lease> {
+/// Parses the error response if any
+fn parse_error_response(e: &RetryError) -> Option<ErrorResponse<'_>> {
     match e {
         RetryError::Client {
             status: StatusCode::BAD_REQUEST,
             body: Some(b),
-        } => {
-            let resp: ErrorResponse<'_> = serde_json::from_str(b).ok()?;
-            if resp.error != CONFLICT {
-                return None;
-            }
-
-            let generation = match resp.item.get("generation") {
-                Some(AttributeValue::Number(generation)) => generation,
-                _ => return None,
-            };
-
-            let timeout = match resp.item.get("timeout") {
-                Some(AttributeValue::Number(timeout)) => *timeout,
-                _ => return None,
-            };
-
-            Some(Lease {
-                acquire: Instant::now(),
-                generation: *generation,
-                timeout: Duration::from_secs(timeout as _),
-            })
-        }
+        } => serde_json::from_str(b).ok(),
         _ => None,
     }
+}
+
+/// Extracts a lease from `item`, returning `None` on error
+fn extract_lease(item: &HashMap<&str, AttributeValue<'_>>) -> Option<Lease> {
+    let generation = match item.get("generation") {
+        Some(AttributeValue::Number(generation)) => generation,
+        _ => return None,
+    };
+
+    let timeout = match item.get("timeout") {
+        Some(AttributeValue::Number(timeout)) => *timeout,
+        _ => return None,
+    };
+
+    Some(Lease {
+        acquire: Instant::now(),
+        generation: *generation,
+        timeout: Duration::from_millis(timeout),
+    })
 }
 
 /// A lock lease
 #[derive(Debug, Clone)]
 struct Lease {
     acquire: Instant,
-    generation: usize,
+    generation: u64,
     timeout: Duration,
 }
 
@@ -339,6 +424,24 @@ struct PutItem<'a> {
     /// that failed a condition check.
     #[serde(skip_serializing_if = "Option::is_none")]
     return_values_on_condition_check_failure: Option<ReturnValues>,
+}
+
+/// A DynamoDB [GetItem] payload
+///
+/// [GetItem]: https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_GetItem.html
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct GetItem<'a> {
+    /// The table name
+    table_name: &'a str,
+    /// The primary key
+    key: Map<'a, &'a str, AttributeValue<'a>>,
+}
+
+#[derive(Deserialize)]
+struct GetItemResponse<'a> {
+    #[serde(borrow, default, rename = "Item")]
+    item: HashMap<&'a str, AttributeValue<'a>>,
 }
 
 #[derive(Deserialize)]
@@ -385,18 +488,18 @@ enum AttributeValue<'a> {
     #[serde(rename = "S")]
     String(&'a str),
     #[serde(rename = "N", with = "number")]
-    Number(usize),
+    Number(u64),
 }
 
 /// Numbers are serialized as strings
 mod number {
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S: Serializer>(v: &usize, s: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&v.to_string())
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
         let v: &str = Deserialize::deserialize(d)?;
         v.parse().map_err(serde::de::Error::custom)
     }
@@ -404,6 +507,10 @@ mod number {
 
 #[cfg(test)]
 mod tests {
+    use crate::aws::{AmazonS3Builder, S3CopyIfNotExists};
+    use crate::test_util::maybe_skip_integration;
+    use crate::ObjectStore;
+
     use super::*;
 
     #[test]
@@ -412,5 +519,46 @@ mod tests {
         assert_eq!(serde, "{\"N\":\"23\"}");
         let back: AttributeValue<'_> = serde_json::from_str(&serde).unwrap();
         assert!(matches!(back, AttributeValue::Number(23)));
+    }
+
+    #[tokio::test]
+    async fn test_dynamo() {
+        maybe_skip_integration!();
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let d = match &integration.client.config.copy_if_not_exists {
+            Some(S3CopyIfNotExists::Dynamo(d)) => d,
+            _ => {
+                eprintln!("Skipping dynamo integration test - dynamo not configured");
+                return;
+            }
+        };
+        let client = integration.client.as_ref();
+
+        let src = Path::from("dynamo_path_src");
+        integration.put(&src, "asd".into()).await.unwrap();
+
+        let dst = Path::from("dynamo_path");
+        let _ = integration.delete(&dst).await; // Delete if present
+
+        // Create a lock if not already exists
+        let existing = match d.try_lock(client, dst.as_ref(), None).await.unwrap() {
+            TryLockResult::Conflict(l) => l,
+            TryLockResult::Ok(l) => l,
+        };
+
+        // Should not be able to acquire a lock again
+        let r = d.try_lock(client, dst.as_ref(), None).await;
+        assert!(matches!(r, Ok(TryLockResult::Conflict(_))));
+
+        // But should still be able to reclaim lock and perform copy
+        d.copy_if_not_exists(client, &src, &dst).await.unwrap();
+
+        match d.try_lock(client, dst.as_ref(), None).await.unwrap() {
+            TryLockResult::Conflict(new) => {
+                // Should have incremented generation to do so
+                assert_eq!(new.generation, existing.generation + 1);
+            }
+            _ => panic!("Should conflict"),
+        }
     }
 }

@@ -41,7 +41,8 @@ pub enum S3CopyIfNotExists {
     Header(String, String),
     /// The name of a DynamoDB table to use for coordination
     ///
-    /// Encoded as `dynamodb:<TABLE_NAME>` ignoring whitespace
+    /// Encoded as either `dynamodb:<TABLE_NAME>` or `dynamodb:<TABLE_NAME>:<TIMEOUT_MILLIS>`
+    /// ignoring whitespace. The default timeout is used if not specified
     ///
     /// See [`DynamoCommit`] for more information
     ///
@@ -66,7 +67,12 @@ impl S3CopyIfNotExists {
                 let (k, v) = value.split_once(':')?;
                 Some(Self::Header(k.trim().to_string(), v.trim().to_string()))
             }
-            "dynamo" => Some(Self::Dynamo(DynamoCommit::new(value.trim().to_string()))),
+            "dynamo" => Some(Self::Dynamo(match value.split_once(':') {
+                Some((table_name, timeout)) => DynamoCommit::new(table_name.trim().to_string())
+                    .with_timeout(timeout.parse().ok()?),
+                None => DynamoCommit::new(value.trim().to_string()),
+            })),
+
             _ => None,
         }
     }
