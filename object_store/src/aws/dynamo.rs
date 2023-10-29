@@ -305,7 +305,7 @@ impl DynamoCommit {
         }
     }
 
-    async fn request<R: Serialize>(
+    async fn request<R: Serialize + Send + Sync>(
         &self,
         s3: &S3Client,
         cred: Option<&AwsCredential>,
