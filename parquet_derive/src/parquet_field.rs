@@ -385,6 +385,7 @@ impl Field {
         }
     }
 
+    // generates code to read `field_name` from each record into a vector `vals`
     fn copied_direct_vals(&self) -> proc_macro2::TokenStream {
         let field_name = &self.ident;
 
@@ -417,6 +418,7 @@ impl Field {
         }
     }
 
+    // generates code to read a vector `records` into `field_name` for each record
     fn copied_direct_fields(&self) -> proc_macro2::TokenStream {
         let field_name = &self.ident;
 

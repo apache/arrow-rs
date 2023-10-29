@@ -71,7 +71,7 @@ let mut row_group = writer.next_row_group().unwrap();
 let chunks = vec![ACompleteRecord{...}];
 
 // The derived `RecordWriter` takes over here
-chunks.write_to_row_group(&mut row_group);
+(&chunks[..]).write_to_row_group(&mut row_group);
 
 writer.close_row_group(row_group).unwrap();
 writer.close().unwrap();
@@ -113,16 +113,16 @@ chunks.read_from_row_group(&mut *row_group, 1).unwrap();
 - [x] Support writing `String`, `&str`, `bool`, `i32`, `f32`, `f64`, `Vec<u8>`
 - [ ] Support writing dictionaries
 - [x] Support writing logical types like timestamp
-- [x] Derive definition_levels for `Option` for writing
-- [ ] Derive definition levels for nested structures for writing
+- [x] Handle definition_levels for `Option` for writing
+- [ ] Handle definition levels for nested structures for writing
 - [ ] Derive writing tuple struct
 - [ ] Derive writing `tuple` container types
 
 - [x] Support reading `String`, `&str`, `bool`, `i32`, `f32`, `f64`, `Vec<u8>`
 - [ ] Support reading/writing dictionaries
 - [x] Support reading/writing logical types like timestamp
-- [ ] Derive definition_levels for `Option` for reading
-- [ ] Derive definition levels for nested structures for reading
+- [ ] Handle definition_levels for `Option` for reading
+- [ ] Handle definition levels for nested structures for reading
 - [ ] Derive reading/writing tuple struct
 - [ ] Derive reading/writing `tuple` container types
 
