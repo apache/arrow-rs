@@ -113,8 +113,8 @@ chunks.read_from_row_group(&mut *row_group, 1).unwrap();
 - [x] Support writing `String`, `&str`, `bool`, `i32`, `f32`, `f64`, `Vec<u8>`
 - [ ] Support writing dictionaries
 - [x] Support writing logical types like timestamp
-- [x] Handle definition_levels for `Option` for writing
-- [ ] Handle definition levels for nested structures for writing
+- [x] Derive definition_levels for `Option` for writing
+- [ ] Derive definition levels for nested structures for writing
 - [ ] Derive writing tuple struct
 - [ ] Derive writing `tuple` container types
 
