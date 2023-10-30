@@ -964,10 +964,7 @@ mod tests {
         assert_eq!(ret, original);
 
         // Ensure can be downcast to the correct type
-        ret.column(0)
-            .as_any()
-            .downcast_ref::<Float16Array>()
-            .unwrap();
+        ret.column(0).as_primitive::<Float16Type>();
 
         Ok(())
     }
