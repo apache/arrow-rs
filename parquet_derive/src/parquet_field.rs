@@ -1335,11 +1335,7 @@ mod test {
                     panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
                 }
                 for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
-                    r.henceforth = ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i]
-                        + ((::chrono::naive::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
-                        .signed_duration_since(
-                            ::chrono::naive::NaiveDate::from_ymd_opt(0, 12, 31).unwrap()
-                        )).num_days()) as i32).unwrap();
+                    r.henceforth = ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i] + 719163).unwrap();
                 }
             }
         }).to_string());
