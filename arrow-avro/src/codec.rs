@@ -262,9 +262,9 @@ fn make_field<'a>(
             // https://avro.apache.org/docs/1.11.1/specification/#logical-types
             match (t.attributes.logical_type, &mut meta.codec) {
                 (Some("decimal"), c @ Codec::Fixed(_)) => {
-                    return Err(ArrowError::NotYetImplemented(format!(
-                        "Decimals are not currently supported"
-                    )))
+                    return Err(ArrowError::NotYetImplemented(
+                        "Decimals are not currently supported".to_string(),
+                    ))
                 }
                 (Some("date"), c @ Codec::Int32) => *c = Codec::Date32,
                 (Some("time-millis"), c @ Codec::Int32) => *c = Codec::TimeMillis,
