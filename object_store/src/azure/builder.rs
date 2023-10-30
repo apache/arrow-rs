@@ -173,6 +173,8 @@ pub struct MicrosoftAzureBuilder {
     ///
     /// i.e. https://{account_name}.dfs.fabric.microsoft.com
     use_fabric_endpoint: ConfigValue<bool>,
+    /// When set to true, skips tagging objects
+    disable_tagging: ConfigValue<bool>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -321,6 +323,15 @@ pub enum AzureConfigKey {
     /// - `container_name`
     ContainerName,
 
+    /// Disables tagging objects
+    ///
+    /// This can be desirable if not supported by the backing store
+    ///
+    /// Supported keys:
+    /// - `azure_disable_tagging`
+    /// - `disable_tagging`
+    DisableTagging,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -344,6 +355,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::FederatedTokenFile => "azure_federated_token_file",
             Self::UseAzureCli => "azure_use_azure_cli",
             Self::ContainerName => "azure_container_name",
+            Self::DisableTagging => "azure_disable_tagging",
             Self::Client(key) => key.as_ref(),
         }
     }
@@ -387,6 +399,7 @@ impl FromStr for AzureConfigKey {
             "azure_use_fabric_endpoint" | "use_fabric_endpoint" => Ok(Self::UseFabricEndpoint),
             "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
             "azure_container_name" | "container_name" => Ok(Self::ContainerName),
+            "azure_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.parse() {
@@ -503,6 +516,7 @@ impl MicrosoftAzureBuilder {
                 self.client_options = self.client_options.with_config(key, value)
             }
             AzureConfigKey::ContainerName => self.container_name = Some(value.into()),
+            AzureConfigKey::DisableTagging => self.disable_tagging.parse(value),
         };
         self
     }
@@ -556,6 +570,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::UseAzureCli => Some(self.use_azure_cli.to_string()),
             AzureConfigKey::Client(key) => self.client_options.get_config_value(key),
             AzureConfigKey::ContainerName => self.container_name.clone(),
+            AzureConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
         }
     }
 
@@ -781,6 +796,12 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// If set to `true` will ignore any tags provided to put_opts
+    pub fn with_disable_tagging(mut self, ignore: bool) -> Self {
+        self.disable_tagging = ignore.into();
+        self
+    }
+
     /// Configure a connection to container with given name on Microsoft Azure Blob store.
     pub fn build(mut self) -> Result<MicrosoftAzure> {
         if let Some(url) = self.url.take() {
@@ -885,6 +906,7 @@ impl MicrosoftAzureBuilder {
             account,
             is_emulator,
             container,
+            disable_tagging: self.disable_tagging.get()?,
             retry_config: self.retry_config,
             client_options: self.client_options,
             service: storage_url,

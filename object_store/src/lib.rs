@@ -263,6 +263,10 @@ pub use client::{
 #[cfg(feature = "cloud")]
 mod config;
 
+mod tags;
+
+pub use tags::TagSet;
+
 pub mod multipart;
 mod parse;
 mod util;
@@ -893,11 +897,27 @@ impl From<PutResult> for UpdateVersion {
 pub struct PutOptions {
     /// Configure the [`PutMode`] for this operation
     pub mode: PutMode,
+    /// Provide a [`TagSet`] for this object
+    ///
+    /// Implementations that don't support object tagging should ignore this
+    pub tags: TagSet,
 }
 
 impl From<PutMode> for PutOptions {
     fn from(mode: PutMode) -> Self {
-        Self { mode }
+        Self {
+            mode,
+            ..Default::default()
+        }
+    }
+}
+
+impl From<TagSet> for PutOptions {
+    fn from(tags: TagSet) -> Self {
+        Self {
+            tags,
+            ..Default::default()
+        }
     }
 }
 
@@ -1015,6 +1035,7 @@ mod tests {
     use chrono::TimeZone;
     use futures::stream::FuturesUnordered;
     use rand::{thread_rng, Rng};
+    use std::future::Future;
     use tokio::io::AsyncWriteExt;
 
     pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
@@ -1880,6 +1901,68 @@ mod tests {
 
         let meta = storage.head(&path).await.unwrap();
         assert_eq!(meta.size, chunk_size * 2);
+    }
+
+    #[cfg(any(feature = "aws", feature = "azure"))]
+    pub(crate) async fn tagging<F, Fut>(storage: &dyn ObjectStore, validate: bool, get_tags: F)
+    where
+        F: Fn(Path) -> Fut + Send + Sync,
+        Fut: Future<Output = Result<reqwest::Response>> + Send,
+    {
+        use bytes::Buf;
+        use serde::Deserialize;
+
+        #[derive(Deserialize)]
+        struct Tagging {
+            #[serde(rename = "TagSet")]
+            list: TagList,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct TagList {
+            #[serde(rename = "Tag")]
+            tags: Vec<Tag>,
+        }
+
+        #[derive(Debug, Deserialize, Eq, PartialEq)]
+        #[serde(rename_all = "PascalCase")]
+        struct Tag {
+            key: String,
+            value: String,
+        }
+
+        let tags = vec![
+            Tag {
+                key: "foo.com=bar/s".to_string(),
+                value: "bananas/foo.com-_".to_string(),
+            },
+            Tag {
+                key: "namespace/key.foo".to_string(),
+                value: "value with a space".to_string(),
+            },
+        ];
+        let mut tag_set = TagSet::default();
+        for t in &tags {
+            tag_set.push(&t.key, &t.value)
+        }
+
+        let path = Path::from("tag_test");
+        storage
+            .put_opts(&path, "test".into(), tag_set.into())
+            .await
+            .unwrap();
+
+        // Write should always succeed, but certain configurations may simply ignore tags
+        if !validate {
+            return;
+        }
+
+        let resp = get_tags(path.clone()).await.unwrap();
+        let body = resp.bytes().await.unwrap();
+
+        let mut resp: Tagging = quick_xml::de::from_reader(body.reader()).unwrap();
+        resp.list.tags.sort_by(|a, b| a.key.cmp(&b.key));
+        assert_eq!(resp.list.tags, tags);
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {

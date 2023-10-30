@@ -202,6 +202,13 @@ mod tests {
         stream_get(&integration).await;
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
+
+        let validate = !integration.client.config().disable_tagging;
+        tagging(&integration, validate, |p| {
+            let client = Arc::clone(&integration.client);
+            async move { client.get_blob_tagging(&p).await }
+        })
+        .await
     }
 
     #[test]
