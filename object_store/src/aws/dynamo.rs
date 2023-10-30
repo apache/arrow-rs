@@ -44,8 +44,8 @@ const STORE: &str = "DynamoDB";
 /// ## Limitations
 ///
 /// Only conditional operations, e.g. `copy_if_not_exists` will be synchronized, and can
-/// therefore race with non-conditional operations, e.g. `put`, `copy`, or conditional
-/// operations performed by writers not configured to synchronize with DynamoDB.
+/// therefore race with non-conditional operations, e.g. `put`, `copy`, `delete`, or
+/// conditional operations performed by writers not configured to synchronize with DynamoDB.
 ///
 /// Workloads making use of this mechanism **must** ensure:
 ///
@@ -129,7 +129,7 @@ impl DynamoCommit {
     ///
     /// A longer lock timeout reduces the probability of spurious commit failures and multi-writer
     /// races, but will increase the time that writers must wait to reclaim a lock lost. The
-    /// default value of 2 seconds should be appropriate for must use-cases.
+    /// default value of 20 seconds should be appropriate for must use-cases.
     pub fn with_timeout(mut self, millis: u64) -> Self {
         self.timeout = millis;
         self
@@ -204,6 +204,7 @@ impl DynamoCommit {
         }
     }
 
+    /// Retrieve a lock, returning an error if it doesn't exist
     async fn get_lock(&self, s3: &S3Client, key: &str) -> Result<Lease> {
         let key_attributes = [("key", AttributeValue::String(key))];
         let req = GetItem {
@@ -234,6 +235,7 @@ impl DynamoCommit {
         })
     }
 
+    /// Attempt to acquire a lock, reclaiming an existing lease if provided
     async fn try_lock(
         &self,
         s3: &S3Client,
@@ -291,6 +293,11 @@ impl DynamoCommit {
                     // to DynamoDB and is not supported by dynamodb-local, which is used
                     // by localstack. In such cases the conflict error will not contain
                     // the conflicting item, and we must instead perform a get request
+                    //
+                    // There is a potential race here if the conflicting record is removed
+                    // before we retrieve it. We could retry the transaction in such a scenario,
+                    // but as this only occurs for emulators, we simply abort with a
+                    // not found error
                     //
                     // <https://aws.amazon.com/about-aws/whats-new/2023/06/amazon-dynamodb-cost-failed-conditional-writes/>
                     // <https://repost.aws/questions/QUNfADrK4RT6WHe61RzTK8aw/dynamodblocal-support-for-returnvaluesonconditioncheckfailure-for-single-write-operations>
