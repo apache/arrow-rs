@@ -278,7 +278,11 @@ fn make_field<'a>(
                     *c = Codec::TimestampMicros(false)
                 }
                 (Some("duration"), c @ Codec::Fixed(12)) => *c = Codec::Duration,
-                _ => {}
+                (Some(logical), _) => {
+                    // Insert unrecognized logical type into metadata map
+                    meta.metadata.insert("logicalType".into(), logical.into());
+                }
+                (None, _) => {}
             }
 
             if !t.attributes.additional.is_empty() {
