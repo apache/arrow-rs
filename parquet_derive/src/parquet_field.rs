@@ -427,13 +427,9 @@ impl Field {
                 quote! { ::chrono::naive::NaiveDateTime::from_timestamp_millis(vals[i]).unwrap() }
             }
             Some(ThirdPartyType::ChronoNaiveDate) => {
+                // NaiveDateTime::UNIX_EPOCH.num_days_from_ce() == 719163
                 quote! {
-                    ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i]
-                + ((::chrono::naive::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
-                        .signed_duration_since(
-                            ::chrono::naive::NaiveDate::from_ymd_opt(0, 12, 31).unwrap()
-                        )
-                   ).num_days()) as i32).unwrap()
+                    ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i] + 719163).unwrap()
                 }
             }
             Some(ThirdPartyType::Uuid) => {
