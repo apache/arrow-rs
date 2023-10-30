@@ -1562,7 +1562,7 @@ mod tests {
         let file = File::open(path).unwrap();
         let mut reader = BufReader::new(file);
         let schema = schema.unwrap_or_else(|| {
-            let schema = infer_json_schema(&mut reader, None).unwrap();
+            let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
             reader.rewind().unwrap();
             schema
         });
@@ -1939,7 +1939,7 @@ mod tests {
     fn test_with_multiple_batches() {
         let file = File::open("test/data/basic_nulls.json").unwrap();
         let mut reader = BufReader::new(file);
-        let schema = infer_json_schema(&mut reader, None).unwrap();
+        let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
         reader.rewind().unwrap();
 
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(5);
@@ -2079,7 +2079,7 @@ mod tests {
     fn test_json_iterator() {
         let file = File::open("test/data/basic.json").unwrap();
         let mut reader = BufReader::new(file);
-        let schema = infer_json_schema(&mut reader, None).unwrap();
+        let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
         reader.rewind().unwrap();
 
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(5);
