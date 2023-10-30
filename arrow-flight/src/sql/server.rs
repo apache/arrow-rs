@@ -225,6 +225,18 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
         ))
     }
 
+    /// Implementors may override to handle additional calls to get_flight_info()
+    async fn get_flight_info_fallback(
+        &self,
+        cmd: Command,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(format!(
+            "get_flight_info: The defined request is invalid: {}",
+            cmd.type_url()
+        )))
+    }
+
     // do_get
 
     /// Get a FlightDataStream containing the query results.
@@ -616,10 +628,7 @@ where
             Command::CommandGetXdbcTypeInfo(token) => {
                 self.get_flight_info_xdbc_type_info(token, request).await
             }
-            cmd => Err(Status::unimplemented(format!(
-                "get_flight_info: The defined request is invalid: {}",
-                cmd.type_url()
-            ))),
+            cmd => self.get_flight_info_fallback(cmd, request).await,
         }
     }
 
