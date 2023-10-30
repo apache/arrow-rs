@@ -113,7 +113,7 @@ jobs:
       AWS_ENDPOINT: http://localhost:4566
       AWS_ALLOW_HTTP: true
       # We use a low timeout to speed up tests, this should not be replicated for production environments
-      AWS_COPY_IF_NOT_EXISTS: dynamo:test-table:1000
+      AWS_COPY_IF_NOT_EXISTS: dynamo:test-table:100
       HTTP_URL: "http://localhost:8080"
       GOOGLE_BUCKET: test-bucket
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
