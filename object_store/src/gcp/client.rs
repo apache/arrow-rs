@@ -472,8 +472,6 @@ impl ListClient for GoogleCloudStorageClient {
         page_token: Option<&str>,
         offset: Option<&str>,
     ) -> Result<(ListResult, Option<String>)> {
-        assert!(offset.is_none()); // Not yet supported
-
         let credential = self.get_credential().await?;
         let url = format!("{}/{}", self.config.base_url, self.bucket_name_encoded);
 
@@ -493,6 +491,10 @@ impl ListClient for GoogleCloudStorageClient {
 
         if let Some(max_results) = &self.max_list_results {
             query.push(("max-keys", max_results))
+        }
+
+        if let Some(offset) = offset {
+            query.push(("start-after", offset))
         }
 
         let response = self
