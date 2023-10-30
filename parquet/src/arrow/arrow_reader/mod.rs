@@ -719,7 +719,7 @@ mod tests {
 
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
-    use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType};
+    use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType, Float16Type};
     use arrow_array::*;
     use arrow_array::{RecordBatch, RecordBatchReader};
     use arrow_buffer::{i256, ArrowNativeType, Buffer};
@@ -927,33 +927,48 @@ mod tests {
 
     #[test]
     fn test_float16_roundtrip() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "float16",
-            ArrowDataType::Float16,
-            true,
-        )]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("float16", ArrowDataType::Float16, false),
+            Field::new("float16-nullable", ArrowDataType::Float16, true),
+        ]));
 
         let mut buf = Vec::with_capacity(1024);
         let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None)?;
 
         let original = RecordBatch::try_new(
             schema,
-            vec![Arc::new(Float16Array::from_iter_values([
-                f16::EPSILON,
-                f16::INFINITY,
-                f16::MIN,
-                f16::MAX,
-                f16::NAN,
-                f16::INFINITY,
-                f16::NEG_INFINITY,
-                f16::ONE,
-                f16::NEG_ONE,
-                f16::ZERO,
-                f16::NEG_ZERO,
-                f16::E,
-                f16::PI,
-                f16::FRAC_1_PI,
-            ]))],
+            vec![
+                Arc::new(Float16Array::from_iter_values([
+                    f16::EPSILON,
+                    f16::MIN,
+                    f16::MAX,
+                    f16::NAN,
+                    f16::INFINITY,
+                    f16::NEG_INFINITY,
+                    f16::ONE,
+                    f16::NEG_ONE,
+                    f16::ZERO,
+                    f16::NEG_ZERO,
+                    f16::E,
+                    f16::PI,
+                    f16::FRAC_1_PI,
+                ])),
+                Arc::new(Float16Array::from(vec![
+                    None,
+                    None,
+                    None,
+                    Some(f16::NAN),
+                    Some(f16::INFINITY),
+                    Some(f16::NEG_INFINITY),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(f16::FRAC_1_PI),
+                ])),
+            ],
         )?;
 
         writer.write(&original)?;
@@ -965,6 +980,7 @@ mod tests {
 
         // Ensure can be downcast to the correct type
         ret.column(0).as_primitive::<Float16Type>();
+        ret.column(1).as_primitive::<Float16Type>();
 
         Ok(())
     }
