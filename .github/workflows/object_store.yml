@@ -153,7 +153,7 @@ jobs:
           rustup default stable
 
       - name: Run object_store tests
-        run: cargo test --features=aws,azure,gcp,http
+        run: cargo test --features=aws,azure,gcp,http -- --test-threads=1
 
   # test the object_store crate builds against wasm32 in stable rust
   wasm32-build:
