@@ -236,9 +236,11 @@ impl HeaderDecoder {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::codec::AvroField;
     use crate::reader::read_header;
     use crate::schema::SCHEMA_METADATA_KEY;
     use crate::test_util::arrow_test_data;
+    use arrow_schema::{DataType, Field, Fields, TimeUnit};
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 
@@ -269,7 +271,34 @@ mod test {
         let schema_json = header.get(SCHEMA_METADATA_KEY).unwrap();
         let expected = br#"{"type":"record","name":"topLevelRecord","fields":[{"name":"id","type":["int","null"]},{"name":"bool_col","type":["boolean","null"]},{"name":"tinyint_col","type":["int","null"]},{"name":"smallint_col","type":["int","null"]},{"name":"int_col","type":["int","null"]},{"name":"bigint_col","type":["long","null"]},{"name":"float_col","type":["float","null"]},{"name":"double_col","type":["double","null"]},{"name":"date_string_col","type":["bytes","null"]},{"name":"string_col","type":["bytes","null"]},{"name":"timestamp_col","type":[{"type":"long","logicalType":"timestamp-micros"},"null"]}]}"#;
         assert_eq!(schema_json, expected);
-        let _schema: Schema<'_> = serde_json::from_slice(schema_json).unwrap();
+        let schema: Schema<'_> = serde_json::from_slice(schema_json).unwrap();
+        let field = AvroField::try_from(&schema).unwrap();
+
+        assert_eq!(
+            field.field(),
+            Field::new(
+                "topLevelRecord",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("id", DataType::Int32, true),
+                    Field::new("bool_col", DataType::Boolean, true),
+                    Field::new("tinyint_col", DataType::Int32, true),
+                    Field::new("smallint_col", DataType::Int32, true),
+                    Field::new("int_col", DataType::Int32, true),
+                    Field::new("bigint_col", DataType::Int64, true),
+                    Field::new("float_col", DataType::Float32, true),
+                    Field::new("double_col", DataType::Float64, true),
+                    Field::new("date_string_col", DataType::Binary, true),
+                    Field::new("string_col", DataType::Binary, true),
+                    Field::new(
+                        "timestamp_col",
+                        DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                        true
+                    ),
+                ])),
+                false
+            )
+        );
+
         assert_eq!(
             u128::from_le_bytes(header.sync()),
             226966037233754408753420635932530907102

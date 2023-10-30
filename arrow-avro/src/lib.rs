@@ -27,6 +27,8 @@ mod schema;
 
 mod compression;
 
+mod codec;
+
 #[cfg(test)]
 mod test_util {
     pub fn arrow_test_data(path: &str) -> String {
