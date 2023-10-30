@@ -23,9 +23,16 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Avro types are not nullable, with nullability instead encoded as a union
+/// where one of the variants is the null type.
+///
+/// To accommodate this we special case two-variant unions where one of the
+/// variants is the null type, and use this to derive arrow's notion of nullability
 #[derive(Debug, Copy, Clone)]
 enum Nulls {
+    /// The nulls are encoded as the first union variant
     NullFirst,
+    /// The nulls are encoded as the second union variant
     NullSecond,
 }
 
