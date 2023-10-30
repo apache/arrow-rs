@@ -429,7 +429,7 @@ impl Field {
             Some(ThirdPartyType::ChronoNaiveDate) => {
                 // NaiveDateTime::UNIX_EPOCH.num_days_from_ce() == 719163
                 quote! {
-                    ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i] + 719163).unwrap()
+                    ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i].saturating_add(719163)).unwrap()
                 }
             }
             Some(ThirdPartyType::Uuid) => {
@@ -1335,7 +1335,7 @@ mod test {
                     panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
                 }
                 for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
-                    r.henceforth = ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i] + 719163).unwrap();
+                    r.henceforth = ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i].saturating_add(719163)).unwrap();
                 }
             }
         }).to_string());
