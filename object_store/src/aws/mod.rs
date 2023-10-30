@@ -164,7 +164,7 @@ impl ObjectStore for AmazonS3 {
     async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
         let mut request = self.client.put_request(location, bytes);
         let tags = opts.tags.encoded();
-        if !tags.is_empty() && !self.client.config().skip_tagging {
+        if !tags.is_empty() && !self.client.config().disable_tagging {
             request = request.header(&TAGS_HEADER, tags);
         }
 
@@ -349,7 +349,7 @@ mod tests {
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
 
-        tagging(&integration, !config.skip_tagging, |p| {
+        tagging(&integration, !config.disable_tagging, |p| {
             let client = Arc::clone(&integration.client);
             async move { client.get_object_tagging(&p).await }
         })

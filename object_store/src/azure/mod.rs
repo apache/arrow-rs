@@ -203,7 +203,7 @@ mod tests {
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
 
-        let validate = !integration.client.config().skip_tagging;
+        let validate = !integration.client.config().disable_tagging;
         tagging(&integration, validate, |p| {
             let client = Arc::clone(&integration.client);
             async move { client.get_blob_tagging(&p).await }

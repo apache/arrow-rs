@@ -126,7 +126,7 @@ pub(crate) struct AzureConfig {
     pub retry_config: RetryConfig,
     pub service: Url,
     pub is_emulator: bool,
-    pub skip_tagging: bool,
+    pub disable_tagging: bool,
     pub client_options: ClientOptions,
 }
 
@@ -232,7 +232,7 @@ impl AzureClient {
             }
         };
 
-        let builder = match (opts.tags.encoded(), self.config.skip_tagging) {
+        let builder = match (opts.tags.encoded(), self.config.disable_tagging) {
             ("", _) | (_, true) => builder,
             (tags, false) => builder.header(&TAGS_HEADER, tags),
         };
