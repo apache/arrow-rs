@@ -528,15 +528,28 @@ mod tests {
         ]);
 
         let mut reader = BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
-        let (inferred_schema, _) = infer_json_schema_from_seekable(&mut reader, None).unwrap();
+        let (inferred_schema, n_rows) = infer_json_schema_from_seekable(&mut reader, None).unwrap();
 
         assert_eq!(inferred_schema, schema);
+        assert_eq!(n_rows, 4);
 
         let file = File::open("test/data/mixed_arrays.json.gz").unwrap();
         let mut reader = BufReader::new(GzDecoder::new(&file));
-        let (inferred_schema, _) = infer_json_schema(&mut reader, None).unwrap();
+        let (inferred_schema, n_rows) = infer_json_schema(&mut reader, None).unwrap();
 
         assert_eq!(inferred_schema, schema);
+        assert_eq!(n_rows, 4);
+    }
+
+    #[test]
+    fn test_row_limit() {
+        let mut reader = BufReader::new(File::open("test/data/basic.json").unwrap());
+
+        let (_, n_rows) = infer_json_schema_from_seekable(&mut reader, None).unwrap();
+        assert_eq!(n_rows, 12);
+
+        let (_, n_rows) = infer_json_schema_from_seekable(&mut reader, Some(5)).unwrap();
+        assert_eq!(n_rows, 5);
     }
 
     #[test]
