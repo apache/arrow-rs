@@ -44,12 +44,12 @@
 //! 2. Production quality, leading this crate to be used in large
 //! scale production systems, such as [crates.io] and [InfluxDB IOx]
 //!
-//! 3. Support for advanced functionality, including [ACID] reads
+//! 3. Support for advanced functionality, including atomic, conditional reads
 //! and writes, vectored IO, bulk deletion, and more...
 //!
 //! 4. Stable and predictable governance via the [Apache Arrow] project
 //!
-//! 5. Very low dependency footprint
+//! 5. Small dependency footprint, depending on only a small number of common crates
 //!
 //! Originally developed for [InfluxDB IOx] and subsequently donated
 //! to [Apache Arrow].
@@ -89,7 +89,8 @@
 //! # Why not a Filesystem Interface?
 //!
 //! Whilst this crate does provide a [`BufReader`], the [`ObjectStore`] interface mirrors the APIs
-//! of object stores and not filesystems.
+//! of object stores and not filesystems, opting to provide stateless APIs instead of the cursor
+//! based interfaces such as [`Read`] or [`Seek`] favoured by filesystems.
 //!
 //! This provides some compelling advantages:
 //!
@@ -291,7 +292,7 @@
 //! # Vectored Read
 //!
 //! A common pattern, especially when reading structured datasets, is to need to fetch
-//! multiple ranges of a particular object.
+//! multiple, potentially non-contiguous, ranges of a particular object.
 //!
 //! [`ObjectStore::get_ranges`] provides an efficient way to perform such vectored IO, and will
 //! automatically coalesce adjacent ranges into an appropriate number of parallel requests.
@@ -333,11 +334,15 @@
 //! # use tokio::io::AsyncWriteExt;
 //! # use object_store::path::Path;
 //! struct CacheEntry {
+//!     /// Data returned by last request
 //!     data: Bytes,
+//!     /// ETag identifying the object returned by the server
 //!     e_tag: String,
+//!     /// Instant of last refresh
 //!     refreshed_at: Instant,
 //! }
 //!
+//! /// Example cache that checks entries after 10 seconds for a new version
 //! struct Cache {
 //!     entries: HashMap<Path, CacheEntry>,
 //!     store: Arc<dyn ObjectStore>,
@@ -348,7 +353,7 @@
 //!         Ok(match self.entries.get_mut(path) {
 //!             Some(e) => match e.refreshed_at.elapsed() < Duration::from_secs(10) {
 //!                 true => e.data.clone(), // Return cached data
-//!                 false => {
+//!                 false => { // Check if remote version has changed
 //!                     let opts = GetOptions {
 //!                         if_none_match: Some(e.e_tag.clone()),
 //!                         ..GetOptions::default()
@@ -362,7 +367,7 @@
 //!                     e.data.clone()
 //!                 }
 //!             },
-//!             None => {
+//!             None => { // Not cached, fetch data
 //!                 let get = self.store.get(&path).await?;
 //!                 let e_tag = get.meta.e_tag.clone();
 //!                 let data = get.bytes().await?;
@@ -383,11 +388,11 @@
 //!
 //! # Conditional Put
 //!
-//! The default behaviour when writing data is to upsert any existing object at the given path.
-//! More complex behaviours can be achieved using [`PutMode`], and can be used to build
-//! [Optimistic Concurrency Control] based transactions. This facilitates building metadata catalogs,
-//! such as [Apache Iceberg] or [Delta Lake], directly on top of object storage, without relying on
-//! a separate DBMS.
+//! The default behaviour when writing data is to upsert any existing object at the given path,
+//! overwriting any previous value. More complex behaviours can be achieved using [`PutMode`], and
+//! can be used to build [Optimistic Concurrency Control] based transactions. This facilitates
+//! building metadata catalogs, such as [Apache Iceberg] or [Delta Lake], directly on top of object
+//! storage, without relying on a separate DBMS.
 //!
 //! ```
 //! # use object_store::{Error, ObjectStore, PutMode, UpdateVersion};
@@ -403,6 +408,8 @@
 //! # async fn conditional_put() {
 //! let store = get_object_store();
 //! let path = Path::from("test");
+//!
+//! // Perform a conditional update on path
 //! loop {
 //!     // Perform get request
 //!     let r = store.get(&path).await.unwrap();
@@ -419,7 +426,7 @@
 //!     // Attempt to commit transaction
 //!     match store.put_opts(&path, new, PutMode::Update(version).into()).await {
 //!         Ok(_) => break, // Successfully committed
-//!         Err(Error::Precondition { .. }) => continue, // Transaction conflict, try again
+//!         Err(Error::Precondition { .. }) => continue, // Object has changed, try again
 //!         Err(e) => panic!("{e}")
 //!     }
 //! }
