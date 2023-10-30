@@ -545,9 +545,7 @@ impl S3Client {
             )
             .send_retry(&self.config.retry_config)
             .await
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
-            })?;
+            .map_err(|e| e.error(STORE, path.to_string()))?;
         Ok(response)
     }
 }
