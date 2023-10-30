@@ -772,10 +772,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     get_decimal_256_array_slice(array, indices)
                 }
                 ArrowDataType::Float16 => {
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::Float16Array>()
-                        .unwrap();
+                    let array = column.as_primitive::<Float16Type>();
                     get_float_16_array_slice(array, indices)
                 }
                 _ => {
