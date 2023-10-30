@@ -427,13 +427,9 @@ impl Field {
                 quote! { ::chrono::naive::NaiveDateTime::from_timestamp_millis(vals[i]).unwrap() }
             }
             Some(ThirdPartyType::ChronoNaiveDate) => {
+                // NaiveDateTime::UNIX_EPOCH.num_days_from_ce() == 719163
                 quote! {
-                    ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i]
-                + ((::chrono::naive::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
-                        .signed_duration_since(
-                            ::chrono::naive::NaiveDate::from_ymd_opt(0, 12, 31).unwrap()
-                        )
-                   ).num_days()) as i32).unwrap()
+                    ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i].saturating_add(719163)).unwrap()
                 }
             }
             Some(ThirdPartyType::Uuid) => {
@@ -1339,11 +1335,7 @@ mod test {
                     panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
                 }
                 for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
-                    r.henceforth = ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i]
-                        + ((::chrono::naive::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
-                        .signed_duration_since(
-                            ::chrono::naive::NaiveDate::from_ymd_opt(0, 12, 31).unwrap()
-                        )).num_days()) as i32).unwrap();
+                    r.henceforth = ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i].saturating_add(719163)).unwrap();
                 }
             }
         }).to_string());
