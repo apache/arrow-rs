@@ -330,7 +330,7 @@ impl DynamoCommit {
         };
 
         builder
-            // .timeout(Duration::from_millis(self.timeout))
+            .timeout(Duration::from_millis(self.timeout))
             .json(&req)
             .header("X-Amz-Target", target)
             .with_aws_sigv4(cred, region, "dynamodb", true, None)

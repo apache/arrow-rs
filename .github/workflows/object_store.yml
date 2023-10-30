@@ -112,8 +112,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: test
       AWS_ENDPOINT: http://localhost:4566
       AWS_ALLOW_HTTP: true
-      # We use a low timeout to speed up tests, this should not be replicated for production environments
-      AWS_COPY_IF_NOT_EXISTS: dynamo:test-table:100
+      AWS_COPY_IF_NOT_EXISTS: dynamo:test-table:2000
       HTTP_URL: "http://localhost:8080"
       GOOGLE_BUCKET: test-bucket
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
@@ -153,7 +152,7 @@ jobs:
           rustup default stable
 
       - name: Run object_store tests
-        run: cargo test --features=aws,azure,gcp,http -- --test-threads=1
+        run: cargo test --features=aws,azure,gcp,http
 
   # test the object_store crate builds against wasm32 in stable rust
   wasm32-build:
