@@ -47,7 +47,7 @@ use crate::parse::{
     string_to_datetime, Parser,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{i256, ArrowNativeType, Buffer, OffsetBuffer};
+use arrow_buffer::{i256, ArrowNativeType, Buffer, OffsetBuffer, ToByteSlice};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
@@ -202,6 +202,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         ) => true,
         (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
+
+        (_, Binary | LargeBinary) => from_type.is_integer(),
 
         // start numeric casts
         (
@@ -1368,6 +1370,28 @@ pub fn cast_with_options(
         (from_type, Utf8) if from_type.is_primitive() => {
             value_to_string::<i32>(array, cast_options)
         }
+        (from_type, Binary) if from_type.is_integer() => match from_type {
+            UInt8 => cast_numeric_to_binary::<UInt8Type, i32>(array),
+            UInt16 => cast_numeric_to_binary::<UInt16Type, i32>(array),
+            UInt32 => cast_numeric_to_binary::<UInt32Type, i32>(array),
+            UInt64 => cast_numeric_to_binary::<UInt64Type, i32>(array),
+            Int8 => cast_numeric_to_binary::<Int8Type, i32>(array),
+            Int16 => cast_numeric_to_binary::<Int16Type, i32>(array),
+            Int32 => cast_numeric_to_binary::<Int32Type, i32>(array),
+            Int64 => cast_numeric_to_binary::<Int64Type, i32>(array),
+            _ => unreachable!(),
+        },
+        (from_type, LargeBinary) if from_type.is_integer() => match from_type {
+            UInt8 => cast_numeric_to_binary::<UInt8Type, i64>(array),
+            UInt16 => cast_numeric_to_binary::<UInt16Type, i64>(array),
+            UInt32 => cast_numeric_to_binary::<UInt32Type, i64>(array),
+            UInt64 => cast_numeric_to_binary::<UInt64Type, i64>(array),
+            Int8 => cast_numeric_to_binary::<Int8Type, i64>(array),
+            Int16 => cast_numeric_to_binary::<Int16Type, i64>(array),
+            Int32 => cast_numeric_to_binary::<Int32Type, i64>(array),
+            Int64 => cast_numeric_to_binary::<Int64Type, i64>(array),
+            _ => unreachable!(),
+        },
         // start numeric casts
         (UInt8, UInt16) => cast_numeric_arrays::<UInt8Type, UInt16Type>(array, cast_options),
         (UInt8, UInt32) => cast_numeric_arrays::<UInt8Type, UInt32Type>(array, cast_options),
@@ -2312,6 +2336,22 @@ fn value_to_string<O: OffsetSizeTrait>(
                 // tell the builder the row is finished
                 builder.append_value("");
             }
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
+fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_primitive::<FROM>();
+
+    let mut builder = GenericBinaryBuilder::<O>::new();
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            builder.append_null();
+        } else {
+            builder.append_value(array.value(i).to_byte_slice());
         }
     }
     Ok(Arc::new(builder.finish()))
@@ -5173,6 +5213,44 @@ mod tests {
         let down_cast = array_ref.as_binary::<i64>();
         assert_eq!(bytes_1, down_cast.value(0));
         assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+    }
+
+    #[test]
+    fn test_numeric_to_binary() {
+        let a = Int16Array::from(vec![Some(1), Some(511), None]);
+
+        let array_ref = cast(&a, &DataType::Binary).unwrap();
+        let down_cast = array_ref.as_binary::<i32>();
+        assert_eq!(&1_i16.to_le_bytes(), down_cast.value(0));
+        assert_eq!(&511_i16.to_le_bytes(), down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        let a = Int64Array::from(vec![Some(-1), Some(123456789), None]);
+
+        let array_ref = cast(&a, &DataType::Binary).unwrap();
+        let down_cast = array_ref.as_binary::<i32>();
+        assert_eq!(&(-1 as i64).to_le_bytes(), down_cast.value(0));
+        assert_eq!(&123456789_i64.to_le_bytes(), down_cast.value(1));
+        assert!(down_cast.is_null(2));
+    }
+
+    #[test]
+    fn test_numeric_to_large_binary() {
+        let a = Int16Array::from(vec![Some(1), Some(511), None]);
+
+        let array_ref = cast(&a, &DataType::LargeBinary).unwrap();
+        let down_cast = array_ref.as_binary::<i64>();
+        assert_eq!(&1_i16.to_le_bytes(), down_cast.value(0));
+        assert_eq!(&511_i16.to_le_bytes(), down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        let a = Int64Array::from(vec![Some(-1), Some(123456789), None]);
+
+        let array_ref = cast(&a, &DataType::LargeBinary).unwrap();
+        let down_cast = array_ref.as_binary::<i64>();
+        assert_eq!(&(-1 as i64).to_le_bytes(), down_cast.value(0));
+        assert_eq!(&123456789_i64.to_le_bytes(), down_cast.value(1));
         assert!(down_cast.is_null(2));
     }
 
