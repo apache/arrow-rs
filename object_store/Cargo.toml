@@ -53,11 +53,6 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util", "fs"] }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
 tokio = { version = "1.25.0", features = ["sync", "macros", "rt", "time", "io-util"] }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]

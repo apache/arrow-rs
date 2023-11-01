@@ -103,12 +103,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         let full_path = self.full_path(location);
         self.inner.abort_multipart(&full_path, multipart_id).await
     }
-
-    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-        let full_path = self.full_path(location);
-        self.inner.append(&full_path).await
-    }
-
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let full_path = self.full_path(location);
         self.inner.get(&full_path).await
