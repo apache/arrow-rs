@@ -98,8 +98,7 @@ impl ObjectStoreScheme {
             _ => return Err(Error::Unrecognised { url: url.clone() }),
         };
 
-        let path = Path::parse(path)?;
-        Ok((scheme, path))
+        Ok((scheme, Path::from_url_path(path)?))
     }
 }
 
@@ -240,6 +239,18 @@ mod tests {
             ),
             ("http://mydomain/path", (ObjectStoreScheme::Http, "path")),
             ("https://mydomain/path", (ObjectStoreScheme::Http, "path")),
+            (
+                "s3://bucket/foo%20bar",
+                (ObjectStoreScheme::AmazonS3, "foo bar"),
+            ),
+            (
+                "https://foo/bar%20baz",
+                (ObjectStoreScheme::Http, "bar baz"),
+            ),
+            (
+                "file:///bar%252Efoo",
+                (ObjectStoreScheme::Local, "bar%2Efoo"),
+            ),
         ];
 
         for (s, (expected_scheme, expected_path)) in cases {
@@ -259,5 +270,13 @@ mod tests {
             let url = Url::parse(s).unwrap();
             assert!(ObjectStoreScheme::parse(&url).is_err());
         }
+    }
+
+    #[test]
+    fn test_url_spaces() {
+        let url = Url::parse("file:///my file with spaces").unwrap();
+        assert_eq!(url.path(), "/my%20file%20with%20spaces");
+        let (_, path) = parse_url(&url).unwrap();
+        assert_eq!(path.as_ref(), "my file with spaces");
     }
 }
