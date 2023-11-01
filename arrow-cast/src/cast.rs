@@ -2346,7 +2346,8 @@ fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_primitive::<FROM>();
 
-    let mut builder = GenericBinaryBuilder::<O>::new();
+    let mut builder =
+        GenericBinaryBuilder::<O>::with_capacity(array.len(), array.values().inner().capacity());
     for i in 0..array.len() {
         if array.is_null(i) {
             builder.append_null();
