@@ -94,8 +94,7 @@
 //!
 //! This provides some compelling advantages:
 //!
-//! * Except where explicitly stated otherwise, operations are atomic, and readers
-//! cannot observe partial and/or failed writes
+//! * All operations are atomic, and readers cannot observe partial and/or failed writes
 //! * Methods map directly to object store APIs, providing both efficiency and predictability
 //! * Abstracts away filesystem and operating system specific quirks, ensuring portability
 //! * Allows for functionality not native to filesystems, such as operation preconditions
@@ -559,30 +558,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// vary by object store.
     async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()>;
 
-    /// Returns an [`AsyncWrite`] that can be used to append to the object at `location`
-    ///
-    /// A new object will be created if it doesn't already exist, otherwise it will be
-    /// opened, with subsequent writes appended to the end.
-    ///
-    /// This operation cannot be supported by all stores, most use-cases should prefer
-    /// [`ObjectStore::put`] and [`ObjectStore::put_multipart`] for better portability
-    /// and stronger guarantees
-    ///
-    /// This API is not guaranteed to be atomic, in particular
-    ///
-    /// * On error, `location` may contain partial data
-    /// * Concurrent calls to [`ObjectStore::list`] may return partially written objects
-    /// * Concurrent calls to [`ObjectStore::get`] may return partially written data
-    /// * Concurrent calls to [`ObjectStore::put`] may result in data loss / corruption
-    /// * Concurrent calls to [`ObjectStore::append`] may result in data loss / corruption
-    ///
-    /// Additionally some stores, such as Azure, may only support appending to objects created
-    /// with [`ObjectStore::append`], and not with [`ObjectStore::put`], [`ObjectStore::copy`], or
-    /// [`ObjectStore::put_multipart`]
-    async fn append(&self, _location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-        Err(Error::NotImplemented)
-    }
-
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult> {
         self.get_opts(location, GetOptions::default()).await
@@ -777,10 +752,6 @@ macro_rules! as_ref_impl {
                 multipart_id: &MultipartId,
             ) -> Result<()> {
                 self.as_ref().abort_multipart(location, multipart_id).await
-            }
-
-            async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-                self.as_ref().append(location).await
             }
 
             async fn get(&self, location: &Path) -> Result<GetResult> {
