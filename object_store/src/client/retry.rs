@@ -417,11 +417,10 @@ mod tests {
             );
         }
 
-        let e = do_request().await.unwrap_err().to_string();
+        let e = do_request().await.unwrap_err().to_string();        
         assert!(
-            e.starts_with(
-                "Error after 2 retries: HTTP status server error (502 Bad Gateway) for url"
-            ),
+            e.contains("Error after 2 retries in") && 
+            e.contains("max_retries:2, retry_timeout:1000s, source:HTTP status server error (502 Bad Gateway) for url"),
             "{e}"
         );
 
@@ -436,7 +435,8 @@ mod tests {
         }
         let e = do_request().await.unwrap_err().to_string();
         assert!(
-            e.starts_with("Error after 2 retries: error sending request for url"),
+            e.contains("Error after 2 retries in") && 
+            e.contains("max_retries:2, retry_timeout:1000s, source:error sending request for url"),
             "{e}"
         );
 
