@@ -5230,7 +5230,7 @@ mod tests {
 
         let array_ref = cast(&a, &DataType::Binary).unwrap();
         let down_cast = array_ref.as_binary::<i32>();
-        assert_eq!(&(-1 as i64).to_le_bytes(), down_cast.value(0));
+        assert_eq!(&(-1_i64).to_le_bytes(), down_cast.value(0));
         assert_eq!(&123456789_i64.to_le_bytes(), down_cast.value(1));
         assert!(down_cast.is_null(2));
     }
@@ -5249,7 +5249,7 @@ mod tests {
 
         let array_ref = cast(&a, &DataType::LargeBinary).unwrap();
         let down_cast = array_ref.as_binary::<i64>();
-        assert_eq!(&(-1 as i64).to_le_bytes(), down_cast.value(0));
+        assert_eq!(&(-1_i64).to_le_bytes(), down_cast.value(0));
         assert_eq!(&123456789_i64.to_le_bytes(), down_cast.value(1));
         assert!(down_cast.is_null(2));
     }
