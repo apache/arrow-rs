@@ -1442,6 +1442,23 @@ mod tests {
 
         storage.delete(&path).await.unwrap();
 
+        // Test handling of unicode paths
+        let path = Path::parse("🇦🇺/$shenanigans@@~.txt").unwrap();
+        storage.put(&path, "test".into()).await.unwrap();
+
+        let r = storage.get(&path).await.unwrap();
+        assert_eq!(r.bytes().await.unwrap(), "test");
+
+        let dir = Path::parse("🇦🇺").unwrap();
+        let r = storage.list_with_delimiter(None).await.unwrap();
+        assert!(r.common_prefixes.contains(&dir));
+
+        let r = storage.list_with_delimiter(Some(&dir)).await.unwrap();
+        assert_eq!(r.objects.len(), 1);
+        assert_eq!(r.objects[0].location, path);
+
+        storage.delete(&path).await.unwrap();
+
         // Can also write non-percent encoded sequences
         let path = Path::parse("%Q.parquet").unwrap();
         storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
