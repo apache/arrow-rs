@@ -55,13 +55,13 @@ jobs:
       - name: Run clippy with default features
         run: cargo clippy -- -D warnings
       - name: Run clippy with aws feature
-        run: cargo clippy --features aws -- -D warnings
+        run: cargo clippy --features aws,tls-webpki-roots -- -D warnings
       - name: Run clippy with gcp feature
-        run: cargo clippy --features gcp -- -D warnings
+        run: cargo clippy --features gcp,tls-webpki-roots -- -D warnings
       - name: Run clippy with azure feature
-        run: cargo clippy --features azure -- -D warnings
+        run: cargo clippy --features azure,tls-webpki-roots -- -D warnings
       - name: Run clippy with http feature
-        run: cargo clippy --features http -- -D warnings
+        run: cargo clippy --features http,tls-webpki-roots -- -D warnings
       - name: Run clippy with all features
         run: cargo clippy --all-features -- -D warnings
       - name: Run clippy with all features and all targets
@@ -150,7 +150,7 @@ jobs:
           rustup default stable
 
       - name: Run object_store tests
-        run: cargo test --features=aws,azure,gcp,http
+        run: cargo test --features=aws,azure,gcp,http,tls-webpki-roots
 
   # test the object_store crate builds against wasm32 in stable rust
   wasm32-build:

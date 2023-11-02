@@ -86,6 +86,13 @@
     doc = "* [`http`]: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
 //!
+//! Stores that use HTTPS/TLS (this is true for most cloud stores) can use the source of their [CA]
+//! certificates. This is controlled by a feature switch:
+//!
+//! - `tls-native-roots`: use certificates bundled with the operating system, see [`rustls-native-certs`]
+//! - `tls-webpki-roots`: use Mozilla's root certificates bundled with the library/application, see
+//!   [`webpki-roots`]
+//!
 //! # Why not a Filesystem Interface?
 //!
 //! Whilst this crate does provide a [`BufReader`], the [`ObjectStore`] interface mirrors the APIs
@@ -434,7 +441,10 @@
 //!
 //! [Optimistic Concurrency Control]: https://en.wikipedia.org/wiki/Optimistic_concurrency_control
 //! [Apache Iceberg]: https://iceberg.apache.org/
+//! [CA]: https://en.wikipedia.org/wiki/Certificate_authority
 //! [Delta Lake]: https://delta.io/
+//! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
+//! [`webpki-roots`]: https://crates.io/crates/webpki-roots
 //!
 
 #[cfg(all(
@@ -442,6 +452,13 @@
     any(feature = "gcp", feature = "aws", feature = "azure", feature = "http")
 ))]
 compile_error!("Features 'gcp', 'aws', 'azure', 'http' are not supported on wasm.");
+
+#[cfg(all(
+    feature = "cloud",
+    not(feature = "tls-native-roots"),
+    not(feature = "tls-webpki-roots"),
+))]
+compile_error!("Feature 'cloud' needs at a CA root feature, use either 'tls-native-roots' or 'tls-webpki-roots'.");
 
 #[cfg(feature = "aws")]
 pub mod aws;
