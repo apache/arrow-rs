@@ -103,7 +103,7 @@ test_source_distribution() {
 
   # build and test rust
   cargo build
-  cargo test --all
+  cargo test --all --all-features
 
   # verify that the crate can be published to crates.io
   cargo publish --dry-run
