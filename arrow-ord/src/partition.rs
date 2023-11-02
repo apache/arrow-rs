@@ -78,7 +78,7 @@ impl Partitions {
 /// # Example:
 ///
 /// For example, given columns `x`, `y` and `z`, calling
-/// `lexicographical_partition_ranges(values, (x, y))` will divide the
+/// [`partition`]`(values, (x, y))` will divide the
 /// rows into ranges where the values of `(x, y)` are equal:
 ///
 /// ```text
