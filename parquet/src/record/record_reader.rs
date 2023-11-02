@@ -15,21 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::schema::types::TypePtr;
-
 use super::super::errors::ParquetError;
-use super::super::file::writer::SerializedRowGroupWriter;
+use super::super::file::reader::RowGroupReader;
 
-/// `write_to_row_group` writes from `self` into `row_group_writer`
-/// `schema` builds the schema used by `row_group_writer`
+/// read up to `max_records` records from `row_group_reader` into `self`
 /// The type parameter `T` is used to work around the rust orphan rule
-/// when implementing on types such as `&[T]`.
-pub trait RecordWriter<T> {
-    fn write_to_row_group<W: std::io::Write + Send>(
-        &self,
-        row_group_writer: &mut SerializedRowGroupWriter<W>,
+/// when implementing on types such as `Vec<T>`.
+pub trait RecordReader<T> {
+    fn read_from_row_group(
+        &mut self,
+        row_group_reader: &mut dyn RowGroupReader,
+        num_records: usize,
     ) -> Result<(), ParquetError>;
-
-    /// Generated schema
-    fn schema(&self) -> Result<TypePtr, ParquetError>;
 }

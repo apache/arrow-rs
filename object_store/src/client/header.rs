@@ -67,6 +67,23 @@ pub enum Error {
     },
 }
 
+/// Extracts a PutResult from the provided [`HeaderMap`]
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub fn get_put_result(headers: &HeaderMap, version: &str) -> Result<crate::PutResult, Error> {
+    let e_tag = Some(get_etag(headers)?);
+    let version = get_version(headers, version)?;
+    Ok(crate::PutResult { e_tag, version })
+}
+
+/// Extracts a optional version from the provided [`HeaderMap`]
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<String>, Error> {
+    Ok(match headers.get(version) {
+        Some(x) => Some(x.to_str().context(BadHeaderSnafu)?.to_string()),
+        None => None,
+    })
+}
+
 /// Extracts an etag from the provided [`HeaderMap`]
 pub fn get_etag(headers: &HeaderMap) -> Result<String, Error> {
     let e_tag = headers.get(ETAG).ok_or(Error::MissingEtag)?;

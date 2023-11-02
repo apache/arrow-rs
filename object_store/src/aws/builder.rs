@@ -20,7 +20,8 @@ use crate::aws::credential::{
     InstanceCredentialProvider, TaskCredentialProvider, WebIdentityProvider,
 };
 use crate::aws::{
-    AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3CopyIfNotExists, STORE,
+    AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
+    STORE,
 };
 use crate::client::TokenCredentialProvider;
 use crate::config::ConfigValue;
@@ -152,6 +153,10 @@ pub struct AmazonS3Builder {
     skip_signature: ConfigValue<bool>,
     /// Copy if not exists
     copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
+    /// Put precondition
+    conditional_put: Option<ConfigValue<S3ConditionalPut>>,
+    /// Ignore tags
+    disable_tagging: ConfigValue<bool>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -288,8 +293,22 @@ pub enum AmazonS3ConfigKey {
     /// See [`S3CopyIfNotExists`]
     CopyIfNotExists,
 
+    /// Configure how to provide conditional put operations
+    ///
+    /// See [`S3ConditionalPut`]
+    ConditionalPut,
+
     /// Skip signing request
     SkipSignature,
+
+    /// Disable tagging objects
+    ///
+    /// This can be desirable if not supported by the backing store
+    ///
+    /// Supported keys:
+    /// - `aws_disable_tagging`
+    /// - `disable_tagging`
+    DisableTagging,
 
     /// Client options
     Client(ClientConfigKey),
@@ -312,7 +331,9 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::Checksum => "aws_checksum_algorithm",
             Self::ContainerCredentialsRelativeUri => "aws_container_credentials_relative_uri",
             Self::SkipSignature => "aws_skip_signature",
-            Self::CopyIfNotExists => "copy_if_not_exists",
+            Self::CopyIfNotExists => "aws_copy_if_not_exists",
+            Self::ConditionalPut => "aws_conditional_put",
+            Self::DisableTagging => "aws_disable_tagging",
             Self::Client(opt) => opt.as_ref(),
         }
     }
@@ -339,7 +360,9 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_checksum_algorithm" | "checksum_algorithm" => Ok(Self::Checksum),
             "aws_container_credentials_relative_uri" => Ok(Self::ContainerCredentialsRelativeUri),
             "aws_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
-            "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
+            "aws_copy_if_not_exists" | "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
+            "aws_conditional_put" | "conditional_put" => Ok(Self::ConditionalPut),
+            "aws_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.parse() {
@@ -443,8 +466,12 @@ impl AmazonS3Builder {
                 self.client_options = self.client_options.with_config(key, value)
             }
             AmazonS3ConfigKey::SkipSignature => self.skip_signature.parse(value),
+            AmazonS3ConfigKey::DisableTagging => self.disable_tagging.parse(value),
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
+            }
+            AmazonS3ConfigKey::ConditionalPut => {
+                self.conditional_put = Some(ConfigValue::Deferred(value.into()))
             }
         };
         self
@@ -509,6 +536,10 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists.as_ref().map(ToString::to_string)
             }
+            AmazonS3ConfigKey::ConditionalPut => {
+                self.conditional_put.as_ref().map(ToString::to_string)
+            }
+            AmazonS3ConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
         }
     }
 
@@ -713,6 +744,18 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Configure how to provide conditional put operations
+    pub fn with_conditional_put(mut self, config: S3ConditionalPut) -> Self {
+        self.conditional_put = Some(config.into());
+        self
+    }
+
+    /// If set to `true` will ignore any tags provided to put_opts
+    pub fn with_disable_tagging(mut self, ignore: bool) -> Self {
+        self.disable_tagging = ignore.into();
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -724,6 +767,7 @@ impl AmazonS3Builder {
         let region = self.region.context(MissingRegionSnafu)?;
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
         let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
+        let put_precondition = self.conditional_put.map(|x| x.get()).transpose()?;
 
         let credentials = if let Some(credentials) = self.credentials {
             credentials
@@ -828,8 +872,10 @@ impl AmazonS3Builder {
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
             skip_signature: self.skip_signature.get()?,
+            disable_tagging: self.disable_tagging.get()?,
             checksum,
             copy_if_not_exists,
+            conditional_put: put_precondition,
         };
 
         let client = Arc::new(S3Client::new(config)?);

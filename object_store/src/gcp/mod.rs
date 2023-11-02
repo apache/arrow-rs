@@ -35,7 +35,8 @@ use crate::client::CredentialProvider;
 use crate::{
     multipart::{PartId, PutPart, WriteMultiPart},
     path::Path,
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutResult, Result,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
+    Result,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -107,9 +108,8 @@ impl PutPart for GCSMultipartUpload {
 
 #[async_trait]
 impl ObjectStore for GoogleCloudStorage {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        let e_tag = self.client.put_request(location, bytes, &()).await?;
-        Ok(PutResult { e_tag: Some(e_tag) })
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        self.client.put(location, bytes, opts).await
     }
 
     async fn put_multipart(
@@ -145,6 +145,14 @@ impl ObjectStore for GoogleCloudStorage {
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         self.client.list(prefix)
+    }
+
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'_, Result<ObjectMeta>> {
+        self.client.list_with_offset(prefix, offset)
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -221,6 +229,7 @@ mod test {
             multipart(&integration, &integration).await;
             // Fake GCS server doesn't currently honor preconditions
             get_opts(&integration).await;
+            put_opts(&integration, true).await;
         }
     }
 

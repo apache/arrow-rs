@@ -46,7 +46,7 @@ use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
     ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, PutResult, Result, RetryConfig,
+    ObjectStore, PutMode, PutOptions, PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -96,14 +96,23 @@ impl std::fmt::Display for HttpStore {
 
 #[async_trait]
 impl ObjectStore for HttpStore {
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
+    async fn put_opts(&self, location: &Path, bytes: Bytes, opts: PutOptions) -> Result<PutResult> {
+        if opts.mode != PutMode::Overwrite {
+            // TODO: Add support for If header - https://datatracker.ietf.org/doc/html/rfc2518#section-9.4
+            return Err(crate::Error::NotImplemented);
+        }
+
         let response = self.client.put(location, bytes).await?;
         let e_tag = match get_etag(response.headers()) {
             Ok(e_tag) => Some(e_tag),
             Err(crate::client::header::Error::MissingEtag) => None,
             Err(source) => return Err(Error::Metadata { source }.into()),
         };
-        Ok(PutResult { e_tag })
+
+        Ok(PutResult {
+            e_tag,
+            version: None,
+        })
     }
 
     async fn put_multipart(
