@@ -1384,13 +1384,14 @@ mod tests {
         std::fs::write(emoji, "foo").unwrap();
 
         // Can list illegal file
-        let paths = flatten_list_stream(&integration, None).await.unwrap();
+        let mut paths = flatten_list_stream(&integration, None).await.unwrap();
+        paths.sort_unstable();
 
         assert_eq!(
             paths,
             vec![
-                Path::parse("💀").unwrap(),
-                Path::parse("directory/child.txt").unwrap()
+                Path::parse("directory/child.txt").unwrap(),
+                Path::parse("💀").unwrap()
             ]
         );
     }
