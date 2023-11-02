@@ -32,6 +32,7 @@ pub const DELIMITER_BYTE: u8 = DELIMITER.as_bytes()[0];
 
 mod parts;
 
+use crate::local;
 pub use parts::{InvalidPart, PathPart};
 
 /// Error returned by [`Path::parse`]
@@ -73,10 +74,15 @@ pub enum Error {
 /// * Paths do not contain empty path segments
 /// * Paths do not contain any ASCII control characters
 ///
+/// There are no enforced restrictions on path length, however, it should be noted that most
+/// object stores do not permit paths longer than 1024 bytes, and many filesystems do not
+/// support path segments longer than 255 bytes.
+///
 /// # Encode
 ///
 /// In theory object stores support any UTF-8 character sequence, however, certain character
-/// sequences cause compatibility problems with some applications and protocols. As such the
+/// sequences cause compatibility problems with some applications and protocols. Additionally
+/// some filesystems may impose character restrictions, see [`LocalFileSystem`]. As such the
 /// naming guidelines for [S3], [GCS] and [Azure Blob Storage] all recommend sticking to a
 /// limited character subset.
 ///
@@ -119,6 +125,7 @@ pub enum Error {
 /// ```
 ///
 /// [RFC 1738]: https://www.ietf.org/rfc/rfc1738.txt
+/// [`LocalFileSystem`]: local::LocalFileSystem
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Path {
     /// The raw path with no leading or trailing delimiters

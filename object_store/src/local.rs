@@ -198,12 +198,12 @@ impl From<Error> for super::Error {
 ///
 /// Additionally some filesystems, such as NTFS, are case-insensitive, whilst others like
 /// FAT don't preserve case at all. Further some filesystems support non-unicode character
-/// sequences, such as unpaired UTF-16 surrogates, [`LocalFileSystem`] will error on
+/// sequences, such as unpaired UTF-16 surrogates, and [`LocalFileSystem`] will error on
 /// encountering such sequences.
 ///
 /// Finally, filenames matching the regex `/.*#\d+/`, e.g. `foo.parquet#123`, are not supported
 /// by [`LocalFileSystem`] as they are used to provide atomic writes. Such files will be ignored
-/// for listing operations, and attempting to address such a file will yield an error.
+/// for listing operations, and attempting to address such a file will error.
 ///
 /// # Tokio Compatibility
 ///
