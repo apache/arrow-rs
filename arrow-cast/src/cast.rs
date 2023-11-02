@@ -47,7 +47,7 @@ use crate::parse::{
     string_to_datetime, Parser,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{i256, ArrowNativeType, Buffer, OffsetBuffer, ToByteSlice};
+use arrow_buffer::{i256, ArrowNativeType, Buffer, OffsetBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
@@ -2345,17 +2345,13 @@ fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
     array: &dyn Array,
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_primitive::<FROM>();
-
-    let mut builder =
-        GenericBinaryBuilder::<O>::with_capacity(array.len(), array.values().inner().capacity());
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            builder.append_null();
-        } else {
-            builder.append_value(array.value(i).to_byte_slice());
-        }
-    }
-    Ok(Arc::new(builder.finish()))
+    let size = std::mem::size_of::<FROM::Native>();
+    let offsets = OffsetBuffer::from_lengths(std::iter::repeat(size).take(array.len()));
+    Ok(Arc::new(GenericBinaryArray::<O>::new(
+        offsets,
+        array.values().inner().clone(),
+        array.nulls().cloned(),
+    )))
 }
 
 /// Parse UTF-8
