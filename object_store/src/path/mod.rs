@@ -32,7 +32,6 @@ pub const DELIMITER_BYTE: u8 = DELIMITER.as_bytes()[0];
 
 mod parts;
 
-use crate::local;
 pub use parts::{InvalidPart, PathPart};
 
 /// Error returned by [`Path::parse`]
@@ -125,7 +124,7 @@ pub enum Error {
 /// ```
 ///
 /// [RFC 1738]: https://www.ietf.org/rfc/rfc1738.txt
-/// [`LocalFileSystem`]: local::LocalFileSystem
+/// [`LocalFileSystem`]: crate::local::LocalFileSystem
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Path {
     /// The raw path with no leading or trailing delimiters
