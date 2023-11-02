@@ -191,8 +191,7 @@ fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
 }
 
 /// Sort elements from `ArrayRef` into an unsigned integer (`UInt32Array`) of indices.
-/// For floating point arrays any NaN values are considered to be greater than any other non-null value.
-/// `limit` is an option for [partial_sort].
+/// Floats are sorted using IEEE 754 totalOrder.  `limit` is an option for [partial_sort].
 pub fn sort_to_indices(
     array: &dyn Array,
     options: Option<SortOptions>,
