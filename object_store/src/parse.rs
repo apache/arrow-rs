@@ -81,7 +81,10 @@ impl ObjectStoreScheme {
             }
             ("http", Some(_)) => (Self::Http, url.path()),
             ("https", Some(host)) => {
-                if host.ends_with("dfs.core.windows.net") || host.ends_with("blob.core.windows.net")
+                if host.ends_with("dfs.core.windows.net")
+                    || host.ends_with("blob.core.windows.net")
+                    || host.ends_with("dfs.fabric.microsoft.com")
+                    || host.ends_with("blob.fabric.microsoft.com")
                 {
                     (Self::MicrosoftAzure, url.path())
                 } else if host.ends_with("amazonaws.com") {
@@ -250,6 +253,30 @@ mod tests {
             (
                 "file:///bar%252Efoo",
                 (ObjectStoreScheme::Local, "bar%2Efoo"),
+            ),
+            (
+                "abfss://file_system@account.dfs.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "abfss://file_system@account.dfs.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.dfs.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.dfs.fabric.microsoft.com/container",
+                (ObjectStoreScheme::MicrosoftAzure, "container"),
+            ),
+            (
+                "https://account.blob.fabric.microsoft.com/",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.blob.fabric.microsoft.com/container",
+                (ObjectStoreScheme::MicrosoftAzure, "container"),
             ),
         ];
 
