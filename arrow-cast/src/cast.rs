@@ -4759,7 +4759,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Casting from Int32 to Timestamp(Microsecond, None) not supported")]
     fn test_cast_list_i32_to_list_timestamp() {
         // Construct a value array
         let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 8, 100000000]).into_data();
@@ -4776,7 +4775,7 @@ mod tests {
             .unwrap();
         let list_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
 
-        cast(
+        let actual = cast(
             &list_array,
             &DataType::List(Arc::new(Field::new(
                 "item",
@@ -4785,6 +4784,22 @@ mod tests {
             ))),
         )
         .unwrap();
+
+        let expected = cast(
+            &cast(
+                &list_array,
+                &DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            )
+            .unwrap(),
+            &DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ))),
+        )
+        .unwrap();
+
+        assert_eq!(&actual, &expected);
     }
 
     #[test]
