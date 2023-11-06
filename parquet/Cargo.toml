@@ -44,7 +44,7 @@ arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
 # Intentionally not a path dependency as object_store is released separately
-object_store = { version = "0.7", default-features = false, optional = true }
+object_store = { version = "0.8", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
