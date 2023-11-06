@@ -1623,96 +1623,23 @@ pub fn cast_with_options(
 
         (Timestamp(TimeUnit::Second, _), _) if to_type.is_integer() => {
             let array = cast_reinterpret_arrays::<TimestampSecondType, Int64Type>(array)?;
-
-            match to_type {
-                Int8 => cast_numeric_arrays::<Int64Type, Int8Type>(&array, cast_options),
-                Int16 => cast_numeric_arrays::<Int64Type, Int16Type>(&array, cast_options),
-                Int32 => cast_numeric_arrays::<Int64Type, Int32Type>(&array, cast_options),
-                Int64 => Ok(array),
-                UInt8 => cast_numeric_arrays::<Int64Type, UInt8Type>(&array, cast_options),
-                UInt16 => cast_numeric_arrays::<Int64Type, UInt16Type>(&array, cast_options),
-                UInt32 => cast_numeric_arrays::<Int64Type, UInt32Type>(&array, cast_options),
-                UInt64 => cast_numeric_arrays::<Int64Type, UInt64Type>(&array, cast_options),
-                _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
-                ))),
-            }
+            cast_with_options(&array, to_type, cast_options)
         }
         (Timestamp(TimeUnit::Millisecond, _), _) if to_type.is_integer() => {
             let array = cast_reinterpret_arrays::<TimestampMillisecondType, Int64Type>(array)?;
-
-            match to_type {
-                Int8 => cast_numeric_arrays::<Int64Type, Int8Type>(&array, cast_options),
-                Int16 => cast_numeric_arrays::<Int64Type, Int16Type>(&array, cast_options),
-                Int32 => cast_numeric_arrays::<Int64Type, Int32Type>(&array, cast_options),
-                Int64 => Ok(array),
-                UInt8 => cast_numeric_arrays::<Int64Type, UInt8Type>(&array, cast_options),
-                UInt16 => cast_numeric_arrays::<Int64Type, UInt16Type>(&array, cast_options),
-                UInt32 => cast_numeric_arrays::<Int64Type, UInt32Type>(&array, cast_options),
-                UInt64 => cast_numeric_arrays::<Int64Type, UInt64Type>(&array, cast_options),
-                _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
-                ))),
-            }
+            cast_with_options(&array, to_type, cast_options)
         }
         (Timestamp(TimeUnit::Microsecond, _), _) if to_type.is_integer() => {
             let array = cast_reinterpret_arrays::<TimestampMicrosecondType, Int64Type>(array)?;
-
-            match to_type {
-                Int8 => cast_numeric_arrays::<Int64Type, Int8Type>(&array, cast_options),
-                Int16 => cast_numeric_arrays::<Int64Type, Int16Type>(&array, cast_options),
-                Int32 => cast_numeric_arrays::<Int64Type, Int32Type>(&array, cast_options),
-                Int64 => Ok(array),
-                UInt8 => cast_numeric_arrays::<Int64Type, UInt8Type>(&array, cast_options),
-                UInt16 => cast_numeric_arrays::<Int64Type, UInt16Type>(&array, cast_options),
-                UInt32 => cast_numeric_arrays::<Int64Type, UInt32Type>(&array, cast_options),
-                UInt64 => cast_numeric_arrays::<Int64Type, UInt64Type>(&array, cast_options),
-                _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
-                ))),
-            }
+            cast_with_options(&array, to_type, cast_options)
         }
         (Timestamp(TimeUnit::Nanosecond, _), _) if to_type.is_integer() => {
             let array = cast_reinterpret_arrays::<TimestampNanosecondType, Int64Type>(array)?;
-
-            match to_type {
-                Int8 => cast_numeric_arrays::<Int64Type, Int8Type>(&array, cast_options),
-                Int16 => cast_numeric_arrays::<Int64Type, Int16Type>(&array, cast_options),
-                Int32 => cast_numeric_arrays::<Int64Type, Int32Type>(&array, cast_options),
-                Int64 => Ok(array),
-                UInt8 => cast_numeric_arrays::<Int64Type, UInt8Type>(&array, cast_options),
-                UInt16 => cast_numeric_arrays::<Int64Type, UInt16Type>(&array, cast_options),
-                UInt32 => cast_numeric_arrays::<Int64Type, UInt32Type>(&array, cast_options),
-                UInt64 => cast_numeric_arrays::<Int64Type, UInt64Type>(&array, cast_options),
-                _ => Err(ArrowError::CastError(format!(
-                    "Casting from {:?} to {:?} not supported",
-                    from_type, to_type
-                ))),
-            }
+            cast_with_options(&array, to_type, cast_options)
         }
 
         (_, Timestamp(unit, tz)) if from_type.is_integer() => {
-            let array = match from_type {
-                Int8 => cast_numeric_arrays::<Int8Type, Int64Type>(array, cast_options),
-                Int16 => cast_numeric_arrays::<Int16Type, Int64Type>(array, cast_options),
-                Int32 => cast_numeric_arrays::<Int32Type, Int64Type>(array, cast_options),
-                Int64 => {
-                    return Ok(make_timestamp_array(
-                        array.as_primitive(),
-                        unit.clone(),
-                        tz.clone(),
-                    ))
-                }
-                UInt8 => cast_numeric_arrays::<UInt8Type, Int64Type>(array, cast_options),
-                UInt16 => cast_numeric_arrays::<UInt16Type, Int64Type>(array, cast_options),
-                UInt32 => cast_numeric_arrays::<UInt32Type, Int64Type>(array, cast_options),
-                UInt64 => cast_numeric_arrays::<UInt64Type, Int64Type>(array, cast_options),
-                _ => unreachable!(),
-            }?;
-
+            let array = cast_with_options(array, &Int64, cast_options)?;
             Ok(make_timestamp_array(
                 array.as_primitive(),
                 unit.clone(),
