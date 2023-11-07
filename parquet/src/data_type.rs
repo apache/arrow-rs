@@ -627,7 +627,7 @@ pub(crate) mod private {
 
         /// Return the value as i64 if possible
         ///
-        /// This is essentially the same as `std::convert::TryInto<i64>` but can
+        /// This is essentially the same as `std::convert::TryInto<i64>` but can't be
         /// implemented for `f32` and `f64`, types that would fail orphan rules
         fn as_i64(&self) -> Result<i64> {
             Err(general_err!("Type cannot be converted to i64"))
@@ -635,7 +635,7 @@ pub(crate) mod private {
 
         /// Return the value as u64 if possible
         ///
-        /// This is essentially the same as `std::convert::TryInto<u64>` but can
+        /// This is essentially the same as `std::convert::TryInto<u64>` but can't be
         /// implemented for `f32` and `f64`, types that would fail orphan rules
         fn as_u64(&self) -> Result<u64> {
             self.as_i64()
