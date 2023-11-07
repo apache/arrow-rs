@@ -236,7 +236,7 @@ impl FallbackEncoder {
                 let lengths = lengths.flush_buffer()?;
 
                 let mut out = Vec::with_capacity(lengths.len() + buffer.len());
-                out.extend_from_slice(lengths.data());
+                out.extend_from_slice(&lengths);
                 out.extend_from_slice(buffer);
                 buffer.clear();
                 (out, Encoding::DELTA_LENGTH_BYTE_ARRAY)
@@ -252,8 +252,8 @@ impl FallbackEncoder {
 
                 let mut out =
                     Vec::with_capacity(prefix_lengths.len() + suffix_lengths.len() + buffer.len());
-                out.extend_from_slice(prefix_lengths.data());
-                out.extend_from_slice(suffix_lengths.data());
+                out.extend_from_slice(&prefix_lengths);
+                out.extend_from_slice(&suffix_lengths);
                 out.extend_from_slice(buffer);
                 buffer.clear();
                 last_value.clear();

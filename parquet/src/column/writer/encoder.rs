@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use bytes::Bytes;
+
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
@@ -26,7 +28,6 @@ use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties};
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
-use crate::util::memory::ByteBufferPtr;
 
 /// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
 pub trait ColumnValues {
@@ -49,14 +50,14 @@ impl<T: ParquetValueType> ColumnValues for [T] {
 
 /// The encoded data for a dictionary page
 pub struct DictionaryPage {
-    pub buf: ByteBufferPtr,
+    pub buf: Bytes,
     pub num_values: usize,
     pub is_sorted: bool,
 }
 
 /// The encoded values for a data page, with optional statistics
 pub struct DataPageValues<T> {
-    pub buf: ByteBufferPtr,
+    pub buf: Bytes,
     pub num_values: usize,
     pub encoding: Encoding,
     pub min_value: Option<T>,

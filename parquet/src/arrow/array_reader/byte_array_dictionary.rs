@@ -23,6 +23,7 @@ use std::sync::Arc;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType as ArrowType;
+use bytes::Bytes;
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
@@ -39,7 +40,6 @@ use crate::encodings::rle::RleDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::FromBytes;
-use crate::util::memory::ByteBufferPtr;
 
 /// A macro to reduce verbosity of [`make_byte_array_dictionary_reader`]
 macro_rules! make_reader {
@@ -253,7 +253,7 @@ where
 
     fn set_dict(
         &mut self,
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         encoding: Encoding,
         _is_sorted: bool,
@@ -286,7 +286,7 @@ where
     fn set_data(
         &mut self,
         encoding: Encoding,
-        data: ByteBufferPtr,
+        data: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()> {
@@ -294,7 +294,7 @@ where
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
                 let bit_width = data[0];
                 let mut decoder = RleDecoder::new(bit_width);
-                decoder.set_data(data.start_from(1));
+                decoder.set_data(data.slice(1..));
                 MaybeDictionaryDecoder::Dict {
                     decoder,
                     max_remaining_values: num_values.unwrap_or(num_levels),

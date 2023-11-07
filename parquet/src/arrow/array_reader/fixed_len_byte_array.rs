@@ -26,7 +26,6 @@ use crate::column::page::PageIterator;
 use crate::column::reader::decoder::{ColumnValueDecoder, ValuesBufferSlice};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::memory::ByteBufferPtr;
 use arrow_array::{
     ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray,
     IntervalDayTimeArray, IntervalYearMonthArray,
@@ -34,6 +33,7 @@ use arrow_array::{
 use arrow_buffer::{i256, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
+use bytes::Bytes;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -298,7 +298,7 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
 
 struct ValueDecoder {
     byte_length: usize,
-    dict_page: Option<ByteBufferPtr>,
+    dict_page: Option<Bytes>,
     decoder: Option<Decoder>,
 }
 
@@ -315,7 +315,7 @@ impl ColumnValueDecoder for ValueDecoder {
 
     fn set_dict(
         &mut self,
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         encoding: Encoding,
         _is_sorted: bool,
@@ -345,7 +345,7 @@ impl ColumnValueDecoder for ValueDecoder {
     fn set_data(
         &mut self,
         encoding: Encoding,
-        data: ByteBufferPtr,
+        data: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()> {
@@ -434,7 +434,7 @@ impl ColumnValueDecoder for ValueDecoder {
 }
 
 enum Decoder {
-    Plain { buf: ByteBufferPtr, offset: usize },
+    Plain { buf: Bytes, offset: usize },
     Dict { decoder: DictIndexDecoder },
     Delta { decoder: DeltaByteArrayDecoder },
 }

@@ -18,6 +18,8 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
+use bytes::Bytes;
+
 use crate::basic::Encoding;
 use crate::data_type::DataType;
 use crate::encodings::{
@@ -26,10 +28,7 @@ use crate::encodings::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::{
-    bit_util::{num_required_bits, BitReader},
-    memory::ByteBufferPtr,
-};
+use crate::util::bit_util::{num_required_bits, BitReader};
 
 /// A slice of levels buffer data that is written to by a [`ColumnLevelDecoder`]
 pub trait LevelsBufferSlice {
@@ -67,7 +66,7 @@ pub trait ColumnLevelDecoder {
     type Slice: LevelsBufferSlice + ?Sized;
 
     /// Set data for this [`ColumnLevelDecoder`]
-    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr);
+    fn set_data(&mut self, encoding: Encoding, data: Bytes);
 }
 
 pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
@@ -132,7 +131,7 @@ pub trait ColumnValueDecoder {
     /// Set the current dictionary page
     fn set_dict(
         &mut self,
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         encoding: Encoding,
         is_sorted: bool,
@@ -152,7 +151,7 @@ pub trait ColumnValueDecoder {
     fn set_data(
         &mut self,
         encoding: Encoding,
-        data: ByteBufferPtr,
+        data: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()>;
@@ -197,7 +196,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
     fn set_dict(
         &mut self,
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         mut encoding: Encoding,
         _is_sorted: bool,
@@ -229,7 +228,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     fn set_data(
         &mut self,
         mut encoding: Encoding,
-        data: ByteBufferPtr,
+        data: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()> {
@@ -294,7 +293,7 @@ enum LevelDecoder {
 }
 
 impl LevelDecoder {
-    fn new(encoding: Encoding, data: ByteBufferPtr, bit_width: u8) -> Self {
+    fn new(encoding: Encoding, data: Bytes, bit_width: u8) -> Self {
         match encoding {
             Encoding::RLE => {
                 let mut decoder = RleDecoder::new(bit_width);
@@ -335,7 +334,7 @@ impl DefinitionLevelDecoderImpl {
 impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
     type Slice = [i16];
 
-    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) {
         self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width))
     }
 }
@@ -426,7 +425,7 @@ impl RepetitionLevelDecoderImpl {
 impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
     type Slice = [i16];
 
-    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) {
         self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width));
         self.buffer_len = 0;
         self.buffer_offset = 0;
@@ -511,7 +510,7 @@ mod tests {
         let mut encoder = RleEncoder::new(1, 1024);
         encoder.put(0);
         (0..3).for_each(|_| encoder.put(1));
-        let data = ByteBufferPtr::new(encoder.consume());
+        let data = Bytes::from(encoder.consume());
 
         let mut decoder = RepetitionLevelDecoderImpl::new(1);
         decoder.set_data(Encoding::RLE, data.clone());
@@ -537,7 +536,7 @@ mod tests {
             for v in &encoded {
                 encoder.put(*v as _)
             }
-            let data = ByteBufferPtr::new(encoder.consume());
+            let data = Bytes::from(encoder.consume());
 
             let mut decoder = RepetitionLevelDecoderImpl::new(5);
             decoder.set_data(Encoding::RLE, data);
