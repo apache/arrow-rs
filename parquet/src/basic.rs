@@ -215,8 +215,20 @@ pub enum Repetition {
 // Mirrors `parquet::Encoding`
 
 /// Encodings supported by Parquet.
+///
 /// Not all encodings are valid for all types. These enums are also used to specify the
 /// encoding of definition and repetition levels.
+///
+/// Additionally, not all encodings are well supported by the broader ecosystem.
+/// Applications aiming for maximum interoperability should stick to using
+/// the well supported [Encoding::PLAIN], [Encoding::RLE], and [Encoding::RLE_DICTIONARY].
+///
+/// The delta binary encodings, [Encoding::DELTA_BINARY_PACKED], [Encoding::DELTA_BYTE_ARRAY],
+/// and [Encoding::DELTA_LENGTH_BYTE_ARRAY] are moderately well supported by the ecosystem.
+/// However, it should be noted that they sacrifice encode and decode performance for improved
+/// storage efficiency, with this performance regression particularly pronounced in the case of
+/// record skipping, as occurs during predicate push-down. It is recommended users assess the
+/// performance impact when evaluating these encodings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[allow(non_camel_case_types)]
 pub enum Encoding {
@@ -304,6 +316,18 @@ impl FromStr for Encoding {
 // Mirrors `parquet::CompressionCodec`
 
 /// Supported compression algorithms.
+///
+/// Block compression can yield non-trivial improvements to storage efficiency at the expense
+/// of potentially significantly worse encode and decode performance. Many applications,
+/// especially those making use of high-throughput and low-cost commodity object storage,
+/// may find storage efficiency less important than decode throughput, and therefore may
+/// wish to not make use of block compression.
+///
+/// Applications that do still wish to use block compression, will find [`Compression::ZSTD`]
+/// to provide a good balance of compression, performance, and ecosystem support. Alternatively,
+/// [`Compression::LZ4_RAW`] provides much faster decompression speeds, at the cost of typically
+/// worse compression ratios. However, it is not as widely supported by the ecosystem, with the
+/// Hadoop ecosystem historically favoring the non-standard and now deprecated [`Compression::LZ4`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum Compression {
