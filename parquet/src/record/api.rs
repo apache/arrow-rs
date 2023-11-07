@@ -737,7 +737,7 @@ impl fmt::Display for Field {
             Field::UInt(value) => write!(f, "{value}"),
             Field::ULong(value) => write!(f, "{value}"),
             Field::Float(value) => {
-                if !(1e-15..=1e19).contains(&value) && value.abs() != 0.0 {
+                if !(1e-15..=1e19).contains(&value) && value != 0.0 {
                     write!(f, "{value:E}")
                 } else if value.trunc() == value {
                     write!(f, "{value}.0")
@@ -746,7 +746,7 @@ impl fmt::Display for Field {
                 }
             }
             Field::Double(value) => {
-                if !(1e-15..=1e19).contains(&value) && value.abs() != 0.0 {
+                if !(1e-15..=1e19).contains(&value) && value != 0.0 {
                     write!(f, "{value:E}")
                 } else if value.trunc() == value {
                     write!(f, "{value}.0")
