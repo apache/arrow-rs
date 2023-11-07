@@ -74,10 +74,6 @@ pub mod data_type;
 #[doc(hidden)]
 pub use self::encodings::{decoding, encoding};
 
-#[cfg(feature = "experimental")]
-#[doc(hidden)]
-pub use self::util::memory;
-
 experimental!(#[macro_use] mod util);
 #[cfg(feature = "arrow")]
 pub mod arrow;
