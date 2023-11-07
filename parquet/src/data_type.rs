@@ -18,6 +18,7 @@
 //! Data types that connect Parquet physical types with their Rust-specific
 //! representations.
 use bytes::Bytes;
+use half::f16;
 use std::cmp::Ordering;
 use std::fmt;
 use std::mem;
@@ -228,6 +229,12 @@ impl From<ByteBufferPtr> for ByteArray {
 impl From<Bytes> for ByteArray {
     fn from(value: Bytes) -> Self {
         ByteBufferPtr::from(value).into()
+    }
+}
+
+impl From<f16> for ByteArray {
+    fn from(value: f16) -> Self {
+        Self::from(value.to_le_bytes().as_slice())
     }
 }
 

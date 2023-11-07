@@ -290,7 +290,7 @@ where
 {
     let first = loop {
         let next = iter.next()?;
-        if !is_nan(next) {
+        if !is_nan(descr, next) {
             break next;
         }
     };
@@ -298,7 +298,7 @@ where
     let mut min = first;
     let mut max = first;
     for val in iter {
-        if is_nan(val) {
+        if is_nan(descr, val) {
             continue;
         }
         if compare_greater(descr, min, val) {
