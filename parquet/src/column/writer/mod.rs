@@ -2112,6 +2112,64 @@ mod tests {
     }
 
     #[test]
+    fn test_float_statistics_zero_only() {
+        let stats = statistics_roundtrip::<FloatType>(&[0.0]);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = stats {
+            assert_eq!(stats.min(), &-0.0);
+            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.max(), &0.0);
+            assert!(stats.max().is_sign_positive());
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_float_statistics_neg_zero_only() {
+        let stats = statistics_roundtrip::<FloatType>(&[-0.0]);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = stats {
+            assert_eq!(stats.min(), &-0.0);
+            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.max(), &0.0);
+            assert!(stats.max().is_sign_positive());
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_float_statistics_zero_min() {
+        let stats = statistics_roundtrip::<FloatType>(&[0.0, 1.0, f32::NAN, 2.0]);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = stats {
+            assert_eq!(stats.min(), &-0.0);
+            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.max(), &2.0);
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_float_statistics_neg_zero_max() {
+        let stats = statistics_roundtrip::<FloatType>(&[-0.0, -1.0, f32::NAN, -2.0]);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = stats {
+            assert_eq!(stats.min(), &-2.0);
+            assert_eq!(stats.max(), &0.0);
+            assert!(stats.max().is_sign_positive());
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
     fn test_double_statistics_nan_middle() {
         let stats = statistics_roundtrip::<DoubleType>(&[1.0, f64::NAN, 2.0]);
         assert!(stats.has_min_max_set());
@@ -2120,7 +2178,7 @@ mod tests {
             assert_eq!(stats.min(), &1.0);
             assert_eq!(stats.max(), &2.0);
         } else {
-            panic!("expecting Statistics::Float");
+            panic!("expecting Statistics::Double");
         }
     }
 
@@ -2133,7 +2191,7 @@ mod tests {
             assert_eq!(stats.min(), &1.0);
             assert_eq!(stats.max(), &2.0);
         } else {
-            panic!("expecting Statistics::Float");
+            panic!("expecting Statistics::Double");
         }
     }
 
@@ -2143,6 +2201,64 @@ mod tests {
         assert!(!stats.has_min_max_set());
         assert!(matches!(stats, Statistics::Double(_)));
         assert!(stats.is_min_max_backwards_compatible());
+    }
+
+    #[test]
+    fn test_double_statistics_zero_only() {
+        let stats = statistics_roundtrip::<DoubleType>(&[0.0]);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Double(stats) = stats {
+            assert_eq!(stats.min(), &-0.0);
+            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.max(), &0.0);
+            assert!(stats.max().is_sign_positive());
+        } else {
+            panic!("expecting Statistics::Double");
+        }
+    }
+
+    #[test]
+    fn test_double_statistics_neg_zero_only() {
+        let stats = statistics_roundtrip::<DoubleType>(&[-0.0]);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Double(stats) = stats {
+            assert_eq!(stats.min(), &-0.0);
+            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.max(), &0.0);
+            assert!(stats.max().is_sign_positive());
+        } else {
+            panic!("expecting Statistics::Double");
+        }
+    }
+
+    #[test]
+    fn test_double_statistics_zero_min() {
+        let stats = statistics_roundtrip::<DoubleType>(&[0.0, 1.0, f64::NAN, 2.0]);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Double(stats) = stats {
+            assert_eq!(stats.min(), &-0.0);
+            assert!(stats.min().is_sign_negative());
+            assert_eq!(stats.max(), &2.0);
+        } else {
+            panic!("expecting Statistics::Double");
+        }
+    }
+
+    #[test]
+    fn test_double_statistics_neg_zero_max() {
+        let stats = statistics_roundtrip::<DoubleType>(&[-0.0, -1.0, f64::NAN, -2.0]);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Double(stats) = stats {
+            assert_eq!(stats.min(), &-2.0);
+            assert_eq!(stats.max(), &0.0);
+            assert!(stats.max().is_sign_positive());
+        } else {
+            panic!("expecting Statistics::Double");
+        }
     }
 
     #[test]
