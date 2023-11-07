@@ -2171,6 +2171,62 @@ mod tests {
     }
 
     #[test]
+    fn test_float16_statistics_zero_only() {
+        let input = [f16::ZERO]
+            .into_iter()
+            .map(|s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.max(), &ByteArray::from(f16::ZERO));
+    }
+
+    #[test]
+    fn test_float16_statistics_neg_zero_only() {
+        let input = [f16::NEG_ZERO]
+            .into_iter()
+            .map(|s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.max(), &ByteArray::from(f16::ZERO));
+    }
+
+    #[test]
+    fn test_float16_statistics_zero_min() {
+        let input = [f16::ZERO, f16::ONE, f16::NAN, f16::PI]
+            .into_iter()
+            .map(|s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.max(), &ByteArray::from(f16::PI));
+    }
+
+    #[test]
+    fn test_float16_statistics_neg_zero_max() {
+        let input = [f16::NEG_ZERO, f16::NEG_ONE, f16::NAN, -f16::PI]
+            .into_iter()
+            .map(|s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input);
+        assert!(stats.has_min_max_set());
+        assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min(), &ByteArray::from(-f16::PI));
+        assert_eq!(stats.max(), &ByteArray::from(f16::ZERO));
+    }
+
+    #[test]
     fn test_float_statistics_nan_middle() {
         let stats = statistics_roundtrip::<FloatType>(&[1.0, f32::NAN, 2.0]);
         assert!(stats.has_min_max_set());
