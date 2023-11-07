@@ -737,7 +737,7 @@ impl fmt::Display for Field {
             Field::UInt(value) => write!(f, "{value}"),
             Field::ULong(value) => write!(f, "{value}"),
             Field::Float(value) => {
-                if !(1e-15..=1e19).contains(&value) {
+                if !(1e-15..=1e19).contains(&value) && value.abs() != 0.0 {
                     write!(f, "{value:E}")
                 } else if value.trunc() == value {
                     write!(f, "{value}.0")
@@ -746,7 +746,7 @@ impl fmt::Display for Field {
                 }
             }
             Field::Double(value) => {
-                if !(1e-15..=1e19).contains(&value) {
+                if !(1e-15..=1e19).contains(&value) && value.abs() != 0.0 {
                     write!(f, "{value:E}")
                 } else if value.trunc() == value {
                     write!(f, "{value}.0")
@@ -1155,6 +1155,11 @@ mod tests {
         assert_eq!(format!("{}", Field::Float(1e20)), "1E20");
         assert_eq!(format!("{}", Field::Float(1.7976931E30)), "1.7976931E30");
         assert_eq!(format!("{}", Field::Float(-1.7976931E30)), "-1.7976931E30");
+        assert_eq!(format!("{}", Field::Float(f32::NAN)), "NaN");
+        assert_eq!(format!("{}", Field::Float(f32::INFINITY)), "inf");
+        assert_eq!(format!("{}", Field::Float(f32::NEG_INFINITY)), "-inf");
+        assert_eq!(format!("{}", Field::Float(0.0)), "0.0");
+        assert_eq!(format!("{}", Field::Float(f32::neg_zero())), "-0.0");
     }
 
     #[test]
@@ -1173,6 +1178,11 @@ mod tests {
             format!("{}", Field::Double(-1.79769313486E308)),
             "-1.79769313486E308"
         );
+        assert_eq!(format!("{}", Field::Double(f64::NAN)), "NaN");
+        assert_eq!(format!("{}", Field::Double(f64::INFINITY)), "inf");
+        assert_eq!(format!("{}", Field::Double(f64::NEG_INFINITY)), "-inf");
+        assert_eq!(format!("{}", Field::Double(0.0)), "0.0");
+        assert_eq!(format!("{}", Field::Double(f64::neg_zero())), "-0.0");
     }
 
     #[test]
