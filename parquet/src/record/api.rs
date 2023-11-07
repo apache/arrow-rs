@@ -1159,7 +1159,7 @@ mod tests {
         assert_eq!(format!("{}", Field::Float(f32::INFINITY)), "inf");
         assert_eq!(format!("{}", Field::Float(f32::NEG_INFINITY)), "-inf");
         assert_eq!(format!("{}", Field::Float(0.0)), "0.0");
-        assert_eq!(format!("{}", Field::Float(f32::neg_zero())), "-0.0");
+        assert_eq!(format!("{}", Field::Float(-0.0)), "-0.0");
     }
 
     #[test]
@@ -1182,7 +1182,7 @@ mod tests {
         assert_eq!(format!("{}", Field::Double(f64::INFINITY)), "inf");
         assert_eq!(format!("{}", Field::Double(f64::NEG_INFINITY)), "-inf");
         assert_eq!(format!("{}", Field::Double(0.0)), "0.0");
-        assert_eq!(format!("{}", Field::Double(f64::neg_zero())), "-0.0");
+        assert_eq!(format!("{}", Field::Double(-0.0)), "-0.0");
     }
 
     #[test]
