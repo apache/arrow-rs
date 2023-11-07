@@ -55,7 +55,7 @@ The `parquet` crate provides the following features which may be enabled in your
 
 ## Parquet Feature Status
 
-- [x] All encodings except BYTE_STREAM_SPLIT supported
+- [x] All encodings supported, except for BYTE_STREAM_SPLIT ([#4102](https://github.com/apache/arrow-rs/issues/4102))
 - [x] All compression codecs supported
 - [x] Read support
   - [x] Primitive column value readers
