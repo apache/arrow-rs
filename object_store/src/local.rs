@@ -144,6 +144,11 @@ pub(crate) enum Error {
         path: PathBuf,
         source: io::Error,
     },
+
+    #[snafu(display("Filenames containing trailing '/#\\d+/' are not supported: {}", path))]
+    InvalidPath {
+        path: String,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -176,6 +181,30 @@ impl From<Error> for super::Error {
 /// [file URI]: https://en.wikipedia.org/wiki/File_URI_scheme
 /// [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
 ///
+/// # Path Semantics
+///
+/// [`LocalFileSystem`] will expose the path semantics of the underlying filesystem, which may
+/// have additional restrictions beyond those enforced by [`Path`].
+///
+/// For example:
+///
+/// * Windows forbids certain filenames, e.g. `COM0`,
+/// * Windows forbids folders with trailing `.`
+/// * Windows forbids certain ASCII characters, e.g. `<` or `|`
+/// * OS X forbids filenames containing `:`
+/// * Leading `-` are discouraged on Unix systems where they may be interpreted as CLI flags
+/// * Filesystems may have restrictions on the maximum path or path segment length
+/// * Filesystem support for non-ASCII characters is inconsistent
+///
+/// Additionally some filesystems, such as NTFS, are case-insensitive, whilst others like
+/// FAT don't preserve case at all. Further some filesystems support non-unicode character
+/// sequences, such as unpaired UTF-16 surrogates, and [`LocalFileSystem`] will error on
+/// encountering such sequences.
+///
+/// Finally, filenames matching the regex `/.*#\d+/`, e.g. `foo.parquet#123`, are not supported
+/// by [`LocalFileSystem`] as they are used to provide atomic writes. Such files will be ignored
+/// for listing operations, and attempting to address such a file will error.
+///
 /// # Tokio Compatibility
 ///
 /// Tokio discourages performing blocking IO on a tokio worker thread, however,
@@ -195,6 +224,11 @@ impl From<Error> for super::Error {
 /// * Symlinks that resolve to paths outside the root **will** be followed
 /// * Mutating a file through one or more symlinks will mutate the underlying file
 /// * Deleting a path that resolves to a symlink will only delete the symlink
+///
+/// # Cross-Filesystem Copy
+///
+/// [`LocalFileSystem::copy`] is implemented using [`std::fs::hard_link`], and therefore
+/// does not support copying across filesystem boundaries.
 ///
 #[derive(Debug)]
 pub struct LocalFileSystem {
@@ -246,8 +280,19 @@ impl LocalFileSystem {
 }
 
 impl Config {
-    /// Return an absolute filesystem path of the given location
+    /// Return an absolute filesystem path of the given file location
     fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
+        ensure!(
+            is_valid_file_path(location),
+            InvalidPathSnafu {
+                path: location.as_ref()
+            }
+        );
+        self.prefix_to_filesystem(location)
+    }
+
+    /// Return an absolute filesystem path of the given location
+    fn prefix_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
         let mut url = self.root.clone();
         url.path_segments_mut()
             .expect("url path")
@@ -266,6 +311,19 @@ impl Config {
             location,
             Some(&self.root),
         )?)
+    }
+}
+
+fn is_valid_file_path(path: &Path) -> bool {
+    match path.filename() {
+        Some(p) => match p.split_once('#') {
+            Some((_, suffix)) if !suffix.is_empty() => {
+                // Valid if contains non-digits
+                !suffix.as_bytes().iter().all(|x| x.is_ascii_digit())
+            }
+            _ => true,
+        },
+        None => false,
     }
 }
 
@@ -350,45 +408,6 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-        // Get the path to the file from the configuration.
-        let path = self.config.path_to_filesystem(location)?;
-        loop {
-            // Create new `OpenOptions`.
-            let mut options = tokio::fs::OpenOptions::new();
-
-            // Attempt to open the file with the given options.
-            match options
-                .truncate(false)
-                .append(true)
-                .create(true)
-                .open(&path)
-                .await
-            {
-                // If the file was successfully opened, return it wrapped in a boxed `AsyncWrite` trait object.
-                Ok(file) => return Ok(Box::new(file)),
-                // If the error is that the file was not found, attempt to create the file and any necessary parent directories.
-                Err(source) if source.kind() == ErrorKind::NotFound => {
-                    // Get the path to the parent directory of the file.
-                    let parent = path.parent().ok_or_else(|| Error::UnableToCreateFile {
-                        path: path.to_path_buf(),
-                        source,
-                    })?;
-
-                    // Create the parent directory and any necessary ancestors.
-                    tokio::fs::create_dir_all(parent)
-                        .await
-                        // If creating the directory fails, return a `UnableToCreateDirSnafu` error.
-                        .context(UnableToCreateDirSnafu { path: parent })?;
-                    // Try again to open the file.
-                    continue;
-                }
-                // If any other error occurs, return a `UnableToOpenFile` error.
-                Err(source) => return Err(Error::UnableToOpenFile { source, path }.into()),
-            }
-        }
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let location = location.clone();
         let path = self.config.path_to_filesystem(&location)?;
@@ -445,7 +464,7 @@ impl ObjectStore for LocalFileSystem {
         let config = Arc::clone(&self.config);
 
         let root_path = match prefix {
-            Some(prefix) => match config.path_to_filesystem(prefix) {
+            Some(prefix) => match config.prefix_to_filesystem(prefix) {
                 Ok(path) => path,
                 Err(e) => return futures::future::ready(Err(e)).into_stream().boxed(),
             },
@@ -458,20 +477,21 @@ impl ObjectStore for LocalFileSystem {
             .follow_links(true);
 
         let s = walkdir.into_iter().flat_map(move |result_dir_entry| {
-            match convert_walkdir_result(result_dir_entry) {
+            let entry = match convert_walkdir_result(result_dir_entry).transpose()? {
+                Ok(entry) => entry,
+                Err(e) => return Some(Err(e)),
+            };
+
+            if !entry.path().is_file() {
+                return None;
+            }
+
+            match config.filesystem_to_path(entry.path()) {
+                Ok(path) => match is_valid_file_path(&path) {
+                    true => Some(convert_entry(entry, path)),
+                    false => None,
+                },
                 Err(e) => Some(Err(e)),
-                Ok(None) => None,
-                Ok(entry @ Some(_)) => entry
-                    .filter(|dir_entry| {
-                        dir_entry.file_type().is_file()
-                            // Ignore file names with # in them, since they might be in-progress uploads.
-                            // They would be rejected anyways by filesystem_to_path below.
-                            && !dir_entry.file_name().to_string_lossy().contains('#')
-                    })
-                    .map(|entry| {
-                        let location = config.filesystem_to_path(entry.path())?;
-                        convert_entry(entry, location)
-                    }),
             }
         });
 
@@ -512,7 +532,7 @@ impl ObjectStore for LocalFileSystem {
         let config = Arc::clone(&self.config);
 
         let prefix = prefix.cloned().unwrap_or_default();
-        let resolved_prefix = config.path_to_filesystem(&prefix)?;
+        let resolved_prefix = config.prefix_to_filesystem(&prefix)?;
 
         maybe_spawn_blocking(move || {
             let walkdir = WalkDir::new(&resolved_prefix)
@@ -525,15 +545,11 @@ impl ObjectStore for LocalFileSystem {
 
             for entry_res in walkdir.into_iter().map(convert_walkdir_result) {
                 if let Some(entry) = entry_res? {
-                    if entry.file_type().is_file()
-                        // Ignore file names with # in them, since they might be in-progress uploads.
-                        // They would be rejected anyways by filesystem_to_path below.
-                        && entry.file_name().to_string_lossy().contains('#')
-                    {
-                        continue;
-                    }
                     let is_directory = entry.file_type().is_dir();
                     let entry_location = config.filesystem_to_path(entry.path())?;
+                    if !is_directory && !is_valid_file_path(&entry_location) {
+                        continue;
+                    }
 
                     let mut parts = match entry_location.prefix_match(&prefix) {
                         Some(parts) => parts,
@@ -1364,26 +1380,19 @@ mod tests {
         assert!(result.common_prefixes.is_empty());
         assert_eq!(result.objects[0].location, object);
 
-        let illegal = root.join("💀");
-        std::fs::write(illegal, "foo").unwrap();
+        let emoji = root.join("💀");
+        std::fs::write(emoji, "foo").unwrap();
 
-        // Can list directory that doesn't contain illegal path
-        flatten_list_stream(&integration, Some(&directory))
-            .await
-            .unwrap();
+        // Can list illegal file
+        let mut paths = flatten_list_stream(&integration, None).await.unwrap();
+        paths.sort_unstable();
 
-        // Cannot list illegal file
-        let err = flatten_list_stream(&integration, None)
-            .await
-            .unwrap_err()
-            .to_string();
-
-        assert!(
-            err.contains(
-                "Encountered illegal character sequence \"💀\" whilst parsing path segment \"💀\""
-            ),
-            "{}",
-            err
+        assert_eq!(
+            paths,
+            vec![
+                Path::parse("directory/child.txt").unwrap(),
+                Path::parse("💀").unwrap()
+            ]
         );
     }
 
@@ -1442,6 +1451,51 @@ mod tests {
         let path = Path::from_filesystem_path(".").unwrap();
         integration.list_with_delimiter(Some(&path)).await.unwrap();
     }
+
+    #[test]
+    fn test_valid_path() {
+        let cases = [
+            ("foo#123/test.txt", true),
+            ("foo#123/test#23.txt", true),
+            ("foo#123/test#34", false),
+            ("foo😁/test#34", false),
+            ("foo/test#😁34", true),
+        ];
+
+        for (case, expected) in cases {
+            let path = Path::parse(case).unwrap();
+            assert_eq!(is_valid_file_path(&path), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_intermediate_files() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let a = Path::parse("foo#123/test.txt").unwrap();
+        integration.put(&a, "test".into()).await.unwrap();
+
+        let list = flatten_list_stream(&integration, None).await.unwrap();
+        assert_eq!(list, vec![a.clone()]);
+
+        std::fs::write(root.path().join("bar#123"), "test").unwrap();
+
+        // Should ignore file
+        let list = flatten_list_stream(&integration, None).await.unwrap();
+        assert_eq!(list, vec![a.clone()]);
+
+        let b = Path::parse("bar#123").unwrap();
+        let err = integration.get(&b).await.unwrap_err().to_string();
+        assert_eq!(err, "Generic LocalFileSystem error: Filenames containing trailing '/#\\d+/' are not supported: bar#123");
+
+        let c = Path::parse("foo#123.txt").unwrap();
+        integration.put(&c, "test".into()).await.unwrap();
+
+        let mut list = flatten_list_stream(&integration, None).await.unwrap();
+        list.sort_unstable();
+        assert_eq!(list, vec![c, a]);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1449,96 +1503,9 @@ mod tests {
 mod not_wasm_tests {
     use crate::local::LocalFileSystem;
     use crate::{ObjectStore, Path};
-    use bytes::Bytes;
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::io::AsyncWriteExt;
-
-    #[tokio::test]
-    async fn creates_dir_if_not_present_append() {
-        let root = TempDir::new().unwrap();
-        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-
-        let location = Path::from("nested/file/test_file");
-
-        let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
-
-        let mut writer = integration.append(&location).await.unwrap();
-
-        writer.write_all(data.as_ref()).await.unwrap();
-
-        writer.flush().await.unwrap();
-
-        let read_data = integration
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(&*read_data, expected_data);
-    }
-
-    #[tokio::test]
-    async fn unknown_length_append() {
-        let root = TempDir::new().unwrap();
-        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-
-        let location = Path::from("some_file");
-
-        let data = Bytes::from("arbitrary data");
-        let expected_data = data.clone();
-        let mut writer = integration.append(&location).await.unwrap();
-
-        writer.write_all(data.as_ref()).await.unwrap();
-        writer.flush().await.unwrap();
-
-        let read_data = integration
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(&*read_data, expected_data);
-    }
-
-    #[tokio::test]
-    async fn multiple_append() {
-        let root = TempDir::new().unwrap();
-        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-
-        let location = Path::from("some_file");
-
-        let data = vec![
-            Bytes::from("arbitrary"),
-            Bytes::from("data"),
-            Bytes::from("gnz"),
-        ];
-
-        let mut writer = integration.append(&location).await.unwrap();
-        for d in &data {
-            writer.write_all(d).await.unwrap();
-        }
-        writer.flush().await.unwrap();
-
-        let mut writer = integration.append(&location).await.unwrap();
-        for d in &data {
-            writer.write_all(d).await.unwrap();
-        }
-        writer.flush().await.unwrap();
-
-        let read_data = integration
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        let expected_data = Bytes::from("arbitrarydatagnzarbitrarydatagnz");
-        assert_eq!(&*read_data, expected_data);
-    }
 
     #[tokio::test]
     async fn test_cleanup_intermediate_files() {

@@ -209,6 +209,8 @@ impl<R: BufRead> Iterator for ValueIter<R> {
 ///
 /// If `max_read_records` is not set, the whole file is read to infer its field types.
 ///
+/// Returns inferred schema and number of records read.
+///
 /// Contrary to [`infer_json_schema`], this function will seek back to the start of the `reader`.
 /// That way, the `reader` can be used immediately afterwards to create a [`Reader`].
 ///
@@ -229,7 +231,7 @@ impl<R: BufRead> Iterator for ValueIter<R> {
 pub fn infer_json_schema_from_seekable<R: BufRead + Seek>(
     mut reader: R,
     max_read_records: Option<usize>,
-) -> Result<Schema, ArrowError> {
+) -> Result<(Schema, usize), ArrowError> {
     let schema = infer_json_schema(&mut reader, max_read_records);
     // return the reader seek back to the start
     reader.rewind()?;
@@ -241,6 +243,8 @@ pub fn infer_json_schema_from_seekable<R: BufRead + Seek>(
 /// `max_read_records` controlling the maximum number of records to read.
 ///
 /// If `max_read_records` is not set, the whole file is read to infer its field types.
+///
+/// Returns inferred schema and number of records read.
 ///
 /// This function will not seek back to the start of the `reader`. The user has to manage the
 /// original file's cursor. This function is useful when the `reader`'s cursor is not available
@@ -266,8 +270,10 @@ pub fn infer_json_schema_from_seekable<R: BufRead + Seek>(
 pub fn infer_json_schema<R: BufRead>(
     reader: R,
     max_read_records: Option<usize>,
-) -> Result<Schema, ArrowError> {
-    infer_json_schema_from_iterator(ValueIter::new(reader, max_read_records))
+) -> Result<(Schema, usize), ArrowError> {
+    let mut values = ValueIter::new(reader, max_read_records);
+    let schema = infer_json_schema_from_iterator(&mut values)?;
+    Ok((schema, values.record_count))
 }
 
 fn set_object_scalar_field_type(
@@ -522,15 +528,28 @@ mod tests {
         ]);
 
         let mut reader = BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
-        let inferred_schema = infer_json_schema_from_seekable(&mut reader, None).unwrap();
+        let (inferred_schema, n_rows) = infer_json_schema_from_seekable(&mut reader, None).unwrap();
 
         assert_eq!(inferred_schema, schema);
+        assert_eq!(n_rows, 4);
 
         let file = File::open("test/data/mixed_arrays.json.gz").unwrap();
         let mut reader = BufReader::new(GzDecoder::new(&file));
-        let inferred_schema = infer_json_schema(&mut reader, None).unwrap();
+        let (inferred_schema, n_rows) = infer_json_schema(&mut reader, None).unwrap();
 
         assert_eq!(inferred_schema, schema);
+        assert_eq!(n_rows, 4);
+    }
+
+    #[test]
+    fn test_row_limit() {
+        let mut reader = BufReader::new(File::open("test/data/basic.json").unwrap());
+
+        let (_, n_rows) = infer_json_schema_from_seekable(&mut reader, None).unwrap();
+        assert_eq!(n_rows, 12);
+
+        let (_, n_rows) = infer_json_schema_from_seekable(&mut reader, Some(5)).unwrap();
+        assert_eq!(n_rows, 5);
     }
 
     #[test]
@@ -640,7 +659,7 @@ mod tests {
             bigger_than_i64_max, smaller_than_i64_min
         );
         let mut buf_reader = BufReader::new(json.as_bytes());
-        let inferred_schema = infer_json_schema(&mut buf_reader, Some(1)).unwrap();
+        let (inferred_schema, _) = infer_json_schema(&mut buf_reader, Some(1)).unwrap();
         let fields = inferred_schema.fields();
 
         let (_, big_field) = fields.find("bigger_than_i64_max").unwrap();
@@ -686,7 +705,7 @@ mod tests {
             {"in":null, "ni":2,    "ns":"3",  "sn":null, "n":null, "an":null, "na": [],   "nas":["8"]}
             {"in":1,    "ni":null, "ns":null, "sn":"4",  "n":null, "an":[],   "na": null, "nas":[]}
         "#;
-        let inferred_schema =
+        let (inferred_schema, _) =
             infer_json_schema_from_seekable(Cursor::new(data), None).expect("infer");
         let schema = Schema::new(vec![
             Field::new("an", list_type_of(DataType::Null), true),

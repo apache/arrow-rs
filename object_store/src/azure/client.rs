@@ -50,6 +50,8 @@ use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
 
+static TAGS_HEADER: HeaderName = HeaderName::from_static("x-ms-tags");
+
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
@@ -124,11 +126,12 @@ pub(crate) struct AzureConfig {
     pub retry_config: RetryConfig,
     pub service: Url,
     pub is_emulator: bool,
+    pub disable_tagging: bool,
     pub client_options: ClientOptions,
 }
 
 impl AzureConfig {
-    fn path_url(&self, path: &Path) -> Url {
+    pub(crate) fn path_url(&self, path: &Path) -> Url {
         let mut url = self.service.clone();
         {
             let mut path_mut = url.path_segments_mut().unwrap();
@@ -229,6 +232,11 @@ impl AzureClient {
             }
         };
 
+        let builder = match (opts.tags.encoded(), self.config.disable_tagging) {
+            ("", _) | (_, true) => builder,
+            (tags, false) => builder.header(&TAGS_HEADER, tags),
+        };
+
         let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
         Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
     }
@@ -314,6 +322,23 @@ impl AzureClient {
             .map_err(|err| err.error(STORE, from.to_string()))?;
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub async fn get_blob_tagging(&self, path: &Path) -> Result<Response> {
+        let credential = self.get_credential().await?;
+        let url = self.config.path_url(path);
+        let response = self
+            .client
+            .request(Method::GET, url)
+            .query(&[("comp", "tags")])
+            .with_azure_authorization(&credential, &self.config.account)
+            .send_retry(&self.config.retry_config)
+            .await
+            .context(GetRequestSnafu {
+                path: path.as_ref(),
+            })?;
+        Ok(response)
     }
 }
 

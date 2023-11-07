@@ -203,6 +203,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
 
+        (_, Binary | LargeBinary) => from_type.is_integer(),
+
         // start numeric casts
         (
             UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
@@ -225,8 +227,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Time64(_), Time32(to_unit)) => {
             matches!(to_unit, Second | Millisecond)
         }
-        (Timestamp(_, _), Int64) => true,
-        (Int64, Timestamp(_, _)) => true,
+        (Timestamp(_, _), _) if to_type.is_integer() => true,
+        (_, Timestamp(_, _)) if from_type.is_integer() => true,
         (Date64, Timestamp(_, None)) => true,
         (Date32, Timestamp(_, None)) => true,
         (
@@ -1368,6 +1370,28 @@ pub fn cast_with_options(
         (from_type, Utf8) if from_type.is_primitive() => {
             value_to_string::<i32>(array, cast_options)
         }
+        (from_type, Binary) if from_type.is_integer() => match from_type {
+            UInt8 => cast_numeric_to_binary::<UInt8Type, i32>(array),
+            UInt16 => cast_numeric_to_binary::<UInt16Type, i32>(array),
+            UInt32 => cast_numeric_to_binary::<UInt32Type, i32>(array),
+            UInt64 => cast_numeric_to_binary::<UInt64Type, i32>(array),
+            Int8 => cast_numeric_to_binary::<Int8Type, i32>(array),
+            Int16 => cast_numeric_to_binary::<Int16Type, i32>(array),
+            Int32 => cast_numeric_to_binary::<Int32Type, i32>(array),
+            Int64 => cast_numeric_to_binary::<Int64Type, i32>(array),
+            _ => unreachable!(),
+        },
+        (from_type, LargeBinary) if from_type.is_integer() => match from_type {
+            UInt8 => cast_numeric_to_binary::<UInt8Type, i64>(array),
+            UInt16 => cast_numeric_to_binary::<UInt16Type, i64>(array),
+            UInt32 => cast_numeric_to_binary::<UInt32Type, i64>(array),
+            UInt64 => cast_numeric_to_binary::<UInt64Type, i64>(array),
+            Int8 => cast_numeric_to_binary::<Int8Type, i64>(array),
+            Int16 => cast_numeric_to_binary::<Int16Type, i64>(array),
+            Int32 => cast_numeric_to_binary::<Int32Type, i64>(array),
+            Int64 => cast_numeric_to_binary::<Int64Type, i64>(array),
+            _ => unreachable!(),
+        },
         // start numeric casts
         (UInt8, UInt16) => cast_numeric_arrays::<UInt8Type, UInt16Type>(array, cast_options),
         (UInt8, UInt32) => cast_numeric_arrays::<UInt8Type, UInt32Type>(array, cast_options),
@@ -1597,24 +1621,31 @@ pub fn cast_with_options(
                 .unary::<_, Time64MicrosecondType>(|x| x / (NANOSECONDS / MICROSECONDS)),
         )),
 
-        (Timestamp(TimeUnit::Second, _), Int64) => {
-            cast_reinterpret_arrays::<TimestampSecondType, Int64Type>(array)
+        (Timestamp(TimeUnit::Second, _), _) if to_type.is_integer() => {
+            let array = cast_reinterpret_arrays::<TimestampSecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
         }
-        (Timestamp(TimeUnit::Millisecond, _), Int64) => {
-            cast_reinterpret_arrays::<TimestampMillisecondType, Int64Type>(array)
+        (Timestamp(TimeUnit::Millisecond, _), _) if to_type.is_integer() => {
+            let array = cast_reinterpret_arrays::<TimestampMillisecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
         }
-        (Timestamp(TimeUnit::Microsecond, _), Int64) => {
-            cast_reinterpret_arrays::<TimestampMicrosecondType, Int64Type>(array)
+        (Timestamp(TimeUnit::Microsecond, _), _) if to_type.is_integer() => {
+            let array = cast_reinterpret_arrays::<TimestampMicrosecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
         }
-        (Timestamp(TimeUnit::Nanosecond, _), Int64) => {
-            cast_reinterpret_arrays::<TimestampNanosecondType, Int64Type>(array)
+        (Timestamp(TimeUnit::Nanosecond, _), _) if to_type.is_integer() => {
+            let array = cast_reinterpret_arrays::<TimestampNanosecondType, Int64Type>(array)?;
+            cast_with_options(&array, to_type, cast_options)
         }
 
-        (Int64, Timestamp(unit, tz)) => Ok(make_timestamp_array(
-            array.as_primitive(),
-            unit.clone(),
-            tz.clone(),
-        )),
+        (_, Timestamp(unit, tz)) if from_type.is_integer() => {
+            let array = cast_with_options(array, &Int64, cast_options)?;
+            Ok(make_timestamp_array(
+                array.as_primitive(),
+                unit.clone(),
+                tz.clone(),
+            ))
+        }
 
         (Timestamp(from_unit, from_tz), Timestamp(to_unit, to_tz)) => {
             let array = cast_with_options(array, &Int64, cast_options)?;
@@ -2315,6 +2346,19 @@ fn value_to_string<O: OffsetSizeTrait>(
         }
     }
     Ok(Arc::new(builder.finish()))
+}
+
+fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_primitive::<FROM>();
+    let size = std::mem::size_of::<FROM::Native>();
+    let offsets = OffsetBuffer::from_lengths(std::iter::repeat(size).take(array.len()));
+    Ok(Arc::new(GenericBinaryArray::<O>::new(
+        offsets,
+        array.values().inner().clone(),
+        array.nulls().cloned(),
+    )))
 }
 
 /// Parse UTF-8
@@ -4522,10 +4566,72 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Casting from Int32 to Timestamp(Microsecond, None) not supported")]
-    fn test_cast_int32_to_timestamp() {
+    fn test_cast_integer_to_timestamp() {
+        let array = Int64Array::from(vec![Some(2), Some(10), None]);
+        let expected = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        let array = Int8Array::from(vec![Some(2), Some(10), None]);
+        let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        assert_eq!(&actual, &expected);
+
+        let array = Int16Array::from(vec![Some(2), Some(10), None]);
+        let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        assert_eq!(&actual, &expected);
+
         let array = Int32Array::from(vec![Some(2), Some(10), None]);
-        cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+        let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        assert_eq!(&actual, &expected);
+
+        let array = UInt8Array::from(vec![Some(2), Some(10), None]);
+        let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        assert_eq!(&actual, &expected);
+
+        let array = UInt16Array::from(vec![Some(2), Some(10), None]);
+        let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        assert_eq!(&actual, &expected);
+
+        let array = UInt32Array::from(vec![Some(2), Some(10), None]);
+        let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        assert_eq!(&actual, &expected);
+
+        let array = UInt64Array::from(vec![Some(2), Some(10), None]);
+        let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        assert_eq!(&actual, &expected);
+    }
+
+    #[test]
+    fn test_cast_timestamp_to_integer() {
+        let array = TimestampMillisecondArray::from(vec![Some(5), Some(1), None])
+            .with_timezone("UTC".to_string());
+        let expected = cast(&array, &DataType::Int64).unwrap();
+
+        let actual = cast(&cast(&array, &DataType::Int8).unwrap(), &DataType::Int64).unwrap();
+        assert_eq!(&actual, &expected);
+
+        let actual = cast(&cast(&array, &DataType::Int16).unwrap(), &DataType::Int64).unwrap();
+        assert_eq!(&actual, &expected);
+
+        let actual = cast(&cast(&array, &DataType::Int32).unwrap(), &DataType::Int64).unwrap();
+        assert_eq!(&actual, &expected);
+
+        let actual = cast(&cast(&array, &DataType::UInt8).unwrap(), &DataType::Int64).unwrap();
+        assert_eq!(&actual, &expected);
+
+        let actual = cast(&cast(&array, &DataType::UInt16).unwrap(), &DataType::Int64).unwrap();
+        assert_eq!(&actual, &expected);
+
+        let actual = cast(&cast(&array, &DataType::UInt32).unwrap(), &DataType::Int64).unwrap();
+        assert_eq!(&actual, &expected);
+
+        let actual = cast(&cast(&array, &DataType::UInt64).unwrap(), &DataType::Int64).unwrap();
+        assert_eq!(&actual, &expected);
     }
 
     #[test]
@@ -4580,7 +4686,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Casting from Int32 to Timestamp(Microsecond, None) not supported")]
     fn test_cast_list_i32_to_list_timestamp() {
         // Construct a value array
         let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 8, 100000000]).into_data();
@@ -4597,7 +4702,7 @@ mod tests {
             .unwrap();
         let list_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
 
-        cast(
+        let actual = cast(
             &list_array,
             &DataType::List(Arc::new(Field::new(
                 "item",
@@ -4606,6 +4711,22 @@ mod tests {
             ))),
         )
         .unwrap();
+
+        let expected = cast(
+            &cast(
+                &list_array,
+                &DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            )
+            .unwrap(),
+            &DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ))),
+        )
+        .unwrap();
+
+        assert_eq!(&actual, &expected);
     }
 
     #[test]
@@ -5173,6 +5294,44 @@ mod tests {
         let down_cast = array_ref.as_binary::<i64>();
         assert_eq!(bytes_1, down_cast.value(0));
         assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+    }
+
+    #[test]
+    fn test_numeric_to_binary() {
+        let a = Int16Array::from(vec![Some(1), Some(511), None]);
+
+        let array_ref = cast(&a, &DataType::Binary).unwrap();
+        let down_cast = array_ref.as_binary::<i32>();
+        assert_eq!(&1_i16.to_le_bytes(), down_cast.value(0));
+        assert_eq!(&511_i16.to_le_bytes(), down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        let a = Int64Array::from(vec![Some(-1), Some(123456789), None]);
+
+        let array_ref = cast(&a, &DataType::Binary).unwrap();
+        let down_cast = array_ref.as_binary::<i32>();
+        assert_eq!(&(-1_i64).to_le_bytes(), down_cast.value(0));
+        assert_eq!(&123456789_i64.to_le_bytes(), down_cast.value(1));
+        assert!(down_cast.is_null(2));
+    }
+
+    #[test]
+    fn test_numeric_to_large_binary() {
+        let a = Int16Array::from(vec![Some(1), Some(511), None]);
+
+        let array_ref = cast(&a, &DataType::LargeBinary).unwrap();
+        let down_cast = array_ref.as_binary::<i64>();
+        assert_eq!(&1_i16.to_le_bytes(), down_cast.value(0));
+        assert_eq!(&511_i16.to_le_bytes(), down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        let a = Int64Array::from(vec![Some(-1), Some(123456789), None]);
+
+        let array_ref = cast(&a, &DataType::LargeBinary).unwrap();
+        let down_cast = array_ref.as_binary::<i64>();
+        assert_eq!(&(-1_i64).to_le_bytes(), down_cast.value(0));
+        assert_eq!(&123456789_i64.to_le_bytes(), down_cast.value(1));
         assert!(down_cast.is_null(2));
     }
 

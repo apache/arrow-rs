@@ -94,13 +94,6 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.abort_multipart(location, multipart_id).await
     }
-
-    async fn append(&self, location: &Path) -> Result<Box<dyn AsyncWrite + Unpin + Send>> {
-        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
-        let write = self.inner.append(location).await?;
-        Ok(Box::new(PermitWrapper::new(write, permit)))
-    }
-
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
         let r = self.inner.get(location).await?;

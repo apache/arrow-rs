@@ -1206,7 +1206,7 @@ mod tests {
     fn test_write_for_file(test_file: &str) {
         let file = File::open(test_file).unwrap();
         let mut reader = BufReader::new(file);
-        let schema = infer_json_schema(&mut reader, None).unwrap();
+        let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
         reader.rewind().unwrap();
 
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(1024);
@@ -1391,7 +1391,7 @@ mod tests {
         let test_file = "test/data/basic.json";
         let file = File::open(test_file).unwrap();
         let mut reader = BufReader::new(file);
-        let schema = infer_json_schema(&mut reader, None).unwrap();
+        let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
         reader.rewind().unwrap();
 
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(1024);

@@ -1562,7 +1562,7 @@ mod tests {
         let file = File::open(path).unwrap();
         let mut reader = BufReader::new(file);
         let schema = schema.unwrap_or_else(|| {
-            let schema = infer_json_schema(&mut reader, None).unwrap();
+            let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
             reader.rewind().unwrap();
             schema
         });
@@ -1939,7 +1939,7 @@ mod tests {
     fn test_with_multiple_batches() {
         let file = File::open("test/data/basic_nulls.json").unwrap();
         let mut reader = BufReader::new(file);
-        let schema = infer_json_schema(&mut reader, None).unwrap();
+        let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
         reader.rewind().unwrap();
 
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(5);
@@ -2079,7 +2079,7 @@ mod tests {
     fn test_json_iterator() {
         let file = File::open("test/data/basic.json").unwrap();
         let mut reader = BufReader::new(file);
-        let schema = infer_json_schema(&mut reader, None).unwrap();
+        let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
         reader.rewind().unwrap();
 
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(5);
@@ -2228,5 +2228,35 @@ mod tests {
         let b = decoder.flush().unwrap().unwrap();
         let values = b.column(0).as_primitive::<Int32Type>().values();
         assert_eq!(values, &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_serde_large_numbers() {
+        let field = Field::new("int", DataType::Int64, true);
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .build_decoder()
+            .unwrap();
+
+        decoder.serialize(&[1699148028689_u64, 2, 3, 4]).unwrap();
+        let b = decoder.flush().unwrap().unwrap();
+        let values = b.column(0).as_primitive::<Int64Type>().values();
+        assert_eq!(values, &[1699148028689, 2, 3, 4]);
+
+        let field = Field::new(
+            "int",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        );
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .build_decoder()
+            .unwrap();
+
+        decoder.serialize(&[1699148028689_u64, 2, 3, 4]).unwrap();
+        let b = decoder.flush().unwrap().unwrap();
+        let values = b
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .values();
+        assert_eq!(values, &[1699148028689, 2, 3, 4]);
     }
 }
