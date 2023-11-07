@@ -668,6 +668,15 @@ mod tests {
                     .unwrap(),
                 "OPTIONAL FIXED_LEN_BYTE_ARRAY (9) decimal (DECIMAL(19,4));",
             ),
+            (
+                Type::primitive_type_builder("float16", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                    .with_logical_type(Some(LogicalType::Float16))
+                    .with_length(2)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()
+                    .unwrap(),
+                "REQUIRED FIXED_LEN_BYTE_ARRAY (2) float16 (FLOAT16);",
+            ),
         ];
 
         types_and_strings.into_iter().for_each(|(field, expected)| {
