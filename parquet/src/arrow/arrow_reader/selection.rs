@@ -86,7 +86,7 @@ impl RowSelector {
 /// A [`RowSelection`] maintains the following invariants:
 ///
 /// * It contains no [`RowSelector`] of 0 rows
-/// * Consecutive [`RowSelector`] alternate whether they skip or select rows
+/// * Consecutive [`RowSelector`]s alternate skipping or selecting rows
 ///
 /// [`PageIndex`]: crate::file::page_index::index::PageIndex
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
@@ -438,6 +438,7 @@ impl FromIterator<RowSelector> for RowSelection {
                 continue;
             }
 
+            // Combine consecutive selectors
             let last = selectors.last_mut().unwrap();
             if last.skip == s.skip {
                 last.row_count = last.row_count.checked_add(s.row_count).unwrap();
@@ -484,28 +485,28 @@ fn intersect_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowS
                 (_, Some(b)) if b.row_count == 0 => {
                     r_iter.next().unwrap();
                 }
-                (Some(a), Some(b)) => {
-                    return match (a.skip, b.skip) {
+                (Some(l), Some(r)) => {
+                    return match (l.skip, r.skip) {
                         // Keep both ranges
                         (false, false) => {
-                            if a.row_count < b.row_count {
-                                b.row_count -= a.row_count;
+                            if l.row_count < r.row_count {
+                                r.row_count -= l.row_count;
                                 l_iter.next()
                             } else {
-                                a.row_count -= b.row_count;
+                                l.row_count -= r.row_count;
                                 r_iter.next()
                             }
                         }
                         // skip at least one
                         _ => {
-                            if a.row_count < b.row_count {
-                                let skip = a.row_count;
-                                b.row_count -= a.row_count;
+                            if l.row_count < r.row_count {
+                                let skip = l.row_count;
+                                r.row_count -= l.row_count;
                                 l_iter.next();
                                 Some(RowSelector::skip(skip))
                             } else {
-                                let skip = b.row_count;
-                                a.row_count -= skip;
+                                let skip = r.row_count;
+                                l.row_count -= skip;
                                 r_iter.next();
                                 Some(RowSelector::skip(skip))
                             }
