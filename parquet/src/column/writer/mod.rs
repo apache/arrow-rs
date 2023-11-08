@@ -17,6 +17,7 @@
 
 //! Contains column writer API.
 
+use bytes::Bytes;
 use half::f16;
 
 use crate::bloom_filter::Sbbf;
@@ -40,7 +41,6 @@ use crate::file::{
     properties::{WriterProperties, WriterPropertiesPtr, WriterVersion},
 };
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
-use crate::util::memory::ByteBufferPtr;
 
 pub(crate) mod encoder;
 
@@ -733,7 +733,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     );
                 }
 
-                buffer.extend_from_slice(values_data.buf.data());
+                buffer.extend_from_slice(&values_data.buf);
                 let uncompressed_size = buffer.len();
 
                 if let Some(ref mut cmpr) = self.compressor {
@@ -743,7 +743,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 }
 
                 let data_page = Page::DataPage {
-                    buf: ByteBufferPtr::new(buffer),
+                    buf: buffer.into(),
                     num_values: self.page_metrics.num_buffered_values,
                     encoding: values_data.encoding,
                     def_level_encoding: Encoding::RLE,
@@ -776,13 +776,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 // Data Page v2 compresses values only.
                 match self.compressor {
                     Some(ref mut cmpr) => {
-                        cmpr.compress(values_data.buf.data(), &mut buffer)?;
+                        cmpr.compress(&values_data.buf, &mut buffer)?;
                     }
-                    None => buffer.extend_from_slice(values_data.buf.data()),
+                    None => buffer.extend_from_slice(&values_data.buf),
                 }
 
                 let data_page = Page::DataPageV2 {
-                    buf: ByteBufferPtr::new(buffer),
+                    buf: buffer.into(),
                     num_values: self.page_metrics.num_buffered_values,
                     encoding: values_data.encoding,
                     num_nulls: self.page_metrics.num_page_nulls as u32,
@@ -922,8 +922,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
             if let Some(ref mut cmpr) = self.compressor {
                 let mut output_buf = Vec::with_capacity(uncompressed_size);
-                cmpr.compress(page.buf.data(), &mut output_buf)?;
-                page.buf = ByteBufferPtr::new(output_buf);
+                cmpr.compress(&page.buf, &mut output_buf)?;
+                page.buf = Bytes::from(output_buf);
             }
 
             let dict_page = Page::DictionaryPage {
@@ -2499,10 +2499,10 @@ mod tests {
 
         let mut data = vec![FixedLenByteArray::default(); 3];
         // This is the expected min value - "aaa..."
-        data[0].set_data(ByteBufferPtr::new(vec![97_u8; 200]));
+        data[0].set_data(Bytes::from(vec![97_u8; 200]));
         // This is the expected max value - "ZZZ..."
-        data[1].set_data(ByteBufferPtr::new(vec![112_u8; 200]));
-        data[2].set_data(ByteBufferPtr::new(vec![98_u8; 200]));
+        data[1].set_data(Bytes::from(vec![112_u8; 200]));
+        data[2].set_data(Bytes::from(vec![98_u8; 200]));
 
         writer.write_batch(&data, None, None).unwrap();
 
@@ -2569,9 +2569,7 @@ mod tests {
 
         let mut data = vec![FixedLenByteArray::default(); 1];
         // This is the expected min value
-        data[0].set_data(ByteBufferPtr::new(
-            String::from("Blart Versenwald III").into_bytes(),
-        ));
+        data[0].set_data(Bytes::from(String::from("Blart Versenwald III")));
 
         writer.write_batch(&data, None, None).unwrap();
 
@@ -2642,9 +2640,9 @@ mod tests {
 
         // Also show that BinaryArray level comparison works here
         let mut greater = ByteArray::new();
-        greater.set_data(ByteBufferPtr::new(v));
+        greater.set_data(Bytes::from(v));
         let mut original = ByteArray::new();
-        original.set_data(ByteBufferPtr::new("hello".as_bytes().to_vec()));
+        original.set_data(Bytes::from("hello".as_bytes().to_vec()));
         assert!(greater > original);
 
         // UTF8 string
