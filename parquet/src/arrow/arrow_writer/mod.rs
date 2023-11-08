@@ -331,7 +331,7 @@ impl PageWriter for ArrowPageWriter {
 
         buf.length += compressed_size;
         buf.data.push(header);
-        buf.data.push(data.into());
+        buf.data.push(data);
 
         Ok(spec)
     }

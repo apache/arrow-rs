@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use bytes::Bytes;
+
 use crate::basic::Encoding;
 use crate::column::page::{Page, PageIterator};
 use crate::column::page::{PageMetadata, PageReader};
@@ -23,7 +25,6 @@ use crate::encodings::encoding::{get_encoder, Encoder};
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
-use crate::util::memory::ByteBufferPtr;
 use std::iter::Peekable;
 use std::mem;
 
@@ -31,7 +32,7 @@ pub trait DataPageBuilder {
     fn add_rep_levels(&mut self, max_level: i16, rep_levels: &[i16]);
     fn add_def_levels(&mut self, max_level: i16, def_levels: &[i16]);
     fn add_values<T: DataType>(&mut self, encoding: Encoding, values: &[T::T]);
-    fn add_indices(&mut self, indices: ByteBufferPtr);
+    fn add_indices(&mut self, indices: Bytes);
     fn consume(self) -> Page;
 }
 
@@ -112,18 +113,18 @@ impl DataPageBuilder for DataPageBuilderImpl {
         let encoded_values = encoder
             .flush_buffer()
             .expect("consume_buffer() should be OK");
-        self.buffer.extend_from_slice(encoded_values.data());
+        self.buffer.extend_from_slice(&encoded_values);
     }
 
-    fn add_indices(&mut self, indices: ByteBufferPtr) {
+    fn add_indices(&mut self, indices: Bytes) {
         self.encoding = Some(Encoding::RLE_DICTIONARY);
-        self.buffer.extend_from_slice(indices.data());
+        self.buffer.extend_from_slice(&indices);
     }
 
     fn consume(self) -> Page {
         if self.datapage_v2 {
             Page::DataPageV2 {
-                buf: ByteBufferPtr::new(self.buffer),
+                buf: Bytes::from(self.buffer),
                 num_values: self.num_values,
                 encoding: self.encoding.unwrap(),
                 num_nulls: 0, /* set to dummy value - don't need this when reading
@@ -137,7 +138,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
             }
         } else {
             Page::DataPage {
-                buf: ByteBufferPtr::new(self.buffer),
+                buf: Bytes::from(self.buffer),
                 num_values: self.num_values,
                 encoding: self.encoding.unwrap(),
                 def_level_encoding: Encoding::RLE,

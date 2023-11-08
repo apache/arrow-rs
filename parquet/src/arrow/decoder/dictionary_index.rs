@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use bytes::Bytes;
+
 use crate::encodings::rle::RleDecoder;
 use crate::errors::Result;
-use crate::util::memory::ByteBufferPtr;
 
 /// Decoder for `Encoding::RLE_DICTIONARY` indices
 pub struct DictIndexDecoder {
@@ -41,10 +42,10 @@ pub struct DictIndexDecoder {
 impl DictIndexDecoder {
     /// Create a new [`DictIndexDecoder`] with the provided data page, the number of levels
     /// associated with this data page, and the number of non-null values (if known)
-    pub fn new(data: ByteBufferPtr, num_levels: usize, num_values: Option<usize>) -> Self {
+    pub fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Self {
         let bit_width = data[0];
         let mut decoder = RleDecoder::new(bit_width);
-        decoder.set_data(data.start_from(1));
+        decoder.set_data(data.slice(1..));
 
         Self {
             decoder,

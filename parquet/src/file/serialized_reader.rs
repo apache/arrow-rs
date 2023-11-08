@@ -40,7 +40,7 @@ use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
-use crate::util::memory::ByteBufferPtr;
+use bytes::Bytes;
 use thrift::protocol::TCompactInputProtocol;
 
 impl TryFrom<File> for SerializedFileReader<File> {
@@ -386,7 +386,7 @@ fn read_page_header_len<T: Read>(input: &mut T) -> Result<(usize, PageHeader)> {
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
     page_header: PageHeader,
-    buffer: ByteBufferPtr,
+    buffer: Bytes,
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
@@ -428,7 +428,7 @@ pub(crate) fn decode_page(
                 ));
             }
 
-            ByteBufferPtr::new(decompressed)
+            Bytes::from(decompressed)
         }
         _ => buffer,
     };
@@ -627,7 +627,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     decode_page(
                         header,
-                        ByteBufferPtr::new(buffer),
+                        Bytes::from(buffer),
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?
@@ -656,7 +656,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     let bytes = buffer.slice(offset..);
                     decode_page(
                         header,
-                        bytes.into(),
+                        bytes,
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?
