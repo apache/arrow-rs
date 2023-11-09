@@ -2239,4 +2239,34 @@ mod tests {
         let values = b.column(0).as_primitive::<Int32Type>().values();
         assert_eq!(values, &[1, 2, 3, 4]);
     }
+
+    #[test]
+    fn test_serde_large_numbers() {
+        let field = Field::new("int", DataType::Int64, true);
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .build_decoder()
+            .unwrap();
+
+        decoder.serialize(&[1699148028689_u64, 2, 3, 4]).unwrap();
+        let b = decoder.flush().unwrap().unwrap();
+        let values = b.column(0).as_primitive::<Int64Type>().values();
+        assert_eq!(values, &[1699148028689, 2, 3, 4]);
+
+        let field = Field::new(
+            "int",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        );
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .build_decoder()
+            .unwrap();
+
+        decoder.serialize(&[1699148028689_u64, 2, 3, 4]).unwrap();
+        let b = decoder.flush().unwrap().unwrap();
+        let values = b
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .values();
+        assert_eq!(values, &[1699148028689, 2, 3, 4]);
+    }
 }
