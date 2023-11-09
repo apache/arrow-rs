@@ -810,7 +810,7 @@ impl FromStr for IntervalUnit {
             "century" | "centuries" => Ok(Self::Century),
             "decade" | "decades" => Ok(Self::Decade),
             "year" | "years" => Ok(Self::Year),
-            "month" | "months" => Ok(Self::Month),
+            "month" | "months" | "mon" | "mons" => Ok(Self::Month),
             "week" | "weeks" => Ok(Self::Week),
             "day" | "days" => Ok(Self::Day),
             "hour" | "hours" => Ok(Self::Hour),
