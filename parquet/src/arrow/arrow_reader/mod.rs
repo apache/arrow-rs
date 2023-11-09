@@ -1316,6 +1316,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_read_float16_nonzeros_file() {
+        use arrow_array::Float16Array;
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // see https://github.com/apache/parquet-testing/pull/40
+        let path = format!("{testdata}/float16_nonzeros_and_nans.parquet");
+        let file = File::open(path).unwrap();
+        let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
+
+        let batch = record_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 8);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .unwrap();
+
+        let f16_two = f16::ONE + f16::ONE;
+
+        assert_eq!(col.null_count(), 1);
+        assert!(col.is_null(0));
+        assert_eq!(col.value(1), f16::ONE);
+        assert_eq!(col.value(2), -f16_two);
+        assert!(col.value(3).is_nan());
+        assert_eq!(col.value(4), f16::ZERO);
+        assert!(col.value(4).is_sign_positive());
+        assert_eq!(col.value(5), f16::NEG_ONE);
+        assert_eq!(col.value(6), f16::NEG_ZERO);
+        assert!(col.value(6).is_sign_negative());
+        assert_eq!(col.value(7), f16_two);
+    }
+
+    #[test]
+    fn test_read_float16_zeros_file() {
+        use arrow_array::Float16Array;
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // see https://github.com/apache/parquet-testing/pull/40
+        let path = format!("{testdata}/float16_zeros_and_nans.parquet");
+        let file = File::open(path).unwrap();
+        let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
+
+        let batch = record_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .unwrap();
+
+        assert_eq!(col.null_count(), 1);
+        assert!(col.is_null(0));
+        assert_eq!(col.value(1), f16::ZERO);
+        assert!(col.value(1).is_sign_positive());
+        assert!(col.value(2).is_nan());
+    }
+
     /// Parameters for single_column_reader_test
     #[derive(Clone)]
     struct TestOptions {
