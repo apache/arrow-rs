@@ -436,6 +436,17 @@
 //! [Apache Iceberg]: https://iceberg.apache.org/
 //! [Delta Lake]: https://delta.io/
 //!
+//! # TLS Certificates
+//!
+//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
+//! certificates. By default the system-bundled certificates are used (see
+//! [`rustls-native-certs`]). The `tls-webpki-roots` feature switch can be used to also bundle Mozilla's
+//! root certificates with the library/application (see [`webpki-roots`]).
+//!
+//! [CA]: https://en.wikipedia.org/wiki/Certificate_authority
+//! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
+//! [`webpki-roots`]: https://crates.io/crates/webpki-roots
+//!
 
 #[cfg(all(
     target_arch = "wasm32",
