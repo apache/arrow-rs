@@ -62,7 +62,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "48.0.0"
+version = "48.0.1"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
