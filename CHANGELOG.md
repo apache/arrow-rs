@@ -19,6 +19,20 @@
 
 # Changelog
 
+## [48.0.1](https://github.com/apache/arrow-rs/tree/48.0.1) (2023-11-09)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/48.0.0...48.0.1)
+
+**Fixed bugs:**
+
+- RowSelection::intersection Produces Invalid RowSelection [\#5036](https://github.com/apache/arrow-rs/issues/5036) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Regression when serializing large json numbers [\#5038](https://github.com/apache/arrow-rs/issues/5038) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+
+**Merged pull requests:**
+- Backport CI fixes to 48.0.0_maintenance [\#5061](https://github.com/apache/arrow-rs/pull/5061)
+- Backport: Fix RowSelection::intersection (#5036) (#5041) [\#5060](https://github.com/apache/arrow-rs/pull/5060)
+- Backport: Fix serialization of large integers (#5038) (#5042) to 48.0.0_maintenance [\#5059](https://github.com/apache/arrow-rs/pull/5059)
+
 ## [48.0.0](https://github.com/apache/arrow-rs/tree/48.0.0) (2023-10-18)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/47.0.0...48.0.0)
