@@ -31,6 +31,7 @@
 - Add ObjectMeta::version and GetOptions::version \(\#4925\) [\#4935](https://github.com/apache/arrow-rs/pull/4935) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
 - Add GetOptions::head [\#4931](https://github.com/apache/arrow-rs/pull/4931) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
 - Remove Nested async and Fallibility from ObjectStore::list [\#4930](https://github.com/apache/arrow-rs/pull/4930) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
+- Add ObjectStore::put_opts / Conditional Put [\#4879](https://github.com/apache/arrow-rs/pull/4984) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
 
 **Implemented enhancements:**
 
