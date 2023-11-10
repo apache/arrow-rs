@@ -45,6 +45,19 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
     /// The multiplicative identity
     const ONE: Self;
 
+    /// The minimum value and identity for the `max` aggregation.
+    /// Note that the aggregation uses the total order predicate for floating point values,
+    /// which means that this value is a negative NaN.
+    const MIN: Self;
+
+    /// The maximum value and identity for the `min` aggregation.
+    /// Note that the aggregation uses the total order predicate for floating point values,
+    /// which means that this value is a positive NaN.
+    const MAX: Self;
+
+    /// The number of bytes occupied by this type
+    const BYTES: usize;
+
     /// Checked addition operation
     fn add_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
@@ -129,12 +142,15 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
 
 macro_rules! native_type_op {
     ($t:tt) => {
-        native_type_op!($t, 0, 1);
+        native_type_op!($t, 0, 1, $t::MIN, $t::MAX);
     };
-    ($t:tt, $zero:expr, $one: expr) => {
+    ($t:tt, $zero:expr, $one: expr, $min: expr, $max: expr) => {
         impl ArrowNativeTypeOp for $t {
             const ZERO: Self = $zero;
             const ONE: Self = $one;
+            const MIN: Self = $min;
+            const MAX: Self = $max;
+            const BYTES: usize = std::mem::size_of::<Self>();
 
             #[inline]
             fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
@@ -270,13 +286,57 @@ native_type_op!(u8);
 native_type_op!(u16);
 native_type_op!(u32);
 native_type_op!(u64);
-native_type_op!(i256, i256::ZERO, i256::ONE);
+native_type_op!(i256, i256::ZERO, i256::ONE, i256::MIN, i256::MAX);
+
+/*
+trait ToTotalOrder {
+    type TotalOrder;
+    fn to_total_order(self) -> Self::TotalOrder;
+}
+
+impl ToTotalOrder for f64 {
+    type TotalOrder = u64;
+
+    #[inline]
+    fn to_total_order(self) -> Self::TotalOrder {
+        // reading via integer pointer instead of calling to_bits seems to avoid a move from xmm to gp reg
+        // let bits = unsafe { (self as *const f64 as *const u64).read() };
+        let bits = self.to_bits();
+        (bits ^ ((bits as i64 >> 63) as u64 >> 1)) ^ (1 << 63)
+    }
+}
+
+impl ToTotalOrder for f32 {
+    type TotalOrder = u32;
+
+    #[inline]
+    fn to_total_order(self) -> Self::TotalOrder {
+        // reading via integer pointer instead of calling to_bits seems to avoid a move from xmm to gp reg
+        // let bits = unsafe { (self as *const f32 as *const u32).read() };
+        let bits = self.to_bits();
+        (bits ^ ((bits as i32 >> 31) as u32 >> 1)) ^ (1 << 31)
+    }
+}
+
+impl ToTotalOrder for f16 {
+    type TotalOrder = u16;
+
+    #[inline]
+    fn to_total_order(self) -> Self::TotalOrder {
+        let bits = self.to_bits();
+        (bits ^ ((bits as i16 >> 15) as u16 >> 1)) ^ (1 << 15)
+    }
+}
+*/
 
 macro_rules! native_type_float_op {
-    ($t:tt, $zero:expr, $one:expr) => {
+    ($t:tt, $zero:expr, $one:expr, $min:expr, $max:expr, $bits:ty) => {
         impl ArrowNativeTypeOp for $t {
             const ZERO: Self = $zero;
             const ONE: Self = $one;
+            const MIN: Self = $min;
+            const MAX: Self = $max;
+            const BYTES: usize = std::mem::size_of::<Self>();
 
             #[inline]
             fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
@@ -377,9 +437,16 @@ macro_rules! native_type_float_op {
     };
 }
 
-native_type_float_op!(f16, f16::ZERO, f16::ONE);
-native_type_float_op!(f32, 0., 1.);
-native_type_float_op!(f64, 0., 1.);
+native_type_float_op!(
+    f16,
+    f16::ZERO,
+    f16::ONE,
+    f16::from_bits(f16::NAN.to_bits() ^ 0x8000),
+    f16::NAN,
+    u16
+);
+native_type_float_op!(f32, 0., 1., -f32::NAN, f32::NAN, u32);
+native_type_float_op!(f64, 0., 1., -f64::NAN, f64::NAN, u64);
 
 #[cfg(test)]
 mod tests {
@@ -779,5 +846,17 @@ mod tests {
         );
         assert_eq!(8.0_f32.pow_checked(2_u32).unwrap(), 64_f32);
         assert_eq!(8.0_f64.pow_checked(2_u32).unwrap(), 64_f64);
+    }
+
+    #[test]
+    fn test_float_total_order_identity() {
+        assert!(<f64 as ArrowNativeTypeOp>::MIN.is_lt(f64::NEG_INFINITY));
+        assert!(<f64 as ArrowNativeTypeOp>::MAX.is_gt(f64::INFINITY));
+
+        assert!(<f32 as ArrowNativeTypeOp>::MIN.is_lt(f32::NEG_INFINITY));
+        assert!(<f32 as ArrowNativeTypeOp>::MAX.is_gt(f32::INFINITY));
+
+        assert!(<f16 as ArrowNativeTypeOp>::MIN.is_lt(f16::NEG_INFINITY));
+        assert!(<f16 as ArrowNativeTypeOp>::MAX.is_gt(f16::INFINITY));
     }
 }
