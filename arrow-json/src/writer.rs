@@ -92,8 +92,13 @@
 //! let buf = writer.into_inner();
 //! assert_eq!(r#"[{"a":1},{"a":2},{"a":3}]"#, String::from_utf8(buf).unwrap())
 //! ```
+//!
+//! [`LineDelimitedWriter`] and [`ArrayWriter`] will omit writing keys with null values.
+//! In order to explicitly write null values for keys, use the alternative
+//! [`LineDelimitedWriterWithNulls`] and [`ArrayWriterWithNulls`] versions.
 
 use std::iter;
+use std::marker::PhantomData;
 use std::{fmt::Debug, io::Write};
 
 use serde_json::map::Map as JsonMap;
@@ -106,6 +111,68 @@ use arrow_array::*;
 use arrow_schema::*;
 
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
+
+/// This trait controls whether null values should be written explicitly
+/// for keys in objects, or whether the key should be omitted entirely.
+pub trait NullHandler {
+    /// How to insert a maybe null into a JSON object
+    fn insert_value(row: &mut JsonMap<String, Value>, col_name: &str, value: Option<Value>);
+
+    /// How to handle inserting a [`NullArray`] into a list of JSON objects.
+    fn insert_null_array(rows: &mut [JsonMap<String, Value>], col_name: &str);
+}
+
+/// Skips writing keys that have null values.
+///
+/// For example, with [`LineDelimited`] format:
+///
+/// ```json
+/// {"foo":1}
+/// {"foo":1,"bar":2}
+/// {}
+/// ```
+pub struct SkipNulls {}
+
+impl NullHandler for SkipNulls {
+    #[inline]
+    fn insert_value(row: &mut JsonMap<String, Value>, col_name: &str, value: Option<Value>) {
+        if let Some(j) = value {
+            row.insert(col_name.to_string(), j);
+        }
+    }
+
+    #[inline]
+    fn insert_null_array(_rows: &mut [JsonMap<String, Value>], _col_namee: &str) {}
+}
+
+/// Writes keys that have null values.
+///
+/// For example, with [`LineDelimited`] format:
+///
+/// ```json
+/// {"foo":1,"bar":null}
+/// {"foo":1,"bar":2}
+/// {"foo":null,"bar":null}
+/// ```
+pub struct KeepNulls {}
+
+impl NullHandler for KeepNulls {
+    #[inline]
+    fn insert_value(row: &mut JsonMap<String, Value>, col_name: &str, value: Option<Value>) {
+        if let Some(j) = value {
+            row.insert(col_name.to_string(), j);
+        } else {
+            row.insert(col_name.to_string(), Value::Null);
+        }
+    }
+
+    #[inline]
+    fn insert_null_array(rows: &mut [JsonMap<String, Value>], col_name: &str) {
+        rows.iter_mut().for_each(|row| {
+            row.insert(col_name.to_string(), Value::Null);
+        });
+    }
+}
 
 fn primitive_array_to_json<T>(array: &dyn Array) -> Result<Vec<Value>, ArrowError>
 where
@@ -122,7 +189,7 @@ where
         .collect())
 }
 
-fn struct_array_to_jsonmap_array(
+fn struct_array_to_jsonmap_array<N: NullHandler>(
     array: &StructArray,
 ) -> Result<Vec<JsonMap<String, Value>>, ArrowError> {
     let inner_col_names = array.column_names();
@@ -132,13 +199,20 @@ fn struct_array_to_jsonmap_array(
         .collect::<Vec<JsonMap<String, Value>>>();
 
     for (j, struct_col) in array.columns().iter().enumerate() {
-        set_column_for_json_rows(&mut inner_objs, struct_col, inner_col_names[j])?
+        set_column_for_json_rows::<N>(&mut inner_objs, struct_col, inner_col_names[j])?
     }
     Ok(inner_objs)
 }
 
 /// Converts an arrow [`Array`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
 pub fn array_to_json_array(array: &dyn Array) -> Result<Vec<Value>, ArrowError> {
+    // For backwards compatibility, default to SkipNulls
+    array_to_json_array_internal::<SkipNulls>(array)
+}
+
+fn array_to_json_array_internal<N: NullHandler>(
+    array: &dyn Array,
+) -> Result<Vec<Value>, ArrowError> {
     match array.data_type() {
         DataType::Null => Ok(iter::repeat(Value::Null).take(array.len()).collect()),
         DataType::Boolean => Ok(array
@@ -180,32 +254,32 @@ pub fn array_to_json_array(array: &dyn Array) -> Result<Vec<Value>, ArrowError> 
         DataType::List(_) => as_list_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                Some(v) => Ok(Value::Array(array_to_json_array_internal::<N>(&v)?)),
                 None => Ok(Value::Null),
             })
             .collect(),
         DataType::LargeList(_) => as_large_list_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                Some(v) => Ok(Value::Array(array_to_json_array_internal::<N>(&v)?)),
                 None => Ok(Value::Null),
             })
             .collect(),
         DataType::FixedSizeList(_, _) => as_fixed_size_list_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                Some(v) => Ok(Value::Array(array_to_json_array_internal::<N>(&v)?)),
                 None => Ok(Value::Null),
             })
             .collect(),
         DataType::Struct(_) => {
-            let jsonmaps = struct_array_to_jsonmap_array(array.as_struct())?;
+            let jsonmaps = struct_array_to_jsonmap_array::<N>(array.as_struct())?;
             Ok(jsonmaps.into_iter().map(Value::Object).collect())
         }
         DataType::Map(_, _) => as_map_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                Some(v) => Ok(Value::Array(array_to_json_array_internal::<N>(&v)?)),
                 None => Ok(Value::Null),
             })
             .collect(),
@@ -216,89 +290,85 @@ pub fn array_to_json_array(array: &dyn Array) -> Result<Vec<Value>, ArrowError> 
 }
 
 macro_rules! set_column_by_array_type {
-    ($cast_fn:ident, $col_name:ident, $rows:ident, $array:ident) => {
+    ($cast_fn:ident, $col_name:ident, $rows:ident, $array:ident, $null_handler:ty) => {
         let arr = $cast_fn($array);
         $rows
             .iter_mut()
             .zip(arr.iter())
             .for_each(|(row, maybe_value)| {
-                if let Some(v) = maybe_value {
-                    row.insert($col_name.to_string(), v.into());
-                }
+                <$null_handler>::insert_value(row, $col_name, maybe_value.map(Into::into))
             });
     };
 }
 
-fn set_column_by_primitive_type<T>(
+fn set_column_by_primitive_type<T, N>(
     rows: &mut [JsonMap<String, Value>],
     array: &ArrayRef,
     col_name: &str,
 ) where
     T: ArrowPrimitiveType,
     T::Native: JsonSerializable,
+    N: NullHandler,
 {
     let primitive_arr = array.as_primitive::<T>();
 
     rows.iter_mut()
         .zip(primitive_arr.iter())
         .for_each(|(row, maybe_value)| {
-            // when value is null, we simply skip setting the key
-            if let Some(j) = maybe_value.and_then(|v| v.into_json_value()) {
-                row.insert(col_name.to_string(), j);
-            }
+            N::insert_value(row, col_name, maybe_value.and_then(|v| v.into_json_value()))
         });
 }
 
-fn set_column_for_json_rows(
+fn set_column_for_json_rows<N: NullHandler>(
     rows: &mut [JsonMap<String, Value>],
     array: &ArrayRef,
     col_name: &str,
 ) -> Result<(), ArrowError> {
     match array.data_type() {
         DataType::Int8 => {
-            set_column_by_primitive_type::<Int8Type>(rows, array, col_name);
+            set_column_by_primitive_type::<Int8Type, N>(rows, array, col_name);
         }
         DataType::Int16 => {
-            set_column_by_primitive_type::<Int16Type>(rows, array, col_name);
+            set_column_by_primitive_type::<Int16Type, N>(rows, array, col_name);
         }
         DataType::Int32 => {
-            set_column_by_primitive_type::<Int32Type>(rows, array, col_name);
+            set_column_by_primitive_type::<Int32Type, N>(rows, array, col_name);
         }
         DataType::Int64 => {
-            set_column_by_primitive_type::<Int64Type>(rows, array, col_name);
+            set_column_by_primitive_type::<Int64Type, N>(rows, array, col_name);
         }
         DataType::UInt8 => {
-            set_column_by_primitive_type::<UInt8Type>(rows, array, col_name);
+            set_column_by_primitive_type::<UInt8Type, N>(rows, array, col_name);
         }
         DataType::UInt16 => {
-            set_column_by_primitive_type::<UInt16Type>(rows, array, col_name);
+            set_column_by_primitive_type::<UInt16Type, N>(rows, array, col_name);
         }
         DataType::UInt32 => {
-            set_column_by_primitive_type::<UInt32Type>(rows, array, col_name);
+            set_column_by_primitive_type::<UInt32Type, N>(rows, array, col_name);
         }
         DataType::UInt64 => {
-            set_column_by_primitive_type::<UInt64Type>(rows, array, col_name);
+            set_column_by_primitive_type::<UInt64Type, N>(rows, array, col_name);
         }
         DataType::Float16 => {
-            set_column_by_primitive_type::<Float16Type>(rows, array, col_name);
+            set_column_by_primitive_type::<Float16Type, N>(rows, array, col_name);
         }
         DataType::Float32 => {
-            set_column_by_primitive_type::<Float32Type>(rows, array, col_name);
+            set_column_by_primitive_type::<Float32Type, N>(rows, array, col_name);
         }
         DataType::Float64 => {
-            set_column_by_primitive_type::<Float64Type>(rows, array, col_name);
+            set_column_by_primitive_type::<Float64Type, N>(rows, array, col_name);
         }
         DataType::Null => {
-            // when value is null, we simply skip setting the key
+            N::insert_null_array(rows, col_name);
         }
         DataType::Boolean => {
-            set_column_by_array_type!(as_boolean_array, col_name, rows, array);
+            set_column_by_array_type!(as_boolean_array, col_name, rows, array, N);
         }
         DataType::Utf8 => {
-            set_column_by_array_type!(as_string_array, col_name, rows, array);
+            set_column_by_array_type!(as_string_array, col_name, rows, array, N);
         }
         DataType::LargeUtf8 => {
-            set_column_by_array_type!(as_largestring_array, col_name, rows, array);
+            set_column_by_array_type!(as_largestring_array, col_name, rows, array, N);
         }
         DataType::Date32
         | DataType::Date64
@@ -310,16 +380,15 @@ fn set_column_for_json_rows(
             let formatter = ArrayFormatter::try_new(array.as_ref(), &options)?;
             let nulls = array.nulls();
             rows.iter_mut().enumerate().for_each(|(idx, row)| {
-                if nulls.map(|x| x.is_valid(idx)).unwrap_or(true) {
-                    row.insert(
-                        col_name.to_string(),
-                        formatter.value(idx).to_string().into(),
-                    );
-                }
+                let maybe_value = nulls
+                    .map(|x| x.is_valid(idx))
+                    .unwrap_or(true)
+                    .then(|| formatter.value(idx).to_string().into());
+                N::insert_value(row, col_name, maybe_value);
             });
         }
         DataType::Struct(_) => {
-            let inner_objs = struct_array_to_jsonmap_array(array.as_struct())?;
+            let inner_objs = struct_array_to_jsonmap_array::<N>(array.as_struct())?;
             rows.iter_mut().zip(inner_objs).for_each(|(row, obj)| {
                 row.insert(col_name.to_string(), Value::Object(obj));
             });
@@ -328,9 +397,10 @@ fn set_column_for_json_rows(
             let listarr = as_list_array(array);
             rows.iter_mut().zip(listarr.iter()).try_for_each(
                 |(row, maybe_value)| -> Result<(), ArrowError> {
-                    if let Some(v) = maybe_value {
-                        row.insert(col_name.to_string(), Value::Array(array_to_json_array(&v)?));
-                    }
+                    let maybe_value = maybe_value
+                        .map(|v| array_to_json_array_internal::<N>(&v).map(Value::Array))
+                        .transpose()?;
+                    N::insert_value(row, col_name, maybe_value);
                     Ok(())
                 },
             )?;
@@ -339,10 +409,10 @@ fn set_column_for_json_rows(
             let listarr = as_large_list_array(array);
             rows.iter_mut().zip(listarr.iter()).try_for_each(
                 |(row, maybe_value)| -> Result<(), ArrowError> {
-                    if let Some(v) = maybe_value {
-                        let val = array_to_json_array(&v)?;
-                        row.insert(col_name.to_string(), Value::Array(val));
-                    }
+                    let maybe_value = maybe_value
+                        .map(|v| array_to_json_array_internal::<N>(&v).map(Value::Array))
+                        .transpose()?;
+                    N::insert_value(row, col_name, maybe_value);
                     Ok(())
                 },
             )?;
@@ -350,7 +420,7 @@ fn set_column_for_json_rows(
         DataType::Dictionary(_, value_type) => {
             let hydrated = arrow_cast::cast::cast(&array, value_type)
                 .expect("cannot cast dictionary to underlying values");
-            set_column_for_json_rows(rows, &hydrated, col_name)?;
+            set_column_for_json_rows::<N>(rows, &hydrated, col_name)?;
         }
         DataType::Map(_, _) => {
             let maparr = as_map_array(array);
@@ -367,7 +437,7 @@ fn set_column_for_json_rows(
             }
 
             let keys = keys.as_string::<i32>();
-            let values = array_to_json_array(values)?;
+            let values = array_to_json_array_internal::<N>(values)?;
 
             let mut kv = keys.iter().zip(values);
 
@@ -402,6 +472,13 @@ fn set_column_for_json_rows(
 pub fn record_batches_to_json_rows(
     batches: &[&RecordBatch],
 ) -> Result<Vec<JsonMap<String, Value>>, ArrowError> {
+    // For backwards compatibility, default to SkipNulls
+    record_batches_to_json_rows_internal::<SkipNulls>(batches)
+}
+
+fn record_batches_to_json_rows_internal<N: NullHandler>(
+    batches: &[&RecordBatch],
+) -> Result<Vec<JsonMap<String, Value>>, ArrowError> {
     let mut rows: Vec<JsonMap<String, Value>> = iter::repeat(JsonMap::new())
         .take(batches.iter().map(|b| b.num_rows()).sum())
         .collect();
@@ -414,7 +491,7 @@ pub fn record_batches_to_json_rows(
             let row_slice = &mut rows[base..base + batch.num_rows()];
             for (j, col) in batch.columns().iter().enumerate() {
                 let col_name = schema.field(j).name();
-                set_column_for_json_rows(row_slice, col, col_name)?
+                set_column_for_json_rows::<N>(row_slice, col, col_name)?
             }
             base += row_count;
         }
@@ -450,7 +527,9 @@ pub trait JsonFormat: Debug + Default {
     }
 }
 
-/// Produces JSON output with one record per line. For example
+/// Produces JSON output with one record per line.
+///
+/// For example:
 ///
 /// ```json
 /// {"foo":1}
@@ -467,7 +546,9 @@ impl JsonFormat for LineDelimited {
     }
 }
 
-/// Produces JSON output as a single JSON array. For example
+/// Produces JSON output as a single JSON array.
+///
+/// For example:
 ///
 /// ```json
 /// [{"foo":1},{"bar":1}]
@@ -494,21 +575,36 @@ impl JsonFormat for JsonArray {
     }
 }
 
-/// A JSON writer which serializes [`RecordBatch`]es to newline delimited JSON objects
-pub type LineDelimitedWriter<W> = Writer<W, LineDelimited>;
+/// A JSON writer which serializes [`RecordBatch`]es to newline delimited JSON objects.
+///
+/// Will skip writing keys with null values.
+pub type LineDelimitedWriter<W> = Writer<W, LineDelimited, SkipNulls>;
 
-/// A JSON writer which serializes [`RecordBatch`]es to JSON arrays
-pub type ArrayWriter<W> = Writer<W, JsonArray>;
+/// Similar to [`LineDelimitedWriter`] but will keep keys with null values.
+pub type LineDelimitedWriterWithNulls<W> = Writer<W, LineDelimited, KeepNulls>;
+
+/// A JSON writer which serializes [`RecordBatch`]es to JSON arrays.
+///
+/// Will skip writing keys with null values.
+pub type ArrayWriter<W> = Writer<W, JsonArray, SkipNulls>;
+
+/// Similar to [`ArrayWriter`] but will keep keys with null values.
+pub type ArrayWriterWithNulls<W> = Writer<W, JsonArray, KeepNulls>;
 
 /// A JSON writer which serializes [`RecordBatch`]es to a stream of
-/// `u8` encoded JSON objects. See the module level documentation for
-/// detailed usage and examples. The specific format of the stream is
-/// controlled by the [`JsonFormat`] type parameter.
+/// `u8` encoded JSON objects.
+///
+/// See the module level documentation for detailed usage and examples.
+/// The specific format of the stream is controlled by the [`JsonFormat`]
+/// type parameter. The [`NullHandler`] type parameter controls whether
+/// nulls should be written explicitly for keys or skipped. Default is
+/// [`SkipNulls`] for backward compatibility.
 #[derive(Debug)]
-pub struct Writer<W, F>
+pub struct Writer<W, F, N = SkipNulls>
 where
     W: Write,
     F: JsonFormat,
+    N: NullHandler,
 {
     /// Underlying writer to use to write bytes
     writer: W,
@@ -521,12 +617,16 @@ where
 
     /// Determines how the byte stream is formatted
     format: F,
+
+    /// Determines whether nulls should be written for keys or omitted
+    null_handler: PhantomData<N>,
 }
 
-impl<W, F> Writer<W, F>
+impl<W, F, N> Writer<W, F, N>
 where
     W: Write,
     F: JsonFormat,
+    N: NullHandler,
 {
     /// Construct a new writer
     pub fn new(writer: W) -> Self {
@@ -535,6 +635,7 @@ where
             started: false,
             finished: false,
             format: F::default(),
+            null_handler: Default::default(),
         }
     }
 
@@ -556,7 +657,7 @@ where
 
     /// Convert the `RecordBatch` into JSON rows, and write them to the output
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
-        for row in record_batches_to_json_rows(&[batch])? {
+        for row in record_batches_to_json_rows_internal::<N>(&[batch])? {
             self.write_row(&Value::Object(row))?;
         }
         Ok(())
@@ -564,7 +665,7 @@ where
 
     /// Convert the [`RecordBatch`] into JSON rows, and write them to the output
     pub fn write_batches(&mut self, batches: &[&RecordBatch]) -> Result<(), ArrowError> {
-        for row in record_batches_to_json_rows(batches)? {
+        for row in record_batches_to_json_rows_internal::<N>(batches)? {
             self.write_row(&Value::Object(row))?;
         }
         Ok(())
@@ -587,10 +688,11 @@ where
     }
 }
 
-impl<W, F> RecordBatchWriter for Writer<W, F>
+impl<W, F, N> RecordBatchWriter for Writer<W, F, N>
 where
     W: Write,
     F: JsonFormat,
+    N: NullHandler,
 {
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         self.write(batch)
@@ -609,7 +711,7 @@ mod tests {
 
     use serde_json::json;
 
-    use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
+    use arrow_array::builder::{Int32Builder, Int64Builder, MapBuilder, StringBuilder};
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::ArrayData;
 
@@ -1203,7 +1305,7 @@ mod tests {
         );
     }
 
-    fn test_write_for_file(test_file: &str) {
+    fn test_write_for_file(test_file: &str, remove_nulls: bool) {
         let file = File::open(test_file).unwrap();
         let mut reader = BufReader::new(file);
         let (schema, _) = infer_json_schema(&mut reader, None).unwrap();
@@ -1215,18 +1317,25 @@ mod tests {
 
         let mut buf = Vec::new();
         {
-            let mut writer = LineDelimitedWriter::new(&mut buf);
-            writer.write_batches(&[&batch]).unwrap();
+            if remove_nulls {
+                let mut writer = LineDelimitedWriter::new(&mut buf);
+                writer.write_batches(&[&batch]).unwrap();
+            } else {
+                let mut writer = LineDelimitedWriterWithNulls::new(&mut buf);
+                writer.write_batches(&[&batch]).unwrap();
+            }
         }
 
         let result = String::from_utf8(buf).unwrap();
         let expected = read_to_string(test_file).unwrap();
         for (r, e) in result.lines().zip(expected.lines()) {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
-            // remove null value from object to make comparison consistent:
-            if let Value::Object(obj) = expected_json {
-                expected_json =
-                    Value::Object(obj.into_iter().filter(|(_, v)| *v != Value::Null).collect());
+            if remove_nulls {
+                // remove null value from object to make comparison consistent:
+                if let Value::Object(obj) = expected_json {
+                    expected_json =
+                        Value::Object(obj.into_iter().filter(|(_, v)| *v != Value::Null).collect());
+                }
             }
             assert_eq!(serde_json::from_str::<Value>(r).unwrap(), expected_json,);
         }
@@ -1234,17 +1343,22 @@ mod tests {
 
     #[test]
     fn write_basic_rows() {
-        test_write_for_file("test/data/basic.json");
+        test_write_for_file("test/data/basic.json", true);
     }
 
     #[test]
     fn write_arrays() {
-        test_write_for_file("test/data/arrays.json");
+        test_write_for_file("test/data/arrays.json", true);
     }
 
     #[test]
     fn write_basic_nulls() {
-        test_write_for_file("test/data/basic_nulls.json");
+        test_write_for_file("test/data/basic_nulls.json", true);
+    }
+
+    #[test]
+    fn write_nested_with_nulls() {
+        test_write_for_file("test/data/nested_with_nulls.json", false);
     }
 
     #[test]
@@ -1529,5 +1643,232 @@ mod tests {
         let map_array = Arc::new(array) as ArrayRef;
 
         assert_eq!(array_to_json_array(&map_array).unwrap(), expected_json);
+    }
+
+    #[test]
+    fn test_writer_keep_nulls() -> Result<(), ArrowError> {
+        fn nested_list() -> (Arc<ListArray>, Arc<Field>) {
+            let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![None, None, None]),
+                Some(vec![Some(1), Some(2), Some(3)]),
+                None,
+                Some(vec![None, None, None]),
+            ]));
+            let field = Arc::new(Field::new("list", array.data_type().clone(), true));
+            // [{"list":[null,null,null]},{"list":[1,2,3]},{"list":null},{"list":[null,null,null]}]
+            (array, field)
+        }
+
+        fn nested_dict() -> (Arc<DictionaryArray<Int32Type>>, Arc<Field>) {
+            let array = Arc::new(DictionaryArray::from_iter(vec![
+                Some("cupcakes"),
+                None,
+                Some("bear"),
+                Some("kuma"),
+            ]));
+            let field = Arc::new(Field::new("dict", array.data_type().clone(), true));
+            // [{"dict":"cupcakes"},{"dict":null},{"dict":"bear"},{"dict":"kuma"}]
+            (array, field)
+        }
+
+        fn nested_map() -> (Arc<MapArray>, Arc<Field>) {
+            let string_builder = StringBuilder::new();
+            let int_builder = Int64Builder::new();
+            let mut builder = MapBuilder::new(None, string_builder, int_builder);
+
+            // [{"foo": 10}, null, {}, {"bar": 20, "baz": 30, "qux": 40}]
+            builder.keys().append_value("foo");
+            builder.values().append_value(10);
+            builder.append(true).unwrap();
+
+            builder.append(false).unwrap();
+
+            builder.append(true).unwrap();
+
+            builder.keys().append_value("bar");
+            builder.values().append_value(20);
+            builder.keys().append_value("baz");
+            builder.values().append_value(30);
+            builder.keys().append_value("qux");
+            builder.values().append_value(40);
+            builder.append(true).unwrap();
+
+            let array = Arc::new(builder.finish());
+            let field = Arc::new(Field::new("map", array.data_type().clone(), true));
+            (array, field)
+        }
+
+        fn root_list() -> (Arc<ListArray>, Field) {
+            let struct_array = StructArray::from(vec![
+                (
+                    Arc::new(Field::new("utf8", DataType::Utf8, true)),
+                    Arc::new(StringArray::from(vec![Some("a"), Some("b"), None, None])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("int32", DataType::Int32, true)),
+                    Arc::new(Int32Array::from(vec![Some(1), None, Some(5), None])) as ArrayRef,
+                ),
+            ]);
+
+            let field = Field::new_list(
+                "list",
+                Field::new("struct", struct_array.data_type().clone(), true),
+                true,
+            );
+
+            // [{"list":[{"int32":1,"utf8":"a"},{"int32":null,"utf8":"b"}]},{"list":null},{"list":[{int32":5,"utf8":null}]},{"list":null}]
+            let entry_offsets = Buffer::from(&[0, 2, 2, 3, 3].to_byte_slice());
+            let data = ArrayData::builder(field.data_type().clone())
+                .len(4)
+                .add_buffer(entry_offsets)
+                .add_child_data(struct_array.into_data())
+                .null_bit_buffer(Some([0b00000101].into()))
+                .build()
+                .unwrap();
+            let array = Arc::new(ListArray::from(data));
+            (array, field)
+        }
+
+        let (nested_list_array, nested_list_field) = nested_list();
+        let (nested_dict_array, nested_dict_field) = nested_dict();
+        let (nested_map_array, nested_map_field) = nested_map();
+        let (root_list_array, root_list_field) = root_list();
+
+        let schema = Schema::new(vec![
+            Field::new("date", DataType::Date32, true),
+            Field::new("null", DataType::Null, true),
+            Field::new_struct(
+                "struct",
+                vec![
+                    Arc::new(Field::new("utf8", DataType::Utf8, true)),
+                    nested_list_field.clone(),
+                    nested_dict_field.clone(),
+                    nested_map_field.clone(),
+                ],
+                true,
+            ),
+            root_list_field,
+        ]);
+
+        let arr_date32 = Date32Array::from(vec![Some(0), None, Some(1), None]);
+        let arr_null = NullArray::new(4);
+        let arr_struct = StructArray::from(vec![
+            // [{"utf8":"a"},{"utf8":null},{"utf8":null},{"utf8":"b"}]
+            (
+                Arc::new(Field::new("utf8", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec![Some("a"), None, None, Some("b")])) as ArrayRef,
+            ),
+            // [{"list":[null,null,null]},{"list":[1,2,3]},{"list":null},{"list":[null,null,null]}]
+            (nested_list_field, nested_list_array as ArrayRef),
+            // [{"dict":"cupcakes"},{"dict":null},{"dict":"bear"},{"dict":"kuma"}]
+            (nested_dict_field, nested_dict_array as ArrayRef),
+            // [{"foo": 10}, null, {}, {"bar": 20, "baz": 30, "qux": 40}]
+            (nested_map_field, nested_map_array as ArrayRef),
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                // [{"date":"1970-01-01"},{"date":null},{"date":"1970-01-02"},{"date":null}]
+                Arc::new(arr_date32),
+                // [{"null":null},{"null":null},{"null":null},{"null":null}]
+                Arc::new(arr_null),
+                Arc::new(arr_struct),
+                // [{"list":[{"int32":1,"utf8":"a"},{"int32":null,"utf8":"b"}]},{"list":null},{"list":[{int32":5,"utf8":null}]},{"list":null}]
+                root_list_array,
+            ],
+        )?;
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = ArrayWriterWithNulls::new(&mut buf);
+            writer.write_batches(&[&batch])?;
+            writer.finish()?;
+        }
+
+        let actual = serde_json::from_slice::<Vec<Value>>(&buf).unwrap();
+        let expected = serde_json::from_value::<Vec<Value>>(json!([
+          {
+            "date": "1970-01-01",
+            "list": [
+              {
+                "int32": 1,
+                "utf8": "a"
+              },
+              {
+                "int32": null,
+                "utf8": "b"
+              }
+            ],
+            "null": null,
+            "struct": {
+              "dict": "cupcakes",
+              "list": [
+                null,
+                null,
+                null
+              ],
+              "map": {
+                "foo": 10
+              },
+              "utf8": "a"
+            }
+          },
+          {
+            "date": null,
+            "list": null,
+            "null": null,
+            "struct": {
+              "dict": null,
+              "list": [
+                1,
+                2,
+                3
+              ],
+              "map": null,
+              "utf8": null
+            }
+          },
+          {
+            "date": "1970-01-02",
+            "list": [
+              {
+                "int32": 5,
+                "utf8": null
+              }
+            ],
+            "null": null,
+            "struct": {
+              "dict": "bear",
+              "list": null,
+              "map": {},
+              "utf8": null
+            }
+          },
+          {
+            "date": null,
+            "list": null,
+            "null": null,
+            "struct": {
+              "dict": "kuma",
+              "list": [
+                null,
+                null,
+                null
+              ],
+              "map": {
+                "bar": 20,
+                "baz": 30,
+                "qux": 40
+              },
+              "utf8": "b"
+            }
+          }
+        ]))
+        .unwrap();
+
+        assert_eq!(actual, expected);
+
+        Ok(())
     }
 }
