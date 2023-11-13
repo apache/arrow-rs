@@ -55,6 +55,7 @@
 //! [pyarrow.Table.to_reader()](https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table.to_reader)
 //! and then importing the reader as a [ArrowArrayStreamReader].
 
+use std::borrow::BorrowMut;
 use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
@@ -262,9 +263,10 @@ impl FromPyArrow for ArrayData {
             validate_pycapsule(array_capsule, "arrow_array")?;
 
             let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
-            let array_ptr = unsafe { array_capsule.reference::<FFI_ArrowArray>() };
+            let array_ptr = array_capsule.pointer() as *mut FFI_ArrowArray;
+            let array_mut = unsafe { array_ptr.as_mut() };
 
-            let array = std::mem::replace(array_ptr, FFI_ArrowArray::empty());
+            let array = std::mem::replace(array_mut.unwrap(), FFI_ArrowArray::empty());
             return ffi::from_ffi(array, schema_ptr).map_err(to_py_err);
         }
 
