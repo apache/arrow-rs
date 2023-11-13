@@ -264,7 +264,7 @@ impl FromPyArrow for ArrayData {
             let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
             let array_ptr = unsafe { array_capsule.reference::<FFI_ArrowArray>() };
 
-            ffi::from_ffi(array_ptr.copy(), schema_ptr).map_err(to_py_err)
+            return ffi::from_ffi(array_ptr.copy(), schema_ptr).map_err(to_py_err);
         }
 
         validate_class("Array", value)?;
