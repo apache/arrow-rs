@@ -2181,6 +2181,21 @@ mod tests {
     }
 
     #[test]
+    fn encode_empty_list() {
+        let val_inner = Field::new("item", DataType::UInt32, true);
+        let val_list_field = Field::new("val", DataType::List(Arc::new(val_inner)), false);
+        let schema = Arc::new(Schema::new(vec![val_list_field]));
+
+        let values = Arc::new(generate_list_data::<i32>());
+
+        let in_batch = RecordBatch::try_new(schema, vec![values])
+            .unwrap()
+            .slice(999, 0);
+        let out_batch = deserialize_file(serialize_file(&in_batch));
+        assert_eq!(in_batch, out_batch);
+    }
+
+    #[test]
     fn encode_large_lists() {
         let val_inner = Field::new("item", DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
