@@ -64,7 +64,7 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PyTuple};
+use pyo3::types::{PyCapsule, PyList, PyTuple};
 
 use crate::array::{make_array, ArrayData};
 use crate::datatypes::{DataType, Field, Schema};
@@ -118,8 +118,39 @@ fn validate_class(expected: &str, value: &PyAny) -> PyResult<()> {
     Ok(())
 }
 
+fn validate_pycapsule(capsule: &PyCapsule, name: &str) -> PyResult<()> {
+    let capsule_name = capsule.name()?;
+    if capsule_name.is_none() {
+        return Err(PyValueError::new_err(
+            "Expected schema PyCapsule to have name set.",
+        ));
+    }
+
+    let capsule_name = capsule_name.unwrap().to_str()?;
+    if capsule_name != name {
+        return Err(PyValueError::new_err(format!(
+            "Expected name '{}' in PyCapsule.",
+            name,
+        )));
+    }
+
+    Ok(())
+}
+
 impl FromPyArrow for DataType {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        // Newer versions of PyArrow as well as other libraries with Arrow data implement this
+        // method, so prefer it over _export_to_c.
+        if value.hasattr("__arrow_c_schema__")? {
+            let capsule: &PyCapsule =
+                PyTryInto::try_into(value.getattr("__arrow_c_schema__")?.call0()?)?;
+            validate_pycapsule(capsule, "arrow_schema")?;
+
+            let schema_ptr = unsafe { capsule.reference::<FFI_ArrowSchema>() };
+            let dtype = DataType::try_from(schema_ptr).map_err(to_py_err)?;
+            Ok(dtype)
+        }
+
         validate_class("DataType", value)?;
 
         let c_schema = FFI_ArrowSchema::empty();
@@ -143,6 +174,18 @@ impl ToPyArrow for DataType {
 
 impl FromPyArrow for Field {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        // Newer versions of PyArrow as well as other libraries with Arrow data implement this
+        // method, so prefer it over _export_to_c.
+        if value.hasattr("__arrow_c_schema__")? {
+            let capsule: &PyCapsule =
+                PyTryInto::try_into(value.getattr("__arrow_c_schema__")?.call0()?)?;
+            validate_pycapsule(capsule, "arrow_schema")?;
+
+            let schema_ptr = unsafe { capsule.reference::<FFI_ArrowSchema>() };
+            let field = Field::try_from(schema_ptr).map_err(to_py_err)?;
+            Ok(field)
+        }
+
         validate_class("Field", value)?;
 
         let c_schema = FFI_ArrowSchema::empty();
@@ -166,6 +209,18 @@ impl ToPyArrow for Field {
 
 impl FromPyArrow for Schema {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        // Newer versions of PyArrow as well as other libraries with Arrow data implement this
+        // method, so prefer it over _export_to_c.
+        if value.hasattr("__arrow_c_schema__")? {
+            let capsule: &PyCapsule =
+                PyTryInto::try_into(value.getattr("__arrow_c_schema__")?.call0()?)?;
+            validate_pycapsule(capsule, "arrow_schema")?;
+
+            let schema_ptr = unsafe { capsule.reference::<FFI_ArrowSchema>() };
+            let schema = Schema::try_from(&c_schema).map_err(to_py_err)?;
+            Ok(schema)
+        }
+
         validate_class("Schema", value)?;
 
         let c_schema = FFI_ArrowSchema::empty();
@@ -189,6 +244,29 @@ impl ToPyArrow for Schema {
 
 impl FromPyArrow for ArrayData {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        // Newer versions of PyArrow as well as other libraries with Arrow data implement this
+        // method, so prefer it over _export_to_c.
+        if value.hasattr("__arrow_c_array__")? {
+            let tuple = value.getattr("__arrow_c_array__")?.call0()?;
+
+            if !tuple.is_instance_of::<PyTuple>() {
+                return Err(PyTypeError::new_err(
+                    "Expected __arrow_c_array__ to return a tuple.",
+                ));
+            }
+
+            let schema_capsule: &PyCapsule = PyTryInto::try_into(tuple.get_item(0)?)?;
+            let array_capsule: &PyCapsule = PyTryInto::try_into(tuple.get_item(1)?)?;
+
+            validate_pycapsule(schema_capsule, "arrow_schema")?;
+            validate_pycapsule(array_capsule, "arrow_array")?;
+
+            let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
+            let array_ptr = unsafe { array_capsule.reference::<FFI_ArrowArray>() };
+
+            ffi::from_ffi(array_ptr.copy(), schema_ptr).map_err(to_py_err)
+        }
+
         validate_class("Array", value)?;
 
         // prepare a pointer to receive the Array struct
