@@ -142,6 +142,7 @@ impl FromPyArrow for DataType {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
+        // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
         if value.hasattr("__arrow_c_schema__")? {
             let capsule: &PyCapsule =
                 PyTryInto::try_into(value.getattr("__arrow_c_schema__")?.call0()?)?;
@@ -177,6 +178,7 @@ impl FromPyArrow for Field {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
+        // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
         if value.hasattr("__arrow_c_schema__")? {
             let capsule: &PyCapsule =
                 PyTryInto::try_into(value.getattr("__arrow_c_schema__")?.call0()?)?;
@@ -212,6 +214,7 @@ impl FromPyArrow for Schema {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
+        // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
         if value.hasattr("__arrow_c_schema__")? {
             let capsule: &PyCapsule =
                 PyTryInto::try_into(value.getattr("__arrow_c_schema__")?.call0()?)?;
@@ -247,6 +250,7 @@ impl FromPyArrow for ArrayData {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
         // method, so prefer it over _export_to_c.
+        // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
         if value.hasattr("__arrow_c_array__")? {
             let tuple = value.getattr("__arrow_c_array__")?.call0()?;
 
