@@ -356,7 +356,6 @@ impl Drop for FFI_ArrowSchema {
 }
 
 unsafe impl Send for FFI_ArrowSchema {}
-unsafe impl Sync for FFI_ArrowSchema {}
 
 impl TryFrom<&FFI_ArrowSchema> for DataType {
     type Error = ArrowError;
