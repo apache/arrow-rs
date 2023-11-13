@@ -243,6 +243,8 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         distinct_count: stats.distinct_count().map(|value| value as i64),
         max_value: None,
         min_value: None,
+        is_max_value_exact: None,
+        is_min_value_exact: None,
     };
 
     // Get min/max if set.
@@ -607,6 +609,8 @@ mod tests {
             distinct_count: None,
             max_value: None,
             min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
         };
 
         from_thrift(Type::INT32, Some(thrift_stats)).unwrap();

@@ -771,6 +771,10 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         .unwrap();
                     get_decimal_256_array_slice(array, indices)
                 }
+                ArrowDataType::Float16 => {
+                    let array = column.as_primitive::<Float16Type>();
+                    get_float_16_array_slice(array, indices)
+                }
                 _ => {
                     return Err(ParquetError::NYI(
                         "Attempting to write an Arrow type that is not yet implemented".to_string(),
@@ -863,6 +867,18 @@ fn get_decimal_256_array_slice(
         let as_be_bytes = array.value(*i).to_be_bytes();
         let resized_value = as_be_bytes[(32 - size)..].to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+    }
+    values
+}
+
+fn get_float_16_array_slice(
+    array: &arrow_array::Float16Array,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    for i in indices {
+        let value = array.value(*i).to_le_bytes().to_vec();
+        values.push(FixedLenByteArray::from(ByteArray::from(value)));
     }
     values
 }

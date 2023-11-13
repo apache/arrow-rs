@@ -356,6 +356,14 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}
+                    (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                        if self.length == 2 => {}
+                    (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
+                        return Err(general_err!(
+                            "FLOAT16 cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(2) field",
+                            self.name
+                        ))
+                    }
                     (a, b) => {
                         return Err(general_err!(
                             "Cannot annotate {:?} from {} for field '{}'",
@@ -1504,6 +1512,41 @@ mod tests {
                 "Parquet error: Invalid FIXED_LEN_BYTE_ARRAY length: -1 for field 'foo'"
             );
         }
+
+        result = Type::primitive_type_builder("foo", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::Float16))
+            .with_length(2)
+            .build();
+        assert!(result.is_ok());
+
+        // Can't be other than FIXED_LEN_BYTE_ARRAY for physical type
+        result = Type::primitive_type_builder("foo", PhysicalType::FLOAT)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::Float16))
+            .with_length(2)
+            .build();
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(
+                format!("{e}"),
+                "Parquet error: Cannot annotate Float16 from FLOAT for field 'foo'"
+            );
+        }
+
+        // Must have length 2
+        result = Type::primitive_type_builder("foo", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::Float16))
+            .with_length(4)
+            .build();
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(
+                format!("{e}"),
+                "Parquet error: FLOAT16 cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(2) field"
+            );
+        }
     }
 
     #[test]
@@ -1981,6 +2024,7 @@ mod tests {
         let message_type = "
     message conversions {
       REQUIRED INT64 id;
+      OPTIONAL FIXED_LEN_BYTE_ARRAY (2) f16 (FLOAT16);
       OPTIONAL group int_array_Array (LIST) {
         REPEATED group list {
           OPTIONAL group element (LIST) {

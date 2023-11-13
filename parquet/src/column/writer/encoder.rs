@@ -16,8 +16,9 @@
 // under the License.
 
 use bytes::Bytes;
+use half::f16;
 
-use crate::basic::{Encoding, Type};
+use crate::basic::{Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
@@ -291,7 +292,7 @@ where
 {
     let first = loop {
         let next = iter.next()?;
-        if !is_nan(next) {
+        if !is_nan(descr, next) {
             break next;
         }
     };
@@ -299,7 +300,7 @@ where
     let mut min = first;
     let mut max = first;
     for val in iter {
-        if is_nan(val) {
+        if is_nan(descr, val) {
             continue;
         }
         if compare_greater(descr, min, val) {
@@ -318,20 +319,26 @@ where
     //
     // For max, it has similar logic but will be written as 0.0
     // (positive zero)
-    let min = replace_zero(min, -0.0);
-    let max = replace_zero(max, 0.0);
+    let min = replace_zero(min, descr, -0.0);
+    let max = replace_zero(max, descr, 0.0);
 
     Some((min, max))
 }
 
 #[inline]
-fn replace_zero<T: ParquetValueType>(val: &T, replace: f32) -> T {
+fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace: f32) -> T {
     match T::PHYSICAL_TYPE {
         Type::FLOAT if f32::from_le_bytes(val.as_bytes().try_into().unwrap()) == 0.0 => {
             T::try_from_le_slice(&f32::to_le_bytes(replace)).unwrap()
         }
         Type::DOUBLE if f64::from_le_bytes(val.as_bytes().try_into().unwrap()) == 0.0 => {
             T::try_from_le_slice(&f64::to_le_bytes(replace as f64)).unwrap()
+        }
+        Type::FIXED_LEN_BYTE_ARRAY
+            if descr.logical_type() == Some(LogicalType::Float16)
+                && f16::from_le_bytes(val.as_bytes().try_into().unwrap()) == f16::NEG_ZERO =>
+        {
+            T::try_from_le_slice(&f16::to_le_bytes(f16::from_f32(replace))).unwrap()
         }
         _ => val.clone(),
     }
