@@ -86,12 +86,8 @@ struct SchemaPrivateData {
     metadata: Option<Vec<u8>>,
 }
 
-/// callback used to drop [FFI_ArrowSchema] when it is exported.
-///
-/// # Safety
-///
-/// Must be passed a valid [FFI_ArrowSchema].
-pub unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
+// callback used to drop [FFI_ArrowSchema] when it is exported.
+unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
     if schema.is_null() {
         return;
     }
