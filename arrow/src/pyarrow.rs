@@ -129,8 +129,8 @@ fn validate_pycapsule(capsule: &PyCapsule, name: &str) -> PyResult<()> {
     let capsule_name = capsule_name.unwrap().to_str()?;
     if capsule_name != name {
         return Err(PyValueError::new_err(format!(
-            "Expected name '{}' in PyCapsule.",
-            name,
+            "Expected name '{}' in PyCapsule, instead got '{}'",
+            name, capsule_name
         )));
     }
 
