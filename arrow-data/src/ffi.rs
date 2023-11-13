@@ -283,6 +283,10 @@ impl FFI_ArrowArray {
         unsafe { self.dictionary.as_ref() }
     }
 
+    /// Create a copy of an existing `FFI_ArrowArray`
+    ///
+    /// As required by the C Data Interface specification, this sets the `release` member of `Self`
+    /// to `None`, but without calling the release callback.
     pub fn copy(&mut self) -> Self {
         let new = Self {
             length: self.length,
