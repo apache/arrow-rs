@@ -243,11 +243,6 @@ pub fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Result<Array
     tmp.consume()
 }
 
-pub fn copy_ffi_array(array: *mut FFI_ArrowArray) -> FFI_ArrowArray {
-    let x = unsafe { array.as_mut().unwrap() };
-    x.copy()
-}
-
 #[derive(Debug)]
 struct ArrowArray<'a> {
     array: &'a FFI_ArrowArray,
