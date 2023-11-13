@@ -282,6 +282,23 @@ impl FFI_ArrowArray {
         // If dictionary is not null should be valid for reads of `Self`
         unsafe { self.dictionary.as_ref() }
     }
+
+    pub fn copy(&mut self) -> Self {
+        let new = Self {
+            length: self.length,
+            null_count: self.null_count,
+            offset: self.offset,
+            n_buffers: self.n_buffers,
+            n_children: self.n_children,
+            buffers: self.buffers,
+            children: self.children,
+            dictionary: self.dictionary,
+            release: self.release,
+            private_data: self.private_data,
+        };
+        self.release = None;
+        new
+    }
 }
 
 #[cfg(test)]
