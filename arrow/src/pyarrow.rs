@@ -263,10 +263,12 @@ impl FromPyArrow for ArrayData {
             validate_pycapsule(array_capsule, "arrow_array")?;
 
             let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
-            let array_ptr = array_capsule.pointer() as *mut FFI_ArrowArray;
-            let array_mut = unsafe { array_ptr.as_mut() };
-
-            let array = std::mem::replace(array_mut.unwrap(), FFI_ArrowArray::empty());
+            let array = unsafe {
+                std::ptr::replace(
+                    array_capsule.pointer() as *mut FFI_ArrowArray,
+                    FFI_ArrowArray::empty(),
+                )
+            };
             return ffi::from_ffi(array, schema_ptr).map_err(to_py_err);
         }
 
