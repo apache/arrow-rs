@@ -645,7 +645,7 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
             self.null_count,
             self.is_min_max_deprecated,
             self.is_min_max_backwards_compatible,
-            self.is_max_value_exact, 
+            self.is_max_value_exact,
             self.is_min_value_exact
         )
     }
