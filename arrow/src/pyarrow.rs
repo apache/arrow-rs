@@ -220,7 +220,7 @@ impl FromPyArrow for Schema {
             validate_pycapsule(capsule, "arrow_schema")?;
 
             let schema_ptr = unsafe { capsule.reference::<FFI_ArrowSchema>() };
-            let schema = Schema::try_from(&c_schema).map_err(to_py_err)?;
+            let schema = Schema::try_from(schema_ptr).map_err(to_py_err)?;
             return Ok(schema);
         }
 
@@ -353,7 +353,7 @@ impl FromPyArrow for RecordBatch {
             let array_data = ffi::from_ffi(ffi_array, schema_ptr).map_err(to_py_err)?;
             let array_ref = make_array(array_data);
 
-            if !matches!(array_ref.data_type(), DataType::Struct) {
+            if !matches!(array_ref.data_type(), DataType::Struct(_)) {
                 return Err(PyTypeError::new_err(
                     "Expected Struct type from __arrow_c_array.",
                 ));
