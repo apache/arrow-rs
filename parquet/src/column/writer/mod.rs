@@ -880,7 +880,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 Statistics::ByteArray(stats) if stats.has_min_max_set() => {
                     let (min, did_truncate_min) = self.truncate_min_value(
                         self.props.statistics_truncate_length(),
-                        stats.min_bytes().clone(),
+                        stats.min_bytes(),
                     );
                     let (max, did_truncate_max) = self.truncate_max_value(
                         self.props.statistics_truncate_length(),
