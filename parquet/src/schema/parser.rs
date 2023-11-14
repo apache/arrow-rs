@@ -823,6 +823,7 @@ mod tests {
             message root {
               optional fixed_len_byte_array(5) f1 (DECIMAL(9, 3));
               optional fixed_len_byte_array (16) f2 (DECIMAL (38, 18));
+              optional fixed_len_byte_array (2) f3 (FLOAT16);
             }
         ";
         let message = parse(schema).unwrap();
@@ -852,6 +853,13 @@ mod tests {
                         .with_length(16)
                         .with_precision(38)
                         .with_scale(18)
+                        .build()
+                        .unwrap(),
+                ),
+                Arc::new(
+                    Type::primitive_type_builder("f3", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                        .with_logical_type(Some(LogicalType::Float16))
+                        .with_length(2)
                         .build()
                         .unwrap(),
                 ),

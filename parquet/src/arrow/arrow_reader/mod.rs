@@ -712,13 +712,14 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
+    use half::f16;
     use num::PrimInt;
     use rand::{thread_rng, Rng, RngCore};
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
-    use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType};
+    use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType, Float16Type};
     use arrow_array::*;
     use arrow_array::{RecordBatch, RecordBatchReader};
     use arrow_buffer::{i256, ArrowNativeType, Buffer};
@@ -922,6 +923,66 @@ mod tests {
             .as_any()
             .downcast_ref::<UInt64Array>()
             .unwrap();
+    }
+
+    #[test]
+    fn test_float16_roundtrip() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("float16", ArrowDataType::Float16, false),
+            Field::new("float16-nullable", ArrowDataType::Float16, true),
+        ]));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None)?;
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float16Array::from_iter_values([
+                    f16::EPSILON,
+                    f16::MIN,
+                    f16::MAX,
+                    f16::NAN,
+                    f16::INFINITY,
+                    f16::NEG_INFINITY,
+                    f16::ONE,
+                    f16::NEG_ONE,
+                    f16::ZERO,
+                    f16::NEG_ZERO,
+                    f16::E,
+                    f16::PI,
+                    f16::FRAC_1_PI,
+                ])),
+                Arc::new(Float16Array::from(vec![
+                    None,
+                    None,
+                    None,
+                    Some(f16::NAN),
+                    Some(f16::INFINITY),
+                    Some(f16::NEG_INFINITY),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(f16::FRAC_1_PI),
+                ])),
+            ],
+        )?;
+
+        writer.write(&original)?;
+        writer.close()?;
+
+        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024)?;
+        let ret = reader.next().unwrap()?;
+        assert_eq!(ret, original);
+
+        // Ensure can be downcast to the correct type
+        ret.column(0).as_primitive::<Float16Type>();
+        ret.column(1).as_primitive::<Float16Type>();
+
+        Ok(())
     }
 
     struct RandFixedLenGen {}
@@ -1253,6 +1314,62 @@ mod tests {
                 assert_eq!(col.value(i), v * 100_i128);
             }
         }
+    }
+
+    #[test]
+    fn test_read_float16_nonzeros_file() {
+        use arrow_array::Float16Array;
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // see https://github.com/apache/parquet-testing/pull/40
+        let path = format!("{testdata}/float16_nonzeros_and_nans.parquet");
+        let file = File::open(path).unwrap();
+        let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
+
+        let batch = record_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 8);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .unwrap();
+
+        let f16_two = f16::ONE + f16::ONE;
+
+        assert_eq!(col.null_count(), 1);
+        assert!(col.is_null(0));
+        assert_eq!(col.value(1), f16::ONE);
+        assert_eq!(col.value(2), -f16_two);
+        assert!(col.value(3).is_nan());
+        assert_eq!(col.value(4), f16::ZERO);
+        assert!(col.value(4).is_sign_positive());
+        assert_eq!(col.value(5), f16::NEG_ONE);
+        assert_eq!(col.value(6), f16::NEG_ZERO);
+        assert!(col.value(6).is_sign_negative());
+        assert_eq!(col.value(7), f16_two);
+    }
+
+    #[test]
+    fn test_read_float16_zeros_file() {
+        use arrow_array::Float16Array;
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // see https://github.com/apache/parquet-testing/pull/40
+        let path = format!("{testdata}/float16_zeros_and_nans.parquet");
+        let file = File::open(path).unwrap();
+        let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
+
+        let batch = record_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .unwrap();
+
+        assert_eq!(col.null_count(), 1);
+        assert!(col.is_null(0));
+        assert_eq!(col.value(1), f16::ZERO);
+        assert!(col.value(1).is_sign_positive());
+        assert!(col.value(2).is_nan());
     }
 
     /// Parameters for single_column_reader_test
