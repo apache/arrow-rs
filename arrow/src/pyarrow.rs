@@ -406,7 +406,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
             let stream_reader = ArrowArrayStreamReader::try_new(stream)
                 .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
-            return Ok(stream);
+            return Ok(stream_reader);
         }
 
         validate_class("RecordBatchReader", value)?;
