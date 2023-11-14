@@ -376,7 +376,15 @@ mod tests {
             encoding: Encoding::PLAIN,
             def_level_encoding: Encoding::RLE,
             rep_level_encoding: Encoding::RLE,
-            statistics: Some(Statistics::int32(Some(1), Some(2), None, 1, true)),
+            statistics: Some(Statistics::int32(
+                Some(1),
+                Some(2),
+                None,
+                1,
+                true,
+                true,
+                true,
+            )),
         };
         assert_eq!(data_page.page_type(), PageType::DATA_PAGE);
         assert_eq!(data_page.buffer(), vec![0, 1, 2].as_slice());
@@ -384,7 +392,15 @@ mod tests {
         assert_eq!(data_page.encoding(), Encoding::PLAIN);
         assert_eq!(
             data_page.statistics(),
-            Some(&Statistics::int32(Some(1), Some(2), None, 1, true))
+            Some(&Statistics::int32(
+                Some(1),
+                Some(2),
+                None,
+                1,
+                true,
+                true,
+                true
+            ))
         );
 
         let data_page_v2 = Page::DataPageV2 {
@@ -396,7 +412,15 @@ mod tests {
             def_levels_byte_len: 30,
             rep_levels_byte_len: 40,
             is_compressed: false,
-            statistics: Some(Statistics::int32(Some(1), Some(2), None, 1, true)),
+            statistics: Some(Statistics::int32(
+                Some(1),
+                Some(2),
+                None,
+                1,
+                true,
+                true,
+                true,
+            )),
         };
         assert_eq!(data_page_v2.page_type(), PageType::DATA_PAGE_V2);
         assert_eq!(data_page_v2.buffer(), vec![0, 1, 2].as_slice());
@@ -404,7 +428,15 @@ mod tests {
         assert_eq!(data_page_v2.encoding(), Encoding::PLAIN);
         assert_eq!(
             data_page_v2.statistics(),
-            Some(&Statistics::int32(Some(1), Some(2), None, 1, true))
+            Some(&Statistics::int32(
+                Some(1),
+                Some(2),
+                None,
+                1,
+                true,
+                true,
+                true
+            ))
         );
 
         let dict_page = Page::DictionaryPage {
@@ -428,7 +460,15 @@ mod tests {
             encoding: Encoding::PLAIN,
             def_level_encoding: Encoding::RLE,
             rep_level_encoding: Encoding::RLE,
-            statistics: Some(Statistics::int32(Some(1), Some(2), None, 1, true)),
+            statistics: Some(Statistics::int32(
+                Some(1),
+                Some(2),
+                None,
+                1,
+                true,
+                true,
+                true,
+            )),
         };
 
         let cpage = CompressedPage::new(data_page, 5);

@@ -663,10 +663,13 @@ pub struct Statistics {
   /// arrays do not include a length prefix.
   pub max_value: Option<Vec<u8>>,
   pub min_value: Option<Vec<u8>>,
+
+  pub is_max_value_exact: Option<bool>,
+  pub is_min_value_exact: Option<bool>,
 }
 
 impl Statistics {
-  pub fn new<F1, F2, F3, F4, F5, F6>(max: F1, min: F2, null_count: F3, distinct_count: F4, max_value: F5, min_value: F6) -> Statistics where F1: Into<Option<Vec<u8>>>, F2: Into<Option<Vec<u8>>>, F3: Into<Option<i64>>, F4: Into<Option<i64>>, F5: Into<Option<Vec<u8>>>, F6: Into<Option<Vec<u8>>> {
+  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8>(max: F1, min: F2, null_count: F3, distinct_count: F4, max_value: F5, min_value: F6, is_max_value_exact : F7, is_min_value_exact: F8) -> Statistics where F1: Into<Option<Vec<u8>>>, F2: Into<Option<Vec<u8>>>, F3: Into<Option<i64>>, F4: Into<Option<i64>>, F5: Into<Option<Vec<u8>>>, F6: Into<Option<Vec<u8>>>, F7: Into<Option<bool>>, F8: Into<Option<bool>> {
     Statistics {
       max: max.into(),
       min: min.into(),
@@ -674,6 +677,8 @@ impl Statistics {
       distinct_count: distinct_count.into(),
       max_value: max_value.into(),
       min_value: min_value.into(),
+      is_max_value_exact : is_max_value_exact.into(),
+      is_min_value_exact : is_min_value_exact.into(),
     }
   }
 }
@@ -687,6 +692,8 @@ impl crate::thrift::TSerializable for Statistics {
     let mut f_4: Option<i64> = None;
     let mut f_5: Option<Vec<u8>> = None;
     let mut f_6: Option<Vec<u8>> = None;
+    let mut f_7: Option<bool> = None;
+    let mut f_8: Option<bool> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -718,6 +725,14 @@ impl crate::thrift::TSerializable for Statistics {
           let val = i_prot.read_bytes()?;
           f_6 = Some(val);
         },
+        7 => {
+          let val = i_prot.read_bool()?;
+          f_7 = Some(val);
+        }
+        8 => {
+          let val = i_prot.read_bool()?;
+          f_8 = Some(val)
+        }
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -732,6 +747,8 @@ impl crate::thrift::TSerializable for Statistics {
       distinct_count: f_4,
       max_value: f_5,
       min_value: f_6,
+      is_max_value_exact: f_7,
+      is_min_value_exact: f_8
     };
     Ok(ret)
   }
@@ -766,6 +783,16 @@ impl crate::thrift::TSerializable for Statistics {
     if let Some(ref fld_var) = self.min_value {
       o_prot.write_field_begin(&TFieldIdentifier::new("min_value", TType::String, 6))?;
       o_prot.write_bytes(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.is_max_value_exact {
+      o_prot.write_field_begin(&TFieldIdentifier::new("is_max_value_exact", TType::Bool, 7))?;
+      o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.is_min_value_exact {
+      o_prot.write_field_begin(&TFieldIdentifier::new("is_min_value_exact", TType::Bool, 8))?;
+      o_prot.write_bool(fld_var)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;

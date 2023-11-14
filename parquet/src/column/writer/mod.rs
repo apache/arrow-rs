@@ -700,6 +700,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     None,
                     self.page_metrics.num_page_nulls,
                     false,
+                    true,
+                    true,
                 ))
             }
             _ => None,
@@ -861,6 +863,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 self.column_metrics.column_distinct_count,
                 self.column_metrics.num_column_nulls,
                 false,
+                true,
+                true,
             );
 
             // Some common readers only support the deprecated statistics
