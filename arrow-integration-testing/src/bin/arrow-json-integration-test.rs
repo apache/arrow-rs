@@ -15,16 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field};
-use arrow::datatypes::{Fields, Schema};
 use arrow::error::{ArrowError, Result};
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::FileWriter;
 use arrow_integration_test::*;
-use arrow_integration_testing::read_json_file;
+use arrow_integration_testing::{canonicalize_schema, read_json_file};
 use clap::Parser;
 use std::fs::File;
-use std::sync::Arc;
 
 #[derive(clap::ValueEnum, Debug, Clone)]
 #[clap(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -111,42 +108,6 @@ fn arrow_to_json(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()>
     serde_json::to_writer(&json_file, &arrow_json).unwrap();
 
     Ok(())
-}
-
-fn canonicalize_schema(schema: &Schema) -> Schema {
-    let fields = schema
-        .fields()
-        .iter()
-        .map(|field| match field.data_type() {
-            DataType::Map(child_field, sorted) => match child_field.data_type() {
-                DataType::Struct(fields) if fields.len() == 2 => {
-                    let first_field = fields.get(0).unwrap();
-                    let key_field =
-                        Arc::new(Field::new("key", first_field.data_type().clone(), false));
-                    let second_field = fields.get(1).unwrap();
-                    let value_field = Arc::new(Field::new(
-                        "value",
-                        second_field.data_type().clone(),
-                        second_field.is_nullable(),
-                    ));
-
-                    let fields = Fields::from([key_field, value_field]);
-                    let struct_type = DataType::Struct(fields);
-                    let child_field = Field::new("entries", struct_type, false);
-
-                    Arc::new(Field::new(
-                        field.name().as_str(),
-                        DataType::Map(Arc::new(child_field), *sorted),
-                        field.is_nullable(),
-                    ))
-                }
-                _ => panic!("The child field of Map type should be Struct type with 2 fields."),
-            },
-            _ => field.clone(),
-        })
-        .collect::<Fields>();
-
-    Schema::new(fields).with_metadata(schema.metadata().clone())
 }
 
 fn validate(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()> {

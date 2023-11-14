@@ -27,11 +27,14 @@ edition = { workspace = true }
 publish = false
 rust-version = { workspace = true }
 
+[lib]
+crate-type = ["lib", "cdylib"]
+
 [features]
 logging = ["tracing-subscriber"]
 
 [dependencies]
-arrow = { path = "../arrow", default-features = false, features = ["test_utils", "ipc", "ipc_compression", "json"] }
+arrow = { path = "../arrow", default-features = false, features = ["test_utils", "ipc", "ipc_compression", "json", "ffi"] }
 arrow-flight = { path = "../arrow-flight", default-features = false }
 arrow-buffer = { path = "../arrow-buffer", default-features = false }
 arrow-integration-test = { path = "../arrow-integration-test", default-features = false }
