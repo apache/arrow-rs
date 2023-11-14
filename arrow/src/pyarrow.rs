@@ -400,7 +400,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
                 PyTryInto::try_into(value.getattr("__arrow_c_stream__")?.call0()?)?;
             validate_pycapsule(capsule, "arrow_array_stream")?;
 
-            let stream_ptr = array_capsule.pointer() as *mut FFI_ArrowArrayStream;
+            let stream_ptr = capsule.pointer() as *mut FFI_ArrowArrayStream;
             let stream = unsafe { std::ptr::replace(stream_ptr, FFI_ArrowArrayStream::empty()) };
 
             let stream_reader = ArrowArrayStreamReader::try_new(stream)
