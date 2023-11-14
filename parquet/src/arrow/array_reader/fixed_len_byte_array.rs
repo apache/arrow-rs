@@ -27,13 +27,14 @@ use crate::column::reader::decoder::{ColumnValueDecoder, ValuesBufferSlice};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray,
+    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
     IntervalDayTimeArray, IntervalYearMonthArray,
 };
 use arrow_buffer::{i256, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
+use half::f16;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -84,6 +85,14 @@ pub fn make_fixed_len_byte_array_reader(
                 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
                 return Err(general_err!(
                     "interval type must consist of 12 bytes got {}",
+                    byte_length
+                ));
+            }
+        }
+        ArrowType::Float16 => {
+            if byte_length != 2 {
+                return Err(general_err!(
+                    "float 16 type must be 2 bytes, got {}",
                     byte_length
                 ));
             }
@@ -208,6 +217,12 @@ impl ArrayReader for FixedLenByteArrayReader {
                     }
                 }
             }
+            ArrowType::Float16 => Arc::new(
+                binary
+                    .iter()
+                    .map(|o| o.map(|b| f16::from_le_bytes(b[..2].try_into().unwrap())))
+                    .collect::<Float16Array>(),
+            ) as ArrayRef,
             _ => Arc::new(binary) as ArrayRef,
         };
 
