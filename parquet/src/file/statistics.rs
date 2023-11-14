@@ -578,12 +578,12 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     }
 
     /// Returns optional value of number of distinct values occurring.
-    fn distinct_count(&self) -> Option<u64> {
+    pub fn distinct_count(&self) -> Option<u64> {
         self.distinct_count
     }
 
     /// Returns null count.
-    fn null_count(&self) -> u64 {
+    pub fn null_count(&self) -> u64 {
         self.null_count
     }
 
