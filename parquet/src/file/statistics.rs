@@ -755,11 +755,11 @@ mod tests {
     fn test_statistics_partial_eq() {
         let expected = Statistics::int32(Some(12), Some(45), None, 11, true);
 
-        assert!(Statistics::int32(Some(12), Some(45), None, 11, true,) == expected);
-        assert!(Statistics::int32(Some(11), Some(45), None, 11, true,) != expected);
-        assert!(Statistics::int32(Some(12), Some(44), None, 11, true,) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, 23, true,) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, 11, false,) != expected);
+        assert!(Statistics::int32(Some(12), Some(45), None, 11, true) == expected);
+        assert!(Statistics::int32(Some(11), Some(45), None, 11, true) != expected);
+        assert!(Statistics::int32(Some(12), Some(44), None, 11, true) != expected);
+        assert!(Statistics::int32(Some(12), Some(45), None, 23, true) != expected);
+        assert!(Statistics::int32(Some(12), Some(45), None, 11, false) != expected);
 
         assert!(
             Statistics::int32(Some(12), Some(45), None, 11, false)
@@ -777,7 +777,7 @@ mod tests {
                 Some(ByteArray::from(vec![1, 2, 3])),
                 None,
                 0,
-                true,
+                true
             ) != Statistics::fixed_len_byte_array(
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 Some(ByteArray::from(vec![1, 2, 3]).into()),

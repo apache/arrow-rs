@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(data_page.encoding(), Encoding::PLAIN);
         assert_eq!(
             data_page.statistics(),
-            Some(&Statistics::int32(Some(1), Some(2), None, 1, true,))
+            Some(&Statistics::int32(Some(1), Some(2), None, 1, true))
         );
 
         let data_page_v2 = Page::DataPageV2 {
@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(data_page_v2.encoding(), Encoding::PLAIN);
         assert_eq!(
             data_page_v2.statistics(),
-            Some(&Statistics::int32(Some(1), Some(2), None, 1, true,))
+            Some(&Statistics::int32(Some(1), Some(2), None, 1, true))
         );
 
         let dict_page = Page::DictionaryPage {
