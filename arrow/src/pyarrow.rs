@@ -55,7 +55,6 @@
 //! [pyarrow.Table.to_reader()](https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table.to_reader)
 //! and then importing the reader as a [ArrowArrayStreamReader].
 
-use std::borrow::BorrowMut;
 use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
@@ -150,7 +149,7 @@ impl FromPyArrow for DataType {
 
             let schema_ptr = unsafe { capsule.reference::<FFI_ArrowSchema>() };
             let dtype = DataType::try_from(schema_ptr).map_err(to_py_err)?;
-            Ok(dtype)
+            return Ok(dtype);
         }
 
         validate_class("DataType", value)?;
@@ -186,7 +185,7 @@ impl FromPyArrow for Field {
 
             let schema_ptr = unsafe { capsule.reference::<FFI_ArrowSchema>() };
             let field = Field::try_from(schema_ptr).map_err(to_py_err)?;
-            Ok(field)
+            return Ok(field);
         }
 
         validate_class("Field", value)?;
@@ -222,7 +221,7 @@ impl FromPyArrow for Schema {
 
             let schema_ptr = unsafe { capsule.reference::<FFI_ArrowSchema>() };
             let schema = Schema::try_from(&c_schema).map_err(to_py_err)?;
-            Ok(schema)
+            return Ok(schema);
         }
 
         validate_class("Schema", value)?;
