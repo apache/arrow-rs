@@ -709,8 +709,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     None,
                     self.page_metrics.num_page_nulls,
                     false,
-                    true,
-                    true,
                 ))
             }
             _ => None,
@@ -874,8 +872,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 self.column_metrics.column_distinct_count,
                 self.column_metrics.num_column_nulls,
                 false,
-                true,
-                true,
             )
             .with_backwards_compatible_min_max(backwards_compatible_min_max)
             .into();
@@ -890,14 +886,16 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         self.props.statistics_truncate_length(),
                         stats.max_bytes(),
                     );
-                    Statistics::byte_array(
-                        Some(min.into()),
-                        Some(max.into()),
-                        stats.distinct_count(),
-                        stats.null_count(),
-                        backwards_compatible_min_max,
-                        !did_truncate_max,
-                        !did_truncate_min,
+                    Statistics::ByteArray(
+                        ValueStatistics::new(
+                            Some(min.into()),
+                            Some(max.into()),
+                            stats.distinct_count(),
+                            stats.null_count(),
+                            backwards_compatible_min_max,
+                        )
+                        .with_max_is_exact(!did_truncate_max)
+                        .with_min_is_exact(!did_truncate_min),
                     )
                 }
                 Statistics::FixedLenByteArray(stats) if stats.has_min_max_set() => {
@@ -909,14 +907,16 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         self.props.statistics_truncate_length(),
                         stats.max_bytes(),
                     );
-                    Statistics::fixed_len_byte_array(
-                        Some(min.into()),
-                        Some(max.into()),
-                        stats.distinct_count(),
-                        stats.null_count(),
-                        backwards_compatible_min_max,
-                        !did_truncate_max,
-                        !did_truncate_min,
+                    Statistics::FixedLenByteArray(
+                        ValueStatistics::new(
+                            Some(min.into()),
+                            Some(max.into()),
+                            stats.distinct_count(),
+                            stats.null_count(),
+                            backwards_compatible_min_max,
+                        )
+                        .with_max_is_exact(!did_truncate_max)
+                        .with_min_is_exact(!did_truncate_min),
                     )
                 }
                 stats => stats,

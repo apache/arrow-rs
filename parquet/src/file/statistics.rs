@@ -23,7 +23,7 @@
 //! ```rust
 //! use parquet::file::statistics::Statistics;
 //!
-//! let stats = Statistics::int32(Some(1), Some(10), None, 3, true, true, true);
+//! let stats = Statistics::int32(Some(1), Some(10), None, 3, true);
 //! assert_eq!(stats.null_count(), 3);
 //! assert!(stats.has_min_max_set());
 //! assert!(stats.is_min_max_deprecated());
@@ -90,8 +90,6 @@ macro_rules! statistics_new_func {
             distinct: Option<u64>,
             nulls: u64,
             is_deprecated: bool,
-            is_max_value_exact: bool,
-            is_min_value_exact: bool,
         ) -> Self {
             Statistics::$stat(ValueStatistics::new(
                 min,
@@ -99,8 +97,6 @@ macro_rules! statistics_new_func {
                 distinct,
                 nulls,
                 is_deprecated,
-                is_max_value_exact,
-                is_min_value_exact,
             ))
         }
     };
@@ -158,12 +154,6 @@ pub fn from_thrift(
                 stats.max_value
             };
 
-            // Whether or not the min/max values are exact. Due to pre-existing truncation
-            // in other libraries such as parquet-mr, we can't assume that any given parquet file
-            // has exact statistics unless it's explicitly set.
-            let is_max_value_exact = stats.is_max_value_exact.unwrap_or(false);
-            let is_min_value_exact = stats.is_min_value_exact.unwrap_or(false);
-
             // Values are encoded using PLAIN encoding definition, except that
             // variable-length byte arrays do not include a length prefix.
             //
@@ -175,8 +165,6 @@ pub fn from_thrift(
                     distinct_count,
                     null_count,
                     old_format,
-                    is_max_value_exact,
-                    is_min_value_exact,
                 ),
                 Type::INT32 => Statistics::int32(
                     min.map(|data| i32::from_le_bytes(data[..4].try_into().unwrap())),
@@ -184,8 +172,6 @@ pub fn from_thrift(
                     distinct_count,
                     null_count,
                     old_format,
-                    is_max_value_exact,
-                    is_min_value_exact,
                 ),
                 Type::INT64 => Statistics::int64(
                     min.map(|data| i64::from_le_bytes(data[..8].try_into().unwrap())),
@@ -193,8 +179,6 @@ pub fn from_thrift(
                     distinct_count,
                     null_count,
                     old_format,
-                    is_max_value_exact,
-                    is_min_value_exact,
                 ),
                 Type::INT96 => {
                     // INT96 statistics may not be correct, because comparison is signed
@@ -208,15 +192,7 @@ pub fn from_thrift(
                         assert_eq!(data.len(), 12);
                         from_le_slice::<Int96>(&data)
                     });
-                    Statistics::int96(
-                        min,
-                        max,
-                        distinct_count,
-                        null_count,
-                        old_format,
-                        is_max_value_exact,
-                        is_min_value_exact,
-                    )
+                    Statistics::int96(min, max, distinct_count, null_count, old_format)
                 }
                 Type::FLOAT => Statistics::float(
                     min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
@@ -224,8 +200,6 @@ pub fn from_thrift(
                     distinct_count,
                     null_count,
                     old_format,
-                    is_max_value_exact,
-                    is_min_value_exact,
                 ),
                 Type::DOUBLE => Statistics::double(
                     min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
@@ -233,26 +207,28 @@ pub fn from_thrift(
                     distinct_count,
                     null_count,
                     old_format,
-                    is_max_value_exact,
-                    is_min_value_exact,
                 ),
-                Type::BYTE_ARRAY => Statistics::byte_array(
-                    min.map(ByteArray::from),
-                    max.map(ByteArray::from),
-                    distinct_count,
-                    null_count,
-                    old_format,
-                    is_max_value_exact,
-                    is_min_value_exact,
+                Type::BYTE_ARRAY => Statistics::ByteArray(
+                    ValueStatistics::new(
+                        min.map(ByteArray::from),
+                        max.map(ByteArray::from),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
+                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
-                Type::FIXED_LEN_BYTE_ARRAY => Statistics::fixed_len_byte_array(
-                    min.map(ByteArray::from).map(FixedLenByteArray::from),
-                    max.map(ByteArray::from).map(FixedLenByteArray::from),
-                    distinct_count,
-                    null_count,
-                    old_format,
-                    is_max_value_exact,
-                    is_min_value_exact,
+                Type::FIXED_LEN_BYTE_ARRAY => Statistics::FixedLenByteArray(
+                    ValueStatistics::new(
+                        min.map(ByteArray::from).map(FixedLenByteArray::from),
+                        max.map(ByteArray::from).map(FixedLenByteArray::from),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
+                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
             };
 
@@ -336,8 +312,6 @@ impl Statistics {
         distinct_count: Option<u64>,
         null_count: u64,
         is_deprecated: bool,
-        is_max_value_exact: bool,
-        is_min_value_exact: bool,
     ) -> Self {
         Self::from(ValueStatistics::new(
             min,
@@ -345,8 +319,6 @@ impl Statistics {
             distinct_count,
             null_count,
             is_deprecated,
-            is_min_value_exact,
-            is_max_value_exact,
         ))
     }
 
@@ -502,18 +474,38 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         distinct_count: Option<u64>,
         null_count: u64,
         is_min_max_deprecated: bool,
-        is_max_value_exact: bool,
-        is_min_value_exact: bool,
     ) -> Self {
         Self {
+            is_max_value_exact: max.is_some(),
+            is_min_value_exact: min.is_some(),
             min,
             max,
             distinct_count,
             null_count,
             is_min_max_deprecated,
             is_min_max_backwards_compatible: is_min_max_deprecated,
-            is_max_value_exact,
+        }
+    }
+
+    /// Set whether the stored `min` field represents the exact
+    /// minimum, or just a bound on the minimum value.
+    ///
+    /// see [`Self::min_is_exact`]
+    pub fn with_min_is_exact(self, is_min_value_exact: bool) -> Self {
+        Self {
             is_min_value_exact,
+            ..self
+        }
+    }
+
+    /// Set whether the stored `max` field represents the exact
+    /// maximum, or just a bound on the maximum value.
+    ///
+    /// see [`Self::max_is_exact`]
+    pub fn with_max_is_exact(self, is_max_value_exact: bool) -> Self {
+        Self {
+            is_max_value_exact,
+            ..self
         }
     }
 
@@ -657,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_statistics_min_max_bytes() {
-        let stats = Statistics::int32(Some(-123), Some(234), None, 1, false, true, true);
+        let stats = Statistics::int32(Some(-123), Some(234), None, 1, false);
         assert!(stats.has_min_max_set());
         assert_eq!(stats.min_bytes(), (-123).as_bytes());
         assert_eq!(stats.max_bytes(), 234.as_bytes());
@@ -667,8 +659,6 @@ mod tests {
             Some(ByteArray::from(vec![3, 4, 5])),
             None,
             1,
-            true,
-            true,
             true,
         );
         assert!(stats.has_min_max_set());
@@ -701,14 +691,14 @@ mod tests {
 
     #[test]
     fn test_statistics_debug() {
-        let stats = Statistics::int32(Some(1), Some(12), None, 12, true, true, true);
+        let stats = Statistics::int32(Some(1), Some(12), None, 12, true);
         assert_eq!(
             format!("{stats:?}"),
             "Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: 12, \
              min_max_deprecated: true, min_max_backwards_compatible: true, max_value_exact: true, min_value_exact: true})"
         );
 
-        let stats = Statistics::int32(None, None, None, 7, false, false, false);
+        let stats = Statistics::int32(None, None, None, 7, false);
         assert_eq!(
             format!("{stats:?}"),
             "Int32({min: None, max: None, distinct_count: None, null_count: 7, \
@@ -718,13 +708,13 @@ mod tests {
 
     #[test]
     fn test_statistics_display() {
-        let stats = Statistics::int32(Some(1), Some(12), None, 12, true, true, true);
+        let stats = Statistics::int32(Some(1), Some(12), None, 12, true);
         assert_eq!(
             format!("{stats}"),
             "{min: 1, max: 12, distinct_count: N/A, null_count: 12, min_max_deprecated: true, max_value_exact: true, min_value_exact: true}"
         );
 
-        let stats = Statistics::int64(None, None, None, 7, false, false, false);
+        let stats = Statistics::int64(None, None, None, 7, false);
         assert_eq!(
             format!("{stats}"),
             "{min: N/A, max: N/A, distinct_count: N/A, null_count: 7, min_max_deprecated: \
@@ -737,8 +727,6 @@ mod tests {
             None,
             3,
             true,
-            true,
-            true,
         );
         assert_eq!(
             format!("{stats}"),
@@ -746,14 +734,16 @@ mod tests {
              min_max_deprecated: true, max_value_exact: true, min_value_exact: true}"
         );
 
-        let stats = Statistics::byte_array(
-            Some(ByteArray::from(vec![1u8])),
-            Some(ByteArray::from(vec![2u8])),
-            Some(5),
-            7,
-            false,
-            false,
-            false,
+        let stats = Statistics::ByteArray(
+            ValueStatistics::new(
+                Some(ByteArray::from(vec![1u8])),
+                Some(ByteArray::from(vec![2u8])),
+                Some(5),
+                7,
+                false,
+            )
+            .with_max_is_exact(false)
+            .with_min_is_exact(false),
         );
         assert_eq!(
             format!("{stats}"),
@@ -763,24 +753,22 @@ mod tests {
 
     #[test]
     fn test_statistics_partial_eq() {
-        let expected = Statistics::int32(Some(12), Some(45), None, 11, true, true, true);
+        let expected = Statistics::int32(Some(12), Some(45), None, 11, true);
 
-        assert!(Statistics::int32(Some(12), Some(45), None, 11, true, true, true) == expected);
-        assert!(Statistics::int32(Some(11), Some(45), None, 11, true, true, true) != expected);
-        assert!(Statistics::int32(Some(12), Some(44), None, 11, true, true, true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, 23, true, true, true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, 11, false, true, true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, 11, true, false, true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, 11, true, true, false) != expected);
+        assert!(Statistics::int32(Some(12), Some(45), None, 11, true,) == expected);
+        assert!(Statistics::int32(Some(11), Some(45), None, 11, true,) != expected);
+        assert!(Statistics::int32(Some(12), Some(44), None, 11, true,) != expected);
+        assert!(Statistics::int32(Some(12), Some(45), None, 23, true,) != expected);
+        assert!(Statistics::int32(Some(12), Some(45), None, 11, false,) != expected);
 
         assert!(
-            Statistics::int32(Some(12), Some(45), None, 11, false, true, true)
-                != Statistics::int64(Some(12), Some(45), None, 11, false, true, true)
+            Statistics::int32(Some(12), Some(45), None, 11, false)
+                != Statistics::int64(Some(12), Some(45), None, 11, false)
         );
 
         assert!(
-            Statistics::boolean(Some(false), Some(true), None, 0, true, true, true)
-                != Statistics::double(Some(1.2), Some(4.5), None, 0, true, true, true)
+            Statistics::boolean(Some(false), Some(true), None, 0, true)
+                != Statistics::double(Some(1.2), Some(4.5), None, 0, true)
         );
 
         assert!(
@@ -790,16 +778,50 @@ mod tests {
                 None,
                 0,
                 true,
-                true,
-                true
             ) != Statistics::fixed_len_byte_array(
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 None,
                 0,
                 true,
+            )
+        );
+
+        assert!(
+            Statistics::byte_array(
+                Some(ByteArray::from(vec![1, 2, 3])),
+                Some(ByteArray::from(vec![1, 2, 3])),
+                None,
+                0,
                 true,
-                true
+            ) != Statistics::ByteArray(
+                ValueStatistics::new(
+                    Some(ByteArray::from(vec![1, 2, 3])),
+                    Some(ByteArray::from(vec![1, 2, 3])),
+                    None,
+                    0,
+                    true,
+                )
+                .with_max_is_exact(false)
+            )
+        );
+
+        assert!(
+            Statistics::fixed_len_byte_array(
+                Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                None,
+                0,
+                true,
+            ) != Statistics::FixedLenByteArray(
+                ValueStatistics::new(
+                    Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                    Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                    None,
+                    0,
+                    true,
+                )
+                .with_min_is_exact(false)
             )
         );
     }
@@ -813,132 +835,28 @@ mod tests {
             assert_eq!(from_thrift(tpe, thrift_stats).unwrap(), Some(stats));
         }
 
-        check_stats(Statistics::boolean(
-            Some(false),
-            Some(true),
-            None,
-            7,
-            true,
-            true,
-            true,
-        ));
-        check_stats(Statistics::boolean(
-            Some(false),
-            Some(true),
-            None,
-            7,
-            true,
-            true,
-            true,
-        ));
-        check_stats(Statistics::boolean(
-            Some(false),
-            Some(true),
-            None,
-            0,
-            false,
-            true,
-            true,
-        ));
-        check_stats(Statistics::boolean(
-            Some(true),
-            Some(true),
-            None,
-            7,
-            true,
-            true,
-            true,
-        ));
-        check_stats(Statistics::boolean(
-            Some(false),
-            Some(false),
-            None,
-            7,
-            true,
-            true,
-            true,
-        ));
-        check_stats(Statistics::boolean(None, None, None, 7, true, false, false));
+        check_stats(Statistics::boolean(Some(false), Some(true), None, 7, true));
+        check_stats(Statistics::boolean(Some(false), Some(true), None, 7, true));
+        check_stats(Statistics::boolean(Some(false), Some(true), None, 0, false));
+        check_stats(Statistics::boolean(Some(true), Some(true), None, 7, true));
+        check_stats(Statistics::boolean(Some(false), Some(false), None, 7, true));
+        check_stats(Statistics::boolean(None, None, None, 7, true));
 
-        check_stats(Statistics::int32(
-            Some(-100),
-            Some(500),
-            None,
-            7,
-            true,
-            true,
-            true,
-        ));
-        check_stats(Statistics::int32(
-            Some(-100),
-            Some(500),
-            None,
-            0,
-            false,
-            true,
-            true,
-        ));
-        check_stats(Statistics::int32(None, None, None, 7, true, false, false));
+        check_stats(Statistics::int32(Some(-100), Some(500), None, 7, true));
+        check_stats(Statistics::int32(Some(-100), Some(500), None, 0, false));
+        check_stats(Statistics::int32(None, None, None, 7, true));
 
-        check_stats(Statistics::int64(
-            Some(-100),
-            Some(200),
-            None,
-            7,
-            true,
-            true,
-            true,
-        ));
-        check_stats(Statistics::int64(
-            Some(-100),
-            Some(200),
-            None,
-            0,
-            false,
-            true,
-            true,
-        ));
-        check_stats(Statistics::int64(None, None, None, 7, true, false, false));
+        check_stats(Statistics::int64(Some(-100), Some(200), None, 7, true));
+        check_stats(Statistics::int64(Some(-100), Some(200), None, 0, false));
+        check_stats(Statistics::int64(None, None, None, 7, true));
 
-        check_stats(Statistics::float(
-            Some(1.2),
-            Some(3.4),
-            None,
-            7,
-            true,
-            true,
-            true,
-        ));
-        check_stats(Statistics::float(
-            Some(1.2),
-            Some(3.4),
-            None,
-            0,
-            false,
-            true,
-            true,
-        ));
-        check_stats(Statistics::float(None, None, None, 7, true, false, false));
+        check_stats(Statistics::float(Some(1.2), Some(3.4), None, 7, true));
+        check_stats(Statistics::float(Some(1.2), Some(3.4), None, 0, false));
+        check_stats(Statistics::float(None, None, None, 7, true));
 
-        check_stats(Statistics::double(
-            Some(1.2),
-            Some(3.4),
-            None,
-            7,
-            true,
-            true,
-            true,
-        ));
-        check_stats(Statistics::double(
-            Some(1.2),
-            Some(3.4),
-            None,
-            0,
-            false,
-            true,
-            true,
-        ));
-        check_stats(Statistics::double(None, None, None, 7, true, false, false));
+        check_stats(Statistics::double(Some(1.2), Some(3.4), None, 7, true));
+        check_stats(Statistics::double(Some(1.2), Some(3.4), None, 0, false));
+        check_stats(Statistics::double(None, None, None, 7, true));
 
         check_stats(Statistics::byte_array(
             Some(ByteArray::from(vec![1, 2, 3])),
@@ -946,12 +864,8 @@ mod tests {
             None,
             7,
             true,
-            true,
-            true,
         ));
-        check_stats(Statistics::byte_array(
-            None, None, None, 7, true, false, false,
-        ));
+        check_stats(Statistics::byte_array(None, None, None, 7, true));
 
         check_stats(Statistics::fixed_len_byte_array(
             Some(ByteArray::from(vec![1, 2, 3]).into()),
@@ -959,11 +873,7 @@ mod tests {
             None,
             7,
             true,
-            true,
-            true,
         ));
-        check_stats(Statistics::fixed_len_byte_array(
-            None, None, None, 7, true, false, false,
-        ));
+        check_stats(Statistics::fixed_len_byte_array(None, None, None, 7, true));
     }
 }
