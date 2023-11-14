@@ -60,7 +60,7 @@ use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 
-use arrow_array::{RecordBatchIterator, RecordBatchReader};
+use arrow_array::{RecordBatchIterator, RecordBatchReader, StructArray};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
@@ -330,6 +330,40 @@ impl<T: ToPyArrow> ToPyArrow for Vec<T> {
 
 impl FromPyArrow for RecordBatch {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        // Newer versions of PyArrow as well as other libraries with Arrow data implement this
+        // method, so prefer it over _export_to_c.
+        // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
+        if value.hasattr("__arrow_c_array__")? {
+            let tuple = value.getattr("__arrow_c_array__")?.call0()?;
+
+            if !tuple.is_instance_of::<PyTuple>() {
+                return Err(PyTypeError::new_err(
+                    "Expected __arrow_c_array__ to return a tuple.",
+                ));
+            }
+
+            let schema_capsule: &PyCapsule = PyTryInto::try_into(tuple.get_item(0)?)?;
+            let array_capsule: &PyCapsule = PyTryInto::try_into(tuple.get_item(1)?)?;
+
+            validate_pycapsule(schema_capsule, "arrow_schema")?;
+            validate_pycapsule(array_capsule, "arrow_array")?;
+
+            let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
+            let array_ptr = array_capsule.pointer() as *mut FFI_ArrowArray;
+            let ffi_array = unsafe { std::ptr::replace(array_ptr, FFI_ArrowArray::empty()) };
+            let array_data = ffi::from_ffi(ffi_array, schema_ptr).map_err(to_py_err)?;
+            let array_ref = make_array(array_data);
+
+            if !matches!(array_ref.data_type(), DataType::Struct) {
+                return Err(PyTypeError::new_err(
+                    "Expected Struct type from __arrow_c_array.",
+                ));
+            }
+
+            let array = array_ref.as_any().downcast_ref::<StructArray>().unwrap();
+            return Ok(array.into());
+        }
+
         validate_class("RecordBatch", value)?;
         // TODO(kszucs): implement the FFI conversions in arrow-rs for RecordBatches
         let schema = value.getattr("schema")?;
@@ -359,6 +393,23 @@ impl ToPyArrow for RecordBatch {
 /// Supports conversion from `pyarrow.RecordBatchReader` to [ArrowArrayStreamReader].
 impl FromPyArrow for ArrowArrayStreamReader {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        // Newer versions of PyArrow as well as other libraries with Arrow data implement this
+        // method, so prefer it over _export_to_c.
+        // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
+        if value.hasattr("__arrow_c_stream__")? {
+            let capsule: &PyCapsule =
+                PyTryInto::try_into(value.getattr("__arrow_c_stream__")?.call0()?)?;
+            validate_pycapsule(capsule, "arrow_array_stream")?;
+
+            let stream_ptr = array_capsule.pointer() as *mut FFI_ArrowArrayStream;
+            let stream = unsafe { std::ptr::replace(stream_ptr, FFI_ArrowArrayStream::empty()) };
+
+            let stream_reader = ArrowArrayStreamReader::try_new(stream)
+                .map_err(|err| PyValueError::new_err(err.to_string()))?;
+
+            return Ok(stream);
+        }
+
         validate_class("RecordBatchReader", value)?;
 
         // prepare a pointer to receive the stream struct
