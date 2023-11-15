@@ -106,6 +106,7 @@ jobs:
     strategy:
       matrix:
         rust: [ stable ]
+        pyarrow: [ "13", "14" ]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -135,7 +136,7 @@ jobs:
         run: |
           virtualenv venv
           source venv/bin/activate
-          pip install maturin toml pytest pytz pyarrow>=5.0
+          pip install maturin toml pytest pytz pyarrow==${{ matrix.pyarrow }}
       - name: Run Rust tests
         run: |
           source venv/bin/activate
