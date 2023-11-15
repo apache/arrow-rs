@@ -51,6 +51,8 @@ pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
 /// Default value for [`BloomFilterProperties::ndv`]
 pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
+/// Default values for [`WriterProperties::statistics_truncate_length`]
+pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = None;
 
 /// Parquet writer version.
 ///
@@ -136,6 +138,7 @@ pub struct WriterProperties {
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
     column_index_truncate_length: Option<usize>,
+    statistics_truncate_length: Option<usize>,
 }
 
 impl Default for WriterProperties {
@@ -241,6 +244,13 @@ impl WriterProperties {
         self.column_index_truncate_length
     }
 
+    /// Returns the maximum length of truncated min/max values in statistics.
+    ///
+    /// `None` if truncation is disabled, must be greater than 0 otherwise.
+    pub fn statistics_truncate_length(&self) -> Option<usize> {
+        self.statistics_truncate_length
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     /// This is not configurable.
     #[inline]
@@ -334,6 +344,7 @@ pub struct WriterPropertiesBuilder {
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
     column_index_truncate_length: Option<usize>,
+    statistics_truncate_length: Option<usize>,
 }
 
 impl WriterPropertiesBuilder {
@@ -352,6 +363,7 @@ impl WriterPropertiesBuilder {
             column_properties: HashMap::new(),
             sorting_columns: None,
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
+            statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
         }
     }
 
@@ -370,6 +382,7 @@ impl WriterPropertiesBuilder {
             column_properties: self.column_properties,
             sorting_columns: self.sorting_columns,
             column_index_truncate_length: self.column_index_truncate_length,
+            statistics_truncate_length: self.statistics_truncate_length,
         }
     }
 
@@ -641,6 +654,17 @@ impl WriterPropertiesBuilder {
         }
 
         self.column_index_truncate_length = max_length;
+        self
+    }
+
+    /// Sets the max length of min/max value fields in statistics. Must be greater than 0.
+    /// If set to `None` - there's no effective limit.
+    pub fn set_statistics_truncate_length(mut self, max_length: Option<usize>) -> Self {
+        if let Some(value) = max_length {
+            assert!(value > 0, "Cannot have a 0 statistics truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+        }
+
+        self.statistics_truncate_length = max_length;
         self
     }
 }
