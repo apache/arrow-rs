@@ -441,12 +441,12 @@ impl<'a> ImportedArrowArray<'a> {
                 data_type: *value_type.clone(),
                 owner: self.owner,
             })),
-            (Some(_), _) => Err(ArrowError::CDataInterface(format!(
-                "Got dictionary in FFI_ArrowArray for non-dictionary data type"
-            ))),
-            (None, DataType::Dictionary(_, _)) => Err(ArrowError::CDataInterface(format!(
-                "Missing dictionary in FFI_ArrowArray for dictionary data type"
-            ))),
+            (Some(_), _) => Err(ArrowError::CDataInterface(
+                "Got dictionary in FFI_ArrowArray for non-dictionary data type".to_string(),
+            )),
+            (None, DataType::Dictionary(_, _)) => Err(ArrowError::CDataInterface(
+                "Missing dictionary in FFI_ArrowArray for dictionary data type".to_string(),
+            )),
             (_, _) => Ok(None),
         }
     }

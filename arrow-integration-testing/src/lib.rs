@@ -113,8 +113,8 @@ fn read_json_file_metadata(json_name: &str) -> Result<PartialArrowFile> {
     }
     Ok(PartialArrowFile {
         schema,
-        dictionaries: dictionaries,
-        arrow_json: arrow_json,
+        dictionaries,
+        arrow_json,
     })
 }
 
@@ -260,9 +260,13 @@ fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>
     }
 }
 
-// Release a const char* exported by result_to_c_error()
+/// Release a const char* exported by result_to_c_error()
+///
+/// # Safety
+///
+/// The pointer is assumed to have been obtained using CString::into_raw.
 #[no_mangle]
-pub extern "C" fn arrow_rs_free_error(c_error: *mut i8) {
+pub unsafe extern "C" fn arrow_rs_free_error(c_error: *mut i8) {
     if !c_error.is_null() {
         drop(unsafe { CString::from_raw(c_error) });
     }
