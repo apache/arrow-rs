@@ -106,6 +106,7 @@ jobs:
     strategy:
       matrix:
         rust: [ stable ]
+        # PyArrow 13 was the last version prior to introduction to Arrow PyCapsules
         pyarrow: [ "13", "14" ]
     steps:
       - uses: actions/checkout@v4
