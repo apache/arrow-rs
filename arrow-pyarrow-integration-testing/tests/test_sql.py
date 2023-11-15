@@ -545,6 +545,25 @@ def test_record_batch_reader_error():
 
 
 @pytest.mark.skipif(PYARROW_PRE_14, reason="requires pyarrow 14")
+def test_record_batch_pycapsule():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    batch = pa.record_batch([[[1], [2, 42]]], schema)
+    wrapped = StreamWrapper(batch)
+    b = rust.round_trip_record_batch_reader(wrapped)
+    new_table = b.read_all()
+    new_batches = new_table.to_batches()
+
+    assert len(new_batches) == 1
+    new_batch = new_batches[0]
+
+    assert batch == new_batch
+    assert batch.schema == new_batch.schema
+
+
+@pytest.mark.skipif(PYARROW_PRE_14, reason="requires pyarrow 14")
 def test_table_pycapsule():
     """
     Python -> Rust -> Python
