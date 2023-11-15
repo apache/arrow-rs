@@ -538,6 +538,26 @@ def test_record_batch_reader_error():
     with pytest.raises(ValueError, match="invalid utf-8"):
         rust.round_trip_record_batch_reader(reader)
 
+
+def test_table_pycapsule():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema),
+        pa.record_batch([[None, [], [5, 6]]], schema),
+    ]
+    table = pa.Table.from_batches(batches)
+    wrapped = StreamWrapper(table)
+    b = rust.round_trip_record_batch_reader(wrapped)
+    new_table = b.read_all()
+
+    assert table.schema == new_table.schema
+    assert table == new_table
+    assert len(table.to_batches()) == len(new_table.to_batches())
+
+
 def test_reject_other_classes():
     # Arbitrary type that is not a PyArrow type
     not_pyarrow = ["hello"]
