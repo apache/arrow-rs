@@ -22,7 +22,7 @@ use serde_json::Value;
 use arrow::array::{Array, StructArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::error::{ArrowError, Result};
-use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+use arrow::ffi::{from_ffi_and_data_type, FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::test_util::arrow_test_data;
 use arrow_integration_test::*;
@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::ffi::{c_int, CStr, CString};
 use std::fs::File;
 use std::io::BufReader;
+use std::iter::zip;
 use std::ptr;
 use std::sync::Arc;
 
@@ -217,6 +218,40 @@ fn cdata_integration_import_schema_and_compare_to_json(
     Ok(())
 }
 
+fn compare_batches(a: &RecordBatch, b: &RecordBatch) -> Result<()> {
+    if a.num_columns() != b.num_columns() {
+        return Err(ArrowError::InvalidArgumentError(
+            "batches do not have the same number of columns".to_string(),
+        ));
+    }
+    for (a_column, b_column) in zip(a.columns(), b.columns()) {
+        if a_column != b_column {
+            return Err(ArrowError::InvalidArgumentError(
+                "batch columns are not the same".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn cdata_integration_import_batch_and_compare_to_json(
+    c_json_name: *const i8,
+    batch_num: c_int,
+    c_array: *mut FFI_ArrowArray,
+) -> Result<()> {
+    let json_name = unsafe { CStr::from_ptr(c_json_name) };
+    let json_batch =
+        read_single_batch_from_json_file(json_name.to_str()?, batch_num.try_into().unwrap())?;
+    let schema = json_batch.schema();
+
+    let imported_array = unsafe { std::ptr::replace(c_array, FFI_ArrowArray::empty()) };
+    let imported_array =
+        from_ffi_and_data_type(imported_array, DataType::Struct(schema.fields.clone()))?;
+    let imported_batch = RecordBatch::from(StructArray::from(imported_array));
+
+    compare_batches(&json_batch, &imported_batch)
+}
+
 // If Result is an error, then export a const char* to its string display, otherwise NULL
 fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>) -> *mut i8 {
     match result {
@@ -245,9 +280,9 @@ pub extern "C" fn arrow_rs_cdata_integration_export_schema_from_json(
 #[no_mangle]
 pub extern "C" fn arrow_rs_cdata_integration_import_schema_and_compare_to_json(
     c_json_name: *const i8,
-    out: *mut FFI_ArrowSchema,
+    c_schema: *mut FFI_ArrowSchema,
 ) -> *mut i8 {
-    let r = cdata_integration_import_schema_and_compare_to_json(c_json_name, out);
+    let r = cdata_integration_import_schema_and_compare_to_json(c_json_name, c_schema);
     result_to_c_error(&r)
 }
 
@@ -258,5 +293,15 @@ pub extern "C" fn arrow_rs_cdata_integration_export_batch_from_json(
     out: *mut FFI_ArrowArray,
 ) -> *mut i8 {
     let r = cdata_integration_export_batch_from_json(c_json_name, batch_num, out);
+    result_to_c_error(&r)
+}
+
+#[no_mangle]
+pub extern "C" fn arrow_rs_cdata_integration_import_batch_and_compare_to_json(
+    c_json_name: *const i8,
+    batch_num: c_int,
+    c_array: *mut FFI_ArrowArray,
+) -> *mut i8 {
+    let r = cdata_integration_import_batch_and_compare_to_json(c_json_name, batch_num, c_array);
     result_to_c_error(&r)
 }
