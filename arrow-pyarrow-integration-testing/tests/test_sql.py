@@ -113,10 +113,46 @@ _supported_pyarrow_types = [
 _unsupported_pyarrow_types = [
 ]
 
+# As of pyarrow 14, pyarrow implements the Arrow PyCapsule interface
+# (https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
+# This defines that Arrow consumers should allow any object that has specific "dunder"
+# methods, `__arrow_c_*_`. These wrapper classes ensure that arrow-rs is able to handle
+# _any_ class, without pyarrow-specific handling.
+class SchemaWrapper:
+    def __init__(self, schema):
+        self.schema = schema
+
+    def __arrow_c_schema__(self):
+        return self.schema.__arrow_c_schema__()
+
+
+class ArrayWrapper:
+    def __init__(self, array):
+        self.array = array
+
+    def __arrow_c_array__(self):
+        return self.array.__arrow_c_array__()
+
+
+class StreamWrapper:
+    def __init__(self, stream):
+        self.stream = stream
+
+    def __arrow_c_stream__(self):
+        return self.stream.__arrow_c_stream__()
+
 
 @pytest.mark.parametrize("pyarrow_type", _supported_pyarrow_types, ids=str)
 def test_type_roundtrip(pyarrow_type):
     restored = rust.round_trip_type(pyarrow_type)
+    assert restored == pyarrow_type
+    assert restored is not pyarrow_type
+
+
+@pytest.mark.parametrize("pyarrow_type", _supported_pyarrow_types, ids=str)
+def test_type_roundtrip_pycapsule(pyarrow_type):
+    wrapped = SchemaWrapper(pyarrow_type)
+    restored = rust.round_trip_type(wrapped)
     assert restored == pyarrow_type
     assert restored is not pyarrow_type
 
@@ -137,6 +173,19 @@ def test_field_roundtrip(pyarrow_type):
         pyarrow_field = pa.field("test", pyarrow_type, nullable=False)
         field = rust.round_trip_field(pyarrow_field)
         assert field == pyarrow_field
+
+@pytest.mark.parametrize('pyarrow_type', _supported_pyarrow_types, ids=str)
+def test_field_roundtrip_pycapsule(pyarrow_type):
+    pyarrow_field = pa.field("test", pyarrow_type, nullable=True)
+    wrapped = SchemaWrapper(pyarrow_field)
+    field = rust.round_trip_field(wrapped)
+    assert field == wrapped.schema
+
+    if pyarrow_type != pa.null():
+        # A null type field may not be non-nullable
+        pyarrow_field = pa.field("test", pyarrow_type, nullable=False)
+        field = rust.round_trip_field(wrapped)
+        assert field == wrapped.schema
 
 def test_field_metadata_roundtrip():
     metadata = {"hello": "World! 😊", "x": "2"}
@@ -161,6 +210,16 @@ def test_primitive_python():
     assert b == pa.array([2, 4, 6])
     del a
     del b
+
+
+def test_primitive_python_pycapsule():
+    """
+    Python -> Rust -> Python
+    """
+    a = pa.array([1, 2, 3])
+    wrapped = ArrayWrapper(a)
+    b = rust.double(wrapped)
+    assert b == pa.array([2, 4, 6])
 
 
 def test_primitive_rust():
@@ -433,6 +492,32 @@ def test_record_batch_reader():
     got_batches = list(b)
     assert got_batches == batches
 
+def test_record_batch_reader_pycapsule():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema),
+        pa.record_batch([[None, [], [5, 6]]], schema),
+    ]
+    a = pa.RecordBatchReader.from_batches(schema, batches)
+    wrapped = StreamWrapper(a)
+    b = rust.round_trip_record_batch_reader(wrapped)
+
+    assert b.schema == schema
+    got_batches = list(b)
+    assert got_batches == batches
+
+    # Also try the boxed reader variant
+    a = pa.RecordBatchReader.from_batches(schema, batches)
+    wrapped = StreamWrapper(a)
+    b = rust.boxed_reader_roundtrip(wrapped)
+    assert b.schema == schema
+    got_batches = list(b)
+    assert got_batches == batches
+
+
 def test_record_batch_reader_error():
     schema = pa.schema([('ints', pa.list_(pa.int32()))])
 
@@ -459,18 +544,18 @@ def test_reject_other_classes():
 
     with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Array, got builtins.list"):
         rust.round_trip_array(not_pyarrow)
-    
+
     with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Schema, got builtins.list"):
         rust.round_trip_schema(not_pyarrow)
-    
+
     with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.Field, got builtins.list"):
         rust.round_trip_field(not_pyarrow)
-    
+
     with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.DataType, got builtins.list"):
         rust.round_trip_type(not_pyarrow)
 
     with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.RecordBatch, got builtins.list"):
         rust.round_trip_record_batch(not_pyarrow)
-    
+
     with pytest.raises(TypeError, match="Expected instance of pyarrow.lib.RecordBatchReader, got builtins.list"):
         rust.round_trip_record_batch_reader(not_pyarrow)
