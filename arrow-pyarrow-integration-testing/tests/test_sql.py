@@ -27,6 +27,8 @@ import pytz
 
 import arrow_pyarrow_integration_testing as rust
 
+PYARROW_PRE_14 = int(pa.__version__.split('.')[0]) < 14
+
 
 @contextlib.contextmanager
 def no_pyarrow_leak():
@@ -148,7 +150,7 @@ def test_type_roundtrip(pyarrow_type):
     assert restored == pyarrow_type
     assert restored is not pyarrow_type
 
-
+@pytest.mark.skipif(PYARROW_PRE_14, reason="requires pyarrow 14")
 @pytest.mark.parametrize("pyarrow_type", _supported_pyarrow_types, ids=str)
 def test_type_roundtrip_pycapsule(pyarrow_type):
     wrapped = SchemaWrapper(pyarrow_type)
@@ -174,6 +176,7 @@ def test_field_roundtrip(pyarrow_type):
         field = rust.round_trip_field(pyarrow_field)
         assert field == pyarrow_field
 
+@pytest.mark.skipif(PYARROW_PRE_14, reason="requires pyarrow 14")
 @pytest.mark.parametrize('pyarrow_type', _supported_pyarrow_types, ids=str)
 def test_field_roundtrip_pycapsule(pyarrow_type):
     pyarrow_field = pa.field("test", pyarrow_type, nullable=True)
@@ -212,6 +215,7 @@ def test_primitive_python():
     del b
 
 
+@pytest.mark.skipif(PYARROW_PRE_14, reason="requires pyarrow 14")
 def test_primitive_python_pycapsule():
     """
     Python -> Rust -> Python
@@ -492,6 +496,7 @@ def test_record_batch_reader():
     got_batches = list(b)
     assert got_batches == batches
 
+@pytest.mark.skipif(PYARROW_PRE_14, reason="requires pyarrow 14")
 def test_record_batch_reader_pycapsule():
     """
     Python -> Rust -> Python
@@ -539,6 +544,7 @@ def test_record_batch_reader_error():
         rust.round_trip_record_batch_reader(reader)
 
 
+@pytest.mark.skipif(PYARROW_PRE_14, reason="requires pyarrow 14")
 def test_table_pycapsule():
     """
     Python -> Rust -> Python
