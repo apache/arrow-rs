@@ -179,7 +179,7 @@ fn cdata_integration_export_schema_from_json(
     let f = read_json_file_metadata(json_name.to_str()?)?;
     let c_schema = FFI_ArrowSchema::try_from(&f.schema)?;
     // Move exported schema into output struct
-    unsafe { ptr::replace(out, c_schema) };
+    unsafe { ptr::write(out, c_schema) };
     Ok(())
 }
 
@@ -193,7 +193,7 @@ fn cdata_integration_export_batch_from_json(
     let a = StructArray::from(b).into_data();
     let c_array = FFI_ArrowArray::new(&a);
     // Move exported array into output struct
-    unsafe { ptr::replace(out, c_array) };
+    unsafe { ptr::write(out, c_array) };
     Ok(())
 }
 
