@@ -271,7 +271,10 @@ impl<'a> ImportedArrowArray<'a> {
     fn consume(self) -> Result<ArrayData> {
         let len = self.array.len();
         let offset = self.array.offset();
-        let null_count = self.array.null_count();
+        let null_count = match &self.data_type {
+            DataType::Null => 0,
+            _ => self.array.null_count(),
+        };
 
         let data_layout = layout(&self.data_type);
         let buffers = self.buffers(data_layout.can_contain_null_mask)?;

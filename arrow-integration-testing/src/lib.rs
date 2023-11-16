@@ -247,6 +247,7 @@ fn cdata_integration_import_batch_and_compare_to_json(
     let imported_array = unsafe { std::ptr::replace(c_array, FFI_ArrowArray::empty()) };
     let imported_array =
         from_ffi_and_data_type(imported_array, DataType::Struct(schema.fields.clone()))?;
+    imported_array.validate_full()?;
     let imported_batch = RecordBatch::from(StructArray::from(imported_array));
 
     compare_batches(&json_batch, &imported_batch)
