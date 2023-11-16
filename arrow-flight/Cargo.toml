@@ -68,7 +68,7 @@ cli = ["anyhow", "arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subsc
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }
 assert_cmd = "2.0.8"
-http = "0.2.9"
+http = "1.0.0"
 http-body = "0.4.5"
 pin-project-lite = "0.2"
 tempfile = "3.3"
