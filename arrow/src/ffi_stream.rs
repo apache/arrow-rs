@@ -171,6 +171,22 @@ impl FFI_ArrowArrayStream {
         }
     }
 
+    /// Takes ownership of the pointed to [`FFI_ArrowArrayStream`]
+    ///
+    /// This acts to [move] the data out of `raw_stream`, setting the release callback to NULL
+    ///
+    /// # Safety
+    ///
+    /// * `raw_stream` must be [valid] for reads and writes
+    /// * `raw_stream` must be properly aligned
+    /// * `raw_stream` must point to a properly initialized value of [`FFI_ArrowArrayStream`]
+    ///
+    /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
+    /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
+    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Self {
+        std::ptr::replace(raw_stream, Self::empty())
+    }
+
     /// Creates a new empty [FFI_ArrowArrayStream]. Used to import from the C Stream Interface.
     pub fn empty() -> Self {
         Self {
@@ -306,11 +322,10 @@ impl ArrowArrayStreamReader {
     /// the pointer.
     ///
     /// # Safety
-    /// This function dereferences a raw pointer of `FFI_ArrowArrayStream`.
+    ///
+    /// See [`FFI_ArrowArrayStream::from_raw`]
     pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
-        let stream_data = std::ptr::replace(raw_stream, FFI_ArrowArrayStream::empty());
-
-        Self::try_new(stream_data)
+        Self::try_new(FFI_ArrowArrayStream::from_raw(raw_stream))
     }
 
     /// Get the last error from `ArrowArrayStreamReader`
@@ -368,6 +383,7 @@ impl RecordBatchReader for ArrowArrayStreamReader {
 /// # Safety
 /// Assumes that the pointer represents valid C Stream Interfaces, both in memory
 /// representation and lifetime via the `release` mechanism.
+#[deprecated(note = "Use FFI_ArrowArrayStream::new")]
 pub unsafe fn export_reader_into_raw(
     reader: Box<dyn RecordBatchReader + Send>,
     out_stream: *mut FFI_ArrowArrayStream,
@@ -426,8 +442,7 @@ mod tests {
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
 
         // Export a `RecordBatchReader` through `FFI_ArrowArrayStream`
-        let mut ffi_stream = FFI_ArrowArrayStream::empty();
-        unsafe { export_reader_into_raw(reader, &mut ffi_stream) };
+        let mut ffi_stream = FFI_ArrowArrayStream::new(reader);
 
         // Get schema from `FFI_ArrowArrayStream`
         let mut ffi_schema = FFI_ArrowSchema::empty();
