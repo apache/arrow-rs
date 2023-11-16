@@ -138,6 +138,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (List(list_from) | LargeList(list_from), Utf8 | LargeUtf8) => {
             can_cast_types(list_from.data_type(), to_type)
         }
+        (List(list_from) | LargeList(list_from), FixedSizeList(list_to, _)) => {
+            can_cast_types(list_from.data_type(), list_to.data_type())
+        }
         (List(_), _) => false,
         (FixedSizeList(list_from,_), List(list_to)) => {
             list_from.data_type() == list_to.data_type()
@@ -799,6 +802,14 @@ pub fn cast_with_options(
                 cast_list_container::<i64, i32>(array, cast_options)
             }
         }
+        (List(_), FixedSizeList(field, size)) => {
+            let array = array.as_list::<i32>();
+            cast_list_to_fixed_size_list::<i32>(array, field, *size, cast_options)
+        }
+        (LargeList(_), FixedSizeList(field, size)) => {
+            let array = array.as_list::<i64>();
+            cast_list_to_fixed_size_list::<i64>(array, field, *size, cast_options)
+        }
         (List(_) | LargeList(_), _) => match to_type {
             Utf8 => value_to_string::<i32>(array, cast_options),
             LargeUtf8 => value_to_string::<i64>(array, cast_options),
@@ -824,7 +835,6 @@ pub fn cast_with_options(
                 cast_fixed_size_list_to_list::<i64>(array)
             }
         }
-
         (_, List(ref to)) => cast_values_to_list::<i32>(array, to, cast_options),
         (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
@@ -3206,6 +3216,124 @@ where
     Ok(Arc::new(list))
 }
 
+fn cast_list_to_fixed_size_list<OffsetSize>(
+    array: &GenericListArray<OffsetSize>,
+    field: &Arc<Field>,
+    size: i32,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let nulls_have_correct_length = validate_consistent_lengths::<OffsetSize>(array, size)?;
+
+    // Convert the values
+    let data = array.to_data();
+    let underlying_array = make_array(data.child_data()[0].clone());
+    let mut cast_array =
+        cast_with_options(underlying_array.as_ref(), field.data_type(), cast_options)?;
+
+    // There are null slots that have incorrect length in the values. We need
+    // to use take to resize those slots.
+    if !nulls_have_correct_length {
+        let take_indices = build_take_indices(array, size);
+        cast_array = take(cast_array.as_ref(), take_indices.as_ref(), None)?;
+    }
+
+    // Build the FixedSizeListArray
+    let dest_type = DataType::FixedSizeList(field.clone(), size);
+    let builder = data
+        .into_builder()
+        .data_type(dest_type)
+        .child_data(vec![cast_array.into_data()]);
+
+    // Safety
+    // Data was valid before
+    let array_data = unsafe { builder.build_unchecked() };
+    let list = FixedSizeListArray::from(array_data);
+    Ok(Arc::new(list) as ArrayRef)
+}
+
+/// Validate that the values of the list array all have the given length.
+///
+/// Returns an error if the lengths are inconsistent.
+///
+/// This function also checks if the null slots have the correct length, and
+/// returns whether this is true. This can be used later for zero-copy
+/// optimizations.
+fn validate_consistent_lengths<OffsetSize>(
+    array: &GenericListArray<OffsetSize>,
+    size: i32,
+) -> Result<bool, ArrowError>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let mut nulls_have_correct_length = true;
+
+    let size = OffsetSize::from_usize(size as usize).unwrap();
+    let mut offsets_iter = array.offsets().iter();
+    let mut expected_offset = *offsets_iter.next().expect("empty offsets buffer") + size;
+
+    // Iterator over (index, ending offset)
+    let offsets_iter = offsets_iter.enumerate();
+
+    if array.null_count() > 0 {
+        for (i, offset) in offsets_iter {
+            if *offset != expected_offset {
+                nulls_have_correct_length = false;
+                if array.is_valid(i) {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Cannot cast to FixedSizeList({:?}): value at index {} has length {:?}",
+                        size,
+                        i,
+                        *offset - expected_offset + size
+                    )));
+                }
+                expected_offset = *offset + size;
+            } else {
+                expected_offset += size;
+            }
+        }
+    } else {
+        for (i, offset) in offsets_iter {
+            if *offset != expected_offset {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Cannot cast to FixedSizeList({:?}): value at index {} has length {:?}",
+                    size,
+                    i,
+                    *offset - expected_offset + size
+                )));
+            }
+            expected_offset += size;
+        }
+    }
+    Ok(nulls_have_correct_length)
+}
+
+/// Build a take indices array that would make all the slots in the list array
+/// have the given length.
+///
+/// The valid slots are assumed to have already been checked to have the correct
+/// length. This function fills the null slots with the value at offset 0.
+fn build_take_indices<OffsetSize>(array: &GenericListArray<OffsetSize>, list_size: i32) -> ArrayRef
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let mut indices = Vec::with_capacity(array.len() * list_size as usize);
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            indices.extend(std::iter::repeat(0_i64).take(list_size as usize));
+        } else {
+            let start = array.value_offsets()[i].as_usize() as i64;
+            let end = start + list_size as i64;
+            indices.extend(start..end);
+        }
+    }
+
+    Arc::new(Int64Array::from(indices))
+}
+
 /// Cast the container type of List/Largelist array but not the inner types.
 /// This function can leave the value data intact and only has to cast the offset dtypes.
 fn cast_list_container<OffsetSizeFrom, OffsetSizeTo>(
@@ -3274,6 +3402,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use arrow_buffer::NullBuffer;
+
     use super::*;
 
     macro_rules! generate_cast_test_case {
@@ -7372,6 +7502,154 @@ mod tests {
         assert_eq!(&expected.value(0), &actual.value(0));
         assert_eq!(&expected.value(1), &actual.value(1));
         assert_eq!(&expected.value(2), &actual.value(2));
+    }
+
+    #[test]
+    fn test_cast_list_to_fsl() {
+        // There four noteworthy cases we should handle:
+        // 1. No nulls
+        // 2. Nulls that are always empty
+        // 3. Nulls that have varying lengths
+        // 4. Nulls that are correctly sized (same as target list size)
+
+        // Non-null case
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let values = vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+        ];
+        let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
+        )) as ArrayRef;
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            values, 3,
+        )) as ArrayRef;
+        let actual = cast(array.as_ref(), &DataType::FixedSizeList(field.clone(), 3)).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        // Null cases
+        // Array is [[1, 2, 3], null, [4, 5, 6], null]
+        let cases = [
+            (
+                // Zero-length nulls
+                vec![1, 2, 3, 4, 5, 6],
+                vec![3, 0, 3, 0],
+            ),
+            (
+                // Varying-length nulls
+                vec![1, 2, 3, 0, 0, 4, 5, 6, 0],
+                vec![3, 2, 3, 1],
+            ),
+            (
+                // Correctly-sized nulls
+                vec![1, 2, 3, 0, 0, 0, 4, 5, 6, 0, 0, 0],
+                vec![3, 3, 3, 3],
+            ),
+        ];
+        let null_buffer = NullBuffer::from(vec![true, false, true, false]);
+
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                None,
+                Some(vec![Some(4), Some(5), Some(6)]),
+                None,
+            ],
+            3,
+        )) as ArrayRef;
+
+        for (values, offsets) in cases.iter() {
+            let array = Arc::new(ListArray::new(
+                field.clone(),
+                OffsetBuffer::from_lengths(offsets.clone()),
+                Arc::new(Int32Array::from(values.clone())),
+                Some(null_buffer.clone()),
+            )) as ArrayRef;
+            let actual = cast(array.as_ref(), &DataType::FixedSizeList(field.clone(), 3)).unwrap();
+            assert_eq!(expected.as_ref(), actual.as_ref());
+        }
+    }
+
+    #[test]
+    fn test_cast_list_to_fsl_validation() {
+        let values = vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5)]),
+        ];
+        let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
+        )) as ArrayRef;
+
+        let res = cast(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 3),
+        );
+        assert!(res.is_err());
+        assert!(format!("{:?}", res)
+            .contains("Cannot cast to FixedSizeList(3): value at index 1 has length 2"));
+    }
+
+    #[test]
+    fn test_cast_large_list_to_fsl() {
+        let values = vec![Some(vec![Some(1), Some(2)]), Some(vec![Some(3), Some(4)])];
+        let array = Arc::new(LargeListArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
+        )) as ArrayRef;
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            values, 2,
+        )) as ArrayRef;
+        let actual = cast(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 2),
+        )
+        .unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+    }
+
+    #[test]
+    fn test_cast_list_to_fsl_subcast() {
+        let array = Arc::new(LargeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2)]),
+                Some(vec![Some(3), Some(i32::MAX)]),
+            ],
+        )) as ArrayRef;
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2)]),
+                Some(vec![Some(3), Some(i32::MAX as i64)]),
+            ],
+            2,
+        )) as ArrayRef;
+        let actual = cast(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2),
+        )
+        .unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        let res = cast_with_options(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int16, true)), 2),
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        );
+        assert!(res.is_err());
+        assert!(format!("{:?}", res).contains("Can't cast value 2147483647 to type Int16"));
+    }
+
+    #[test]
+    fn test_cast_list_to_fsl_empty() {
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let array = new_empty_array(&DataType::List(field.clone()));
+
+        let target_type = DataType::FixedSizeList(field.clone(), 3);
+        let expected = new_empty_array(&target_type);
+
+        let actual = cast(array.as_ref(), &target_type).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
     }
 
     fn make_list_array() -> ListArray {
