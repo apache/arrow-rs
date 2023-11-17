@@ -57,8 +57,8 @@ Run `cargo bench` for benchmarks.
 
 ## Docs
 
-To build documentation, run `cargo doc --no-deps`.
-To compile and view in the browser, run `cargo doc --no-deps --open`.
+To build documentation, run `cargo doc --no-deps --features object_store`.
+To compile and view in the browser, run `cargo doc --no-deps --features object_store --open`.
 
 ## Update Parquet Format
 
