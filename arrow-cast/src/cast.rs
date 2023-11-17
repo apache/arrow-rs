@@ -283,10 +283,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 ///   in integer casts return null
 /// * Numeric to boolean: 0 returns `false`, any other value returns `true`
 /// * List to List: the underlying data type is cast
-/// * List to FixedSizeList: the underlying data type is cast. If the list size is different
-///   than the FixedSizeList size and safe casting is requested, then lists are
-///   truncated or filled will some value to achieve the requested size. If the output
-///   field is nullable, the fill value is null, otherwise it is the first value.
+/// * List to FixedSizeList: the underlying data type is cast. If safe is true and a list element
+/// has the wrong length it will be replaced with NULL, otherwise an error will be returned
 /// * Primitive to List: a list array with 1 value per slot is created
 /// * Date32 and Date64: precision lost when going to higher interval
 /// * Time32 and Time64: precision lost when going to higher interval
@@ -3244,6 +3242,7 @@ where
     // Nulls in FixedSizeListArray take up space and so we must pad the values
     let values = array.values().to_data();
     let mut mutable = MutableArrayData::new(vec![&values], cast_options.safe, cap);
+    // The end position in values of the last incorrectly-sized list slice
     let mut last_pos = 0;
     for (idx, w) in array.offsets().windows(2).enumerate() {
         let start_pos = w[0].as_usize();
@@ -3252,12 +3251,14 @@ where
 
         if len != size as usize {
             if cast_options.safe || array.is_null(idx) {
-                // Pad with nulls
                 if last_pos != start_pos {
+                    // Extend with valid slices
                     mutable.extend(0, last_pos, start_pos);
                 }
+                // Pad this slice with nulls
                 mutable.extend_nulls(size as _);
                 nulls.as_mut().unwrap().set_bit(idx, false);
+                // Set last_pos to the end of this slice's values
                 last_pos = end_pos
             } else {
                 return Err(ArrowError::CastError(format!(
@@ -7535,6 +7536,7 @@ mod tests {
             Some(vec![Some(1), Some(2), Some(3)]),
             Some(vec![Some(4), Some(5)]),
             Some(vec![Some(6), Some(7), Some(8), Some(9)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
         ];
         let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
             values.clone(),
@@ -7562,8 +7564,9 @@ mod tests {
         let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
             vec![
                 Some(vec![Some(1), Some(2), Some(3)]),
-                None, // Too short -> filled with null
-                None, // Too long -> Truncated
+                None, // Too short -> replaced with null
+                None, // Too long -> replaced with null
+                Some(vec![Some(3), Some(4), Some(5)]),
             ],
             3,
         )) as ArrayRef;
