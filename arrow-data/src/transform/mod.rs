@@ -354,6 +354,14 @@ impl<'a> MutableArrayData<'a> {
     ) -> Self {
         let data_type = arrays[0].data_type();
 
+        for a in arrays.iter().skip(1) {
+            assert_eq!(
+                data_type,
+                a.data_type(),
+                "Arrays with inconsistent types passed to MutableArrayData"
+            )
+        }
+
         // if any of the arrays has nulls, insertions from any array requires setting bits
         // as there is at least one array with nulls.
         let use_nulls = use_nulls | arrays.iter().any(|array| array.null_count() > 0);
