@@ -975,6 +975,14 @@ fn test_extend_nulls_panic() {
     mutable.extend_nulls(2);
 }
 
+#[test]
+#[should_panic(expected = "Arrays with inconsistent types passed to MutableArrayData")]
+fn test_mixed_types() {
+    let a = StringArray::from(vec!["abc", "def"]).to_data();
+    let b = Int32Array::from(vec![1, 2, 3]).to_data();
+    MutableArrayData::new(vec![&a, &b], false, 4);
+}
+
 /*
 // this is an old test used on a meanwhile removed dead code
 // that is still useful when `MutableArrayData` supports fixed-size lists.
