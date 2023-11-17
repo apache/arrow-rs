@@ -205,7 +205,7 @@ fn cdata_integration_import_schema_and_compare_to_json(
     let json_schema = read_json_file_metadata(json_name.to_str()?)?.schema;
 
     // The source ArrowSchema will be released when this is dropped
-    let imported_schema = unsafe { std::ptr::replace(c_schema, FFI_ArrowSchema::empty()) };
+    let imported_schema = unsafe { FFI_ArrowSchema::from_raw(c_schema) };
     let imported_schema = Schema::try_from(&imported_schema)?;
 
     // compare schemas
@@ -244,7 +244,7 @@ fn cdata_integration_import_batch_and_compare_to_json(
         read_single_batch_from_json_file(json_name.to_str()?, batch_num.try_into().unwrap())?;
     let schema = json_batch.schema();
 
-    let imported_array = unsafe { std::ptr::replace(c_array, FFI_ArrowArray::empty()) };
+    let imported_array = unsafe { FFI_ArrowArray::from_raw(c_array) };
     let imported_array =
         from_ffi_and_data_type(imported_array, DataType::Struct(schema.fields.clone()))?;
     imported_array.validate_full()?;
