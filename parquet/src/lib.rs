@@ -31,7 +31,7 @@ page for feature flags and tips to improve performance.
 
 Parquet is a columnar format, which means that unlike row formats like
 the [CSV format](https://en.wikipedia.org/wiki/Comma-separated_values) for instance,
-values are iterated along columns instead of rows. Parquet is similar in spirit to 
+values are iterated along columns instead of rows. Parquet is similar in spirit to
 [Arrow](https://arrow.apache.org/), with Parquet focusing on storage
 efficiency while Arrow prioritizes compute efficiency.
 
@@ -63,7 +63,7 @@ read and written one row group at a time by calling respectively
 [`SerializedFileReader::get_row_group`](file::serialized_reader::SerializedFileReader)
  and [`SerializedFileWriter::next_row_group`](file::writer::SerializedFileWriter).
 Within each row group, columns are read and written one at a time using
-respectively [`ColumnReader`](column::reader::ColumnReader) and 
+respectively [`ColumnReader`](column::reader::ColumnReader) and
 [`ColumnWriter`](column::writer::ColumnWriter). The [`mod@file`] module also allows
 reading files in a row-wise manner via
 [`SerializedFileReader::get_row_iter`](file::serialized_reader::SerializedFileReader).
