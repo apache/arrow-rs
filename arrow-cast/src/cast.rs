@@ -284,7 +284,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 /// * List to List: the underlying data type is cast
 /// * List to FixedSizeList: the underlying data type is cast. If the list size is different
 ///   than the FixedSizeList size and safe casting is requested, then lists are
-///   truncated or filled will nulls to match the FixedSizeList size.
+///   truncated or filled will some value to achieve the requested size. If the output
+///   field is nullable, the fill value is null, otherwise it is the first value.
 /// * Primitive to List: a list array with 1 value per slot is created
 /// * Date32 and Date64: precision lost when going to higher interval
 /// * Time32 and Time64: precision lost when going to higher interval
@@ -3234,31 +3235,35 @@ where
         Err(err) => return Err(err),
     };
 
-    // Convert the values
     let data = array.to_data();
     let underlying_array = make_array(data.child_data()[0].clone());
     let mut cast_array =
         cast_with_options(underlying_array.as_ref(), field.data_type(), cast_options)?;
 
-    // There are null slots that have incorrect length in the values. We need
-    // to use take to resize those slots.
+    // Some of the lists aren't the correct size, so we need to call take on
+    // the values array to make them the correct size.
     if !can_zero_copy_values {
         let (take_indices, null_buffer) = build_take_indices(array, size);
-        let values = take(cast_array.as_ref(), take_indices.as_ref(), None)?;
-        let values = values.to_data().into_builder().nulls(null_buffer).build()?;
-        cast_array = make_array(values);
+        cast_array = take(cast_array.as_ref(), take_indices.as_ref(), None)?;
+        if field.is_nullable() {
+            cast_array = make_array(
+                cast_array
+                    .to_data()
+                    .into_builder()
+                    .nulls(null_buffer)
+                    .build()?,
+            );
+        }
     }
 
-    // Build the FixedSizeListArray
     let dest_type = DataType::FixedSizeList(field.clone(), size);
-    let builder = data
+    let array_data = data
         .into_builder()
+        .buffers(vec![])
         .data_type(dest_type)
-        .child_data(vec![cast_array.into_data()]);
+        .child_data(vec![cast_array.into_data()])
+        .build()?;
 
-    // Safety
-    // Data was valid before
-    let array_data = unsafe { builder.build_unchecked() };
     let list = FixedSizeListArray::from(array_data);
     Ok(Arc::new(list) as ArrayRef)
 }
@@ -3328,7 +3333,7 @@ where
 /// filled with 0, so that they will be populated with the first value. This
 /// means that if only the null slots are improperly sized, then the null buffer
 /// returned will be None.
-/// 
+///
 /// If there are valid slots in the list array that are too long, they will be
 /// truncated. If there are valid slots that are too short, then they will have
 /// their corresponding slots in the null buffer set to null. Thus, if there are
