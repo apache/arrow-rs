@@ -266,8 +266,7 @@ impl FromPyArrow for ArrayData {
             validate_pycapsule(array_capsule, "arrow_array")?;
 
             let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
-            let array_ptr = array_capsule.pointer() as *mut FFI_ArrowArray;
-            let array = unsafe { std::ptr::replace(array_ptr, FFI_ArrowArray::empty()) };
+            let array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer() as _) };
             return ffi::from_ffi(array, schema_ptr).map_err(to_py_err);
         }
 
@@ -348,8 +347,7 @@ impl FromPyArrow for RecordBatch {
             validate_pycapsule(array_capsule, "arrow_array")?;
 
             let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
-            let array_ptr = array_capsule.pointer() as *mut FFI_ArrowArray;
-            let ffi_array = unsafe { std::ptr::replace(array_ptr, FFI_ArrowArray::empty()) };
+            let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer() as _) };
             let array_data = ffi::from_ffi(ffi_array, schema_ptr).map_err(to_py_err)?;
             if !matches!(array_data.data_type(), DataType::Struct(_)) {
                 return Err(PyTypeError::new_err(
@@ -397,8 +395,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
                 PyTryInto::try_into(value.getattr("__arrow_c_stream__")?.call0()?)?;
             validate_pycapsule(capsule, "arrow_array_stream")?;
 
-            let stream_ptr = capsule.pointer() as *mut FFI_ArrowArrayStream;
-            let stream = unsafe { std::ptr::replace(stream_ptr, FFI_ArrowArrayStream::empty()) };
+            let stream = unsafe { FFI_ArrowArrayStream::from_raw(capsule.pointer() as _) };
 
             let stream_reader = ArrowArrayStreamReader::try_new(stream)
                 .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -430,8 +427,7 @@ impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
     // We can't implement `ToPyArrow` for `T: RecordBatchReader + Send` because
     // there is already a blanket implementation for `T: ToPyArrow`.
     fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
-        let mut stream = FFI_ArrowArrayStream::empty();
-        unsafe { export_reader_into_raw(self, &mut stream) };
+        let mut stream = FFI_ArrowArrayStream::new(self);
 
         let stream_ptr = (&mut stream) as *mut FFI_ArrowArrayStream;
         let module = py.import("pyarrow")?;
