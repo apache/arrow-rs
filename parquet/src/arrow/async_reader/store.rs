@@ -28,7 +28,42 @@ use crate::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ParquetMetaData;
 
-/// Implements [`AsyncFileReader`] for a parquet file in object storage
+/**
+Reads Parquet files in object storage using [`ObjectStore`].
+
+Example reading a Parquet file from Azure Blob Storage
+
+```rust
+use object_store::azure::MicrosoftAzureBuilder;
+use object_store::path::Path;
+use object_store::ObjectStore;
+# use parquet::arrow::async_reader::ParquetObjectReader;
+# use parquet::arrow::ParquetRecordBatchStreamBuilder;
+# use parquet::schema::printer::print_parquet_metadata;
+# use std::error::Error;
+# use std::io::stdout;
+# use std::sync::Arc;
+
+// Open Azure Storage Blob https://myaccount.blob.core.windows.net/mycontainer/path/to/blob.parquet
+// Requires running Azure CLI `az login` beforehand to setup authentication
+let storage_container = Arc::new(
+    MicrosoftAzureBuilder::new()
+        .with_account("myaccount")
+        .with_container_name("mycontainer")
+        .with_use_azure_cli(true)
+        .build()?);
+let blob = storage_container
+    .get(&Path::from("path/to/blob.parquet"))
+    .await?
+    .meta;
+println!("Found Blob with {}B at {}", blob.size, blob.location);
+
+// Show Parquet metadata
+let reader = ParquetObjectReader::new(storage_container, blob);
+let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
+print_parquet_metadata(&mut stdout(), builder.metadata());
+```
+*/
 #[derive(Clone, Debug)]
 pub struct ParquetObjectReader {
     store: Arc<dyn ObjectStore>,
