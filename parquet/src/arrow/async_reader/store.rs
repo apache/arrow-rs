@@ -39,16 +39,16 @@ use crate::file::metadata::ParquetMetaData;
 /// # use parquet::arrow::async_reader::ParquetObjectReader;
 /// # use parquet::arrow::ParquetRecordBatchStreamBuilder;
 /// # use parquet::schema::printer::print_parquet_metadata;
-/// # async fn main() {
+/// # async fn run() {
 /// // Populate configuration from environment
-/// let storage_container = Arc::new(MicrosoftAzureBuilder::from_env().build()?);
+/// let storage_container = Arc::new(MicrosoftAzureBuilder::from_env().build().unwrap());
 /// let location = Path::from("path/to/blob.parquet");
-/// let meta = storage_container.head(&location).await?;
+/// let meta = storage_container.head(&location).await.unwrap();
 /// println!("Found Blob with {}B at {}", meta.size, meta.location);
 ///
 /// // Show Parquet metadata
 /// let reader = ParquetObjectReader::new(storage_container, meta);
-/// let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
+/// let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 /// print_parquet_metadata(&mut stdout(), builder.metadata());
 /// # }
 /// ```
