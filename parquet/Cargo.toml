@@ -116,11 +116,6 @@ required-features = ["arrow", "async"]
 path = "./examples/async_read_parquet.rs"
 
 [[example]]
-name = "object_store_read_parquet"
-required-features = ["arrow", "object_store"]
-path = "./examples/object_store_read_parquet.rs"
-
-[[example]]
 name = "read_with_rowgroup"
 required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"
