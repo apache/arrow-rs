@@ -17,50 +17,55 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
+use criterion::{Criterion, Throughput};
+use rand::distributions::{Distribution, Standard};
 
 extern crate arrow;
 
 use arrow::compute::kernels::aggregate::*;
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
+use arrow_array::types::{Float64Type, Int16Type, Int32Type, Int64Type, Int8Type};
 
-fn bench_sum(arr_a: &Float32Array) {
-    criterion::black_box(sum(arr_a).unwrap());
-}
+const BATCH_SIZE: usize = 64 * 1024;
 
-fn bench_min(arr_a: &Float32Array) {
-    criterion::black_box(min(arr_a).unwrap());
-}
-
-fn bench_max(arr_a: &Float32Array) {
-    criterion::black_box(max(arr_a).unwrap());
-}
-
-fn bench_min_string(arr_a: &StringArray) {
-    criterion::black_box(min_string(arr_a).unwrap());
+fn primitive_benchmark<T: ArrowNumericType>(c: &mut Criterion, name: &str)
+where
+    Standard: Distribution<T::Native>,
+{
+    let nonnull_array = create_primitive_array::<T>(BATCH_SIZE, 0.0);
+    let nullable_array = create_primitive_array::<T>(BATCH_SIZE, 0.5);
+    c.benchmark_group(name)
+        .throughput(Throughput::Bytes(
+            (std::mem::size_of::<T::Native>() * BATCH_SIZE) as u64,
+        ))
+        .bench_function("sum nonnull", |b| b.iter(|| sum(&nonnull_array)))
+        .bench_function("min nonnull", |b| b.iter(|| min(&nonnull_array)))
+        .bench_function("max nonnull", |b| b.iter(|| max(&nonnull_array)))
+        .bench_function("sum nullable", |b| b.iter(|| sum(&nullable_array)))
+        .bench_function("min nullable", |b| b.iter(|| min(&nullable_array)))
+        .bench_function("max nullable", |b| b.iter(|| max(&nullable_array)));
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    let arr_a = create_primitive_array::<Float32Type>(512, 0.0);
+    primitive_benchmark::<Float32Type>(c, "float32");
+    primitive_benchmark::<Float64Type>(c, "float64");
 
-    c.bench_function("sum 512", |b| b.iter(|| bench_sum(&arr_a)));
-    c.bench_function("min 512", |b| b.iter(|| bench_min(&arr_a)));
-    c.bench_function("max 512", |b| b.iter(|| bench_max(&arr_a)));
+    primitive_benchmark::<Int8Type>(c, "int8");
+    primitive_benchmark::<Int16Type>(c, "int16");
+    primitive_benchmark::<Int32Type>(c, "int32");
+    primitive_benchmark::<Int64Type>(c, "int64");
 
-    let arr_a = create_primitive_array::<Float32Type>(512, 0.5);
-
-    c.bench_function("sum nulls 512", |b| b.iter(|| bench_sum(&arr_a)));
-    c.bench_function("min nulls 512", |b| b.iter(|| bench_min(&arr_a)));
-    c.bench_function("max nulls 512", |b| b.iter(|| bench_max(&arr_a)));
-
-    let arr_b = create_string_array::<i32>(512, 0.0);
-    c.bench_function("min string 512", |b| b.iter(|| bench_min_string(&arr_b)));
-
-    let arr_b = create_string_array::<i32>(512, 0.5);
-    c.bench_function("min nulls string 512", |b| {
-        b.iter(|| bench_min_string(&arr_b))
-    });
+    {
+        let nonnull_strings = create_string_array::<i32>(BATCH_SIZE, 0.0);
+        let nullable_strings = create_string_array::<i32>(BATCH_SIZE, 0.5);
+        c.benchmark_group("string")
+            .throughput(Throughput::Elements(BATCH_SIZE as u64))
+            .bench_function("min nonnull", |b| b.iter(|| min_string(&nonnull_strings)))
+            .bench_function("max nonnull", |b| b.iter(|| max_string(&nonnull_strings)))
+            .bench_function("min nullable", |b| b.iter(|| min_string(&nullable_strings)))
+            .bench_function("max nullable", |b| b.iter(|| max_string(&nullable_strings)));
+    }
 }
 
 criterion_group!(benches, add_benchmark);
