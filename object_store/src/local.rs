@@ -341,14 +341,10 @@ impl ObjectStore for LocalFileSystem {
 
             let err = match file.write_all(&bytes) {
                 Ok(_) => match opts.mode {
-                    PutMode::Overwrite => {
-                        file.sync_all()
-                            .map_err(|e| Error::UnableToCopyDataToFile { source: e })?;
-                        match std::fs::rename(&staging_path, &path) {
-                            Ok(_) => None,
-                            Err(source) => Some(Error::UnableToRenameFile { source }),
-                        }
-                    }
+                    PutMode::Overwrite => match std::fs::rename(&staging_path, &path) {
+                        Ok(_) => None,
+                        Err(source) => Some(Error::UnableToRenameFile { source }),
+                    },
                     PutMode::Create => match std::fs::hard_link(&staging_path, &path) {
                         Ok(_) => {
                             let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
@@ -363,6 +359,13 @@ impl ObjectStore for LocalFileSystem {
                         },
                     },
                     PutMode::Update(_) => unreachable!(),
+                    PutMode::OverwriteUnsafe => {
+                        std::mem::drop(file);
+                        match std::fs::rename(&staging_path, &path) {
+                            Ok(_) => None,
+                            Err(source) => Some(Error::UnableToRenameFile { source }),
+                        }
+                    }
                 },
                 Err(source) => Some(Error::UnableToCopyDataToFile { source }),
             };
@@ -372,7 +375,7 @@ impl ObjectStore for LocalFileSystem {
                 return Err(err.into());
             }
 
-            let metadata = file.metadata().map_err(|e| Error::Metadata {
+            let metadata = metadata(&path).map_err(|e| Error::Metadata {
                 source: e.into(),
                 path: path.to_string_lossy().to_string(),
             })?;
