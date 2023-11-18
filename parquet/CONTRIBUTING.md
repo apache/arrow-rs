@@ -60,6 +60,8 @@ Run `cargo bench` for benchmarks.
 To build documentation, run `cargo doc --no-deps --features object_store`.
 To compile and view in the browser, run `cargo doc --no-deps --features object_store --open`.
 
+Before submitting a pull request, run `cargo fmt --all` to format the change.
+
 ## Update Parquet Format
 
 To generate the parquet format (thrift definitions) code run [`./regen.sh`](./regen.sh).
