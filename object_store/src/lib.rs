@@ -1064,8 +1064,6 @@ pub enum PutMode {
     /// Perform an atomic write operation if the current version of the object matches the
     /// provided [`UpdateVersion`], returning [`Error::Precondition`] otherwise
     Update(UpdateVersion),
-    /// Only for Mounted path, drop the file before renaming so that the file will upload.
-    OverwriteUnsafe,
 }
 
 /// Uniquely identifies a version of an object to update

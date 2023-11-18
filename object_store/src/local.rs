@@ -341,10 +341,13 @@ impl ObjectStore for LocalFileSystem {
 
             let err = match file.write_all(&bytes) {
                 Ok(_) => match opts.mode {
-                    PutMode::Overwrite => match std::fs::rename(&staging_path, &path) {
-                        Ok(_) => None,
-                        Err(source) => Some(Error::UnableToRenameFile { source }),
-                    },
+                    PutMode::Overwrite => {
+                        std::mem::drop(file);
+                        match std::fs::rename(&staging_path, &path) {
+                            Ok(_) => None,
+                            Err(source) => Some(Error::UnableToRenameFile { source }),
+                        }
+                    }
                     PutMode::Create => match std::fs::hard_link(&staging_path, &path) {
                         Ok(_) => {
                             let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
@@ -359,13 +362,6 @@ impl ObjectStore for LocalFileSystem {
                         },
                     },
                     PutMode::Update(_) => unreachable!(),
-                    PutMode::OverwriteUnsafe => {
-                        std::mem::drop(file);
-                        match std::fs::rename(&staging_path, &path) {
-                            Ok(_) => None,
-                            Err(source) => Some(Error::UnableToRenameFile { source }),
-                        }
-                    }
                 },
                 Err(source) => Some(Error::UnableToCopyDataToFile { source }),
             };

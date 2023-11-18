@@ -177,7 +177,6 @@ impl ObjectStore for InMemory {
             PutMode::Overwrite => storage.overwrite(location, entry),
             PutMode::Create => storage.create(location, entry)?,
             PutMode::Update(v) => storage.update(location, v, entry)?,
-            PutMode::OverwriteUnsafe => storage.overwrite(location, entry),
         }
         storage.next_etag += 1;
 
