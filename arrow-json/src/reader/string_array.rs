@@ -97,7 +97,16 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                 TapeElement::Number(idx) if coerce_primitive => {
                     builder.append_value(tape.get_string(idx));
                 }
-                TapeElement::I64(n) | TapeElement::I32(n) if coerce_primitive => {
+                TapeElement::I64(high) if coerce_primitive => {
+                    match tape.get(p + 1) {
+                        TapeElement::I32(low) => {
+                            let val = (high as i64) << 32 | (low as u32) as i64;
+                            builder.append_value(val.to_string());
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                TapeElement::I32(n) if coerce_primitive => {
                     builder.append_value(n.to_string());
                 }
                 TapeElement::F32(n) | TapeElement::F64(n) if coerce_primitive => {

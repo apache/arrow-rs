@@ -2264,11 +2264,11 @@ mod tests {
 
     #[test]
     fn test_coercing_primitive_into_string_decoder() {
-        let buf = r#"[
-            {"a": 1, "b": "A", "c": "T"},
-            {"a": 2, "b": "BB", "c": "F"},
-            {"a": 3, "b": 123, "c": false}
-        ]"#;
+        let buf = &format!(
+            r#"[{{"a": 1, "b": "A", "c": "T"}}, {{"a": 2, "b": "BB", "c": "F"}}, {{"a": {}, "b": 123, "c": false}}, {{"a": {}, "b": 789, "c": true}}]"#,
+            (std::i32::MAX as i64 + 10),
+            std::i64::MAX - 10
+        );
         let schema = Schema::new(vec![
             Field::new("a", DataType::Float64, true),
             Field::new("b", DataType::Utf8, true),
@@ -2287,9 +2287,14 @@ mod tests {
             RecordBatch::try_new(
                 schema_ref,
                 vec![
-                    Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
-                    Arc::new(StringArray::from(vec!["A", "BB", "0"])),
-                    Arc::new(StringArray::from(vec!["T", "F", "false"])),
+                    Arc::new(Float64Array::from(vec![
+                        1.0,
+                        2.0,
+                        (std::i32::MAX as i64 + 10) as f64,
+                        (std::i64::MAX - 10) as f64
+                    ])),
+                    Arc::new(StringArray::from(vec!["A", "BB", "123", "789"])),
+                    Arc::new(StringArray::from(vec!["T", "F", "false", "true"])),
                 ]
             )
             .unwrap()
