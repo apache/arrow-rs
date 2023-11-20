@@ -46,8 +46,28 @@ pub struct ArrowFile {
     pub schema: Schema,
     // we can evolve this into a concrete Arrow type
     // this is temporarily not being read from
-    pub _dictionaries: HashMap<i64, ArrowJsonDictionaryBatch>,
-    pub batches: Vec<RecordBatch>,
+    dictionaries: HashMap<i64, ArrowJsonDictionaryBatch>,
+    arrow_json: Value,
+}
+
+impl ArrowFile {
+    pub fn read_batch(&self, batch_num: usize) -> Result<RecordBatch> {
+        let b = self.arrow_json["batches"].get(batch_num).unwrap();
+        let json_batch: ArrowJsonBatch = serde_json::from_value(b.clone()).unwrap();
+        record_batch_from_json(&self.schema, json_batch, Some(&self.dictionaries))
+    }
+
+    pub fn read_batches(&self) -> Result<Vec<RecordBatch>> {
+        self.arrow_json["batches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| {
+                let json_batch: ArrowJsonBatch = serde_json::from_value(b.clone()).unwrap();
+                record_batch_from_json(&self.schema, json_batch, Some(&self.dictionaries))
+            })
+            .collect()
+    }
 }
 
 // Canonicalize the names of map fields in a schema
@@ -87,13 +107,7 @@ pub fn canonicalize_schema(schema: &Schema) -> Schema {
     Schema::new(fields).with_metadata(schema.metadata().clone())
 }
 
-struct LazyArrowFile {
-    schema: Schema,
-    dictionaries: HashMap<i64, ArrowJsonDictionaryBatch>,
-    arrow_json: Value,
-}
-
-fn read_json_file_metadata(json_name: &str) -> Result<LazyArrowFile> {
+pub fn open_json_file(json_name: &str) -> Result<ArrowFile> {
     let json_file = File::open(json_name)?;
     let reader = BufReader::new(json_file);
     let arrow_json: Value = serde_json::from_reader(reader).unwrap();
@@ -111,35 +125,11 @@ fn read_json_file_metadata(json_name: &str) -> Result<LazyArrowFile> {
             dictionaries.insert(json_dict.id, json_dict);
         }
     }
-    Ok(LazyArrowFile {
+    Ok(ArrowFile {
         schema,
         dictionaries,
         arrow_json,
     })
-}
-
-pub fn read_json_file(json_name: &str) -> Result<ArrowFile> {
-    let f = read_json_file_metadata(json_name)?;
-
-    let mut batches = vec![];
-    for b in f.arrow_json["batches"].as_array().unwrap() {
-        let json_batch: ArrowJsonBatch = serde_json::from_value(b.clone()).unwrap();
-        let batch = record_batch_from_json(&f.schema, json_batch, Some(&f.dictionaries))?;
-        batches.push(batch);
-    }
-    Ok(ArrowFile {
-        schema: f.schema,
-        _dictionaries: f.dictionaries,
-        batches,
-    })
-}
-
-pub fn read_single_batch_from_json_file(json_name: &str, batch_num: usize) -> Result<RecordBatch> {
-    let f = read_json_file_metadata(json_name)?;
-    let b = f.arrow_json["batches"].get(batch_num).unwrap();
-    let json_batch: ArrowJsonBatch = serde_json::from_value(b.clone()).unwrap();
-    let batch = record_batch_from_json(&f.schema, json_batch, Some(&f.dictionaries))?;
-    Ok(batch)
 }
 
 /// Read gzipped JSON test file
@@ -176,7 +166,7 @@ fn cdata_integration_export_schema_from_json(
     out: *mut FFI_ArrowSchema,
 ) -> Result<()> {
     let json_name = unsafe { CStr::from_ptr(c_json_name) };
-    let f = read_json_file_metadata(json_name.to_str()?)?;
+    let f = open_json_file(json_name.to_str()?)?;
     let c_schema = FFI_ArrowSchema::try_from(&f.schema)?;
     // Move exported schema into output struct
     unsafe { ptr::write(out, c_schema) };
@@ -189,7 +179,7 @@ fn cdata_integration_export_batch_from_json(
     out: *mut FFI_ArrowArray,
 ) -> Result<()> {
     let json_name = unsafe { CStr::from_ptr(c_json_name) };
-    let b = read_single_batch_from_json_file(json_name.to_str()?, batch_num.try_into().unwrap())?;
+    let b = open_json_file(json_name.to_str()?)?.read_batch(batch_num.try_into().unwrap())?;
     let a = StructArray::from(b).into_data();
     let c_array = FFI_ArrowArray::new(&a);
     // Move exported array into output struct
@@ -202,7 +192,7 @@ fn cdata_integration_import_schema_and_compare_to_json(
     c_schema: *mut FFI_ArrowSchema,
 ) -> Result<()> {
     let json_name = unsafe { CStr::from_ptr(c_json_name) };
-    let json_schema = read_json_file_metadata(json_name.to_str()?)?.schema;
+    let json_schema = open_json_file(json_name.to_str()?)?.schema;
 
     // The source ArrowSchema will be released when this is dropped
     let imported_schema = unsafe { FFI_ArrowSchema::from_raw(c_schema) };
@@ -241,7 +231,7 @@ fn cdata_integration_import_batch_and_compare_to_json(
 ) -> Result<()> {
     let json_name = unsafe { CStr::from_ptr(c_json_name) };
     let json_batch =
-        read_single_batch_from_json_file(json_name.to_str()?, batch_num.try_into().unwrap())?;
+        open_json_file(json_name.to_str()?)?.read_batch(batch_num.try_into().unwrap())?;
     let schema = json_batch.schema();
 
     let data_type_for_import = DataType::Struct(schema.fields.clone());

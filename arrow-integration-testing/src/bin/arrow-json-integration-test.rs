@@ -19,7 +19,7 @@ use arrow::error::{ArrowError, Result};
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::FileWriter;
 use arrow_integration_test::*;
-use arrow_integration_testing::{canonicalize_schema, read_json_file};
+use arrow_integration_testing::{canonicalize_schema, open_json_file};
 use clap::Parser;
 use std::fs::File;
 
@@ -63,12 +63,12 @@ fn json_to_arrow(json_name: &str, arrow_name: &str, verbose: bool) -> Result<()>
         eprintln!("Converting {json_name} to {arrow_name}");
     }
 
-    let json_file = read_json_file(json_name)?;
+    let json_file = open_json_file(json_name)?;
 
     let arrow_file = File::create(arrow_name)?;
     let mut writer = FileWriter::try_new(arrow_file, &json_file.schema)?;
 
-    for b in json_file.batches {
+    for b in json_file.read_batches()? {
         writer.write(&b)?;
     }
 
@@ -116,7 +116,7 @@ fn validate(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()> {
     }
 
     // open JSON file
-    let json_file = read_json_file(json_name)?;
+    let json_file = open_json_file(json_name)?;
 
     // open Arrow file
     let arrow_file = File::open(arrow_name)?;
@@ -131,7 +131,7 @@ fn validate(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()> {
         )));
     }
 
-    let json_batches = &json_file.batches;
+    let json_batches = json_file.read_batches()?;
 
     // compare number of batches
     assert!(
