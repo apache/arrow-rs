@@ -203,7 +203,8 @@ fn aggregate_nonnull_simple<T: ArrowNativeTypeOp, A: NumericAccumulator<T>>(valu
 fn aggregate_nonnull_lanes<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, const LANES: usize>(
     values: &[T],
 ) -> T {
-    // aggregate into multiple independent accumulators allows the compiler to use vector registers
+    // aggregating into multiple independent accumulators allows the compiler to use vector registers
+    // with a single accumulator the compiler would not be allowed to reorder floating point addition
     let mut acc = [A::default(); LANES];
     let mut chunks = values.chunks_exact(LANES);
     chunks.borrow_mut().for_each(|chunk| {
@@ -211,12 +212,8 @@ fn aggregate_nonnull_lanes<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, const
     });
 
     let remainder = chunks.remainder();
-    if remainder.len() > 0 {
-        if remainder.len() > 0 {
-            for i in 0..remainder.len() {
-                acc[i].accumulate(remainder[i]);
-            }
-        }
+    for i in 0..remainder.len() {
+        acc[i].accumulate(remainder[i]);
     }
 
     reduce_accumulators(acc).finish()
@@ -230,7 +227,7 @@ fn aggregate_nullable_lanes<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, cons
     assert!(LANES > 0 && 64 % LANES == 0);
     assert_eq!(values.len(), validity.len());
 
-    // aggregate into multiple independent accumulators allows the compiler to use vector registers
+    // aggregating into multiple independent accumulators allows the compiler to use vector registers
     let mut acc = [A::default(); LANES];
     // we process 64 bits of validity at a time
     let mut values_chunks = values.chunks_exact(64);
@@ -248,7 +245,7 @@ fn aggregate_nullable_lanes<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, cons
     });
 
     let remainder = values_chunks.remainder();
-    if remainder.len() > 0 {
+    if !remainder.is_empty() {
         let mut validity = validity_chunks.remainder_bits();
 
         let mut remainder_chunks = remainder.chunks_exact(LANES);
@@ -258,7 +255,7 @@ fn aggregate_nullable_lanes<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, cons
         });
 
         let remainder = remainder_chunks.remainder();
-        if remainder.len() > 0 {
+        if !remainder.is_empty() {
             let mut bit = 1;
             for i in 0..remainder.len() {
                 acc[i].accumulate_nullable(remainder[i], (validity & bit) != 0);
