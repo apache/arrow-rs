@@ -82,7 +82,7 @@ pub type RawReader<R> = Reader<R>;
 pub type RawReaderBuilder = ReaderBuilder;
 
 pub use self::reader::{Reader, ReaderBuilder};
-pub use self::writer::{ArrayWriter, LineDelimitedWriter, Writer};
+pub use self::writer::{ArrayWriter, LineDelimitedWriter, Writer, WriterBuilder};
 use half::f16;
 use serde_json::{Number, Value};
 

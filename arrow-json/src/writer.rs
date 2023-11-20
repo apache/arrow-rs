@@ -94,11 +94,10 @@
 //! ```
 //!
 //! [`LineDelimitedWriter`] and [`ArrayWriter`] will omit writing keys with null values.
-//! In order to explicitly write null values for keys, use the alternative
-//! [`LineDelimitedWriterWithNulls`] and [`ArrayWriterWithNulls`] versions.
+//! In order to explicitly write null values for keys, configure a custom [`Writer`] by
+//! using a [`WriterBuilder`] to construct a [`Writer`].
 
 use std::iter;
-use std::marker::PhantomData;
 use std::{fmt::Debug, io::Write};
 
 use serde_json::map::Map as JsonMap;
@@ -111,68 +110,6 @@ use arrow_array::*;
 use arrow_schema::*;
 
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
-
-/// This trait controls whether null values should be written explicitly
-/// for keys in objects, or whether the key should be omitted entirely.
-pub trait NullHandler {
-    /// How to insert a maybe null into a JSON object
-    fn insert_value(row: &mut JsonMap<String, Value>, col_name: &str, value: Option<Value>);
-
-    /// How to handle inserting a [`NullArray`] into a list of JSON objects.
-    fn insert_null_array(rows: &mut [JsonMap<String, Value>], col_name: &str);
-}
-
-/// Skips writing keys that have null values.
-///
-/// For example, with [`LineDelimited`] format:
-///
-/// ```json
-/// {"foo":1}
-/// {"foo":1,"bar":2}
-/// {}
-/// ```
-pub struct SkipNulls {}
-
-impl NullHandler for SkipNulls {
-    #[inline]
-    fn insert_value(row: &mut JsonMap<String, Value>, col_name: &str, value: Option<Value>) {
-        if let Some(j) = value {
-            row.insert(col_name.to_string(), j);
-        }
-    }
-
-    #[inline]
-    fn insert_null_array(_rows: &mut [JsonMap<String, Value>], _col_namee: &str) {}
-}
-
-/// Writes keys that have null values.
-///
-/// For example, with [`LineDelimited`] format:
-///
-/// ```json
-/// {"foo":1,"bar":null}
-/// {"foo":1,"bar":2}
-/// {"foo":null,"bar":null}
-/// ```
-pub struct KeepNulls {}
-
-impl NullHandler for KeepNulls {
-    #[inline]
-    fn insert_value(row: &mut JsonMap<String, Value>, col_name: &str, value: Option<Value>) {
-        if let Some(j) = value {
-            row.insert(col_name.to_string(), j);
-        } else {
-            row.insert(col_name.to_string(), Value::Null);
-        }
-    }
-
-    #[inline]
-    fn insert_null_array(rows: &mut [JsonMap<String, Value>], col_name: &str) {
-        rows.iter_mut().for_each(|row| {
-            row.insert(col_name.to_string(), Value::Null);
-        });
-    }
-}
 
 fn primitive_array_to_json<T>(array: &dyn Array) -> Result<Vec<Value>, ArrowError>
 where
@@ -189,8 +126,9 @@ where
         .collect())
 }
 
-fn struct_array_to_jsonmap_array<N: NullHandler>(
+fn struct_array_to_jsonmap_array(
     array: &StructArray,
+    keep_nulls: bool,
 ) -> Result<Vec<JsonMap<String, Value>>, ArrowError> {
     let inner_col_names = array.column_names();
 
@@ -199,19 +137,20 @@ fn struct_array_to_jsonmap_array<N: NullHandler>(
         .collect::<Vec<JsonMap<String, Value>>>();
 
     for (j, struct_col) in array.columns().iter().enumerate() {
-        set_column_for_json_rows::<N>(&mut inner_objs, struct_col, inner_col_names[j])?
+        set_column_for_json_rows(&mut inner_objs, struct_col, inner_col_names[j], keep_nulls)?
     }
     Ok(inner_objs)
 }
 
 /// Converts an arrow [`Array`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
 pub fn array_to_json_array(array: &dyn Array) -> Result<Vec<Value>, ArrowError> {
-    // For backwards compatibility, default to SkipNulls
-    array_to_json_array_internal::<SkipNulls>(array)
+    // For backwards compatibility, default to skip nulls
+    array_to_json_array_internal(array, false)
 }
 
-fn array_to_json_array_internal<N: NullHandler>(
+fn array_to_json_array_internal(
     array: &dyn Array,
+    keep_nulls: bool,
 ) -> Result<Vec<Value>, ArrowError> {
     match array.data_type() {
         DataType::Null => Ok(iter::repeat(Value::Null).take(array.len()).collect()),
@@ -254,32 +193,32 @@ fn array_to_json_array_internal<N: NullHandler>(
         DataType::List(_) => as_list_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Ok(Value::Array(array_to_json_array_internal::<N>(&v)?)),
+                Some(v) => Ok(Value::Array(array_to_json_array_internal(&v, keep_nulls)?)),
                 None => Ok(Value::Null),
             })
             .collect(),
         DataType::LargeList(_) => as_large_list_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Ok(Value::Array(array_to_json_array_internal::<N>(&v)?)),
+                Some(v) => Ok(Value::Array(array_to_json_array_internal(&v, keep_nulls)?)),
                 None => Ok(Value::Null),
             })
             .collect(),
         DataType::FixedSizeList(_, _) => as_fixed_size_list_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Ok(Value::Array(array_to_json_array_internal::<N>(&v)?)),
+                Some(v) => Ok(Value::Array(array_to_json_array_internal(&v, keep_nulls)?)),
                 None => Ok(Value::Null),
             })
             .collect(),
         DataType::Struct(_) => {
-            let jsonmaps = struct_array_to_jsonmap_array::<N>(array.as_struct())?;
+            let jsonmaps = struct_array_to_jsonmap_array(array.as_struct(), keep_nulls)?;
             Ok(jsonmaps.into_iter().map(Value::Object).collect())
         }
         DataType::Map(_, _) => as_map_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Ok(Value::Array(array_to_json_array_internal::<N>(&v)?)),
+                Some(v) => Ok(Value::Array(array_to_json_array_internal(&v, keep_nulls)?)),
                 None => Ok(Value::Null),
             })
             .collect(),
@@ -290,85 +229,98 @@ fn array_to_json_array_internal<N: NullHandler>(
 }
 
 macro_rules! set_column_by_array_type {
-    ($cast_fn:ident, $col_name:ident, $rows:ident, $array:ident, $null_handler:ty) => {
+    ($cast_fn:ident, $col_name:ident, $rows:ident, $array:ident, $keep_nulls:ident) => {
         let arr = $cast_fn($array);
         $rows
             .iter_mut()
             .zip(arr.iter())
             .for_each(|(row, maybe_value)| {
-                <$null_handler>::insert_value(row, $col_name, maybe_value.map(Into::into))
+                if let Some(j) = maybe_value.map(Into::into) {
+                    row.insert($col_name.to_string(), j);
+                } else if $keep_nulls {
+                    row.insert($col_name.to_string(), Value::Null);
+                }
             });
     };
 }
 
-fn set_column_by_primitive_type<T, N>(
+fn set_column_by_primitive_type<T>(
     rows: &mut [JsonMap<String, Value>],
     array: &ArrayRef,
     col_name: &str,
+    keep_nulls: bool,
 ) where
     T: ArrowPrimitiveType,
     T::Native: JsonSerializable,
-    N: NullHandler,
 {
     let primitive_arr = array.as_primitive::<T>();
 
     rows.iter_mut()
         .zip(primitive_arr.iter())
         .for_each(|(row, maybe_value)| {
-            N::insert_value(row, col_name, maybe_value.and_then(|v| v.into_json_value()))
+            if let Some(j) = maybe_value.and_then(|v| v.into_json_value()) {
+                row.insert(col_name.to_string(), j);
+            } else if keep_nulls {
+                row.insert(col_name.to_string(), Value::Null);
+            }
         });
 }
 
-fn set_column_for_json_rows<N: NullHandler>(
+fn set_column_for_json_rows(
     rows: &mut [JsonMap<String, Value>],
     array: &ArrayRef,
     col_name: &str,
+    keep_nulls: bool,
 ) -> Result<(), ArrowError> {
     match array.data_type() {
         DataType::Int8 => {
-            set_column_by_primitive_type::<Int8Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<Int8Type>(rows, array, col_name, keep_nulls);
         }
         DataType::Int16 => {
-            set_column_by_primitive_type::<Int16Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<Int16Type>(rows, array, col_name, keep_nulls);
         }
         DataType::Int32 => {
-            set_column_by_primitive_type::<Int32Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<Int32Type>(rows, array, col_name, keep_nulls);
         }
         DataType::Int64 => {
-            set_column_by_primitive_type::<Int64Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<Int64Type>(rows, array, col_name, keep_nulls);
         }
         DataType::UInt8 => {
-            set_column_by_primitive_type::<UInt8Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<UInt8Type>(rows, array, col_name, keep_nulls);
         }
         DataType::UInt16 => {
-            set_column_by_primitive_type::<UInt16Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<UInt16Type>(rows, array, col_name, keep_nulls);
         }
         DataType::UInt32 => {
-            set_column_by_primitive_type::<UInt32Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<UInt32Type>(rows, array, col_name, keep_nulls);
         }
         DataType::UInt64 => {
-            set_column_by_primitive_type::<UInt64Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<UInt64Type>(rows, array, col_name, keep_nulls);
         }
         DataType::Float16 => {
-            set_column_by_primitive_type::<Float16Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<Float16Type>(rows, array, col_name, keep_nulls);
         }
         DataType::Float32 => {
-            set_column_by_primitive_type::<Float32Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<Float32Type>(rows, array, col_name, keep_nulls);
         }
         DataType::Float64 => {
-            set_column_by_primitive_type::<Float64Type, N>(rows, array, col_name);
+            set_column_by_primitive_type::<Float64Type>(rows, array, col_name, keep_nulls);
         }
         DataType::Null => {
-            N::insert_null_array(rows, col_name);
+            if keep_nulls {
+                rows.iter_mut().for_each(|row| {
+                    row.insert(col_name.to_string(), Value::Null);
+                });
+            }
         }
         DataType::Boolean => {
-            set_column_by_array_type!(as_boolean_array, col_name, rows, array, N);
+            set_column_by_array_type!(as_boolean_array, col_name, rows, array, keep_nulls);
         }
         DataType::Utf8 => {
-            set_column_by_array_type!(as_string_array, col_name, rows, array, N);
+            set_column_by_array_type!(as_string_array, col_name, rows, array, keep_nulls);
         }
         DataType::LargeUtf8 => {
-            set_column_by_array_type!(as_largestring_array, col_name, rows, array, N);
+            set_column_by_array_type!(as_largestring_array, col_name, rows, array, keep_nulls);
         }
         DataType::Date32
         | DataType::Date64
@@ -384,11 +336,15 @@ fn set_column_for_json_rows<N: NullHandler>(
                     .map(|x| x.is_valid(idx))
                     .unwrap_or(true)
                     .then(|| formatter.value(idx).to_string().into());
-                N::insert_value(row, col_name, maybe_value);
+                if let Some(j) = maybe_value {
+                    row.insert(col_name.to_string(), j);
+                } else if keep_nulls {
+                    row.insert(col_name.to_string(), Value::Null);
+                };
             });
         }
         DataType::Struct(_) => {
-            let inner_objs = struct_array_to_jsonmap_array::<N>(array.as_struct())?;
+            let inner_objs = struct_array_to_jsonmap_array(array.as_struct(), keep_nulls)?;
             rows.iter_mut().zip(inner_objs).for_each(|(row, obj)| {
                 row.insert(col_name.to_string(), Value::Object(obj));
             });
@@ -398,9 +354,13 @@ fn set_column_for_json_rows<N: NullHandler>(
             rows.iter_mut().zip(listarr.iter()).try_for_each(
                 |(row, maybe_value)| -> Result<(), ArrowError> {
                     let maybe_value = maybe_value
-                        .map(|v| array_to_json_array_internal::<N>(&v).map(Value::Array))
+                        .map(|v| array_to_json_array_internal(&v, keep_nulls).map(Value::Array))
                         .transpose()?;
-                    N::insert_value(row, col_name, maybe_value);
+                    if let Some(j) = maybe_value {
+                        row.insert(col_name.to_string(), j);
+                    } else if keep_nulls {
+                        row.insert(col_name.to_string(), Value::Null);
+                    }
                     Ok(())
                 },
             )?;
@@ -410,9 +370,13 @@ fn set_column_for_json_rows<N: NullHandler>(
             rows.iter_mut().zip(listarr.iter()).try_for_each(
                 |(row, maybe_value)| -> Result<(), ArrowError> {
                     let maybe_value = maybe_value
-                        .map(|v| array_to_json_array_internal::<N>(&v).map(Value::Array))
+                        .map(|v| array_to_json_array_internal(&v, keep_nulls).map(Value::Array))
                         .transpose()?;
-                    N::insert_value(row, col_name, maybe_value);
+                    if let Some(j) = maybe_value {
+                        row.insert(col_name.to_string(), j);
+                    } else if keep_nulls {
+                        row.insert(col_name.to_string(), Value::Null);
+                    }
                     Ok(())
                 },
             )?;
@@ -420,7 +384,7 @@ fn set_column_for_json_rows<N: NullHandler>(
         DataType::Dictionary(_, value_type) => {
             let hydrated = arrow_cast::cast::cast(&array, value_type)
                 .expect("cannot cast dictionary to underlying values");
-            set_column_for_json_rows::<N>(rows, &hydrated, col_name)?;
+            set_column_for_json_rows(rows, &hydrated, col_name, keep_nulls)?;
         }
         DataType::Map(_, _) => {
             let maparr = as_map_array(array);
@@ -437,7 +401,7 @@ fn set_column_for_json_rows<N: NullHandler>(
             }
 
             let keys = keys.as_string::<i32>();
-            let values = array_to_json_array_internal::<N>(values)?;
+            let values = array_to_json_array_internal(values, keep_nulls)?;
 
             let mut kv = keys.iter().zip(values);
 
@@ -472,12 +436,13 @@ fn set_column_for_json_rows<N: NullHandler>(
 pub fn record_batches_to_json_rows(
     batches: &[&RecordBatch],
 ) -> Result<Vec<JsonMap<String, Value>>, ArrowError> {
-    // For backwards compatibility, default to SkipNulls
-    record_batches_to_json_rows_internal::<SkipNulls>(batches)
+    // For backwards compatibility, default to skip nulls
+    record_batches_to_json_rows_internal(batches, false)
 }
 
-fn record_batches_to_json_rows_internal<N: NullHandler>(
+fn record_batches_to_json_rows_internal(
     batches: &[&RecordBatch],
+    keep_nulls: bool,
 ) -> Result<Vec<JsonMap<String, Value>>, ArrowError> {
     let mut rows: Vec<JsonMap<String, Value>> = iter::repeat(JsonMap::new())
         .take(batches.iter().map(|b| b.num_rows()).sum())
@@ -491,7 +456,7 @@ fn record_batches_to_json_rows_internal<N: NullHandler>(
             let row_slice = &mut rows[base..base + batch.num_rows()];
             for (j, col) in batch.columns().iter().enumerate() {
                 let col_name = schema.field(j).name();
-                set_column_for_json_rows::<N>(row_slice, col, col_name)?
+                set_column_for_json_rows(row_slice, col, col_name, keep_nulls)?
             }
             base += row_count;
         }
@@ -576,35 +541,105 @@ impl JsonFormat for JsonArray {
 }
 
 /// A JSON writer which serializes [`RecordBatch`]es to newline delimited JSON objects.
-///
-/// Will skip writing keys with null values.
-pub type LineDelimitedWriter<W> = Writer<W, LineDelimited, SkipNulls>;
-
-/// Similar to [`LineDelimitedWriter`] but will keep keys with null values.
-pub type LineDelimitedWriterWithNulls<W> = Writer<W, LineDelimited, KeepNulls>;
+pub type LineDelimitedWriter<W> = Writer<W, LineDelimited>;
 
 /// A JSON writer which serializes [`RecordBatch`]es to JSON arrays.
-///
-/// Will skip writing keys with null values.
-pub type ArrayWriter<W> = Writer<W, JsonArray, SkipNulls>;
+pub type ArrayWriter<W> = Writer<W, JsonArray>;
 
-/// Similar to [`ArrayWriter`] but will keep keys with null values.
-pub type ArrayWriterWithNulls<W> = Writer<W, JsonArray, KeepNulls>;
+/// JSON writer builder.
+#[derive(Debug, Clone, Default)]
+pub struct WriterBuilder {
+    /// Controls whether null values should be written explicitly for keys
+    /// in objects, or whether the key should be omitted entirely.
+    keep_nulls: bool,
+}
+
+impl WriterBuilder {
+    /// Create a new builder for configuring JSON writing options.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_json::{Writer, WriterBuilder};
+    /// # use arrow_json::writer::LineDelimited;
+    /// # use std::fs::File;
+    ///
+    /// fn example() -> Writer<File, LineDelimited> {
+    ///     let file = File::create("target/out.json").unwrap();
+    ///
+    ///     // create a builder that keeps keys with null values
+    ///     let builder = WriterBuilder::new().with_keep_nulls(true);
+    ///     let writer = builder.build::<_, LineDelimited>(file);
+    ///
+    ///     writer
+    /// }
+    /// ```
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns `true` if this writer is configured to keep keys with null values.
+    pub fn keep_nulls(&self) -> bool {
+        self.keep_nulls
+    }
+
+    /// Set whether to keep keys with null values, or to omit writing them.
+    ///
+    /// For example, with [`LineDelimited`] format:
+    ///
+    /// Skip nulls (set to `false`):
+    ///
+    /// ```json
+    /// {"foo":1}
+    /// {"foo":1,"bar":2}
+    /// {}
+    /// ```
+    ///
+    /// Keep nulls (set to `true`):
+    ///
+    /// ```json
+    /// {"foo":1,"bar":null}
+    /// {"foo":1,"bar":2}
+    /// {"foo":null,"bar":null}
+    /// ```
+    ///
+    /// Default is to skip nulls (set to `false`).
+    pub fn with_keep_nulls(mut self, keep_nulls: bool) -> Self {
+        self.keep_nulls = keep_nulls;
+        self
+    }
+
+    /// Create a new `Writer` with specified `JsonFormat` and builder options.
+    pub fn build<W, F>(self, writer: W) -> Writer<W, F>
+    where
+        W: Write,
+        F: JsonFormat,
+    {
+        Writer {
+            writer,
+            started: false,
+            finished: false,
+            format: F::default(),
+            keep_nulls: self.keep_nulls,
+        }
+    }
+}
 
 /// A JSON writer which serializes [`RecordBatch`]es to a stream of
 /// `u8` encoded JSON objects.
 ///
 /// See the module level documentation for detailed usage and examples.
 /// The specific format of the stream is controlled by the [`JsonFormat`]
-/// type parameter. The [`NullHandler`] type parameter controls whether
-/// nulls should be written explicitly for keys or skipped. Default is
-/// [`SkipNulls`] for backward compatibility.
+/// type parameter.
+///
+/// By default the writer will skip writing keys with null values for
+/// backward compatibility. See [`WriterBuilder`] on how to customize
+/// this behaviour when creating a new writer.
 #[derive(Debug)]
-pub struct Writer<W, F, N = SkipNulls>
+pub struct Writer<W, F>
 where
     W: Write,
     F: JsonFormat,
-    N: NullHandler,
 {
     /// Underlying writer to use to write bytes
     writer: W,
@@ -618,15 +653,14 @@ where
     /// Determines how the byte stream is formatted
     format: F,
 
-    /// Determines whether nulls should be written for keys or omitted
-    null_handler: PhantomData<N>,
+    /// Whether keys with null values should be written or skipped
+    keep_nulls: bool,
 }
 
-impl<W, F, N> Writer<W, F, N>
+impl<W, F> Writer<W, F>
 where
     W: Write,
     F: JsonFormat,
-    N: NullHandler,
 {
     /// Construct a new writer
     pub fn new(writer: W) -> Self {
@@ -635,7 +669,7 @@ where
             started: false,
             finished: false,
             format: F::default(),
-            null_handler: Default::default(),
+            keep_nulls: false,
         }
     }
 
@@ -657,7 +691,7 @@ where
 
     /// Convert the `RecordBatch` into JSON rows, and write them to the output
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
-        for row in record_batches_to_json_rows_internal::<N>(&[batch])? {
+        for row in record_batches_to_json_rows_internal(&[batch], self.keep_nulls)? {
             self.write_row(&Value::Object(row))?;
         }
         Ok(())
@@ -665,7 +699,7 @@ where
 
     /// Convert the [`RecordBatch`] into JSON rows, and write them to the output
     pub fn write_batches(&mut self, batches: &[&RecordBatch]) -> Result<(), ArrowError> {
-        for row in record_batches_to_json_rows_internal::<N>(batches)? {
+        for row in record_batches_to_json_rows_internal(batches, self.keep_nulls)? {
             self.write_row(&Value::Object(row))?;
         }
         Ok(())
@@ -688,11 +722,10 @@ where
     }
 }
 
-impl<W, F, N> RecordBatchWriter for Writer<W, F, N>
+impl<W, F> RecordBatchWriter for Writer<W, F>
 where
     W: Write,
     F: JsonFormat,
-    N: NullHandler,
 {
     fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         self.write(batch)
@@ -1321,7 +1354,9 @@ mod tests {
                 let mut writer = LineDelimitedWriter::new(&mut buf);
                 writer.write_batches(&[&batch]).unwrap();
             } else {
-                let mut writer = LineDelimitedWriterWithNulls::new(&mut buf);
+                let mut writer = WriterBuilder::new()
+                    .with_keep_nulls(true)
+                    .build::<_, LineDelimited>(&mut buf);
                 writer.write_batches(&[&batch]).unwrap();
             }
         }
@@ -1781,7 +1816,9 @@ mod tests {
 
         let mut buf = Vec::new();
         {
-            let mut writer = ArrayWriterWithNulls::new(&mut buf);
+            let mut writer = WriterBuilder::new()
+                .with_keep_nulls(true)
+                .build::<_, JsonArray>(&mut buf);
             writer.write_batches(&[&batch])?;
             writer.finish()?;
         }
