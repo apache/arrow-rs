@@ -55,9 +55,6 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
     /// which means that this value is a positive NaN.
     const MAX: Self;
 
-    /// The number of bytes occupied by this type
-    const BYTES: usize;
-
     /// Checked addition operation
     fn add_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
@@ -150,7 +147,6 @@ macro_rules! native_type_op {
             const ONE: Self = $one;
             const MIN: Self = $min;
             const MAX: Self = $max;
-            const BYTES: usize = std::mem::size_of::<Self>();
 
             #[inline]
             fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
@@ -288,47 +284,6 @@ native_type_op!(u32);
 native_type_op!(u64);
 native_type_op!(i256, i256::ZERO, i256::ONE, i256::MIN, i256::MAX);
 
-/*
-trait ToTotalOrder {
-    type TotalOrder;
-    fn to_total_order(self) -> Self::TotalOrder;
-}
-
-impl ToTotalOrder for f64 {
-    type TotalOrder = u64;
-
-    #[inline]
-    fn to_total_order(self) -> Self::TotalOrder {
-        // reading via integer pointer instead of calling to_bits seems to avoid a move from xmm to gp reg
-        // let bits = unsafe { (self as *const f64 as *const u64).read() };
-        let bits = self.to_bits();
-        (bits ^ ((bits as i64 >> 63) as u64 >> 1)) ^ (1 << 63)
-    }
-}
-
-impl ToTotalOrder for f32 {
-    type TotalOrder = u32;
-
-    #[inline]
-    fn to_total_order(self) -> Self::TotalOrder {
-        // reading via integer pointer instead of calling to_bits seems to avoid a move from xmm to gp reg
-        // let bits = unsafe { (self as *const f32 as *const u32).read() };
-        let bits = self.to_bits();
-        (bits ^ ((bits as i32 >> 31) as u32 >> 1)) ^ (1 << 31)
-    }
-}
-
-impl ToTotalOrder for f16 {
-    type TotalOrder = u16;
-
-    #[inline]
-    fn to_total_order(self) -> Self::TotalOrder {
-        let bits = self.to_bits();
-        (bits ^ ((bits as i16 >> 15) as u16 >> 1)) ^ (1 << 15)
-    }
-}
-*/
-
 macro_rules! native_type_float_op {
     ($t:tt, $zero:expr, $one:expr, $min:expr, $max:expr, $bits:ty) => {
         impl ArrowNativeTypeOp for $t {
@@ -336,7 +291,6 @@ macro_rules! native_type_float_op {
             const ONE: Self = $one;
             const MIN: Self = $min;
             const MAX: Self = $max;
-            const BYTES: usize = std::mem::size_of::<Self>();
 
             #[inline]
             fn add_checked(self, rhs: Self) -> Result<Self, ArrowError> {
