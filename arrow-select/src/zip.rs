@@ -29,19 +29,39 @@ use arrow_schema::ArrowError;
 /// * `falsy` - Values of this array are taken if mask evaluates `false`
 pub fn zip(
     mask: &BooleanArray,
-    truthy: &dyn Array,
-    falsy: &dyn Array,
+    truthy: &dyn Datum,
+    falsy: &dyn Datum,
 ) -> Result<ArrayRef, ArrowError> {
+    let (truthy, truthy_is_scalar) = truthy.get();
+    let (falsy, falsy_is_scalar) = falsy.get();
+
     if truthy.data_type() != falsy.data_type() {
         return Err(ArrowError::InvalidArgumentError(
             "arguments need to have the same data type".into(),
         ));
     }
-    if truthy.len() != falsy.len() || falsy.len() != mask.len() {
+
+    if truthy_is_scalar && truthy.len() != 1 {
+        return Err(ArrowError::InvalidArgumentError(
+            "scalar arrays must have 1 element".into(),
+        ));
+    }
+    if !truthy_is_scalar && truthy.len() != mask.len() {
         return Err(ArrowError::InvalidArgumentError(
             "all arrays should have the same length".into(),
         ));
     }
+    if truthy_is_scalar && truthy.len() != 1 {
+        return Err(ArrowError::InvalidArgumentError(
+            "scalar arrays must have 1 element".into(),
+        ));
+    }
+    if !falsy_is_scalar && falsy.len() != mask.len() {
+        return Err(ArrowError::InvalidArgumentError(
+            "all arrays should have the same length".into(),
+        ));
+    }
+
     let falsy = falsy.to_data();
     let truthy = truthy.to_data();
 
@@ -56,15 +76,36 @@ pub fn zip(
     SlicesIterator::new(mask).for_each(|(start, end)| {
         // the gap needs to be filled with falsy values
         if start > filled {
-            mutable.extend(1, filled, start);
+            if falsy_is_scalar {
+                for _ in filled..start {
+                    // Copy the first item from the 'falsy' array into the output buffer.
+                    mutable.extend(1, 0, 1);
+                }
+            } else {
+                mutable.extend(1, filled, start);
+            }
         }
         // fill with truthy values
-        mutable.extend(0, start, end);
+        if truthy_is_scalar {
+            for _ in start..end {
+                // Copy the first item from the 'truthy' array into the output buffer.
+                mutable.extend(0, 0, 1);
+            }
+        } else {
+            mutable.extend(0, start, end);
+        }
         filled = end;
     });
     // the remaining part is falsy
-    if filled < truthy.len() {
-        mutable.extend(1, filled, truthy.len());
+    if filled < mask.len() {
+        if falsy_is_scalar {
+            for _ in filled..mask.len() {
+                // Copy the first item from the 'falsy' array into the output buffer.
+                mutable.extend(1, 0, 1);
+            }
+        } else {
+            mutable.extend(1, filled, mask.len());
+        }
     }
 
     let data = mutable.freeze();
@@ -76,13 +117,112 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_zip_kernel() {
+    fn test_zip_kernel_one() {
         let a = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
         let b = Int32Array::from(vec![None, Some(3), Some(6), Some(7), Some(3)]);
         let mask = BooleanArray::from(vec![true, true, false, false, true]);
         let out = zip(&mask, &a, &b).unwrap();
         let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
         let expected = Int32Array::from(vec![Some(5), None, Some(6), Some(7), Some(1)]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_two() {
+        let a = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
+        let b = Int32Array::from(vec![None, Some(3), Some(6), Some(7), Some(3)]);
+        let mask = BooleanArray::from(vec![false, false, true, true, false]);
+        let out = zip(&mask, &a, &b).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![None, Some(3), Some(7), None, Some(3)]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_falsy_1() {
+        let a = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
+
+        let fallback = Scalar::new(Int32Array::from_value(42, 1));
+
+        let mask = BooleanArray::from(vec![true, true, false, false, true]);
+        let out = zip(&mask, &a, &fallback).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![Some(5), None, Some(42), Some(42), Some(1)]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_falsy_2() {
+        let a = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
+
+        let fallback = Scalar::new(Int32Array::from_value(42, 1));
+
+        let mask = BooleanArray::from(vec![false, false, true, true, false]);
+        let out = zip(&mask, &a, &fallback).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![Some(42), Some(42), Some(7), None, Some(42)]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_truthy_1() {
+        let a = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
+
+        let fallback = Scalar::new(Int32Array::from_value(42, 1));
+
+        let mask = BooleanArray::from(vec![true, true, false, false, true]);
+        let out = zip(&mask, &fallback, &a).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![Some(42), Some(42), Some(7), None, Some(42)]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_truthy_2() {
+        let a = Int32Array::from(vec![Some(5), None, Some(7), None, Some(1)]);
+
+        let fallback = Scalar::new(Int32Array::from_value(42, 1));
+
+        let mask = BooleanArray::from(vec![false, false, true, true, false]);
+        let out = zip(&mask, &fallback, &a).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![Some(5), None, Some(42), Some(42), Some(1)]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_both() {
+        let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
+        let scalar_falsy = Scalar::new(Int32Array::from_value(123, 1));
+
+        let mask = BooleanArray::from(vec![true, true, false, false, true]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![Some(42), Some(42), Some(123), Some(123), Some(42)]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_none_1() {
+        let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
+        let scalar_falsy = Scalar::new(Int32Array::new_null(1));
+
+        let mask = BooleanArray::from(vec![true, true, false, false, true]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![Some(42), Some(42), None, None, Some(42)]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_none_2() {
+        let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
+        let scalar_falsy = Scalar::new(Int32Array::new_null(1));
+
+        let mask = BooleanArray::from(vec![false, false, true, true, false]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![None, None, Some(42), Some(42), None]);
         assert_eq!(actual, &expected);
     }
 }

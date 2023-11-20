@@ -25,6 +25,7 @@ Note that this crate uses two languages and an external ABI:
 * `Rust`
 * `Python`
 * C ABI privately exposed by `Pyarrow`.
+* PyCapsule ABI publicly exposed by `pyarrow`
 
 ## Basic idea
 
@@ -36,6 +37,7 @@ we can use pyarrow's interface to move pointers from and to Rust.
 ## Relevant literature
 
 * [Arrow's CDataInterface](https://arrow.apache.org/docs/format/CDataInterface.html)
+* [Arrow PyCapsule Interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html)
 * [Rust's FFI](https://doc.rust-lang.org/nomicon/ffi.html)
 * [Pyarrow private binds](https://github.com/apache/arrow/blob/ae1d24efcc3f1ac2a876d8d9f544a34eb04ae874/python/pyarrow/array.pxi#L1226)
 * [PyO3](https://docs.rs/pyo3/0.12.1/pyo3/index.html)

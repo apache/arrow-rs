@@ -28,7 +28,30 @@ use crate::arrow::async_reader::{AsyncFileReader, MetadataLoader};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ParquetMetaData;
 
-/// Implements [`AsyncFileReader`] for a parquet file in object storage
+/// Reads Parquet files in object storage using [`ObjectStore`].
+///
+/// ```no_run
+/// # use std::io::stdout;
+/// # use std::sync::Arc;
+/// # use object_store::azure::MicrosoftAzureBuilder;
+/// # use object_store::ObjectStore;
+/// # use object_store::path::Path;
+/// # use parquet::arrow::async_reader::ParquetObjectReader;
+/// # use parquet::arrow::ParquetRecordBatchStreamBuilder;
+/// # use parquet::schema::printer::print_parquet_metadata;
+/// # async fn run() {
+/// // Populate configuration from environment
+/// let storage_container = Arc::new(MicrosoftAzureBuilder::from_env().build().unwrap());
+/// let location = Path::from("path/to/blob.parquet");
+/// let meta = storage_container.head(&location).await.unwrap();
+/// println!("Found Blob with {}B at {}", meta.size, meta.location);
+///
+/// // Show Parquet metadata
+/// let reader = ParquetObjectReader::new(storage_container, meta);
+/// let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
+/// print_parquet_metadata(&mut stdout(), builder.metadata());
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 pub struct ParquetObjectReader {
     store: Arc<dyn ObjectStore>,

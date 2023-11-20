@@ -219,6 +219,22 @@ impl FFI_ArrowSchema {
         Ok(self)
     }
 
+    /// Takes ownership of the pointed to [`FFI_ArrowSchema`]
+    ///
+    /// This acts to [move] the data out of `schema`, setting the release callback to NULL
+    ///
+    /// # Safety
+    ///
+    /// * `schema` must be [valid] for reads and writes
+    /// * `schema` must be properly aligned
+    /// * `schema` must point to a properly initialized value of [`FFI_ArrowSchema`]
+    ///
+    /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
+    /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
+    pub unsafe fn from_raw(schema: *mut FFI_ArrowSchema) -> Self {
+        std::ptr::replace(schema, Self::empty())
+    }
+
     pub fn empty() -> Self {
         Self {
             format: std::ptr::null_mut(),
@@ -350,6 +366,8 @@ impl Drop for FFI_ArrowSchema {
         };
     }
 }
+
+unsafe impl Send for FFI_ArrowSchema {}
 
 impl TryFrom<&FFI_ArrowSchema> for DataType {
     type Error = ArrowError;

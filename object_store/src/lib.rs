@@ -1535,11 +1535,11 @@ mod tests {
 
             let expected: Vec<_> = files
                 .iter()
-                .cloned()
                 .filter(|x| {
                     let prefix_match = prefix.as_ref().map(|p| x.prefix_matches(p)).unwrap_or(true);
-                    prefix_match && x > &offset
+                    prefix_match && *x > &offset
                 })
+                .cloned()
                 .collect();
 
             assert_eq!(actual, expected, "{prefix:?} - {offset:?}");

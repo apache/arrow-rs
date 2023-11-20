@@ -609,9 +609,20 @@ impl<'a> Either<'a> {
     }
 }
 
-/// Iterator of [`Row`]s.
-/// It is used either for a single row group to iterate over data in that row group, or
-/// an entire file with auto buffering of all row groups.
+/// Access parquet data as an iterator of [`Row`]
+///
+/// # Caveats
+///
+/// Parquet stores data in a columnar fashion using [Dremel] encoding, and is therefore highly
+/// optimised for reading data by column, not row. As a consequence applications concerned with
+/// performance should prefer the columnar arrow or [ColumnReader] APIs.
+///
+/// Additionally the current implementation does not correctly handle repeated fields ([#2394]),
+/// and workloads looking to handle such schema should use the other APIs.
+///
+/// [#2394]: https://github.com/apache/arrow-rs/issues/2394
+/// [ColumnReader]: crate::file::reader::RowGroupReader::get_column_reader
+/// [Dremel]: https://research.google/pubs/pub36632/
 pub struct RowIter<'a> {
     descr: SchemaDescPtr,
     tree_builder: TreeBuilder,
