@@ -87,13 +87,13 @@ pub fn canonicalize_schema(schema: &Schema) -> Schema {
     Schema::new(fields).with_metadata(schema.metadata().clone())
 }
 
-struct PartialArrowFile {
+struct LazyArrowFile {
     schema: Schema,
     dictionaries: HashMap<i64, ArrowJsonDictionaryBatch>,
     arrow_json: Value,
 }
 
-fn read_json_file_metadata(json_name: &str) -> Result<PartialArrowFile> {
+fn read_json_file_metadata(json_name: &str) -> Result<LazyArrowFile> {
     let json_file = File::open(json_name)?;
     let reader = BufReader::new(json_file);
     let arrow_json: Value = serde_json::from_reader(reader).unwrap();
@@ -111,7 +111,7 @@ fn read_json_file_metadata(json_name: &str) -> Result<PartialArrowFile> {
             dictionaries.insert(json_dict.id, json_dict);
         }
     }
-    Ok(PartialArrowFile {
+    Ok(LazyArrowFile {
         schema,
         dictionaries,
         arrow_json,

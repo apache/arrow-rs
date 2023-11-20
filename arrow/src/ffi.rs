@@ -441,7 +441,7 @@ impl<'a> ImportedArrowArray<'a> {
         match (self.array.dictionary(), &self.data_type) {
             (Some(array), DataType::Dictionary(_, value_type)) => Ok(Some(ImportedArrowArray {
                 array,
-                data_type: *value_type.clone(),
+                data_type: value_type.as_ref().clone(),
                 owner: self.owner,
             })),
             (Some(_), _) => Err(ArrowError::CDataInterface(
