@@ -349,6 +349,8 @@ impl ObjectStore for LocalFileSystem {
                     e_tag = Some(get_etag(&metadata));
                     match opts.mode {
                         PutMode::Overwrite => {
+                            // For some fuse types of file systems, the file must be closed first
+                            // to trigger the upload operation, and then renamed, such as Blobfuse
                             std::mem::drop(file);
                             match std::fs::rename(&staging_path, &path) {
                                 Ok(_) => None,
