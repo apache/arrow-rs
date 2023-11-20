@@ -664,8 +664,6 @@ mod tests {
             .downcast_ref::<GenericListArray<Offset>>()
             .unwrap();
 
-        dbg!(&array);
-
         // verify
         let expected = GenericListArray::<Offset>::from(list_data);
         assert_eq!(&array.value(0), &expected.value(0));

@@ -618,7 +618,6 @@ mod tests {
         let mask = 0b01010101_01010101_10101010_10101010;
         let actual = UInt16Type::mask_from_u64(mask);
         let expected = expected_mask!(i16, mask);
-        dbg!(&expected);
         let expected = m16x32::from_cast(i16x32::from_slice_unaligned(expected.as_slice()));
 
         assert_eq!(expected, actual);
