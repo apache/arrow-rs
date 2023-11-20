@@ -717,7 +717,9 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{make_array, Array, BooleanArray, ListArray, StringArray, StructArray};
+    use arrow_array::{
+        make_array, Array, BooleanArray, Float64Array, ListArray, StringArray, StructArray,
+    };
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
@@ -2258,5 +2260,39 @@ mod tests {
             .as_primitive::<TimestampMicrosecondType>()
             .values();
         assert_eq!(values, &[1699148028689, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_coercing_primitive_into_string_decoder() {
+        let buf = r#"[
+            {"a": 1, "b": "A", "c": "T"},
+            {"a": 2, "b": "BB", "c": "F"},
+            {"a": 3, "b": 123, "c": false}
+        ]"#;
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Utf8, true),
+        ]);
+        let json_array: Vec<serde_json::Value> = serde_json::from_str(buf).unwrap();
+        let schema_ref = Arc::new(schema);
+
+        // read record batches
+        let reader = ReaderBuilder::new(schema_ref.clone()).with_coerce_primitive(true);
+        let mut decoder = reader.build_decoder().unwrap();
+        decoder.serialize(json_array.as_slice()).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(
+            batch,
+            RecordBatch::try_new(
+                schema_ref,
+                vec![
+                    Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
+                    Arc::new(StringArray::from(vec!["A", "BB", "0"])),
+                    Arc::new(StringArray::from(vec!["T", "F", "false"])),
+                ]
+            )
+            .unwrap()
+        );
     }
 }

@@ -61,7 +61,15 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                 TapeElement::Number(idx) if coerce_primitive => {
                     data_capacity += tape.get_string(idx).len();
                 }
-                _ => return Err(tape.error(*p, "string")),
+                TapeElement::I64(n) | TapeElement::I32(n) if coerce_primitive => {
+                    data_capacity += n.to_string().len();
+                }
+                TapeElement::F32(n) | TapeElement::F64(n) if coerce_primitive => {
+                    data_capacity += n.to_string().len();
+                }
+                _ => {
+                    return Err(tape.error(*p, "string"));
+                }
             }
         }
 
@@ -88,6 +96,12 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                 }
                 TapeElement::Number(idx) if coerce_primitive => {
                     builder.append_value(tape.get_string(idx));
+                }
+                TapeElement::I64(n) | TapeElement::I32(n) if coerce_primitive => {
+                    builder.append_value(n.to_string());
+                }
+                TapeElement::F32(n) | TapeElement::F64(n) if coerce_primitive => {
+                    builder.append_value(n.to_string());
                 }
                 _ => unreachable!(),
             }
