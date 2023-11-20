@@ -244,9 +244,9 @@ fn cdata_integration_import_batch_and_compare_to_json(
         read_single_batch_from_json_file(json_name.to_str()?, batch_num.try_into().unwrap())?;
     let schema = json_batch.schema();
 
+    let data_type_for_import = DataType::Struct(schema.fields.clone());
     let imported_array = unsafe { FFI_ArrowArray::from_raw(c_array) };
-    let imported_array =
-        from_ffi_and_data_type(imported_array, DataType::Struct(schema.fields.clone()))?;
+    let imported_array = unsafe { from_ffi_and_data_type(imported_array, data_type_for_import) }?;
     imported_array.validate_full()?;
     let imported_batch = RecordBatch::from(StructArray::from(imported_array));
 

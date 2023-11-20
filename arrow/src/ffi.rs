@@ -43,7 +43,7 @@
 //! let (out_array, out_schema) = to_ffi(&data)?;
 //!
 //! // import it
-//! let data = from_ffi(out_array, &out_schema)?;
+//! let data = unsafe { from_ffi(out_array, &out_schema) }?;
 //! let array = Int32Array::from(data);
 //!
 //! // perform some operation
@@ -80,7 +80,7 @@
 //!     let mut schema = FFI_ArrowSchema::empty();
 //!     let mut array = FFI_ArrowArray::empty();
 //!     foreign.export_to_c(addr_of_mut!(array), addr_of_mut!(schema));
-//!     Ok(make_array(from_ffi(array, &schema)?))
+//!     Ok(make_array(unsafe { from_ffi(array, &schema) }?))
 //! }
 //! ```
 
@@ -234,7 +234,7 @@ pub fn to_ffi(data: &ArrayData) -> Result<(FFI_ArrowArray, FFI_ArrowSchema)> {
 /// # Safety
 ///
 /// This struct assumes that the incoming data agrees with the C data interface.
-pub fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Result<ArrayData> {
+pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Result<ArrayData> {
     let dt = DataType::try_from(schema)?;
     let array = Arc::new(array);
     let tmp = ImportedArrowArray {
@@ -250,7 +250,10 @@ pub fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Result<Array
 /// # Safety
 ///
 /// This struct assumes that the incoming data agrees with the C data interface.
-pub fn from_ffi_and_data_type(array: FFI_ArrowArray, data_type: DataType) -> Result<ArrayData> {
+pub unsafe fn from_ffi_and_data_type(
+    array: FFI_ArrowArray,
+    data_type: DataType,
+) -> Result<ArrayData> {
     let array = Arc::new(array);
     let tmp = ImportedArrowArray {
         array: &array,
@@ -487,7 +490,7 @@ mod tests {
         let (array, schema) = to_ffi(&array.into_data()).unwrap();
 
         // (simulate consumer) import it
-        let array = Int32Array::from(from_ffi(array, &schema).unwrap());
+        let array = Int32Array::from(unsafe { from_ffi(array, &schema) }.unwrap());
         let array = kernels::numeric::add(&array, &array).unwrap();
 
         // verify
@@ -531,7 +534,7 @@ mod tests {
         let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -561,7 +564,7 @@ mod tests {
         let (array, schema) = to_ffi(&original_array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -583,7 +586,7 @@ mod tests {
         let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -652,7 +655,7 @@ mod tests {
         let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // downcast
@@ -692,7 +695,7 @@ mod tests {
         let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -737,7 +740,7 @@ mod tests {
         let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -763,7 +766,7 @@ mod tests {
         let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -792,7 +795,7 @@ mod tests {
         let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -828,7 +831,7 @@ mod tests {
         let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -889,7 +892,7 @@ mod tests {
         let (array, schema) = to_ffi(&list_data)?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -934,7 +937,7 @@ mod tests {
         let (array, schema) = to_ffi(&dict_array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -972,7 +975,7 @@ mod tests {
         }
 
         // (simulate consumer) import it
-        let data = from_ffi(out_array, &out_schema)?;
+        let data = unsafe { from_ffi(out_array, &out_schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -993,7 +996,7 @@ mod tests {
         let (array, schema) = to_ffi(&array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -1030,7 +1033,7 @@ mod tests {
         let (array, schema) = to_ffi(&map_array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -1053,7 +1056,7 @@ mod tests {
         let (array, schema) = to_ffi(&struct_array.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         // perform some operation
@@ -1077,7 +1080,7 @@ mod tests {
         let (array, schema) = to_ffi(&union.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = make_array(data);
 
         let array = array.as_any().downcast_ref::<UnionArray>().unwrap();
@@ -1138,7 +1141,7 @@ mod tests {
         let (array, schema) = to_ffi(&union.to_data())?;
 
         // (simulate consumer) import it
-        let data = from_ffi(array, &schema)?;
+        let data = unsafe { from_ffi(array, &schema) }?;
         let array = UnionArray::from(data);
 
         let expected_type_ids = vec![0_i8, 0, 1, 0];

@@ -70,7 +70,7 @@ mod tests {
         let schema = FFI_ArrowSchema::try_from(expected.data_type())?;
 
         // simulate an external consumer by being the consumer
-        let result = &from_ffi(array, &schema)?;
+        let result = &unsafe { from_ffi(array, &schema) }?;
 
         assert_eq!(result, expected);
         Ok(())

@@ -357,9 +357,11 @@ impl Iterator for ArrowArrayStreamReader {
             }
 
             let schema_ref = self.schema();
+            // NOTE: this parses the FFI_ArrowSchema again on each iterator call;
+            // should probably use from_ffi_and_data_type() instead.
             let schema = FFI_ArrowSchema::try_from(schema_ref.as_ref()).ok()?;
 
-            let data = from_ffi(array, &schema).ok()?;
+            let data = unsafe { from_ffi(array, &schema) }.ok()?;
 
             let record_batch = RecordBatch::from(StructArray::from(data));
 
@@ -464,7 +466,7 @@ mod tests {
                 break;
             }
 
-            let array = from_ffi(ffi_array, &ffi_schema).unwrap();
+            let array = unsafe { from_ffi(ffi_array, &ffi_schema) }.unwrap();
 
             let record_batch = RecordBatch::from(StructArray::from(array));
             produced_batches.push(record_batch);
