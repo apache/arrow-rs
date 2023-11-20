@@ -168,6 +168,12 @@ impl FFI_ArrowArray {
             .collect::<Box<_>>();
         let n_children = children.len() as i64;
 
+        // As in the IPC format, emit null_count = length for Null type
+        let null_count = match data.data_type() {
+            DataType::Null => data.len(),
+            _ => data.null_count(),
+        };
+
         // create the private data owning everything.
         // any other data must be added here, e.g. via a struct, to track lifetime.
         let mut private_data = Box::new(ArrayPrivateData {
@@ -179,7 +185,7 @@ impl FFI_ArrowArray {
 
         Self {
             length: data.len() as i64,
-            null_count: data.null_count() as i64,
+            null_count: null_count as i64,
             offset: data.offset() as i64,
             n_buffers,
             n_children,

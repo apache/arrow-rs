@@ -34,7 +34,9 @@
 //! assert_eq!(schema, back);
 //! ```
 
-use crate::{ArrowError, DataType, Field, FieldRef, Schema, TimeUnit, UnionFields, UnionMode};
+use crate::{
+    ArrowError, DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
+};
 use std::sync::Arc;
 use std::{
     collections::HashMap,
@@ -402,6 +404,9 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "tDm" => DataType::Duration(TimeUnit::Millisecond),
             "tDu" => DataType::Duration(TimeUnit::Microsecond),
             "tDn" => DataType::Duration(TimeUnit::Nanosecond),
+            "tiM" => DataType::Interval(IntervalUnit::YearMonth),
+            "tiD" => DataType::Interval(IntervalUnit::DayTime),
+            "tin" => DataType::Interval(IntervalUnit::MonthDayNano),
             "+l" => {
                 let c_child = c_schema.child(0);
                 DataType::List(Arc::new(Field::try_from(c_child)?))
@@ -669,6 +674,9 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
         DataType::Duration(TimeUnit::Millisecond) => Ok("tDm".to_string()),
         DataType::Duration(TimeUnit::Microsecond) => Ok("tDu".to_string()),
         DataType::Duration(TimeUnit::Nanosecond) => Ok("tDn".to_string()),
+        DataType::Interval(IntervalUnit::YearMonth) => Ok("tiM".to_string()),
+        DataType::Interval(IntervalUnit::DayTime) => Ok("tiD".to_string()),
+        DataType::Interval(IntervalUnit::MonthDayNano) => Ok("tin".to_string()),
         DataType::List(_) => Ok("+l".to_string()),
         DataType::LargeList(_) => Ok("+L".to_string()),
         DataType::Struct(_) => Ok("+s".to_string()),

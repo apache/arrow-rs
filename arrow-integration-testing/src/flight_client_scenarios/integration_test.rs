@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{read_json_file, ArrowFile};
+use crate::open_json_file;
 use std::collections::HashMap;
 
 use arrow::{
@@ -45,23 +45,16 @@ pub async fn run_scenario(host: &str, port: u16, path: &str) -> Result {
 
     let client = FlightServiceClient::connect(url).await?;
 
-    let ArrowFile {
-        schema, batches, ..
-    } = read_json_file(path)?;
+    let json_file = open_json_file(path)?;
 
-    let schema = Arc::new(schema);
+    let batches = json_file.read_batches()?;
+    let schema = Arc::new(json_file.schema);
 
     let mut descriptor = FlightDescriptor::default();
     descriptor.set_type(DescriptorType::Path);
     descriptor.path = vec![path.to_string()];
 
-    upload_data(
-        client.clone(),
-        schema.clone(),
-        descriptor.clone(),
-        batches.clone(),
-    )
-    .await?;
+    upload_data(client.clone(), schema, descriptor.clone(), batches.clone()).await?;
     verify_data(client, descriptor, &batches).await?;
 
     Ok(())

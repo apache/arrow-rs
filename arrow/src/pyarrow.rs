@@ -267,7 +267,7 @@ impl FromPyArrow for ArrayData {
 
             let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
             let array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer() as _) };
-            return ffi::from_ffi(array, schema_ptr).map_err(to_py_err);
+            return unsafe { ffi::from_ffi(array, schema_ptr) }.map_err(to_py_err);
         }
 
         validate_class("Array", value)?;
@@ -287,7 +287,7 @@ impl FromPyArrow for ArrayData {
             ),
         )?;
 
-        ffi::from_ffi(array, &schema).map_err(to_py_err)
+        unsafe { ffi::from_ffi(array, &schema) }.map_err(to_py_err)
     }
 }
 
@@ -348,7 +348,7 @@ impl FromPyArrow for RecordBatch {
 
             let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
             let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer() as _) };
-            let array_data = ffi::from_ffi(ffi_array, schema_ptr).map_err(to_py_err)?;
+            let array_data = unsafe { ffi::from_ffi(ffi_array, schema_ptr) }.map_err(to_py_err)?;
             if !matches!(array_data.data_type(), DataType::Struct(_)) {
                 return Err(PyTypeError::new_err(
                     "Expected Struct type from __arrow_c_array.",
