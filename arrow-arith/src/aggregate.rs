@@ -88,7 +88,9 @@ struct MinAccumulator<T: ArrowNativeTypeOp> {
 
 impl<T: ArrowNativeTypeOp> Default for MinAccumulator<T> {
     fn default() -> Self {
-        Self { min: T::MAX }
+        Self {
+            min: T::MAX_TOTAL_ORDER,
+        }
     }
 }
 
@@ -120,7 +122,9 @@ struct MaxAccumulator<T: ArrowNativeTypeOp> {
 
 impl<T: ArrowNativeTypeOp> Default for MaxAccumulator<T> {
     fn default() -> Self {
-        Self { max: T::MIN }
+        Self {
+            max: T::MIN_TOTAL_ORDER,
+        }
     }
 }
 
