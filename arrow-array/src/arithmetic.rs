@@ -285,7 +285,7 @@ native_type_op!(u64);
 native_type_op!(i256, i256::ZERO, i256::ONE, i256::MIN, i256::MAX);
 
 macro_rules! native_type_float_op {
-    ($t:tt, $zero:expr, $one:expr, $min:expr, $max:expr, $bits:ty) => {
+    ($t:tt, $zero:expr, $one:expr, $min:expr, $max:expr) => {
         impl ArrowNativeTypeOp for $t {
             const ZERO: Self = $zero;
             const ONE: Self = $one;
@@ -391,16 +391,30 @@ macro_rules! native_type_float_op {
     };
 }
 
+// the smallest/largest bit patterns for floating point numbers are NaN, but differ from the canonical NAN constants.
+// See test_float_total_order_min_max for details.
 native_type_float_op!(
     f16,
     f16::ZERO,
     f16::ONE,
-    f16::from_bits(f16::NAN.to_bits() ^ 0x8000),
-    f16::NAN,
-    u16
+    f16::from_bits(-1 as _),
+    f16::from_bits(i16::MAX as _)
 );
-native_type_float_op!(f32, 0., 1., -f32::NAN, f32::NAN, u32);
-native_type_float_op!(f64, 0., 1., -f64::NAN, f64::NAN, u64);
+// from_bits is not yet stable as const fn, see https://github.com/rust-lang/rust/issues/72447
+native_type_float_op!(
+    f32,
+    0.,
+    1.,
+    unsafe { std::mem::transmute(-1_i32) },
+    unsafe { std::mem::transmute(i32::MAX) }
+);
+native_type_float_op!(
+    f64,
+    0.,
+    1.,
+    unsafe { std::mem::transmute(-1_i64) },
+    unsafe { std::mem::transmute(i64::MAX) }
+);
 
 #[cfg(test)]
 mod tests {
@@ -803,14 +817,38 @@ mod tests {
     }
 
     #[test]
-    fn test_float_total_order_identity() {
+    fn test_float_total_order_min_max() {
         assert!(<f64 as ArrowNativeTypeOp>::MIN.is_lt(f64::NEG_INFINITY));
         assert!(<f64 as ArrowNativeTypeOp>::MAX.is_gt(f64::INFINITY));
+
+        assert!(<f64 as ArrowNativeTypeOp>::MIN.is_nan());
+        assert!(<f64 as ArrowNativeTypeOp>::MIN.is_sign_negative());
+        assert!(<f64 as ArrowNativeTypeOp>::MIN.is_lt(-f64::NAN));
+
+        assert!(<f64 as ArrowNativeTypeOp>::MAX.is_nan());
+        assert!(<f64 as ArrowNativeTypeOp>::MAX.is_sign_positive());
+        assert!(<f64 as ArrowNativeTypeOp>::MAX.is_gt(f64::NAN));
 
         assert!(<f32 as ArrowNativeTypeOp>::MIN.is_lt(f32::NEG_INFINITY));
         assert!(<f32 as ArrowNativeTypeOp>::MAX.is_gt(f32::INFINITY));
 
+        assert!(<f32 as ArrowNativeTypeOp>::MIN.is_nan());
+        assert!(<f32 as ArrowNativeTypeOp>::MIN.is_sign_negative());
+        assert!(<f32 as ArrowNativeTypeOp>::MIN.is_lt(-f32::NAN));
+
+        assert!(<f32 as ArrowNativeTypeOp>::MAX.is_nan());
+        assert!(<f32 as ArrowNativeTypeOp>::MAX.is_sign_positive());
+        assert!(<f32 as ArrowNativeTypeOp>::MAX.is_gt(f32::NAN));
+
         assert!(<f16 as ArrowNativeTypeOp>::MIN.is_lt(f16::NEG_INFINITY));
         assert!(<f16 as ArrowNativeTypeOp>::MAX.is_gt(f16::INFINITY));
+
+        assert!(<f16 as ArrowNativeTypeOp>::MIN.is_nan());
+        assert!(<f16 as ArrowNativeTypeOp>::MIN.is_sign_negative());
+        assert!(<f16 as ArrowNativeTypeOp>::MIN.is_lt(-f16::NAN));
+
+        assert!(<f16 as ArrowNativeTypeOp>::MAX.is_nan());
+        assert!(<f16 as ArrowNativeTypeOp>::MAX.is_sign_positive());
+        assert!(<f16 as ArrowNativeTypeOp>::MAX.is_gt(f16::NAN));
     }
 }
