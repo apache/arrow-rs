@@ -753,7 +753,40 @@ mod tests {
     }
 
     #[test]
+    fn test_primitive_array_sum_large_float_64() {
+        let c = Float64Array::new((1..=100).map(|x| x as f64).collect(), None);
+        assert_eq!(Some((1..=100).sum::<i64>() as f64), sum(&c));
+
+        // create an array that actually has non-zero values at the invalid indices
+        let validity = NullBuffer::new((1..=100).map(|x| x % 3 == 0).collect());
+        let c = Float64Array::new((1..=100).map(|x| x as f64).collect(), Some(validity));
+
+        assert_eq!(
+            Some((1..=100).filter(|i| i % 3 == 0).sum::<i64>() as f64),
+            sum(&c)
+        );
+    }
+
+    #[test]
+    fn test_primitive_array_sum_large_float_32() {
+        let c = Float32Array::new((1..=100).map(|x| x as f32).collect(), None);
+        assert_eq!(Some((1..=100).sum::<i64>() as f32), sum(&c));
+
+        // create an array that actually has non-zero values at the invalid indices
+        let validity = NullBuffer::new((1..=100).map(|x| x % 3 == 0).collect());
+        let c = Float32Array::new((1..=100).map(|x| x as f32).collect(), Some(validity));
+
+        assert_eq!(
+            Some((1..=100).filter(|i| i % 3 == 0).sum::<i64>() as f32),
+            sum(&c)
+        );
+    }
+
+    #[test]
     fn test_primitive_array_sum_large_64() {
+        let c = Int64Array::new((1..=100).collect(), None);
+        assert_eq!(Some((1..=100).sum()), sum(&c));
+
         // create an array that actually has non-zero values at the invalid indices
         let validity = NullBuffer::new((1..=100).map(|x| x % 3 == 0).collect());
         let c = Int64Array::new((1..=100).collect(), Some(validity));
@@ -763,6 +796,9 @@ mod tests {
 
     #[test]
     fn test_primitive_array_sum_large_32() {
+        let c = Int32Array::new((1..=100).collect(), None);
+        assert_eq!(Some((1..=100).sum()), sum(&c));
+
         // create an array that actually has non-zero values at the invalid indices
         let validity = NullBuffer::new((1..=100).map(|x| x % 3 == 0).collect());
         let c = Int32Array::new((1..=100).collect(), Some(validity));
@@ -771,6 +807,9 @@ mod tests {
 
     #[test]
     fn test_primitive_array_sum_large_16() {
+        let c = Int16Array::new((1..=100).collect(), None);
+        assert_eq!(Some((1..=100).sum()), sum(&c));
+
         // create an array that actually has non-zero values at the invalid indices
         let validity = NullBuffer::new((1..=100).map(|x| x % 3 == 0).collect());
         let c = Int16Array::new((1..=100).collect(), Some(validity));
@@ -779,11 +818,23 @@ mod tests {
 
     #[test]
     fn test_primitive_array_sum_large_8() {
-        // include fewer values than other large tests so the result does not overflow the u8
+        let c = UInt8Array::new((1..=100).collect(), None);
+        assert_eq!(
+            Some((1..=100).fold(0_u8, |a, x| a.wrapping_add(x))),
+            sum(&c)
+        );
+
         // create an array that actually has non-zero values at the invalid indices
-        let validity = NullBuffer::new((1..=100).map(|x| x % 33 == 0).collect());
+        let validity = NullBuffer::new((1..=100).map(|x| x % 3 == 0).collect());
         let c = UInt8Array::new((1..=100).collect(), Some(validity));
-        assert_eq!(Some((1..=100).filter(|i| i % 33 == 0).sum()), sum(&c));
+        assert_eq!(
+            Some(
+                (1..=100)
+                    .filter(|i| i % 3 == 0)
+                    .fold(0_u8, |a, x| a.wrapping_add(x))
+            ),
+            sum(&c)
+        );
     }
 
     #[test]
