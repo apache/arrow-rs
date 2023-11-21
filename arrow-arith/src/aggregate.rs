@@ -1035,6 +1035,19 @@ mod tests {
     }
 
     #[test]
+    fn test_primitive_min_max_float_negative_nan() {
+        let a: Float64Array =
+            Float64Array::from(vec![f64::NEG_INFINITY, f64::NAN, f64::INFINITY, -f64::NAN]);
+        let max = max(&a).unwrap();
+        let min = min(&a).unwrap();
+        assert!(max.is_nan());
+        assert!(max.is_sign_positive());
+
+        assert!(min.is_nan());
+        assert!(min.is_sign_negative());
+    }
+
+    #[test]
     fn test_primitive_min_max_float_first_nan_nonnull() {
         let a: Float64Array = (0..100)
             .map(|i| {
