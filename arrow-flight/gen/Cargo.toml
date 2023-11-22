@@ -33,5 +33,5 @@ publish = false
 # Pin specific version of the tonic-build dependencies to avoid auto-generated
 # (and checked in) arrow.flight.protocol.rs from changing
 proc-macro2 = { version = "=1.0.69", default-features = false }
-prost-build = { version = "=0.12.2", default-features = false }
+prost-build = { version = "=0.12.3", default-features = false }
 tonic-build = { version = "=0.10.2", default-features = false, features = ["transport", "prost"] }
