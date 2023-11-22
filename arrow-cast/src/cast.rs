@@ -73,10 +73,9 @@ impl<'a> Default for CastOptions<'a> {
     }
 }
 
-/// Return true if a value of type `from_type` can be cast into a
-/// value of `to_type`. Note that such as cast may be lossy.
+/// Return true if a value of type `from_type` can be cast into a value of `to_type`.
 ///
-/// If this function returns true to stay consistent with the `cast` kernel below.
+/// See [`cast_with_options`] for more information
 pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     use self::DataType::*;
     use self::IntervalUnit::*;
@@ -272,32 +271,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     }
 }
 
-/// Cast `array` to the provided data type and return a new Array with
-/// type `to_type`, if possible.
+/// Cast `array` to the provided data type and return a new Array with type `to_type`, if possible.
 ///
-/// Behavior:
-/// * Boolean to Utf8: `true` => '1', `false` => `0`
-/// * Utf8 to boolean: `true`, `yes`, `on`, `1` => `true`, `false`, `no`, `off`, `0` => `false`,
-///   short variants are accepted, other strings return null or error
-/// * Utf8 to numeric: strings that can't be parsed to numbers return null, float strings
-///   in integer casts return null
-/// * Numeric to boolean: 0 returns `false`, any other value returns `true`
-/// * List to List: the underlying data type is cast
-/// * List to FixedSizeList: the underlying data type is cast. If safe is true and a list element
-/// has the wrong length it will be replaced with NULL, otherwise an error will be returned
-/// * Primitive to List: a list array with 1 value per slot is created
-/// * Date32 and Date64: precision lost when going to higher interval
-/// * Time32 and Time64: precision lost when going to higher interval
-/// * Timestamp and Date{32|64}: precision lost when going to higher interval
-/// * Temporal to/from backing primitive: zero-copy with data type change
-/// * Casting from `float32/float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
-///   (i.e. casting 6.4999 to Decimal(10, 1) becomes 6.5). This is the breaking change from `26.0.0`.
-///   It used to truncate it instead of round (i.e. outputs 6.4 instead)
-///
-/// Unsupported Casts
-/// * To or from `StructArray`
-/// * List to primitive
-/// * Interval and duration
+/// See [`cast_with_options`] for more information
 pub fn cast(array: &dyn Array, to_type: &DataType) -> Result<ArrayRef, ArrowError> {
     cast_with_options(array, to_type, &CastOptions::default())
 }
@@ -692,9 +668,9 @@ fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
     })
 }
 
-/// Cast `array` to the provided data type and return a new Array with
-/// type `to_type`, if possible. It accepts `CastOptions` to allow consumers
-/// to configure cast behavior.
+/// Cast `array` to the provided data type and return a new Array with type `to_type`, if possible.
+///
+/// Accepts [`CastOptions`] to allow configuring the cast behavior.
 ///
 /// Behavior:
 /// * Boolean to Utf8: `true` => '1', `false` => `0`
@@ -704,15 +680,21 @@ fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
 ///   in integer casts return null
 /// * Numeric to boolean: 0 returns `false`, any other value returns `true`
 /// * List to List: the underlying data type is cast
+/// * List to FixedSizeList: the underlying data type is cast. If safe is true and a list element
+/// has the wrong length it will be replaced with NULL, otherwise an error will be returned
 /// * Primitive to List: a list array with 1 value per slot is created
 /// * Date32 and Date64: precision lost when going to higher interval
 /// * Time32 and Time64: precision lost when going to higher interval
 /// * Timestamp and Date{32|64}: precision lost when going to higher interval
 /// * Temporal to/from backing primitive: zero-copy with data type change
+/// * Casting from `float32/float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
+///   (i.e. casting 6.4999 to Decimal(10, 1) becomes 6.5). This is a breaking change from `26.0.0`.
+///   It used to truncate it instead of round (i.e. outputs 6.4 instead)
 ///
 /// Unsupported Casts
 /// * To or from `StructArray`
 /// * List to primitive
+/// * Interval and duration
 pub fn cast_with_options(
     array: &dyn Array,
     to_type: &DataType,
