@@ -169,6 +169,10 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Duration(TimeUnit::Nanosecond) => {
             Box::new(DurationNanosecondBuilder::with_capacity(capacity))
         }
+        DataType::List(field) => {
+            let builder = make_builder(field.data_type(), capacity);
+            Box::new(ListBuilder::with_capacity(builder, capacity))
+        }
         DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
         t => panic!("Data type {t:?} is not currently supported"),
     }
@@ -507,13 +511,18 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) is not currently supported"
+        expected = "Data type Map(Field { name: \"entries\", data_type: Struct([Field { name: \"keys\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"values\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) is not currently supported"
     )]
     fn test_struct_array_builder_from_schema_unsupported_type() {
-        let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+        let keys = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values = Arc::new(Field::new("values", DataType::UInt32, false));
+        let struct_type = DataType::Struct(Fields::from(vec![keys, values]));
+        let map_data_type =
+            DataType::Map(Arc::new(Field::new("entries", struct_type, false)), false);
+
         let fields = vec![
             Field::new("f1", DataType::Int16, false),
-            Field::new("f2", list_type, false),
+            Field::new("f2", map_data_type, false),
         ];
 
         let _ = StructBuilder::from_fields(fields, 5);
