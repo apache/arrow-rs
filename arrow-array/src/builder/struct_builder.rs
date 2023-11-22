@@ -169,6 +169,10 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Duration(TimeUnit::Nanosecond) => {
             Box::new(DurationNanosecondBuilder::with_capacity(capacity))
         }
+        DataType::List(field) => {
+            let builder = make_builder(field.data_type(), capacity);
+            Box::new(ListBuilder::with_capacity(builder, capacity))
+        }
         DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
         t => panic!("Data type {t:?} is not currently supported"),
     }

@@ -265,6 +265,36 @@ pub trait ArrayBuilder: Any + Send {
     fn into_box_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
+impl ArrayBuilder for Box<dyn ArrayBuilder> {
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+
+    fn is_empty(&self) -> bool {
+        (**self).is_empty()
+    }
+
+    fn finish(&mut self) -> ArrayRef {
+        (**self).finish()
+    }
+
+    fn finish_cloned(&self) -> ArrayRef {
+        (**self).finish_cloned()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        (**self).as_any()
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        (**self).as_any_mut()
+    }
+
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
 /// Builder for [`ListArray`](crate::array::ListArray)
 pub type ListBuilder<T> = GenericListBuilder<i32, T>;
 
