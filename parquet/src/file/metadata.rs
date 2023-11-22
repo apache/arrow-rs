@@ -931,6 +931,9 @@ impl ColumnIndexBuilder {
         self.min_values.push(min_value);
         self.max_values.push(max_value);
         self.null_counts.push(null_count);
+        // backwards compatibility: default to UNORDERED
+        self.boundary_ascending = false;
+        self.boundary_descending = false;
     }
 
     pub fn append_with_boundary_check<T: ParquetValueType>(
