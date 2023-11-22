@@ -36,6 +36,8 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::column::writer::compare_greater;
+use crate::data_type::private::ParquetValueType;
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
     SortingColumn,
@@ -885,11 +887,16 @@ pub struct ColumnIndexBuilder {
     null_pages: Vec<bool>,
     min_values: Vec<Vec<u8>>,
     max_values: Vec<Vec<u8>>,
-    // TODO: calc the order for all pages in this column
-    boundary_order: BoundaryOrder,
     null_counts: Vec<i64>,
     // If one page can't get build index, need to ignore all index in this column
     valid: bool,
+    // Below fields used to incrementally check boundary order
+    // We assume they are ascending/descending until proven wrong
+    boundary_ascending: bool,
+    boundary_descending: bool,
+    // This indexes into min_values/max_values (None when empty)
+    // Easier way of keeping track of latest non-null min/max
+    latest_values_index: Option<usize>,
 }
 
 impl Default for ColumnIndexBuilder {
@@ -904,12 +911,15 @@ impl ColumnIndexBuilder {
             null_pages: Vec::new(),
             min_values: Vec::new(),
             max_values: Vec::new(),
-            boundary_order: BoundaryOrder::UNORDERED,
             null_counts: Vec::new(),
             valid: true,
+            boundary_ascending: true,
+            boundary_descending: true,
+            latest_values_index: None,
         }
     }
 
+    #[deprecated(note = "Use append_with_boundary_check")]
     pub fn append(
         &mut self,
         null_page: bool,
@@ -923,6 +933,52 @@ impl ColumnIndexBuilder {
         self.null_counts.push(null_count);
     }
 
+    pub fn append_with_boundary_check<T: ParquetValueType>(
+        &mut self,
+        descr: &ColumnDescriptor,
+        null_page: bool,
+        min_value: Vec<u8>,
+        max_value: Vec<u8>,
+        null_count: i64,
+    ) -> Result<()> {
+        // Check if min/max are still ascending/descending
+        // Null pages aren't considered in this sort order
+        if !null_page {
+            if let Some(index) = self.latest_values_index {
+                // Convert into types for accurate comparison according to their sort orders
+                let latest_min = T::try_from_le_slice(&self.min_values[index])?;
+                let latest_max = T::try_from_le_slice(&self.max_values[index])?;
+                let min_value = T::try_from_le_slice(&min_value)?;
+                let max_value = T::try_from_le_slice(&max_value)?;
+
+                if self.boundary_ascending {
+                    // If latest min/max are greater than new min/max then not ascending anymore
+                    let not_ascending = compare_greater(descr, &latest_min, &min_value)
+                        || compare_greater(descr, &latest_max, &max_value);
+                    if not_ascending {
+                        self.boundary_ascending = false;
+                    }
+                }
+
+                if self.boundary_descending {
+                    // If new min/max are greater than latest min/max then not descending anymore
+                    let not_descending = compare_greater(descr, &min_value, &latest_min)
+                        || compare_greater(descr, &max_value, &latest_max);
+                    if not_descending {
+                        self.boundary_descending = false;
+                    }
+                }
+            }
+            // No need to -1 for last index as haven't yet pushed to min/max_values here
+            self.latest_values_index = Some(self.min_values.len());
+        }
+        self.null_pages.push(null_page);
+        self.min_values.push(min_value);
+        self.max_values.push(max_value);
+        self.null_counts.push(null_count);
+        Ok(())
+    }
+
     pub fn to_invalid(&mut self) {
         self.valid = false;
     }
@@ -933,11 +989,19 @@ impl ColumnIndexBuilder {
 
     /// Build and get the thrift metadata of column index
     pub fn build_to_thrift(self) -> ColumnIndex {
+        let boundary_order = match (self.boundary_ascending, self.boundary_descending) {
+            // If the lists are composed of equal elements then will be marked as ascending
+            // (Also the case if all pages are null pages)
+            (true, true) => BoundaryOrder::ASCENDING,
+            (true, false) => BoundaryOrder::ASCENDING,
+            (false, true) => BoundaryOrder::DESCENDING,
+            (false, false) => BoundaryOrder::UNORDERED,
+        };
         ColumnIndex::new(
             self.null_pages,
             self.min_values,
             self.max_values,
-            self.boundary_order,
+            boundary_order,
             self.null_counts,
         )
     }
@@ -993,8 +1057,13 @@ impl OffsetIndexBuilder {
 
 #[cfg(test)]
 mod tests {
+    use half::f16;
+
     use super::*;
-    use crate::basic::{Encoding, PageType};
+    use crate::{
+        basic::{Encoding, LogicalType, PageType},
+        data_type::{ByteArray, DataType, FixedLenByteArray, FixedLenByteArrayType, Int32Type},
+    };
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -1137,5 +1206,146 @@ mod tests {
             .unwrap();
 
         Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    // each entry in min/max values represents the min/max for a data page
+    // append N data pages (N = len of min/max slice) to builder and return built index
+    // (None represents null page)
+    fn create_column_index_with_values<T: ParquetValueType>(
+        descr: &ColumnDescriptor,
+        min_values: &[Option<T>],
+        max_values: &[Option<T>],
+    ) -> ColumnIndex {
+        assert_eq!(
+            min_values.len(),
+            max_values.len(),
+            "min and max values must be equal length"
+        );
+        let mut cib = ColumnIndexBuilder::new();
+        for (min, max) in min_values.iter().zip(max_values.iter()) {
+            match (min, max) {
+                (Some(min), Some(max)) => {
+                    cib.append_with_boundary_check::<T>(
+                        descr,
+                        false,
+                        min.as_bytes().to_vec(),
+                        max.as_bytes().to_vec(),
+                        0,
+                    )
+                    .unwrap();
+                }
+                _ => {
+                    cib.append_with_boundary_check::<T>(descr, true, vec![0], vec![0], 0)
+                        .unwrap();
+                }
+            }
+        }
+        cib.build_to_thrift()
+    }
+
+    #[test]
+    fn test_column_index_builder_boundary_order() -> Result<()> {
+        let descr = {
+            let tpe = SchemaType::primitive_type_builder("col", Int32Type::get_physical_type())
+                .build()?;
+            ColumnDescriptor::new(Arc::new(tpe), 1, 1, ColumnPath::from("col"))
+        };
+
+        // both ascending
+        let ci = create_column_index_with_values(
+            &descr,
+            &[Some(-10), Some(-5), None, Some(-5)],
+            &[Some(10), Some(11), None, Some(11)],
+        );
+        assert_eq!(ci.boundary_order, BoundaryOrder::ASCENDING);
+
+        // both descending
+        let ci = create_column_index_with_values(
+            &descr,
+            &[Some(10), Some(5), None, Some(-5)],
+            &[Some(11), Some(11), None, Some(0)],
+        );
+        assert_eq!(ci.boundary_order, BoundaryOrder::DESCENDING);
+
+        // both equal
+        let ci = create_column_index_with_values(
+            &descr,
+            &[Some(10), None, Some(10)],
+            &[Some(11), None, Some(11)],
+        );
+        assert_eq!(ci.boundary_order, BoundaryOrder::ASCENDING);
+
+        // only nulls
+        let ci = create_column_index_with_values::<i32>(
+            &descr,
+            &[None, None, None],
+            &[None, None, None],
+        );
+        assert_eq!(ci.boundary_order, BoundaryOrder::ASCENDING);
+
+        // one page
+        let ci = create_column_index_with_values(&descr, &[Some(-10)], &[Some(10)]);
+        assert_eq!(ci.boundary_order, BoundaryOrder::ASCENDING);
+
+        // one non-null page
+        let ci = create_column_index_with_values(&descr, &[Some(-10), None], &[Some(10), None]);
+        assert_eq!(ci.boundary_order, BoundaryOrder::ASCENDING);
+
+        // both unordered
+        let ci = create_column_index_with_values(
+            &descr,
+            &[Some(10), Some(11), None, Some(-5)],
+            &[Some(11), Some(16), None, Some(0)],
+        );
+        assert_eq!(ci.boundary_order, BoundaryOrder::UNORDERED);
+
+        // ordered in different orders
+        let ci = create_column_index_with_values(
+            &descr,
+            &[Some(1), Some(2), None, Some(3)],
+            &[Some(9), Some(8), None, Some(7)],
+        );
+        assert_eq!(ci.boundary_order, BoundaryOrder::UNORDERED);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_column_index_builder_boundary_order_logical_type() -> Result<()> {
+        // ensure that logical types account for different sort order than underlying
+        // physical type representation
+        let f16_descr = {
+            let tpe = SchemaType::primitive_type_builder(
+                "col",
+                FixedLenByteArrayType::get_physical_type(),
+            )
+            .with_length(2)
+            .with_logical_type(Some(LogicalType::Float16))
+            .build()?;
+            ColumnDescriptor::new(Arc::new(tpe), 1, 1, ColumnPath::from("col"))
+        };
+        let fba_descr = {
+            let tpe = SchemaType::primitive_type_builder(
+                "col",
+                FixedLenByteArrayType::get_physical_type(),
+            )
+            .with_length(2)
+            .build()?;
+            ColumnDescriptor::new(Arc::new(tpe), 1, 1, ColumnPath::from("col"))
+        };
+
+        // f16 descending
+        let values = [f16::ONE, f16::ZERO, f16::NEG_ZERO, f16::NEG_ONE]
+            .into_iter()
+            .map(|s| Some(ByteArray::from(s).into()))
+            .collect::<Vec<Option<FixedLenByteArray>>>();
+        let ci = create_column_index_with_values(&f16_descr, &values, &values);
+        assert_eq!(ci.boundary_order, BoundaryOrder::DESCENDING);
+
+        // same bytes, but fba unordered
+        let ci = create_column_index_with_values(&fba_descr, &values, &values);
+        assert_eq!(ci.boundary_order, BoundaryOrder::UNORDERED);
+
+        Ok(())
     }
 }
