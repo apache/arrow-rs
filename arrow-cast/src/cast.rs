@@ -7483,7 +7483,6 @@ mod tests {
                 false,
             ))),
         )
-        // List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
         .unwrap();
         let actual = list_array.as_any().downcast_ref::<ListArray>().unwrap();
         let expected = array.as_any().downcast_ref::<LargeListArray>().unwrap();
