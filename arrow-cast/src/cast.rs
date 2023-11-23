@@ -788,7 +788,13 @@ pub fn cast_with_options(
             cast_list_inner::<i64>(array, to, to_type, cast_options)
         }
         (List(list_from), LargeList(list_to)) => {
-            if list_to.data_type() != list_from.data_type() {
+            let to_type = list_to.data_type();
+            let from_type = list_from.data_type();
+
+            if to_type != from_type
+                && !(matches!(to_type, List(_) | LargeList(_))
+                    || matches!(from_type, List(_) | LargeList(_)))
+            {
                 Err(ArrowError::CastError(
                     "cannot cast list to large-list with different child data".into(),
                 ))
@@ -797,7 +803,13 @@ pub fn cast_with_options(
             }
         }
         (LargeList(list_from), List(list_to)) => {
-            if list_to.data_type() != list_from.data_type() {
+            let to_type = list_to.data_type();
+            let from_type = list_from.data_type();
+
+            if to_type != from_type
+                && !(matches!(to_type, List(_) | LargeList(_))
+                    || matches!(from_type, List(_) | LargeList(_)))
+            {
                 Err(ArrowError::CastError(
                     "cannot cast large-list to list with different child data".into(),
                 ))
@@ -7446,6 +7458,49 @@ mod tests {
         let large_list_array = cast(
             &array,
             &DataType::LargeList(Arc::new(Field::new("", DataType::Int32, false))),
+        )
+        .unwrap();
+        let actual = large_list_array
+            .as_any()
+            .downcast_ref::<LargeListArray>()
+            .unwrap();
+        let expected = array.as_any().downcast_ref::<ListArray>().unwrap();
+
+        assert_eq!(&expected.value(0), &actual.value(0));
+        assert_eq!(&expected.value(1), &actual.value(1));
+        assert_eq!(&expected.value(2), &actual.value(2));
+    }
+
+    #[test]
+    fn test_cast_nested_list_container() {
+        // large-list to list
+        let array = Arc::new(make_large_list_array()) as ArrayRef;
+        let list_array = cast(
+            &array,
+            &DataType::List(Arc::new(Field::new(
+                "",
+                DataType::List(Arc::new(Field::new("", DataType::Int32, false))),
+                false,
+            ))),
+        )
+        // List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+        .unwrap();
+        let actual = list_array.as_any().downcast_ref::<ListArray>().unwrap();
+        let expected = array.as_any().downcast_ref::<LargeListArray>().unwrap();
+
+        assert_eq!(&expected.value(0), &actual.value(0));
+        assert_eq!(&expected.value(1), &actual.value(1));
+        assert_eq!(&expected.value(2), &actual.value(2));
+
+        // list to large-list
+        let array = Arc::new(make_list_array()) as ArrayRef;
+        let large_list_array = cast(
+            &array,
+            &DataType::LargeList(Arc::new(Field::new(
+                "",
+                DataType::LargeList(Arc::new(Field::new("", DataType::Int32, false))),
+                false,
+            ))),
         )
         .unwrap();
         let actual = large_list_array
