@@ -231,8 +231,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Time64(_), Time32(to_unit)) => {
             matches!(to_unit, Second | Millisecond)
         }
-        (Timestamp(_, _), _) if to_type.is_integer() || to_type.is_floating() => true,
-        (_, Timestamp(_, _)) if from_type.is_integer() || from_type.is_floating() => true,
+        (Timestamp(_, _), _) if to_type.is_integer() || (to_type.is_floating() && to_type != &Float16) => true,
+        (_, Timestamp(_, _)) if from_type.is_integer() || (from_type.is_floating() && from_type != &Float16) => true,
         (Date64, Timestamp(_, None)) => true,
         (Date32, Timestamp(_, None)) => true,
         (
