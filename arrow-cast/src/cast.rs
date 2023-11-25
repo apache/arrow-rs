@@ -231,8 +231,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Time64(_), Time32(to_unit)) => {
             matches!(to_unit, Second | Millisecond)
         }
-        (Timestamp(_, _), _) if to_type.is_integer() => true,
-        (_, Timestamp(_, _)) if from_type.is_integer() => true,
+        (Timestamp(_, _), _) if to_type.is_integer() || to_type.is_floating() => true,
+        (_, Timestamp(_, _)) if from_type.is_integer() || from_type.is_floating() => true,
         (Date64, Timestamp(_, None)) => true,
         (Date32, Timestamp(_, None)) => true,
         (
@@ -1634,24 +1634,31 @@ pub fn cast_with_options(
                 .unary::<_, Time64MicrosecondType>(|x| x / (NANOSECONDS / MICROSECONDS)),
         )),
 
-        (Timestamp(TimeUnit::Second, _), _) if to_type.is_integer() => {
+        // Timestamp to integer/floating
+        (Timestamp(TimeUnit::Second, _), _) if to_type.is_integer() || to_type.is_floating() => {
             let array = cast_reinterpret_arrays::<TimestampSecondType, Int64Type>(array)?;
             cast_with_options(&array, to_type, cast_options)
         }
-        (Timestamp(TimeUnit::Millisecond, _), _) if to_type.is_integer() => {
+        (Timestamp(TimeUnit::Millisecond, _), _)
+            if to_type.is_integer() || to_type.is_floating() =>
+        {
             let array = cast_reinterpret_arrays::<TimestampMillisecondType, Int64Type>(array)?;
             cast_with_options(&array, to_type, cast_options)
         }
-        (Timestamp(TimeUnit::Microsecond, _), _) if to_type.is_integer() => {
+        (Timestamp(TimeUnit::Microsecond, _), _)
+            if to_type.is_integer() || to_type.is_floating() =>
+        {
             let array = cast_reinterpret_arrays::<TimestampMicrosecondType, Int64Type>(array)?;
             cast_with_options(&array, to_type, cast_options)
         }
-        (Timestamp(TimeUnit::Nanosecond, _), _) if to_type.is_integer() => {
+        (Timestamp(TimeUnit::Nanosecond, _), _)
+            if to_type.is_integer() || to_type.is_floating() =>
+        {
             let array = cast_reinterpret_arrays::<TimestampNanosecondType, Int64Type>(array)?;
             cast_with_options(&array, to_type, cast_options)
         }
 
-        (_, Timestamp(unit, tz)) if from_type.is_integer() => {
+        (_, Timestamp(unit, tz)) if from_type.is_integer() || from_type.is_floating() => {
             let array = cast_with_options(array, &Int64, cast_options)?;
             Ok(make_timestamp_array(
                 array.as_primitive(),
@@ -4716,6 +4723,35 @@ mod tests {
         assert_eq!(&actual, &expected);
 
         let actual = cast(&cast(&array, &DataType::UInt64).unwrap(), &DataType::Int64).unwrap();
+        assert_eq!(&actual, &expected);
+    }
+
+    #[test]
+    fn test_cast_floating_to_timestamp() {
+        let array = Int64Array::from(vec![Some(2), Some(10), None]);
+        let expected = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        let array = Float32Array::from(vec![Some(2.0), Some(10.6), None]);
+        let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        assert_eq!(&actual, &expected);
+
+        let array = Float64Array::from(vec![Some(2.1), Some(10.2), None]);
+        let actual = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+
+        assert_eq!(&actual, &expected);
+    }
+
+    #[test]
+    fn test_cast_timestamp_to_floating() {
+        let array = TimestampMillisecondArray::from(vec![Some(5), Some(1), None])
+            .with_timezone("UTC".to_string());
+        let expected = cast(&array, &DataType::Int64).unwrap();
+
+        let actual = cast(&cast(&array, &DataType::Float32).unwrap(), &DataType::Int64).unwrap();
+        assert_eq!(&actual, &expected);
+
+        let actual = cast(&cast(&array, &DataType::Float64).unwrap(), &DataType::Int64).unwrap();
         assert_eq!(&actual, &expected);
     }
 
