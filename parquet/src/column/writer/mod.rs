@@ -1116,7 +1116,7 @@ fn update_stat<T: ParquetValueType, F>(
 }
 
 /// Evaluate `a > b` according to underlying logical type.
-pub fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
+fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
     if let Some(LogicalType::Integer { is_signed, .. }) = descr.logical_type() {
         if !is_signed {
             // need to compare unsigned
