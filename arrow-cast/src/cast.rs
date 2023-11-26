@@ -47,7 +47,7 @@ use crate::parse::{
     string_to_datetime, Parser,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{i256, ArrowNativeType, Buffer, OffsetBuffer};
+use arrow_buffer::{i256, ArrowNativeType, OffsetBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ArrayData;
 use arrow_schema::*;
@@ -3299,7 +3299,7 @@ fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
 
 #[cfg(test)]
 mod tests {
-    use arrow_buffer::NullBuffer;
+    use arrow_buffer::{Buffer, NullBuffer};
 
     use super::*;
 
