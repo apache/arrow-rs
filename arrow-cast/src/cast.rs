@@ -2641,7 +2641,7 @@ where
         )));
     }
 
-    let (negative, first_part) = if parts[0].len() == 0 {
+    let (negative, first_part) = if parts[0].is_empty() {
         (false, parts[0])
     } else {
         match parts[0].as_bytes()[0] {
@@ -2654,13 +2654,13 @@ where
     let integers = first_part.trim_start_matches('0');
     let decimals = if parts.len() == 2 { parts[1] } else { "" };
 
-    if integers.len() != 0 && !integers.as_bytes()[0].is_ascii_digit() {
+    if !integers.is_empty() && !integers.as_bytes()[0].is_ascii_digit() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid decimal format: {value_str:?}"
         )));
     }
 
-    if decimals.len() != 0 && !decimals.as_bytes()[0].is_ascii_digit() {
+    if !decimals.is_empty() && !decimals.as_bytes()[0].is_ascii_digit() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid decimal format: {value_str:?}"
         )));
