@@ -2642,7 +2642,18 @@ where
     }
 
     let integers = parts[0].trim_start_matches('0');
-    let decimals = if parts.len() == 2 { parts[1] } else { "" };
+
+    let (decimals, negative) = if parts.len() == 2 {
+        (parts[1], integers.starts_with('-'))
+    } else {
+        ("", false)
+    };
+
+    let integers = if negative {
+        integers.trim_start_matches('-')
+    } else {
+        integers
+    };
 
     // Adjust decimal based on scale
     let number_decimals = if decimals.len() > scale {
@@ -2677,7 +2688,17 @@ where
             i256::ZERO
         };
 
-        format!("{}", integers.add_wrapping(adjusted))
+        let integers = if negative {
+            integers.neg_wrapping()
+        } else {
+            integers
+        };
+
+        if negative {
+            format!("{}", integers.sub_wrapping(adjusted))
+        } else {
+            format!("{}", integers.add_wrapping(adjusted))
+        }
     } else {
         let padding = if scale > decimals.len() { scale } else { 0 };
 
@@ -8243,6 +8264,8 @@ mod tests {
         assert_eq!("0.00", decimal_arr.value_as_string(10));
         assert_eq!("0.00", decimal_arr.value_as_string(11));
         assert!(decimal_arr.is_null(12));
+        assert_eq!("-1.23", decimal_arr.value_as_string(13));
+        assert_eq!("-1.24", decimal_arr.value_as_string(14));
 
         // Decimal256
         let output_type = DataType::Decimal256(76, 3);
@@ -8264,6 +8287,8 @@ mod tests {
         assert_eq!("0.000", decimal_arr.value_as_string(10));
         assert_eq!("0.000", decimal_arr.value_as_string(11));
         assert!(decimal_arr.is_null(12));
+        assert_eq!("-1.235", decimal_arr.value_as_string(13));
+        assert_eq!("-1.236", decimal_arr.value_as_string(14));
     }
 
     #[test]
@@ -8282,6 +8307,8 @@ mod tests {
             Some(""),
             Some(" "),
             None,
+            Some("-1.23499999"),
+            Some("-1.23599999"),
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
@@ -8304,6 +8331,8 @@ mod tests {
             Some(""),
             Some(" "),
             None,
+            Some("-1.23499999"),
+            Some("-1.23599999"),
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
