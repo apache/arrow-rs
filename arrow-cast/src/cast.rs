@@ -670,9 +670,9 @@ fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
 
 /// Cast `array` to the provided data type and return a new Array with type `to_type`, if possible.
 ///
-/// Accepts [`CastOptions`] to allow configuring the cast behavior.
+/// Accepts [`CastOptions`] to specify cast behavior.
 ///
-/// Behavior:
+/// ## Behavior
 /// * Boolean to Utf8: `true` => '1', `false` => `0`
 /// * Utf8 to boolean: `true`, `yes`, `on`, `1` => `true`, `false`, `no`, `off`, `0` => `false`,
 ///   short variants are accepted, other strings return null or error
@@ -688,8 +688,8 @@ fn as_time_res_with_timezone<T: ArrowPrimitiveType>(
 /// * Timestamp and Date{32|64}: precision lost when going to higher interval
 /// * Temporal to/from backing primitive: zero-copy with data type change
 /// * Casting from `float32/float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
-///   (i.e. casting 6.4999 to Decimal(10, 1) becomes 6.5). This is a breaking change from `26.0.0`.
-///   It used to truncate it instead of round (i.e. outputs 6.4 instead)
+///   (i.e. casting `6.4999` to Decimal(10, 1) becomes `6.5`). Prior to  version `26.0.0`, 
+///   casting would truncate instead (i.e. outputs `6.4` instead)
 ///
 /// Unsupported Casts
 /// * To or from `StructArray`
