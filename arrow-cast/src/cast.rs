@@ -4880,6 +4880,30 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_format_yyyymmdd_to_date32() {
+        let a = Arc::new(StringArray::from(vec![
+            Some("2020-12-25"),
+            Some("20201117"),
+        ])) as ArrayRef;
+
+        let to_type = DataType::Date32;
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let result = cast_with_options(&a, &to_type, &options).unwrap();
+        let c = result.as_primitive::<Date32Type>();
+        assert_eq!(
+            chrono::NaiveDate::from_ymd_opt(2020, 12, 25),
+            c.value_as_date(0)
+        );
+        assert_eq!(
+            chrono::NaiveDate::from_ymd_opt(2020, 11, 17),
+            c.value_as_date(1)
+        );
+    }
+
+    #[test]
     fn test_cast_string_to_time32second() {
         let a1 = Arc::new(StringArray::from(vec![
             Some("08:08:35.091323414"),
