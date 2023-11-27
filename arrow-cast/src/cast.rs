@@ -2634,8 +2634,16 @@ where
     T::Native: DecimalCast + ArrowNativeTypeOp,
 {
     let value_str = value_str.trim();
-    let parts: Vec<&str> = value_str.split('.').collect();
-    if parts.len() > 2 {
+
+    let negative = value_str.starts_with('-');
+
+    let parts: Vec<&str> = if negative {
+        value_str[1..].split('.').collect()
+    } else {
+        value_str.split('.').collect()
+    };
+
+    if parts.len() > 2 || parts[0].starts_with('+') || parts[0].starts_with('-') {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid decimal format: {value_str:?}"
         )));
@@ -2677,12 +2685,22 @@ where
             i256::ZERO
         };
 
-        format!("{}", integers.add_wrapping(adjusted))
+        if negative {
+            format!("-{}", integers.add_wrapping(adjusted))
+        } else {
+            format!("{}", integers.add_wrapping(adjusted))
+        }
     } else {
         let padding = if scale > decimals.len() { scale } else { 0 };
 
         let decimals = format!("{decimals:0<padding$}");
-        format!("{integers}{decimals}")
+
+        if negative {
+            // println!("integers: {}, decimals: {}", integers, decimals);
+            format!("-{integers}{decimals}")
+        } else {
+            format!("{integers}{decimals}")
+        }
     };
 
     let value = i256::from_string(number_decimals.as_str()).ok_or_else(|| {
@@ -8220,6 +8238,95 @@ mod tests {
             ),
             "0.127"
         );
+        assert_eq!(
+            Decimal128Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal128Type>("-123.45", 2).unwrap(),
+                38,
+                2,
+            ),
+            "-123.45"
+        );
+        assert_eq!(
+            Decimal128Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal128Type>("-12345", 2).unwrap(),
+                38,
+                2,
+            ),
+            "-12345.00"
+        );
+        assert_eq!(
+            Decimal128Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal128Type>("-0.12345", 2).unwrap(),
+                38,
+                2,
+            ),
+            "-0.12"
+        );
+        assert_eq!(
+            Decimal128Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal128Type>("-.12345", 2).unwrap(),
+                38,
+                2,
+            ),
+            "-0.12"
+        );
+        assert_eq!(
+            Decimal128Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal128Type>("-.1265", 2).unwrap(),
+                38,
+                2,
+            ),
+            "-0.13"
+        );
+        assert_eq!(
+            Decimal128Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal128Type>("-.1265", 2).unwrap(),
+                38,
+                2,
+            ),
+            "-0.13"
+        );
+
+        assert_eq!(
+            Decimal256Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal256Type>("-123.45", 3).unwrap(),
+                38,
+                3,
+            ),
+            "-123.450"
+        );
+        assert_eq!(
+            Decimal256Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal256Type>("-12345", 3).unwrap(),
+                38,
+                3,
+            ),
+            "-12345.000"
+        );
+        assert_eq!(
+            Decimal256Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal256Type>("-0.12345", 3).unwrap(),
+                38,
+                3,
+            ),
+            "-0.123"
+        );
+        assert_eq!(
+            Decimal256Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal256Type>("-.12345", 3).unwrap(),
+                38,
+                3,
+            ),
+            "-0.123"
+        );
+        assert_eq!(
+            Decimal256Type::format_decimal(
+                parse_string_to_decimal_native::<Decimal256Type>("-.1265", 3).unwrap(),
+                38,
+                3,
+            ),
+            "-0.127"
+        );
     }
 
     fn test_cast_string_to_decimal(array: ArrayRef) {
@@ -8239,10 +8346,21 @@ mod tests {
         assert_eq!("12345.00", decimal_arr.value_as_string(6));
         assert_eq!("0.12", decimal_arr.value_as_string(7));
         assert_eq!("12.23", decimal_arr.value_as_string(8));
-        assert!(decimal_arr.is_null(9));
-        assert_eq!("0.00", decimal_arr.value_as_string(10));
-        assert_eq!("0.00", decimal_arr.value_as_string(11));
-        assert!(decimal_arr.is_null(12));
+        // for negative numbers
+        assert_eq!("-123.45", decimal_arr.value_as_string(9));
+        assert_eq!("-1.23", decimal_arr.value_as_string(10));
+        assert_eq!("-0.12", decimal_arr.value_as_string(11));
+        assert_eq!("-0.13", decimal_arr.value_as_string(12));
+        assert_eq!("-1.26", decimal_arr.value_as_string(13));
+        assert_eq!("-12345.00", decimal_arr.value_as_string(14));
+        assert_eq!("-12345.00", decimal_arr.value_as_string(15));
+        assert_eq!("-0.12", decimal_arr.value_as_string(16));
+        assert_eq!("-12.23", decimal_arr.value_as_string(17));
+        // for null values
+        assert!(decimal_arr.is_null(18));
+        assert_eq!("0.00", decimal_arr.value_as_string(19));
+        assert_eq!("0.00", decimal_arr.value_as_string(20));
+        assert!(decimal_arr.is_null(21));
 
         // Decimal256
         let output_type = DataType::Decimal256(76, 3);
@@ -8260,10 +8378,21 @@ mod tests {
         assert_eq!("12345.000", decimal_arr.value_as_string(6));
         assert_eq!("0.123", decimal_arr.value_as_string(7));
         assert_eq!("12.234", decimal_arr.value_as_string(8));
-        assert!(decimal_arr.is_null(9));
-        assert_eq!("0.000", decimal_arr.value_as_string(10));
-        assert_eq!("0.000", decimal_arr.value_as_string(11));
-        assert!(decimal_arr.is_null(12));
+        // for negative numbers
+        assert_eq!("-123.450", decimal_arr.value_as_string(9));
+        assert_eq!("-1.235", decimal_arr.value_as_string(10));
+        assert_eq!("-0.123", decimal_arr.value_as_string(11));
+        assert_eq!("-0.127", decimal_arr.value_as_string(12));
+        assert_eq!("-1.263", decimal_arr.value_as_string(13));
+        assert_eq!("-12345.000", decimal_arr.value_as_string(14));
+        assert_eq!("-12345.000", decimal_arr.value_as_string(15));
+        assert_eq!("-0.123", decimal_arr.value_as_string(16));
+        assert_eq!("-12.234", decimal_arr.value_as_string(17));
+        // for null values
+        assert!(decimal_arr.is_null(18));
+        assert_eq!("0.000", decimal_arr.value_as_string(19));
+        assert_eq!("0.000", decimal_arr.value_as_string(20));
+        assert!(decimal_arr.is_null(21));
     }
 
     #[test]
@@ -8278,6 +8407,15 @@ mod tests {
             Some("12345"),
             Some("000.123"),
             Some("12.234000"),
+            Some("-123.45"),
+            Some("-1.2345"),
+            Some("-0.12345"),
+            Some("-0.1267"),
+            Some("-1.263"),
+            Some("-12345.0"),
+            Some("-12345"),
+            Some("-000.123"),
+            Some("-12.234000"),
             None,
             Some(""),
             Some(" "),
@@ -8300,6 +8438,15 @@ mod tests {
             Some("12345"),
             Some("000.123"),
             Some("12.234000"),
+            Some("-123.45"),
+            Some("-1.2345"),
+            Some("-0.12345"),
+            Some("-0.1267"),
+            Some("-1.263"),
+            Some("-12345.0"),
+            Some("-12345"),
+            Some("-000.123"),
+            Some("-12.234000"),
             None,
             Some(""),
             Some(" "),
@@ -8945,6 +9092,29 @@ mod tests {
                 ArrowError::ComputeError(format!("Failed to downcast to {}", T::DATA_TYPE))
             })
             .cloned()
+    }
+
+    #[test]
+    fn test() {
+        let array = LargeStringArray::from(vec![Some("-0.12345")]);
+
+        // Decimal128
+        let output_type = DataType::Decimal128(38, 2);
+        assert!(can_cast_types(array.data_type(), &output_type));
+
+        let casted_array = cast(&array, &output_type).unwrap();
+        let decimal_arr = casted_array.as_primitive::<Decimal128Type>();
+
+        assert_eq!("-0.12", decimal_arr.value_as_string(0));
+
+        // Decimal256
+        let output_type = DataType::Decimal256(76, 3);
+        assert!(can_cast_types(array.data_type(), &output_type));
+
+        let casted_array = cast(&array, &output_type).unwrap();
+        let decimal_arr = casted_array.as_primitive::<Decimal256Type>();
+
+        assert_eq!("-0.123", decimal_arr.value_as_string(0));
     }
 
     #[test]
