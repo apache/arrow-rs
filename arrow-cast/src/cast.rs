@@ -2653,7 +2653,7 @@ where
     let decimals = if parts.len() == 2 { parts[1] } else { "" };
 
     // Adjust decimal based on scale
-    let number_decimals = if decimals.len() > scale {
+    let mut number_decimals = if decimals.len() > scale {
         let decimal_number = i256::from_string(decimals).ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!("Cannot parse decimal format: {value_str}"))
         })?;
@@ -2685,22 +2685,18 @@ where
             i256::ZERO
         };
 
-        if negative {
-            format!("-{}", integers.add_wrapping(adjusted))
-        } else {
-            format!("{}", integers.add_wrapping(adjusted))
-        }
+        format!("{}", integers.add_wrapping(adjusted))
     } else {
         let padding = if scale > decimals.len() { scale } else { 0 };
 
         let decimals = format!("{decimals:0<padding$}");
 
-        if negative {
-            format!("-{integers}{decimals}")
-        } else {
-            format!("{integers}{decimals}")
-        }
+        format!("{integers}{decimals}")
     };
+
+    if negative {
+        number_decimals.insert(0, '-');
+    }
 
     let value = i256::from_string(number_decimals.as_str()).ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!(
