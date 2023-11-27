@@ -170,17 +170,16 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Decimal128(_, _) | Decimal256(_, _), Utf8 | LargeUtf8) => true,
         // Utf8 to decimal
         (Utf8 | LargeUtf8, Decimal128(_, _) | Decimal256(_, _)) => true,
-        (Decimal128(_, _) | Decimal256(_, _), _) => false,
-        (_, Decimal128(_, _) | Decimal256(_, _)) => false,
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
         (_, Boolean) => {
-            DataType::is_numeric(from_type)
+            DataType::is_integer(from_type) ||
+                DataType::is_floating(from_type)
                 || from_type == &Utf8
                 || from_type == &LargeUtf8
         }
         (Boolean, _) => {
-            DataType::is_numeric(to_type) || to_type == &Utf8 || to_type == &LargeUtf8
+            DataType::is_integer(to_type) || DataType::is_floating(to_type) || to_type == &Utf8 || to_type == &LargeUtf8
         }
 
         (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_)) => true,
