@@ -2696,7 +2696,6 @@ where
         let decimals = format!("{decimals:0<padding$}");
 
         if negative {
-            // println!("integers: {}, decimals: {}", integers, decimals);
             format!("-{integers}{decimals}")
         } else {
             format!("{integers}{decimals}")
