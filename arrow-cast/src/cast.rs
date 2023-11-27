@@ -2654,6 +2654,12 @@ where
     let integers = first_part.trim_start_matches('0');
     let decimals = if parts.len() == 2 { parts[1] } else { "" };
 
+    if integers.len() != 0 && !integers.as_bytes()[0].is_ascii_digit() {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Invalid decimal format: {value_str:?}"
+        )));
+    }
+
     if decimals.len() != 0 && !decimals.as_bytes()[0].is_ascii_digit() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid decimal format: {value_str:?}"
@@ -8277,6 +8283,7 @@ mod tests {
         assert_eq!("0.12", decimal_arr.value_as_string(24));
         assert!(decimal_arr.is_null(25));
         assert!(decimal_arr.is_null(26));
+        assert!(decimal_arr.is_null(27));
 
         // Decimal256
         let output_type = DataType::Decimal256(76, 3);
@@ -8312,6 +8319,7 @@ mod tests {
         assert_eq!("0.123", decimal_arr.value_as_string(24));
         assert!(decimal_arr.is_null(25));
         assert!(decimal_arr.is_null(26));
+        assert!(decimal_arr.is_null(27));
     }
 
     #[test]
@@ -8344,6 +8352,7 @@ mod tests {
             Some("+000.123"),
             Some("1.-23499999"),
             Some("-1.-23499999"),
+            Some("--1.23499999"),
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
@@ -8380,6 +8389,7 @@ mod tests {
             Some("+000.123"),
             Some("1.-23499999"),
             Some("-1.-23499999"),
+            Some("--1.23499999"),
         ]);
         let array = Arc::new(str_array) as ArrayRef;
 
