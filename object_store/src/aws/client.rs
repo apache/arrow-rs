@@ -493,7 +493,7 @@ impl S3Client {
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| match source.status() {
-                Some(error) if error == acceptable_error_code => crate::Error::AlreadyExists {
+                Some(error) if error == precondition_failure => crate::Error::AlreadyExists {
                     source: Box::new(source),
                     path: to.to_string(),
                 },

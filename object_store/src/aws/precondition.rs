@@ -17,11 +17,13 @@
 
 use crate::config::Parse;
 
+use itertools::Itertools;
+
 /// Configure how to provide [`ObjectStore::copy_if_not_exists`] for [`AmazonS3`].
 ///
 /// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
 /// [`AmazonS3`]: super::AmazonS3
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum S3CopyIfNotExists {
     /// Some S3-compatible stores, such as Cloudflare R2, support copy if not exists
@@ -51,7 +53,7 @@ impl std::fmt::Display for S3CopyIfNotExists {
         match self {
             Self::Header(k, v) => write!(f, "header: {}: {}", k, v),
             Self::HeaderWithStatus(k, v, code) => {
-                write!(f, "header-with-status: {}: {k}: {v}", code.as_u16())
+                write!(f, "header-with-status: {k}: {v}: {}", code.as_u16())
             }
         }
     }
@@ -68,16 +70,11 @@ impl S3CopyIfNotExists {
             "header-with-status" => {
                 let (k, v, status) = value.split(':').collect_tuple()?;
 
-                if parts.len() != 3 {
-                    // format should be `header-with_status: 999: key: value`
-                    return None;
-                }
-
-                let code = parts[0].trim().parse().ok()?;
+                let code = status.trim().parse().ok()?;
 
                 Some(Self::HeaderWithStatus(
-                    parts[1].trim().to_string(),
-                    parts[2].trim().to_string(),
+                    k.trim().to_string(),
+                    v.trim().to_string(),
                     code,
                 ))
             }
@@ -134,5 +131,78 @@ impl Parse for S3ConditionalPut {
             store: "Config",
             source: format!("Failed to parse \"{v}\" as S3PutConditional").into(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::S3CopyIfNotExists;
+
+    #[test]
+    fn parse_s3_copy_if_not_exists_header() {
+        let input = "header: cf-copy-destination-if-none-match: *";
+        let expected = Some(S3CopyIfNotExists::Header(
+            "cf-copy-destination-if-none-match".to_owned(),
+            "*".to_owned(),
+        ));
+
+        assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+    }
+
+    #[test]
+    fn parse_s3_copy_if_not_exists_header_with_status() {
+        let input = "header-with-status:key:value:403";
+        let expected = Some(S3CopyIfNotExists::HeaderWithStatus(
+            "key".to_owned(),
+            "value".to_owned(),
+            reqwest::StatusCode::FORBIDDEN,
+        ));
+
+        assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+    }
+
+    #[test]
+    fn parse_s3_copy_if_not_exists_header_whitespace_invariant() {
+        let expected = Some(S3CopyIfNotExists::Header(
+            "cf-copy-destination-if-none-match".to_owned(),
+            "*".to_owned(),
+        ));
+
+        const INPUTS: &[&str] = &[
+            "header:cf-copy-destination-if-none-match:*",
+            "header: cf-copy-destination-if-none-match:*",
+            "header: cf-copy-destination-if-none-match: *",
+            "header : cf-copy-destination-if-none-match: *",
+            "header : cf-copy-destination-if-none-match : *",
+            "header : cf-copy-destination-if-none-match : * ",
+        ];
+
+        for input in INPUTS {
+            assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+        }
+    }
+
+    #[test]
+    fn parse_s3_copy_if_not_exists_header_with_status_whitespace_invariant() {
+        let expected = Some(S3CopyIfNotExists::HeaderWithStatus(
+            "key".to_owned(),
+            "value".to_owned(),
+            reqwest::StatusCode::FORBIDDEN,
+        ));
+
+        const INPUTS: &[&str] = &[
+            "header-with-status:key:value:403",
+            "header-with-status: key:value:403",
+            "header-with-status: key: value:403",
+            "header-with-status: key: value: 403",
+            "header-with-status : key: value: 403",
+            "header-with-status : key : value: 403",
+            "header-with-status : key : value : 403",
+            "header-with-status : key : value : 403 ",
+        ];
+
+        for input in INPUTS {
+            assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+        }
     }
 }
