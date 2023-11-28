@@ -263,23 +263,23 @@ impl TreeBuilder {
                         .with_fields(field.get_fields().to_vec())
                         .build()?;
 
-                    let mut parent_path = path[..path.len() - 1].to_vec();
+                    path.pop();
 
                     let reader = self.reader_tree(
                         Arc::new(required_field),
-                        &mut parent_path,
+                        path,
                         curr_def_level,
                         curr_rep_level,
                         paths,
                         row_group_reader,
                     )?;
 
-                    Reader::RepeatedReader(
+                    return Ok(Reader::RepeatedReader(
                         field,
                         curr_def_level - 1,
                         curr_rep_level - 1,
                         Box::new(reader),
-                    )
+                    ));
                 }
                 // Group types (structs)
                 _ => {
