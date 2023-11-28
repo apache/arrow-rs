@@ -196,8 +196,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
     }
 }
 
-/// Helper struct to wrap async fetch functions so they can be used with [`MetadataLoader`] through [`MetadataFetch`]
-pub struct MetadataFetchFn<F>(F);
+struct MetadataFetchFn<F>(F);
 
 impl<F, Fut> MetadataFetch for MetadataFetchFn<F>
 where
