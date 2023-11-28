@@ -336,12 +336,10 @@ mod tests {
 
         let integration = config.build().unwrap();
         let config = integration.client.config();
-        let is_local = config.endpoint.starts_with("http://");
         let test_not_exists = config.copy_if_not_exists.is_some();
         let test_conditional_put = config.conditional_put.is_some();
 
-        // Localstack doesn't support listing with spaces https://github.com/localstack/localstack/issues/6328
-        put_get_delete_list_opts(&integration, is_local).await;
+        put_get_delete_list_opts(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
@@ -364,12 +362,12 @@ mod tests {
         // run integration test with unsigned payload enabled
         let builder = AmazonS3Builder::from_env().with_unsigned_payload(true);
         let integration = builder.build().unwrap();
-        put_get_delete_list_opts(&integration, is_local).await;
+        put_get_delete_list_opts(&integration).await;
 
         // run integration test with checksum set to sha256
         let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
         let integration = builder.build().unwrap();
-        put_get_delete_list_opts(&integration, is_local).await;
+        put_get_delete_list_opts(&integration).await;
     }
 
     #[tokio::test]

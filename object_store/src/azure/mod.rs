@@ -193,7 +193,7 @@ mod tests {
         crate::test_util::maybe_skip_integration!();
         let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
 
-        put_get_delete_list_opts(&integration, false).await;
+        put_get_delete_list_opts(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
