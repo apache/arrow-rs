@@ -24,16 +24,22 @@
 //!
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::ByteArrayType;
+use arrow_array::types::{
+    ByteArrayType, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+};
 use arrow_array::{
     downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray,
-    Datum, FixedSizeBinaryArray, GenericByteArray,
+    Datum, FixedSizeBinaryArray, GenericByteArray, PrimitiveArray,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 use arrow_select::take::take;
 use std::ops::Not;
+
+const MILLIS_PER_DAY: i64 = 86_400_000;
+
+const NANOS_PER_DAY: i64 = 86_400_000_000_000;
 
 #[derive(Debug, Copy, Clone)]
 enum Op {
@@ -210,6 +216,13 @@ fn compare_op(
             "Invalid comparison operation: {l_t} {op} {r_t}"
         )));
     }
+
+    let interval_cmp = safe_cmp_for_intervals(l, r, op);
+    let (l, r) = if let Some((l, r)) = interval_cmp.as_ref() {
+        (l as &dyn Array, r as &dyn Array)
+    } else {
+        (l, r)
+    };
 
     // Defer computation as may not be necessary
     let values = || -> BooleanBuffer {
@@ -549,6 +562,103 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
         l < r
     }
+}
+
+#[inline]
+fn safe_cmp_for_intervals(
+    l: &dyn Array,
+    r: &dyn Array,
+    op: Op,
+) -> Option<(PrimitiveArray<Int64Type>, PrimitiveArray<Int64Type>)> {
+    match (
+        l.as_primitive_opt::<IntervalDayTimeType>(),
+        r.as_primitive_opt::<IntervalDayTimeType>(),
+        l.as_primitive_opt::<IntervalMonthDayNanoType>(),
+        r.as_primitive_opt::<IntervalMonthDayNanoType>(),
+    ) {
+        (Some(l_dt), Some(r_dt), _, _) => match op {
+            Op::Less | Op::LessEqual => {
+                let l_max = PrimitiveArray::<Int64Type>::from(
+                    l_dt.iter()
+                        .map(|dt| dt.map(|dt| dt_in_millis_max(dt)))
+                        .collect::<Vec<_>>(),
+                );
+                let r_min = PrimitiveArray::<Int64Type>::from(
+                    r_dt.iter()
+                        .map(|dt| dt.map(|dt| dt_in_millis_min(dt)))
+                        .collect::<Vec<_>>(),
+                );
+                Some((l_max, r_min))
+            }
+            Op::Greater | Op::GreaterEqual => {
+                let l_min = PrimitiveArray::<Int64Type>::from(
+                    l_dt.iter()
+                        .map(|dt| dt.map(|dt| dt_in_millis_min(dt)))
+                        .collect::<Vec<_>>(),
+                );
+                let r_max = PrimitiveArray::<Int64Type>::from(
+                    r_dt.iter()
+                        .map(|dt| dt.map(|dt| dt_in_millis_max(dt)))
+                        .collect::<Vec<_>>(),
+                );
+                Some((l_min, r_max))
+            }
+            _ => None,
+        },
+        (_, _, Some(l_mdn), Some(r_mdn)) => match op {
+            Op::Less | Op::LessEqual => {
+                let l_max = PrimitiveArray::<Int64Type>::from_iter(
+                    l_mdn.iter().map(|mdn| mdn.map(|mdn| mdn_in_nanos_max(mdn))),
+                );
+                let r_min = PrimitiveArray::<Int64Type>::from_iter(
+                    r_mdn.iter().map(|mdn| mdn.map(|mdn| mdn_in_nanos_min(mdn))),
+                );
+                Some((l_max, r_min))
+            }
+            Op::Greater | Op::GreaterEqual => {
+                let l_min = PrimitiveArray::<Int64Type>::from_iter(
+                    l_mdn.iter().map(|mdn| mdn.map(|mdn| mdn_in_nanos_min(mdn))),
+                );
+                let r_max = PrimitiveArray::<Int64Type>::from_iter(
+                    r_mdn.iter().map(|mdn| mdn.map(|mdn| mdn_in_nanos_max(mdn))),
+                );
+                Some((l_min, r_max))
+            }
+            _ => None,
+        },
+
+        _ => None,
+    }
+}
+
+#[inline]
+fn dt_in_millis_max(dt: i64) -> i64 {
+    let d = dt >> 32;
+    let m = dt as i32 as i64;
+    d * 31 * (MILLIS_PER_DAY + 1_000) + m
+}
+
+#[inline]
+fn dt_in_millis_min(dt: i64) -> i64 {
+    let d = dt >> 32;
+    let m = dt as i32 as i64;
+    d * 28 * (MILLIS_PER_DAY) + m
+}
+
+#[inline]
+fn mdn_in_nanos_max(mdn: i128) -> i64 {
+    let m = (mdn >> 96) as i32;
+    let d = (mdn >> 64) as i32;
+    let n = mdn as i64;
+    ((m * 31) + d) as i64 * (NANOS_PER_DAY + 1_000_000_000) as i64 + n
+}
+
+#[inline]
+fn mdn_in_nanos_min(mdn: i128) -> i64 {
+    let m = (mdn >> 96) as i32;
+    let d = (mdn >> 64) as i32;
+    let n = mdn as i64;
+    ((m * 28) + d) as i64 * (NANOS_PER_DAY) as i64 + n
 }
 
 #[cfg(test)]
