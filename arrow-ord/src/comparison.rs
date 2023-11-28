@@ -2047,18 +2047,14 @@ mod tests {
         assert_eq!(res, res_eq);
         assert_eq!(
             &res,
-            &BooleanArray::from(
-                vec![ Some(true), Some(true), Some(true), Some(true), Some(false)]
-            )
+            &BooleanArray::from(vec![ Some(true), Some(true), Some(true), Some(true), Some(false)])
         );
         let res = lt(&b, &a).unwrap();
         let res_eq = lt_eq(&b, &a).unwrap();
         assert_eq!(res, res_eq);
         assert_eq!(
             &res,
-            &BooleanArray::from(
-                vec![ Some(true), Some(true), Some(true), Some(true), Some(false)]
-            )
+            &BooleanArray::from(vec![ Some(true), Some(true), Some(true), Some(true), Some(false)])
         );
 
         let a = IntervalMonthDayNanoArray::from(

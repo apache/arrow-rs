@@ -26,8 +26,8 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::{ByteArrayType, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType};
 use arrow_array::{
-    downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray,
-    BooleanArray, Datum, FixedSizeBinaryArray, GenericByteArray, PrimitiveArray,
+    downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum,
+    FixedSizeBinaryArray, GenericByteArray, PrimitiveArray,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
@@ -567,12 +567,12 @@ fn safe_cmp_for_intervals(
             Op::Less | Op::LessEqual => {
                 let l_max = PrimitiveArray::<Int64Type>::from(
                     l_dt.iter()
-                        .map(|dt| dt.map(|dt| dt_in_millis_max(dt)))
+                        .map(|dt| dt.map(dt_in_millis_max))
                         .collect::<Vec<_>>(),
                 );
                 let r_min = PrimitiveArray::<Int64Type>::from(
                     r_dt.iter()
-                        .map(|dt| dt.map(|dt| dt_in_millis_min(dt)))
+                        .map(|dt| dt.map(dt_in_millis_min))
                         .collect::<Vec<_>>(),
                 );
                 Some((l_max, r_min))
@@ -580,12 +580,12 @@ fn safe_cmp_for_intervals(
             Op::Greater | Op::GreaterEqual => {
                 let l_min = PrimitiveArray::<Int64Type>::from(
                     l_dt.iter()
-                        .map(|dt| dt.map(|dt| dt_in_millis_min(dt)))
+                        .map(|dt| dt.map(dt_in_millis_min))
                         .collect::<Vec<_>>(),
                 );
                 let r_max = PrimitiveArray::<Int64Type>::from(
                     r_dt.iter()
-                        .map(|dt| dt.map(|dt| dt_in_millis_max(dt)))
+                        .map(|dt| dt.map(dt_in_millis_max))
                         .collect::<Vec<_>>(),
                 );
                 Some((l_min, r_max))
@@ -595,19 +595,19 @@ fn safe_cmp_for_intervals(
         (_, _, Some(l_mdn), Some(r_mdn)) => match op {
             Op::Less | Op::LessEqual => {
                 let l_max = PrimitiveArray::<Int64Type>::from_iter(
-                    l_mdn.iter().map(|mdn| mdn.map(|mdn| mdn_in_nanos_max(mdn))),
+                    l_mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_max)),
                 );
                 let r_min = PrimitiveArray::<Int64Type>::from_iter(
-                    r_mdn.iter().map(|mdn| mdn.map(|mdn| mdn_in_nanos_min(mdn))),
+                    r_mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_min)),
                 );
                 Some((l_max, r_min))
             }
             Op::Greater | Op::GreaterEqual => {
                 let l_min = PrimitiveArray::<Int64Type>::from_iter(
-                    l_mdn.iter().map(|mdn| mdn.map(|mdn| mdn_in_nanos_min(mdn))),
+                    l_mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_min)),
                 );
                 let r_max = PrimitiveArray::<Int64Type>::from_iter(
-                    r_mdn.iter().map(|mdn| mdn.map(|mdn| mdn_in_nanos_max(mdn))),
+                    r_mdn.iter().map(|mdn| mdn.map(mdn_in_nanos_max)),
                 );
                 Some((l_min, r_max))
             }
@@ -637,7 +637,7 @@ fn mdn_in_nanos_max(mdn: i128) -> i64 {
     let m = (mdn >> 96) as i32;
     let d = (mdn >> 64) as i32;
     let n = mdn as i64;
-    ((m * 31) + d) as i64 * (NANOS_PER_DAY + 1_000_000_000) as i64 + n
+    ((m * 31) + d) as i64 * (NANOS_PER_DAY + 1_000_000_000) + n
 }
 
 #[inline]
@@ -645,7 +645,7 @@ fn mdn_in_nanos_min(mdn: i128) -> i64 {
     let m = (mdn >> 96) as i32;
     let d = (mdn >> 64) as i32;
     let n = mdn as i64;
-    ((m * 28) + d) as i64 * (NANOS_PER_DAY) as i64 + n
+    ((m * 28) + d) as i64 * (NANOS_PER_DAY) + n
 }
 
 #[cfg(test)]
