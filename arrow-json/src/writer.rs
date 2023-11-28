@@ -136,11 +136,7 @@ fn struct_array_to_jsonmap_array(
         // Ensure we write nulls for struct arrays as nulls in JSON
         // Instead of writing a struct with nulls
         .map(|index| {
-            if array.is_null(index) {
-                None
-            } else {
-                Some(JsonMap::new())
-            }
+            array.is_valid(index).then(JsonMap::new)
         })
         .collect::<Vec<Option<JsonMap<String, Value>>>>();
 
