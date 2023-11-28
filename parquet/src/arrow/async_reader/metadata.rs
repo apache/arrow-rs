@@ -28,7 +28,7 @@ use std::future::Future;
 use std::ops::Range;
 
 /// A data source that can be used with [`MetadataLoader`] to load [`ParquetMetaData`]
-pub(crate) trait MetadataFetch {
+pub trait MetadataFetch {
     fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
 }
 
@@ -39,9 +39,7 @@ impl<'a, T: AsyncFileReader> MetadataFetch for &'a mut T {
 }
 
 /// An asynchronous interface to load [`ParquetMetaData`] from an async source
-///
-/// Crate-private until stabilised
-pub(crate) struct MetadataLoader<F> {
+pub struct MetadataLoader<F> {
     /// Function that fetches byte ranges asynchronously
     fetch: F,
     /// The in-progress metadata
@@ -198,7 +196,8 @@ impl<F: MetadataFetch> MetadataLoader<F> {
     }
 }
 
-struct MetadataFetchFn<F>(F);
+/// Helper struct to wrap async fetch functions so they can be used with [`MetadataLoader`] through [`MetadataFetch`]
+pub struct MetadataFetchFn<F>(F);
 
 impl<F, Fut> MetadataFetch for MetadataFetchFn<F>
 where
