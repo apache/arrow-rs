@@ -18,7 +18,8 @@
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
 use crate::aws::{
-    AwsCredentialProvider, S3ConditionalPut, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET,
+    AwsCredentialProvider, S3ConditionalPut, S3CopyIfNotExists,
+    S3CopyIfNotExistsReturnCodeOverride, STORE, STRICT_PATH_ENCODE_SET,
 };
 use crate::client::get::GetClient;
 use crate::client::header::HeaderConfig;
@@ -45,7 +46,7 @@ use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
 use reqwest::{
     header::{CONTENT_LENGTH, CONTENT_TYPE},
-    Client as ReqwestClient, Method, RequestBuilder, Response, StatusCode,
+    Client as ReqwestClient, Method, RequestBuilder, Response,
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
@@ -207,6 +208,7 @@ pub struct S3Config {
     pub disable_tagging: bool,
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
+    pub copy_if_not_exists_return_code_override: Option<S3CopyIfNotExistsReturnCodeOverride>,
     pub conditional_put: Option<S3ConditionalPut>,
 }
 
@@ -474,6 +476,13 @@ impl S3Client {
             }
         }
 
+        let acceptable_error_code = self
+            .config
+            .copy_if_not_exists_return_code_override
+            .clone()
+            .unwrap_or_default()
+            .0;
+
         builder
             .with_aws_sigv4(
                 credential.as_deref(),
@@ -485,14 +494,10 @@ impl S3Client {
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| match source.status() {
-                Some(StatusCode::PRECONDITION_FAILED) | Some(StatusCode::FORBIDDEN)
-                    if !overwrite =>
-                {
-                    crate::Error::AlreadyExists {
-                        source: Box::new(source),
-                        path: to.to_string(),
-                    }
-                }
+                Some(error) if error == acceptable_error_code => crate::Error::AlreadyExists {
+                    source: Box::new(source),
+                    path: to.to_string(),
+                },
                 _ => Error::CopyRequest {
                     source,
                     path: from.to_string(),

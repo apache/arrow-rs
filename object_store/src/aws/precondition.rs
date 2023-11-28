@@ -29,7 +29,8 @@ pub enum S3CopyIfNotExists {
     ///
     /// If set, [`ObjectStore::copy_if_not_exists`] will perform a normal copy operation
     /// with the provided header pair, and expect the store to fail with `412 Precondition Failed`
-    /// if the destination file already exists
+    /// if the destination file already exists, or a different return code if overridden
+    /// using [`S3CopyIfNotExistsReturnCodeOverride`].
     ///
     /// Encoded as `header:<HEADER_NAME>:<HEADER_VALUE>` ignoring whitespace
     ///
@@ -67,6 +68,36 @@ impl Parse for S3CopyIfNotExists {
             store: "Config",
             source: format!("Failed to parse \"{v}\" as S3CopyIfNotExists").into(),
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+/// Configure the return code that
+pub struct S3CopyIfNotExistsReturnCodeOverride(pub reqwest::StatusCode);
+
+impl Default for S3CopyIfNotExistsReturnCodeOverride {
+    fn default() -> Self {
+        Self(reqwest::StatusCode::PRECONDITION_FAILED)
+    }
+}
+
+impl std::fmt::Display for S3CopyIfNotExistsReturnCodeOverride {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Parse for S3CopyIfNotExistsReturnCodeOverride {
+    fn parse(v: &str) -> crate::Result<Self> {
+        <reqwest::StatusCode as std::str::FromStr>::from_str(v)
+            .map(S3CopyIfNotExistsReturnCodeOverride)
+            .map_err(|err| crate::Error::Generic {
+                store: "Config",
+                source: format!(
+                    "Failed to parse \"{v}\" as S3CopyIfNotExistsReturnCodeOverride: {err}"
+                )
+                .into(),
+            })
     }
 }
 

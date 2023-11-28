@@ -21,7 +21,7 @@ use crate::aws::credential::{
 };
 use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
-    STORE,
+    S3CopyIfNotExistsReturnCodeOverride, STORE,
 };
 use crate::client::TokenCredentialProvider;
 use crate::config::ConfigValue;
@@ -153,6 +153,9 @@ pub struct AmazonS3Builder {
     skip_signature: ConfigValue<bool>,
     /// Copy if not exists
     copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
+    /// Copy-if-not-exists return-code override
+    copy_if_not_exists_return_code_override:
+        Option<ConfigValue<S3CopyIfNotExistsReturnCodeOverride>>,
     /// Put precondition
     conditional_put: Option<ConfigValue<S3ConditionalPut>>,
     /// Ignore tags
@@ -293,6 +296,14 @@ pub enum AmazonS3ConfigKey {
     /// See [`S3CopyIfNotExists`]
     CopyIfNotExists,
 
+    /// Configure how to provide `copy_if_not_exists_return_code_override`
+    ///
+    /// When using [`S3CopyIfNotExists`], allows an override of the assumed return code.
+    /// If left unspecified, the default is `[reqwest::StatusCode::PRECONDITION_FAILED]`.
+    ///
+    /// See [`S3CopyIfNotExistsReturnCodeOverride`]
+    CopyIfNotExistsReturnCodeOverride,
+
     /// Configure how to provide conditional put operations
     ///
     /// See [`S3ConditionalPut`]
@@ -332,6 +343,9 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::ContainerCredentialsRelativeUri => "aws_container_credentials_relative_uri",
             Self::SkipSignature => "aws_skip_signature",
             Self::CopyIfNotExists => "aws_copy_if_not_exists",
+            Self::CopyIfNotExistsReturnCodeOverride => {
+                "aws_copy_if_not_exists_return_code_override"
+            }
             Self::ConditionalPut => "aws_conditional_put",
             Self::DisableTagging => "aws_disable_tagging",
             Self::Client(opt) => opt.as_ref(),
@@ -361,6 +375,10 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_container_credentials_relative_uri" => Ok(Self::ContainerCredentialsRelativeUri),
             "aws_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             "aws_copy_if_not_exists" | "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
+            "aws_copy_if_not_exists_return_code_override"
+            | "copy_if_not_exists_return_code_override" => {
+                Ok(Self::CopyIfNotExistsReturnCodeOverride)
+            }
             "aws_conditional_put" | "conditional_put" => Ok(Self::ConditionalPut),
             "aws_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
             // Backwards compatibility
@@ -470,6 +488,10 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
             }
+            AmazonS3ConfigKey::CopyIfNotExistsReturnCodeOverride => {
+                self.copy_if_not_exists_return_code_override =
+                    Some(ConfigValue::Deferred(value.into()))
+            }
             AmazonS3ConfigKey::ConditionalPut => {
                 self.conditional_put = Some(ConfigValue::Deferred(value.into()))
             }
@@ -536,6 +558,10 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists.as_ref().map(ToString::to_string)
             }
+            AmazonS3ConfigKey::CopyIfNotExistsReturnCodeOverride => self
+                .copy_if_not_exists_return_code_override
+                .as_ref()
+                .map(ToString::to_string),
             AmazonS3ConfigKey::ConditionalPut => {
                 self.conditional_put.as_ref().map(ToString::to_string)
             }
@@ -767,6 +793,10 @@ impl AmazonS3Builder {
         let region = self.region.context(MissingRegionSnafu)?;
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
         let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
+        let copy_if_not_exists_return_code_override = self
+            .copy_if_not_exists_return_code_override
+            .map(|x| x.get())
+            .transpose()?;
         let put_precondition = self.conditional_put.map(|x| x.get()).transpose()?;
 
         let credentials = if let Some(credentials) = self.credentials {
@@ -875,6 +905,7 @@ impl AmazonS3Builder {
             disable_tagging: self.disable_tagging.get()?,
             checksum,
             copy_if_not_exists,
+            copy_if_not_exists_return_code_override,
             conditional_put: put_precondition,
         };
 
