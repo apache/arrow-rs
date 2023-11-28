@@ -18,8 +18,7 @@
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
 use crate::aws::{
-    AwsCredentialProvider, S3ConditionalPut, S3CopyIfNotExists,
-    S3CopyIfNotExistsReturnCodeOverride, STORE, STRICT_PATH_ENCODE_SET,
+    AwsCredentialProvider, S3ConditionalPut, S3CopyIfNotExists, STORE, STRICT_PATH_ENCODE_SET,
 };
 use crate::client::get::GetClient;
 use crate::client::header::HeaderConfig;
@@ -208,7 +207,6 @@ pub struct S3Config {
     pub disable_tagging: bool,
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
-    pub copy_if_not_exists_return_code_override: Option<S3CopyIfNotExistsReturnCodeOverride>,
     pub conditional_put: Option<S3ConditionalPut>,
 }
 
@@ -468,6 +466,9 @@ impl S3Client {
                 Some(S3CopyIfNotExists::Header(k, v)) => {
                     builder = builder.header(k, v);
                 }
+                Some(S3CopyIfNotExists::HeaderWithStatus(k, v, _)) => {
+                    builder = builder.header(k, v);
+                }
                 None => {
                     return Err(crate::Error::NotSupported {
                         source: "S3 does not support copy-if-not-exists".to_string().into(),
@@ -476,12 +477,10 @@ impl S3Client {
             }
         }
 
-        let acceptable_error_code = self
-            .config
-            .copy_if_not_exists_return_code_override
-            .clone()
-            .unwrap_or_default()
-            .0;
+        let acceptable_error_code = match &self.config.copy_if_not_exists {
+            Some(S3CopyIfNotExists::HeaderWithStatus(_, _, code)) => code.clone(),
+            _ => reqwest::StatusCode::PRECONDITION_FAILED,
+        };
 
         builder
             .with_aws_sigv4(

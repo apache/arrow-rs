@@ -63,7 +63,7 @@ mod resolve;
 
 pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
-pub use precondition::{S3ConditionalPut, S3CopyIfNotExists, S3CopyIfNotExistsReturnCodeOverride};
+pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
 pub use resolve::resolve_bucket_region;
 
 // http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html

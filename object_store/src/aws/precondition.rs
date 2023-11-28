@@ -39,12 +39,18 @@ pub enum S3CopyIfNotExists {
     ///
     /// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
     Header(String, String),
+    /// The same as `Header` but allows custom status code checking, for object stores that return values
+    /// other than 412.
+    HeaderWithStatus(String, String, reqwest::StatusCode),
 }
 
 impl std::fmt::Display for S3CopyIfNotExists {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Header(k, v) => write!(f, "header: {}: {}", k, v),
+            Self::HeaderWithStatus(k, v, code) => {
+                write!(f, "header-with-status: {}: {k}: {v}", code.as_u16())
+            }
         }
     }
 }
@@ -57,6 +63,22 @@ impl S3CopyIfNotExists {
                 let (k, v) = value.split_once(':')?;
                 Some(Self::Header(k.trim().to_string(), v.trim().to_string()))
             }
+            "header-with-status" => {
+                let parts = value.split(':').collect::<Vec<_>>();
+
+                if parts.len() != 3 {
+                    // format should be `header-with_status: 999: key: value`
+                    return None;
+                }
+
+                let code = <reqwest::StatusCode as std::str::FromStr>::from_str(&parts[0]).ok()?;
+
+                Some(Self::HeaderWithStatus(
+                    parts[1].trim().to_string(),
+                    parts[2].trim().to_string(),
+                    code,
+                ))
+            }
             _ => None,
         }
     }
@@ -68,36 +90,6 @@ impl Parse for S3CopyIfNotExists {
             store: "Config",
             source: format!("Failed to parse \"{v}\" as S3CopyIfNotExists").into(),
         })
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-/// Configure the return code that
-pub struct S3CopyIfNotExistsReturnCodeOverride(pub reqwest::StatusCode);
-
-impl Default for S3CopyIfNotExistsReturnCodeOverride {
-    fn default() -> Self {
-        Self(reqwest::StatusCode::PRECONDITION_FAILED)
-    }
-}
-
-impl std::fmt::Display for S3CopyIfNotExistsReturnCodeOverride {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Parse for S3CopyIfNotExistsReturnCodeOverride {
-    fn parse(v: &str) -> crate::Result<Self> {
-        <reqwest::StatusCode as std::str::FromStr>::from_str(v)
-            .map(S3CopyIfNotExistsReturnCodeOverride)
-            .map_err(|err| crate::Error::Generic {
-                store: "Config",
-                source: format!(
-                    "Failed to parse \"{v}\" as S3CopyIfNotExistsReturnCodeOverride: {err}"
-                )
-                .into(),
-            })
     }
 }
 
