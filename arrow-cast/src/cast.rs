@@ -6137,6 +6137,25 @@ mod tests {
                 .collect::<Vec<f32>>()
         );
 
+        let f16_expected = vec![
+            f16::from_f64(-9223372000000000000.0),
+            f16::from_f64(-2147483600.0),
+            f16::from_f64(-32768.0),
+            f16::from_f64(-128.0),
+            f16::from_f64(0.0),
+            f16::from_f64(255.0),
+            f16::from_f64(65535.0),
+            f16::from_f64(4294967300.0),
+            f16::from_f64(18446744000000000000.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&f64_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
+        );
+
         let i64_expected = vec![
             "-9223372036854775808",
             "-2147483648",
@@ -6281,6 +6300,14 @@ mod tests {
             get_cast_values::<Float32Type>(&f32_array, &DataType::Float32)
         );
 
+        let f16_expected = vec![
+            "-inf", "-inf", "-32768.0", "-128.0", "0.0", "255.0", "inf", "inf", "inf",
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&f32_array, &DataType::Float16)
+        );
+
         let i64_expected = vec![
             "-2147483648",
             "-2147483648",
@@ -6399,6 +6426,21 @@ mod tests {
                 .collect::<Vec<f32>>()
         );
 
+        let f16_expected = vec![
+            f16::from_f64(0.0),
+            f16::from_f64(255.0),
+            f16::from_f64(65535.0),
+            f16::from_f64(4294967300.0),
+            f16::from_f64(18446744000000000000.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u64_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
+        );
+
         let i64_expected = vec!["0", "255", "65535", "4294967295", "null"];
         assert_eq!(
             i64_expected,
@@ -6463,6 +6505,12 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&u32_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec!["0.0", "255.0", "inf", "inf"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u32_array, &DataType::Float16)
         );
 
         let i64_expected = vec!["0", "255", "65535", "4294967295"];
@@ -6531,6 +6579,12 @@ mod tests {
             get_cast_values::<Float32Type>(&u16_array, &DataType::Float32)
         );
 
+        let f16_expected = vec!["0.0", "255.0", "inf"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u16_array, &DataType::Float16)
+        );
+
         let i64_expected = vec!["0", "255", "65535"];
         assert_eq!(
             i64_expected,
@@ -6595,6 +6649,12 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&u8_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec!["0.0", "255.0"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&u8_array, &DataType::Float16)
         );
 
         let i64_expected = vec!["0", "255"];
@@ -6697,6 +6757,25 @@ mod tests {
                 .iter()
                 .map(|i| i.parse::<f32>().unwrap())
                 .collect::<Vec<f32>>()
+        );
+
+        let f16_expected = vec![
+            f16::from_f64(-9223372000000000000.0),
+            f16::from_f64(-2147483600.0),
+            f16::from_f64(-32768.0),
+            f16::from_f64(-128.0),
+            f16::from_f64(0.0),
+            f16::from_f64(127.0),
+            f16::from_f64(32767.0),
+            f16::from_f64(2147483600.0),
+            f16::from_f64(9223372000000000000.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i64_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
         );
 
         let i64_expected = vec![
@@ -6842,6 +6921,23 @@ mod tests {
             get_cast_values::<Float32Type>(&i32_array, &DataType::Float32)
         );
 
+        let f16_expected = vec![
+            f16::from_f64(-2147483600.0),
+            f16::from_f64(-32768.0),
+            f16::from_f64(-128.0),
+            f16::from_f64(0.0),
+            f16::from_f64(127.0),
+            f16::from_f64(32767.0),
+            f16::from_f64(2147483600.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i32_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
+        );
+
         let i16_expected = vec!["null", "-32768", "-128", "0", "127", "32767", "null"];
         assert_eq!(
             i16_expected,
@@ -6909,6 +7005,21 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&i16_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec![
+            f16::from_f64(-32768.0),
+            f16::from_f64(-128.0),
+            f16::from_f64(0.0),
+            f16::from_f64(127.0),
+            f16::from_f64(32767.0),
+        ];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i16_array, &DataType::Float16)
+                .iter()
+                .map(|i| i.parse::<f16>().unwrap())
+                .collect::<Vec<f16>>()
         );
 
         let i64_expected = vec!["-32768", "-128", "0", "127", "32767"];
@@ -7003,6 +7114,12 @@ mod tests {
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&i8_array, &DataType::Float32)
+        );
+
+        let f16_expected = vec!["-128.0", "0.0", "127.0"];
+        assert_eq!(
+            f16_expected,
+            get_cast_values::<Float16Type>(&i8_array, &DataType::Float16)
         );
 
         let i64_expected = vec!["-128", "0", "127"];
