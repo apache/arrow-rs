@@ -2183,6 +2183,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_interval_array_unit_aware() {
+        let a =
+            IntervalDayTimeArray::from(vec![Some(IntervalDayTimeType::make_value(0, -5)),Some(IntervalDayTimeType::make_value(3, -1_000_000)),Some(IntervalDayTimeType::make_value(4, -1000)),Some(IntervalDayTimeType::make_value(10, 20)),Some(IntervalDayTimeType::make_value(1, 2))]);
+        let b =
+            IntervalDayTimeArray::from(vec![Some(IntervalDayTimeType::make_value(0, -10)),Some(IntervalDayTimeType::make_value(3, -2_000_000)),Some(IntervalDayTimeType::make_value(2, 1000)),Some(IntervalDayTimeType::make_value(5, 6)),Some(IntervalDayTimeType::make_value(1, 1))]);
+        let res = gt(&a, &b).unwrap();
+        let res_eq = gt_eq(&a, &b).unwrap();
+        assert_eq!(res, res_eq);
+        assert_eq!(
+            &res,
+            &BooleanArray::from(
+                vec![ Some(true), Some(true), Some(true), Some(true), Some(false)]
+            )
+        );
+        let res = lt(&b, &a).unwrap();
+        let res_eq = lt_eq(&b, &a).unwrap();
+        assert_eq!(res, res_eq);
+        assert_eq!(
+            &res,
+            &BooleanArray::from(
+                vec![ Some(true), Some(true), Some(true), Some(true), Some(false)]
+            )
+        );
+
+        let a = IntervalMonthDayNanoArray::from(
+            vec![Some(IntervalMonthDayNanoType::make_value(0, 0, 1)),Some(IntervalMonthDayNanoType::make_value(0, 1, -1_000_000_000)),Some(IntervalMonthDayNanoType::make_value(3, 2, -100_000_000_000)),Some(IntervalMonthDayNanoType::make_value(0, 1, 1)),Some(IntervalMonthDayNanoType::make_value(1, 28, 0)), Some(IntervalMonthDayNanoType::make_value(10, 0, -1_000_000_000_000))],
+        );
+        let b = IntervalMonthDayNanoArray::from(
+            vec![Some(IntervalMonthDayNanoType::make_value(0, 0,0)),Some(IntervalMonthDayNanoType::make_value(0, 1, -8_000_000_000)),Some(IntervalMonthDayNanoType::make_value(1, 25, 100_000_000_000)),Some(IntervalMonthDayNanoType::make_value(0, 1, 0)),Some(IntervalMonthDayNanoType::make_value(2, 0, 0)), Some(IntervalMonthDayNanoType::make_value(5, 150, 1_000_000_000_000))],
+        );
+        let res = gt(&a, &b).unwrap();
+        let res_eq = gt_eq(&a, &b).unwrap();
+        assert_eq!(res, res_eq);
+        assert_eq!(
+            &res,
+            &BooleanArray::from(
+                vec![ Some(true), Some(true),Some(true),Some(false),Some(false), Some(false)]
+            )
+        );
+        let res = lt(&b, &a).unwrap();
+        let res_eq = lt_eq(&b, &a).unwrap();
+        assert_eq!(res, res_eq);
+        assert_eq!(
+            &res,
+            &BooleanArray::from(
+                vec![ Some(true), Some(true),Some(true),Some(false),Some(false), Some(false)]
+            )
+        );
+    }
+
     macro_rules! test_binary {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]

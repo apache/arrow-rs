@@ -635,14 +635,14 @@ fn safe_cmp_for_intervals(
 fn dt_in_millis_max(dt: i64) -> i64 {
     let d = dt >> 32;
     let m = dt as i32 as i64;
-    d * 31 * (MILLIS_PER_DAY + 1_000) + m
+    d * (MILLIS_PER_DAY + 1_000) + m
 }
 
 #[inline]
 fn dt_in_millis_min(dt: i64) -> i64 {
     let d = dt >> 32;
     let m = dt as i32 as i64;
-    d * 28 * (MILLIS_PER_DAY) + m
+    d * (MILLIS_PER_DAY) + m
 }
 
 #[inline]
