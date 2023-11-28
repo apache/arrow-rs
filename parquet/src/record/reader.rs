@@ -263,18 +263,16 @@ impl TreeBuilder {
                         .with_fields(field.get_fields().to_vec())
                         .build()?;
 
-                    let field_name = path.pop().unwrap();
+                    let mut parent_path = path[..path.len() - 1].to_vec();
 
                     let reader = self.reader_tree(
                         Arc::new(required_field),
-                        path,
+                        &mut parent_path,
                         curr_def_level,
                         curr_rep_level,
                         paths,
                         row_group_reader,
                     )?;
-
-                    path.push(field_name);
 
                     Reader::RepeatedReader(
                         field,
