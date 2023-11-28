@@ -572,15 +572,7 @@ impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
 }
 
 impl<T> ParquetRecordBatchStream<T> {
-    /// Returns the [`SchemaRef`] for this parquet file.
-    ///
-    /// Note that unlike its synchronous counterpart [`ParquetRecordBatchReader`], the [`SchemaRef`]
-    /// returned here will contain the original metadata, whereas [`ParquetRecordBatchReader`]
-    /// strips this metadata.
-    ///
-    /// As such, this schema is the same as [`ParquetRecordBatchStreamBuilder::schema`] which also
-    /// contains the metadata, but differs from the [`RecordBatch`]es produced which have the metadata
-    /// in their [`RecordBatch::schema`] stripped.
+    /// Returns the [`SchemaRef`] for this parquet file
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
