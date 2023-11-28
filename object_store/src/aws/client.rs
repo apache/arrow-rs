@@ -477,7 +477,7 @@ impl S3Client {
             }
         }
 
-        let acceptable_error_code = match &self.config.copy_if_not_exists {
+        let precondition_failure = match &self.config.copy_if_not_exists {
             Some(S3CopyIfNotExists::HeaderWithStatus(_, _, code)) => code.clone(),
             _ => reqwest::StatusCode::PRECONDITION_FAILED,
         };
