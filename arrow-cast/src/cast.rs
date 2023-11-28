@@ -2645,7 +2645,7 @@ where
         (false, parts[0])
     } else {
         match parts[0].as_bytes()[0] {
-            b'-' => (true, parts[0].strip_prefix('-').unwrap()),
+            b'-' => (true, &parts[0][1..]),
             b'+' => (false, parts[0].strip_prefix('+').unwrap()),
             _ => (false, parts[0]),
         }
