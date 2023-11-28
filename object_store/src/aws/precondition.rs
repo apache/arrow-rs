@@ -71,7 +71,7 @@ impl S3CopyIfNotExists {
                     return None;
                 }
 
-                let code = <reqwest::StatusCode as std::str::FromStr>::from_str(&parts[0]).ok()?;
+                let code = parts[0].trim().parse().ok()?;
 
                 Some(Self::HeaderWithStatus(
                     parts[1].trim().to_string(),
