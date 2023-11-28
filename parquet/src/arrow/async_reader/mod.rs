@@ -75,7 +75,7 @@
 //! # }
 //! ```
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Formatter;
 use std::io::SeekFrom;
 use std::ops::Range;
@@ -83,10 +83,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
 use futures::stream::Stream;
+
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow_array::RecordBatch;
@@ -354,8 +356,10 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         Ok(Some(Sbbf::new(&bitset)))
     }
 
-    /// Build a new [`ParquetRecordBatchStream`]
-    pub fn build(self) -> Result<ParquetRecordBatchStream<T>> {
+    pub fn build_with_async_row_group_builder<R: AsyncRowGroupReader + Send + 'static>(
+        self,
+        builder: R,
+    ) -> Result<ParquetRecordBatchStream<T, R>> {
         let num_row_groups = self.metadata.row_groups().len();
 
         let row_groups = match self.row_groups {
@@ -383,6 +387,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             fields: self.fields,
             limit: self.limit,
             offset: self.offset,
+            row_group_builder: builder,
         };
 
         Ok(ParquetRecordBatchStream {
@@ -396,13 +401,21 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             state: StreamState::Init,
         })
     }
+
+    /// Build a new [`ParquetRecordBatchStream`]
+    pub fn build(self) -> Result<ParquetRecordBatchStream<T, DefaultAsyncRowGroupReaderBuilder>> {
+        let builder = DefaultAsyncRowGroupReaderBuilder {
+            metadata: self.metadata.clone(),
+        };
+        self.build_with_async_row_group_builder(builder)
+    }
 }
 
-type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)>;
+type ReadResult<T, R> = Result<(ReaderFactory<T, R>, Option<ParquetRecordBatchReader>)>;
 
 /// [`ReaderFactory`] is used by [`ParquetRecordBatchStream`] to create
 /// [`ParquetRecordBatchReader`]
-struct ReaderFactory<T> {
+struct ReaderFactory<T, R> {
     metadata: Arc<ParquetMetaData>,
 
     fields: Option<Arc<ParquetField>>,
@@ -414,11 +427,14 @@ struct ReaderFactory<T> {
     limit: Option<usize>,
 
     offset: Option<usize>,
+
+    row_group_builder: R,
 }
 
-impl<T> ReaderFactory<T>
+impl<T, R> ReaderFactory<T, R>
 where
     T: AsyncFileReader + Send,
+    R: AsyncRowGroupReader + Send,
 {
     /// Reads the next row group with the provided `selection`, `projection` and `batch_size`
     ///
@@ -429,7 +445,7 @@ where
         mut selection: Option<RowSelection>,
         projection: ProjectionMask,
         batch_size: usize,
-    ) -> ReadResult<T> {
+    ) -> ReadResult<T, R> {
         // TODO: calling build_array multiple times is wasteful
 
         let meta = self.metadata.row_group(row_group_idx);
@@ -438,11 +454,11 @@ where
             .offset_index()
             .map(|x| x[row_group_idx].as_slice());
 
-        let mut row_group = InMemoryRowGroup {
+        // schema: meta.schema_descr_ptr(),
+        // row_count: meta.num_rows() as usize,
+        // column_chunks: vec![None; meta.columns().len()],
+        let row_group_offsets_builder = RowGroupOffsetsBuilder {
             metadata: meta,
-            // schema: meta.schema_descr_ptr(),
-            row_count: meta.num_rows() as usize,
-            column_chunks: vec![None; meta.columns().len()],
             page_locations,
         };
 
@@ -453,10 +469,12 @@ where
                 }
 
                 let predicate_projection = predicate.projection();
-                row_group
-                    .fetch(&mut self.input, predicate_projection, selection.as_ref())
+                let row_group_offsets =
+                    row_group_offsets_builder.build(predicate_projection, selection.as_ref());
+                let row_group = self
+                    .row_group_builder
+                    .get_row_group(&mut self.input, row_group_idx, row_group_offsets)
                     .await?;
-
                 let array_reader =
                     build_array_reader(self.fields.as_deref(), predicate_projection, &row_group)?;
 
@@ -470,22 +488,23 @@ where
         }
 
         // Compute the number of rows in the selection before applying limit and offset
+        let row_count = meta.num_rows() as usize;
         let rows_before = selection
             .as_ref()
             .map(|s| s.row_count())
-            .unwrap_or(row_group.row_count);
+            .unwrap_or(row_count);
 
         if rows_before == 0 {
             return Ok((self, None));
         }
 
-        selection = apply_range(selection, row_group.row_count, self.offset, self.limit);
+        selection = apply_range(selection, row_count, self.offset, self.limit);
 
         // Compute the number of rows in the selection after applying limit and offset
         let rows_after = selection
             .as_ref()
             .map(|s| s.row_count())
-            .unwrap_or(row_group.row_count);
+            .unwrap_or(row_count);
 
         // Update offset if necessary
         if let Some(offset) = &mut self.offset {
@@ -502,8 +521,10 @@ where
             *limit -= rows_after;
         }
 
-        row_group
-            .fetch(&mut self.input, &projection, selection.as_ref())
+        let row_group_offsets = row_group_offsets_builder.build(&projection, selection.as_ref());
+        let row_group = self
+            .row_group_builder
+            .get_row_group(&mut self.input, row_group_idx, row_group_offsets)
             .await?;
 
         let reader = ParquetRecordBatchReader::new(
@@ -516,18 +537,18 @@ where
     }
 }
 
-enum StreamState<T> {
+enum StreamState<T, R> {
     /// At the start of a new row group, or the end of the parquet stream
     Init,
     /// Decoding a batch
     Decoding(ParquetRecordBatchReader),
     /// Reading data from input
-    Reading(BoxFuture<'static, ReadResult<T>>),
+    Reading(BoxFuture<'static, ReadResult<T, R>>),
     /// Error
     Error,
 }
 
-impl<T> std::fmt::Debug for StreamState<T> {
+impl<T, R> std::fmt::Debug for StreamState<T, R> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             StreamState::Init => write!(f, "StreamState::Init"),
@@ -540,7 +561,7 @@ impl<T> std::fmt::Debug for StreamState<T> {
 
 /// An asynchronous [`Stream`](https://docs.rs/futures/latest/futures/stream/trait.Stream.html) of [`RecordBatch`]
 /// for a parquet file that can be constructed using [`ParquetRecordBatchStreamBuilder`].
-pub struct ParquetRecordBatchStream<T> {
+pub struct ParquetRecordBatchStream<T, R> {
     metadata: Arc<ParquetMetaData>,
 
     schema: SchemaRef,
@@ -554,12 +575,12 @@ pub struct ParquetRecordBatchStream<T> {
     selection: Option<RowSelection>,
 
     /// This is an option so it can be moved into a future
-    reader: Option<ReaderFactory<T>>,
+    reader: Option<ReaderFactory<T, R>>,
 
-    state: StreamState<T>,
+    state: StreamState<T, R>,
 }
 
-impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
+impl<T, R> std::fmt::Debug for ParquetRecordBatchStream<T, R> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParquetRecordBatchStream")
             .field("metadata", &self.metadata)
@@ -571,16 +592,17 @@ impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
     }
 }
 
-impl<T> ParquetRecordBatchStream<T> {
+impl<T, R> ParquetRecordBatchStream<T, R> {
     /// Returns the [`SchemaRef`] for this parquet file
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 }
 
-impl<T> Stream for ParquetRecordBatchStream<T>
+impl<T, R> Stream for ParquetRecordBatchStream<T, R>
 where
     T: AsyncFileReader + Unpin + Send + 'static,
+    R: AsyncRowGroupReader + Unpin + Send + 'static,
 {
     type Item = Result<RecordBatch>;
 
@@ -641,36 +663,34 @@ where
     }
 }
 
-/// An in-memory collection of column chunks
-struct InMemoryRowGroup<'a> {
-    metadata: &'a RowGroupMetaData,
-    page_locations: Option<&'a [Vec<PageLocation>]>,
-    column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
-    row_count: usize,
+#[derive(Debug, Clone)]
+pub enum RowGroupRanges {
+    /// Column chunk data representing only a subset of data pages
+    Sparse(BTreeMap<usize, Vec<Range<usize>>>),
+    /// Full column chunk and its offset
+    Dense(BTreeMap<usize, Range<usize>>),
 }
 
-impl<'a> InMemoryRowGroup<'a> {
-    /// Fetches the necessary column data into memory
-    async fn fetch<T: AsyncFileReader + Send>(
-        &mut self,
-        input: &mut T,
+/// An in-memory collection of column chunks
+struct RowGroupOffsetsBuilder<'a> {
+    metadata: &'a RowGroupMetaData,
+    page_locations: Option<&'a [Vec<PageLocation>]>,
+}
+
+impl<'a> RowGroupOffsetsBuilder<'a> {
+    fn build(
+        &self,
         projection: &ProjectionMask,
         selection: Option<&RowSelection>,
-    ) -> Result<()> {
+    ) -> RowGroupRanges {
+        let columns_num = self.metadata.columns().len();
         if let Some((selection, page_locations)) = selection.zip(self.page_locations) {
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
-            let mut page_start_offsets: Vec<Vec<usize>> = vec![];
-
-            let fetch_ranges = self
-                .column_chunks
-                .iter()
+            let columns_offsets = (0..columns_num)
                 .zip(self.metadata.columns())
-                .enumerate()
-                .filter(|&(idx, (chunk, _chunk_meta))| {
-                    chunk.is_none() && projection.leaf_included(idx)
-                })
-                .flat_map(|(idx, (_chunk, chunk_meta))| {
+                .filter(|&(idx, _chunk_meta)| projection.leaf_included(idx))
+                .map(|(idx, chunk_meta)| {
                     // If the first page does not start at the beginning of the column,
                     // then we need to also fetch a dictionary page.
                     let mut ranges = vec![];
@@ -681,83 +701,137 @@ impl<'a> InMemoryRowGroup<'a> {
                         }
                         _ => (),
                     }
-
                     ranges.extend(selection.scan_ranges(&page_locations[idx]));
-                    page_start_offsets.push(ranges.iter().map(|range| range.start).collect());
 
-                    ranges
+                    (idx, ranges)
                 })
-                .collect();
-
-            let mut chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
-            let mut page_start_offsets = page_start_offsets.into_iter();
-
-            for (idx, chunk) in self.column_chunks.iter_mut().enumerate() {
-                if chunk.is_some() || !projection.leaf_included(idx) {
-                    continue;
-                }
-
-                if let Some(offsets) = page_start_offsets.next() {
-                    let mut chunks = Vec::with_capacity(offsets.len());
-                    for _ in 0..offsets.len() {
-                        chunks.push(chunk_data.next().unwrap());
-                    }
-
-                    *chunk = Some(Arc::new(ColumnChunkData::Sparse {
-                        length: self.metadata.column(idx).byte_range().1 as usize,
-                        data: offsets.into_iter().zip(chunks.into_iter()).collect(),
-                    }))
-                }
-            }
+                .collect::<BTreeMap<_, _>>();
+            RowGroupRanges::Sparse(columns_offsets)
         } else {
-            let fetch_ranges = self
-                .column_chunks
-                .iter()
+            let columns_offsets = (0..columns_num)
                 .enumerate()
-                .filter(|&(idx, chunk)| chunk.is_none() && projection.leaf_included(idx))
+                .filter(|&(idx, _chunk)| projection.leaf_included(idx))
                 .map(|(idx, _chunk)| {
                     let column = self.metadata.column(idx);
                     let (start, length) = column.byte_range();
-                    start as usize..(start + length) as usize
+                    let range = start as usize..(start + length) as usize;
+
+                    (idx, range)
                 })
-                .collect();
+                .collect::<BTreeMap<_, _>>();
+            RowGroupRanges::Dense(columns_offsets)
+        }
+    }
+}
 
-            let mut chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
+/// AsyncRowGroupReader
+#[async_trait]
+pub trait AsyncRowGroupReader {
+    type R: RowGroups;
 
-            for (idx, chunk) in self.column_chunks.iter_mut().enumerate() {
-                if chunk.is_some() || !projection.leaf_included(idx) {
-                    continue;
+    /// Fetches the necessary column data into memory
+    async fn get_row_group<T: AsyncFileReader + Send>(
+        &mut self,
+        input: &mut T,
+        row_group_idx: usize,
+        row_group_offsets: RowGroupRanges,
+    ) -> Result<Self::R>;
+}
+
+pub struct DefaultAsyncRowGroupReaderBuilder {
+    metadata: Arc<ParquetMetaData>,
+}
+
+#[async_trait]
+impl AsyncRowGroupReader for DefaultAsyncRowGroupReaderBuilder {
+    type R = InMemoryRowGroup;
+
+    /// Fetches the necessary column data into memory
+    async fn get_row_group<T: AsyncFileReader + Send>(
+        &mut self,
+        input: &mut T,
+        row_group_idx: usize,
+        row_group_offsets: RowGroupRanges,
+    ) -> Result<Self::R> {
+        let row_group_meta = self.metadata.row_group(row_group_idx);
+        let mut column_chunks = BTreeMap::new();
+        match row_group_offsets {
+            RowGroupRanges::Sparse(rg_ranges) => {
+                let flat_ranges = rg_ranges
+                    .iter()
+                    .flat_map(|(_, ranges)| ranges.iter().cloned())
+                    .collect::<Vec<_>>();
+                let mut chunk_data = input.get_byte_ranges(flat_ranges).await?.into_iter();
+                for (idx, col_offsets) in rg_ranges {
+                    let mut chunks = Vec::with_capacity(col_offsets.len());
+                    for _ in 0..col_offsets.len() {
+                        chunks.push(chunk_data.next().unwrap());
+                    }
+                    let offset_and_chunks = col_offsets
+                        .into_iter()
+                        .map(|offset| offset.start)
+                        .zip(chunks)
+                        .collect::<Vec<_>>();
+                    let column_data = Arc::new(ColumnChunkData::Sparse {
+                        length: row_group_meta.column(idx).byte_range().1 as usize,
+                        data: offset_and_chunks,
+                    });
+
+                    column_chunks.insert(idx, column_data);
                 }
+            }
 
-                if let Some(data) = chunk_data.next() {
-                    *chunk = Some(Arc::new(ColumnChunkData::Dense {
-                        offset: self.metadata.column(idx).byte_range().0 as usize,
-                        data,
-                    }));
+            RowGroupRanges::Dense(rg_ranges) => {
+                let ranges = rg_ranges.values().cloned().collect::<Vec<_>>();
+                let mut chunk_data = input.get_byte_ranges(ranges).await?.into_iter();
+                for (idx, _col_offsets) in rg_ranges {
+                    if let Some(data) = chunk_data.next() {
+                        let column_data = Arc::new(ColumnChunkData::Dense {
+                            offset: row_group_meta.column(idx).byte_range().0 as usize,
+                            data,
+                        });
+
+                        column_chunks.insert(idx, column_data);
+                    }
                 }
             }
         }
 
-        Ok(())
+        return Ok(InMemoryRowGroup {
+            column_chunks,
+            row_group_idx,
+            metadata: self.metadata.clone(),
+        });
     }
 }
 
-impl<'a> RowGroups for InMemoryRowGroup<'a> {
+pub struct InMemoryRowGroup {
+    column_chunks: BTreeMap<usize, Arc<ColumnChunkData>>,
+    row_group_idx: usize,
+    metadata: Arc<ParquetMetaData>,
+}
+
+impl RowGroups for InMemoryRowGroup {
     fn num_rows(&self) -> usize {
-        self.row_count
+        self.metadata.row_group(self.row_group_idx).num_rows() as usize
     }
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
-        match &self.column_chunks[i] {
+        let row_group_meta = self.metadata.row_group(self.row_group_idx);
+        let page_locations = self
+            .metadata
+            .offset_index()
+            .map(|indexes| &indexes[self.row_group_idx]);
+        match self.column_chunks.get(&i) {
             None => Err(ParquetError::General(format!(
                 "Invalid column index {i}, column was not fetched"
             ))),
             Some(data) => {
-                let page_locations = self.page_locations.map(|index| index[i].clone());
+                let page_locations = page_locations.map(|index| index[i].clone());
                 let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
                     data.clone(),
-                    self.metadata.column(i),
-                    self.row_count,
+                    row_group_meta.column(i),
+                    self.num_rows(),
                     page_locations,
                 )?);
 
@@ -1501,6 +1575,9 @@ mod tests {
 
         let projection = ProjectionMask::leaves(metadata.file_metadata().schema_descr(), vec![0]);
 
+        let row_group_builder = DefaultAsyncRowGroupReaderBuilder {
+            metadata: metadata.clone(),
+        };
         let reader_factory = ReaderFactory {
             metadata,
             fields: fields.map(Arc::new),
@@ -1508,6 +1585,7 @@ mod tests {
             filter: None,
             limit: None,
             offset: None,
+            row_group_builder,
         };
 
         let mut skip = true;

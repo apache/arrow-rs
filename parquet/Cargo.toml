@@ -45,6 +45,7 @@ arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
 # Intentionally not a path dependency as object_store is released separately
 object_store = { version = "0.7", default-features = false, optional = true }
+async-trait = { version ="0.1.53", optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
@@ -85,7 +86,7 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 all-features = true
 
 [features]
-default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
+default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64", "async"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
@@ -99,7 +100,7 @@ test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
 experimental = []
 # Enable async APIs
-async = ["futures", "tokio"]
+async = ["futures", "tokio", "async-trait"]
 # Enable object_store integration
 object_store = ["dep:object_store", "async"]
 
